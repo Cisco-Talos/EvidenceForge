@@ -1217,6 +1217,37 @@ class TestActivityGenerator:
         assert net.resp_bytes != event.http.response_body_len
         assert net.duration is not None and net.duration >= 0.04
 
+    def test_http_connection_duration_covers_zeek_http_offset(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """HTTP-bearing conn duration should cover the later Zeek http.log timestamp."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            service="http",
+            duration=0.01,
+            orig_bytes=200,
+            resp_bytes=400,
+            conn_state="RSTO",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/index.html",
+                response_body_len=400,
+                status_code=200,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        net = event.network
+        assert net.conn_state == "SF"
+        assert net.duration is not None and net.duration >= 0.04
+
     def test_generate_connection_with_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection with duration sets a valid conn_state."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

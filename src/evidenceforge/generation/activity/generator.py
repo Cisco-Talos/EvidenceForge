@@ -4394,6 +4394,22 @@ class ActivityGenerator:
             if event.network.duration is None:
                 event.network.duration = rng.uniform(0.01, 2.0)
 
+        if (
+            event.http is not None
+            and event.network.protocol == "tcp"
+            and event.network.conn_state == "SF"
+        ):
+            http_timing = get_timing_window(
+                "source.zeek_http_request",
+                default_min_ms=1,
+                default_max_ms=35,
+                default_position="after",
+                default_class="same_observation",
+            )
+            http_min_duration = (http_timing.max_ms + 5) / 1000
+            if event.network.duration is None or event.network.duration < http_min_duration:
+                event.network.duration = http_min_duration + rng.uniform(0.0, 0.025)
+
         if event.network.protocol == "tcp" and event.network.conn_state == "SF":
             if event.http is not None:
                 event.network.orig_bytes = max(
