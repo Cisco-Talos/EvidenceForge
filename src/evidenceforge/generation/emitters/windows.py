@@ -1146,8 +1146,6 @@ class WindowsEventEmitter(LogEmitter):
         else:
             with self._file_lock:
                 self._event_dicts.append(event_data)
-                if len(self._event_dicts) >= self.buffer_size:
-                    self._flush_unlocked()
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Windows Event dict to XML format."""
@@ -1175,15 +1173,11 @@ class WindowsEventEmitter(LogEmitter):
                 event_data = self._event_queue.get(timeout=0.1)
                 with self._file_lock:
                     self._event_dicts.append(event_data)
-                    if len(self._event_dicts) >= self.buffer_size:
-                        self._flush_unlocked()
                 self._event_queue.task_done()
             except Empty:
                 if self._flush_barrier.is_set():
-                    self.flush()
                     self._flush_barrier.clear()
 
-        self.flush()
         win_logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
     def _flush_unlocked(self) -> None:
@@ -1282,10 +1276,11 @@ class WindowsEventEmitter(LogEmitter):
                     seed_parts=(key[0], key[1], latest),
                 )
 
-    def flush(self) -> None:
-        """Flush dict buffer then all host writers."""
-        with self._file_lock:
-            self._flush_unlocked()
+    def flush(self, *, force: bool = False) -> None:
+        """Flush host writers, deferring Windows event rendering until final close."""
+        if force:
+            with self._file_lock:
+                self._flush_unlocked()
         with self._host_writers_lock:
             for writer in self._host_writers.values():
                 writer.flush()
@@ -1295,7 +1290,9 @@ class WindowsEventEmitter(LogEmitter):
         if self.threaded:
             self.stop_thread()
         else:
-            self.flush()
+            self.flush(force=True)
+        if self.threaded:
+            self.flush(force=True)
         # Write XML footer for each host file that has events
         footer = self.format_def.output.footer_template or ""
         for writer in self._host_writers.values():

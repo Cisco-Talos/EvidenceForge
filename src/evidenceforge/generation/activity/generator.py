@@ -760,6 +760,20 @@ def _enterprise_tls_issuer() -> dict[str, Any]:
     }
 
 
+def _tls_key_for_certificate_name(
+    cert_name: str,
+    key_type: str,
+    key_length: int,
+) -> tuple[str, int]:
+    """Align generated certificate key metadata with RSA/ECC naming conventions."""
+    name = cert_name.lower()
+    if any(marker in name for marker in ("rsa", " r", "-r")):
+        return "rsa", max(key_length if key_type == "rsa" else 0, 2048)
+    if any(marker in name for marker in ("ecdsa", "ecc", " ec ", "-ec")):
+        return "ecdsa", 256 if key_type != "ecdsa" else key_length
+    return key_type, key_length
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -1257,6 +1271,7 @@ class ActivityGenerator:
             else pick_issuer(cert_rng, server_name=cert_name)
         )
         key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
+        key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
         is_ecdsa = key_type == "ecdsa"
 
         modern_tls_domain = bool(server_name) and server_name.endswith(
@@ -1333,6 +1348,11 @@ class ActivityGenerator:
             net.history = "Sh" if net.conn_state == "SH" else "ShR"
             net.resp_bytes = 0
             net.orig_bytes = 0
+            net.orig_pkts = max(1, sum(1 for char in net.history if char.isupper()))
+            net.resp_pkts = sum(1 for char in net.history if char.islower())
+            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
+            net.orig_ip_bytes = net.orig_pkts * overhead
+            net.resp_ip_bytes = net.resp_pkts * overhead if net.resp_pkts else None
             if net.duration is not None:
                 net.duration = rng.uniform(0.0, 0.5)
             return
@@ -1668,6 +1688,7 @@ class ActivityGenerator:
                 selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
                 key_type = str(selected_key.get("type", "rsa"))
                 key_length = int(selected_key.get("length", 2048))
+                key_type, key_length = _tls_key_for_certificate_name(subject, key_type, key_length)
                 serial_seed = "|".join(
                     [
                         "tls_chain_serial",
@@ -2742,13 +2763,24 @@ class ActivityGenerator:
         # Skip for pre-existing binaries in System32/SysWOW64/Program Files — Event 11
         # should only fire for genuinely new files written to disk (malware drops, downloads).
         if ensure_file_event:
-            _lower = process_name.lower().replace("/", "\\")
-            _is_system_binary = (
-                _lower.startswith("c:\\windows\\system32\\")
-                or _lower.startswith("c:\\windows\\syswow64\\")
-                or _lower.startswith("c:\\program files\\")
-                or _lower.startswith("c:\\program files (x86)\\")
+            _lower = process_name.lower()
+            _win_path = _lower.replace("/", "\\")
+            _is_windows_system_binary = (
+                _win_path.startswith("c:\\windows\\system32\\")
+                or _win_path.startswith("c:\\windows\\syswow64\\")
+                or _win_path.startswith("c:\\program files\\")
+                or _win_path.startswith("c:\\program files (x86)\\")
             )
+            _linux_system_binary_prefixes = (
+                "/bin/",
+                "/sbin/",
+                "/usr/bin/",
+                "/usr/sbin/",
+                "/usr/local/bin/",
+                "/usr/local/sbin/",
+            )
+            _is_linux_system_binary = _lower.startswith(_linux_system_binary_prefixes)
+            _is_system_binary = _is_windows_system_binary or _is_linux_system_binary
             if not _is_system_binary:
                 self.dispatcher.dispatch(
                     SecurityEvent(
@@ -2883,6 +2915,17 @@ class ActivityGenerator:
                         event_type="registry_modify",
                         src_host=host_ctx,
                         auth=auth_ctx,
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=process_name,
+                            command_line=command_line,
+                            username=process_username,
+                            logon_id=process_logon_id,
+                            start_time=running_proc.start_time
+                            if running_proc is not None
+                            else None,
+                        ),
                         registry=RegistryContext(
                             key=_target, value=_details, action=reg_action, pid=pid
                         ),

@@ -22,11 +22,14 @@
 
 """Unit tests for activity generation."""
 
+import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
@@ -34,6 +37,7 @@ from evidenceforge.generation.activity import (
     ActivityGenerator,
     _is_invalid_network_connection,
 )
+from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import _extract_image_from_command
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
@@ -1588,3 +1592,89 @@ def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
 
     assert hot_key in activity_gen._dns_cache
     assert len(activity_gen._dns_cache) <= 50_001
+
+
+def test_ensure_file_event_skips_existing_linux_binaries(activity_gen):
+    """Storyline process visibility should not invent FILE/CREATE for /usr/bin tools."""
+    user = User(username="alice", full_name="Alice", email="alice@example.com", enabled=True)
+    system = System(
+        hostname="lin-01",
+        ip="10.0.0.10",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    logon_id = activity_gen.generate_logon(user, system, timestamp, logon_type=2)
+
+    activity_gen.generate_process(
+        user=user,
+        system=system,
+        time=timestamp + timedelta(seconds=1),
+        logon_id=logon_id,
+        process_name="/usr/bin/cat",
+        command_line="/usr/bin/cat /etc/passwd",
+        ensure_file_event=True,
+        from_storyline=True,
+    )
+
+    emitted = [
+        call.args[0] for call in activity_gen.dispatcher.emitters["ecar"].emit.call_args_list
+    ]
+    file_creates_for_binary = [
+        event
+        for event in emitted
+        if event.event_type == "file_create" and event.file and event.file.path == "/usr/bin/cat"
+    ]
+    assert file_creates_for_binary == []
+
+
+def test_tls_key_metadata_follows_rsa_named_intermediates():
+    """RSA-branded certificate subjects should not get ECDSA key metadata."""
+    assert generator_module._tls_key_for_certificate_name(
+        "CN=Amazon RSA 2048 M01", "ecdsa", 256
+    ) == ("rsa", 2048)
+
+
+def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch):
+    """Failed TLS handshakes should not retain full response-byte accounting."""
+    monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
+    timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    event = SecurityEvent(
+        timestamp=timestamp,
+        event_type="connection",
+        network=NetworkContext(
+            src_ip="10.0.0.10",
+            src_port=49152,
+            dst_ip="93.184.216.34",
+            dst_port=443,
+            protocol="tcp",
+            service="ssl",
+            zeek_uid="Ctest",
+            duration=2.0,
+            orig_bytes=1200,
+            resp_bytes=55000,
+            orig_pkts=4,
+            resp_pkts=40,
+            orig_ip_bytes=1500,
+            resp_ip_bytes=57000,
+            conn_state="SF",
+            history="ShADadfF",
+            initiating_pid=-1,
+        ),
+    )
+
+    activity_gen._attach_ssl_context(
+        event,
+        hostname="example.com",
+        dns=None,
+        dst_ip="93.184.216.34",
+        rng=random.Random(4),
+    )
+
+    assert event.ssl is not None
+    assert event.ssl.established is False
+    assert event.network.conn_state in {"S1", "SH"}
+    assert event.network.orig_bytes == 0
+    assert event.network.resp_bytes == 0
+    assert event.network.orig_pkts <= 2
+    assert event.network.resp_pkts <= 2

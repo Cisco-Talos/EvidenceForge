@@ -1020,22 +1020,33 @@ class BaselineMixin:
         )
         n_sched_hosts = min(2, len(servers))
         _sched_hosts = _sched_rng.sample(servers, n_sched_hosts)
-        # Fires every 1-2 hours (check if this hour is a firing hour)
-        _sched_interval = _sched_rng.choice([1, 2])
         hour_idx = int((current_hour - self.start_time).total_seconds() / 3600)
-        if hour_idx % _sched_interval == 0:
-            for host in _sched_hosts:
-                sched_time = current_hour + timedelta(
-                    seconds=_sched_rng.randint(0, 300)  # first 5 minutes of hour
+        for host in _sched_hosts:
+            profile_rng = random.Random(
+                _stable_seed(
+                    f"sched_fail_profile:{self.scenario.name}:{_sched_acct}:{host.hostname}"
                 )
-                self.state_manager.set_current_time(sched_time)
-                self.activity_generator.generate_failed_logon(
-                    user=_sched_user,
-                    system=host,
-                    time=sched_time,
-                    logon_type=4,  # batch (scheduled task)
-                    source_ip=host.ip,
+            )
+            sched_interval = profile_rng.choices([1, 2, 3], weights=[35, 45, 20], k=1)[0]
+            sched_phase = profile_rng.randint(0, sched_interval - 1)
+            if (hour_idx + sched_phase) % sched_interval != 0:
+                continue
+            hour_rng = random.Random(
+                _stable_seed(
+                    f"sched_fail_time:{self.scenario.name}:{_sched_acct}:{host.hostname}:{hour_idx}"
                 )
+            )
+            nominal_second = profile_rng.randint(0, 900)
+            sched_second = max(0, min(3599, nominal_second + hour_rng.randint(-180, 540)))
+            sched_time = current_hour + timedelta(seconds=sched_second)
+            self.state_manager.set_current_time(sched_time)
+            self.activity_generator.generate_failed_logon(
+                user=_sched_user,
+                system=host,
+                time=sched_time,
+                logon_type=4,  # batch (scheduled task)
+                source_ip=host.ip,
+            )
 
         # Pattern 3: Management software sweep (1-2 per business day).
         # Use scenario-local time for business-hour gating.

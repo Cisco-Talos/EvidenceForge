@@ -131,6 +131,49 @@ class TestFileEventActions:
         actions = [call.args[0]["action"] for call in emitter.emit_event.call_args_list]
         assert actions == ["READ", "WRITE"]
 
+    def test_file_event_renders_after_process_create_offset(self, emitter, ts):
+        """Dependent eCAR records should not render before PROCESS/CREATE."""
+        host = HostContext(
+            hostname="FS-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            fqdn="fs-01.example.com",
+        )
+        proc = ProcessContext(
+            pid=4321,
+            parent_pid=4,
+            image=r"C:\Temp\tool.exe",
+            command_line=r"C:\Temp\tool.exe",
+            username="jdoe",
+            start_time=ts,
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=proc,
+            )
+        )
+        emitter._render_file_event(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="file_create",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=proc,
+                file=FileContext(path=r"C:\Temp\tool.exe", action="create", pid=4321),
+            )
+        )
+
+        process_create, file_create = [call.args[0] for call in emitter.emit_event.call_args_list]
+        assert file_create["timestamp"] > process_create["timestamp"]
+
 
 class TestRemoteThreadRendering:
     def test_remote_thread_uses_canonical_context_values(self, emitter, ts):

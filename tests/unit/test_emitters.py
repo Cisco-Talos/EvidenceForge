@@ -361,8 +361,8 @@ class TestWindowsEventEmitter:
         assert max(gaps[:24]) < timedelta(milliseconds=1)
         assert min(gaps[25:]) >= timedelta(seconds=1)
 
-    def test_buffering(self, format_def, temp_output):
-        """Test that events are buffered before flushing."""
+    def test_windows_events_defer_rendering_until_close(self, format_def, temp_output):
+        """Windows events should render in one final chronological RecordID pass."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=3)
 
         # Emit 2 events (below buffer size)
@@ -411,8 +411,11 @@ class TestWindowsEventEmitter:
         }
         emitter.emit_event(event_data)
 
-        # File should now exist (buffer flushed)
-        assert temp_output.exists()
+        # Intermediate flushes should not materialize partial Windows logs.
+        emitter.flush()
+        assert not temp_output.exists()
+
+        emitter.close()
 
         # Verify all 3 events are in the file
         content = temp_output.read_text()
@@ -420,6 +423,53 @@ class TestWindowsEventEmitter:
         assert "user0" in content
         assert "user1" in content
         assert "user2" in content
+
+    def test_windows_record_ids_follow_global_chronology_across_flushes(
+        self, format_def, temp_output
+    ):
+        """A late-discovered earlier event should not get a higher RecordID."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        base = {
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x123",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "10.0.0.10",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+        later = {
+            **base,
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+        }
+        earlier = {
+            **base,
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            "TargetUserName": "adoe",
+        }
+
+        emitter.emit_event(later)
+        emitter.flush()
+        emitter.emit_event(earlier)
+        emitter.close()
+
+        content = temp_output.read_text()
+        records = [
+            int(match.group(1))
+            for match in re.finditer(r"<EventRecordID>(\d+)</EventRecordID>", content)
+        ]
+        users = re.findall(r'<Data Name="TargetUserName">([^<]+)</Data>', content)
+        assert users == ["adoe", "jsmith"]
+        assert records == sorted(records)
 
     def test_close_preserves_chronological_order_for_same_second_events(
         self, format_def, temp_output

@@ -33,8 +33,8 @@ from evidenceforge.generation.activity.timing_profiles import sample_timing_delt
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 _ECAR_SORT_PRIORITY = {
-    ("PROCESS", "CREATE"): 0,
-    ("USER_SESSION", "LOGIN"): 1,
+    ("USER_SESSION", "LOGIN"): 0,
+    ("PROCESS", "CREATE"): 1,
     ("MODULE", "LOAD"): 2,
     ("REGISTRY", "MODIFY"): 3,
     ("FILE", "CREATE"): 4,
@@ -207,14 +207,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
         host = event.src_host
         proc = event.process
-        event_ts = event.timestamp + self._source_offset(
-            "process_create",
-            host.hostname,
-            proc.pid,
-            event.timestamp,
-            minimum_ms=12,
-            maximum_ms=250,
-        )
+        event_ts = self._process_create_timestamp(event, proc)
         event_data = {
             "timestamp": event_ts,
             "hostname": self._host_name(host),
@@ -252,6 +245,7 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_file_event(self, event: SecurityEvent) -> None:
         """Render eCAR FILE event from canonical FileContext (logged on src_host)."""
         host = event.src_host
+        proc = event.process
         action_map = {
             "file_read": "READ",
             "file_create": "CREATE",
@@ -259,7 +253,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_delete": "DELETE",
         }
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "FILE",
             "action": action_map.get(event.event_type, "CREATE"),
@@ -274,8 +268,9 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_registry_event(self, event: SecurityEvent) -> None:
         """Render eCAR REGISTRY event from canonical RegistryContext (logged on src_host)."""
         host = event.src_host
+        proc = event.process
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "REGISTRY",
             "action": "MODIFY",
@@ -298,7 +293,7 @@ class EcarEmitter(HostMultiplexEmitter):
         elif event.file is not None:
             module_path = event.file.path
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
@@ -410,7 +405,7 @@ class EcarEmitter(HostMultiplexEmitter):
             else -1
         )
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "THREAD",
             "action": "REMOTE_CREATE",
@@ -453,7 +448,7 @@ class EcarEmitter(HostMultiplexEmitter):
         target_pid = access.target_pid if access else -1
         granted_access = access.granted_access if access else "0x0"
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "OPEN",
@@ -492,6 +487,46 @@ class EcarEmitter(HostMultiplexEmitter):
             _stable_seed(f"ecar:{event_type}:{hostname}:{pid}:{timestamp}") % span
         )
         return timedelta(milliseconds=offset)
+
+    def _process_create_timestamp(
+        self,
+        event: SecurityEvent,
+        proc: Any,
+    ) -> datetime:
+        """Return the eCAR render timestamp for a process-create observation."""
+        if proc is None:
+            return event.timestamp
+        host = event.src_host
+        hostname = host.hostname if host is not None else ""
+        start_time = proc.start_time or event.timestamp
+        return start_time + self._source_offset(
+            "process_create",
+            hostname,
+            proc.pid,
+            start_time,
+            minimum_ms=12,
+            maximum_ms=250,
+        )
+
+    def _after_process_create_timestamp(
+        self,
+        event: SecurityEvent,
+        proc: Any,
+    ) -> datetime:
+        """Clamp dependent eCAR observations after their PROCESS/CREATE record."""
+        if proc is None or proc.start_time is None:
+            return event.timestamp
+        process_create_ts = self._process_create_timestamp(event, proc)
+        if event.timestamp > process_create_ts:
+            return event.timestamp
+        return process_create_ts + self._source_offset(
+            "dependent_after_process_create",
+            self._host_name(event.src_host),
+            proc.pid,
+            event.timestamp,
+            minimum_ms=1,
+            maximum_ms=35,
+        )
 
     def _render_service_installed(self, event: SecurityEvent) -> None:
         """Render eCAR SERVICE/CREATE event (logged on src_host)."""

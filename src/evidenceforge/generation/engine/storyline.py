@@ -33,6 +33,7 @@ Contains the StorylineMixin with methods for:
 import base64
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -834,16 +835,35 @@ class StorylineMixin:
             if output_file:
                 file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
                 from evidenceforge.events.base import SecurityEvent
-                from evidenceforge.events.contexts import AuthContext, FileContext
+                from evidenceforge.events.contexts import (
+                    AuthContext,
+                    EdrContext,
+                    FileContext,
+                    ProcessContext,
+                )
 
                 host_ctx = self.activity_generator._build_host_context(system)
+                running_proc = self.state_manager.get_process(system.hostname, pid)
+                proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=file_time,
                         event_type="file_create",
                         src_host=host_ctx,
                         auth=AuthContext(username=actor.username),
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=process_name,
+                            command_line=command_line,
+                            username=actor.username,
+                            logon_id=logon_id,
+                            start_time=running_proc.start_time
+                            if running_proc is not None
+                            else None,
+                        ),
                         file=FileContext(path=output_file, action="create", pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                         storyline_origin=True,
                     )
                 )
