@@ -38,6 +38,11 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
+### Skill Installer Agent Support
+
+- [x] Add dual-agent `eforge install-skills` workflow — default to Claude project installs, add explicit `--agent claude|codex`, keep Claude project/global behavior, add Codex user-level `~/.codex/skills/` installs, reject invalid Codex/global combinations, and cover installer safety/stale-cleanup behavior with tests.
+- [x] Reduce Codex skill reference duplication — bundle only the references each Codex skill needs and rely on installer stale cleanup to prune no-longer-needed reference files from prior installs.
+
 ### P1 Syslog BSD Timestamp Year Inference
 
 - [ ] **P1** Syslog emitter uses BSD format (`%b %d %H:%M:%S`) with no year in the output template (`syslog.yaml` line 61). The parser substitutes `datetime.now().year` at parse time, so evaluating scenario data in a different calendar year than it was generated stamps all syslog events with the wrong year. This inflates the observed event span for the diurnal-pattern short-scenario guard and any other evaluator logic that computes spans across formats. Fix: switch the syslog emitter template to ISO 8601 (`%Y-%m-%dT%H:%M:%SZ`) and remove the BSD branch from the parser (keeping it only as a fallback for real-world log ingestion). Existing `_SYSLOG_MONTHS`, `_SYSLOG_TS_RE`, and `_syslog_sort_key` in the emitter can be removed once the template is ISO. Scenarios regenerated after this fix will parse cleanly at any future date.

@@ -28,7 +28,7 @@ import pytest
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import EXIT_SUCCESS, app
-from evidenceforge.cli.install_skills import install_skills
+from evidenceforge.cli.install_skills import install_codex_skills, install_skills
 
 runner = CliRunner()
 
@@ -150,6 +150,91 @@ class TestInstallSkills:
         assert isinstance(removed, list)
 
 
+class TestInstallCodexSkills:
+    """Tests for Codex skill installation."""
+
+    def test_creates_codex_skill_directories(self, tmp_path):
+        """install_codex_skills creates one skill directory per command."""
+        install_codex_skills(tmp_path)
+
+        for name in EXPECTED_SKILL_FILES:
+            command_name = name.removesuffix(".md")
+            assert (tmp_path / f"eforge-{command_name}" / "SKILL.md").is_file()
+
+    def test_codex_frontmatter_remains_valid(self, tmp_path):
+        """Installed Codex SKILL.md keeps required frontmatter fields."""
+        install_codex_skills(tmp_path)
+
+        skill = (tmp_path / "eforge-scenario" / "SKILL.md").read_text()
+        assert skill.startswith("---\n")
+        assert "\nname: eforge-scenario\n" in skill
+        assert "\ndescription: >\n" in skill
+
+    def test_codex_references_are_bundled(self, tmp_path):
+        """Reference docs are copied beside each Codex skill."""
+        install_codex_skills(tmp_path)
+
+        for ref_path in EXPECTED_REFERENCES_MIN:
+            ref = tmp_path / "eforge-scenario" / ref_path
+            assert ref.is_file(), f"Missing reference: {ref_path}"
+            assert len(ref.read_text()) > 100
+
+    def test_codex_references_are_limited_per_skill(self, tmp_path):
+        """Codex skills only receive the references they need."""
+        install_codex_skills(tmp_path)
+
+        assert (tmp_path / "eforge-config" / "references" / "config-personas.md").is_file()
+        assert not (tmp_path / "eforge-scenario" / "references" / "config-personas.md").exists()
+        assert not (tmp_path / "eforge-validate" / "references" / "evidence-formats.md").exists()
+
+    def test_codex_install_prunes_no_longer_needed_references(self, tmp_path):
+        """Codex reinstall removes references left by older all-reference installs."""
+        old_ref = tmp_path / "eforge-scenario" / "references" / "config-personas.md"
+        old_ref.parent.mkdir(parents=True)
+        old_ref.write_text("old duplicated reference")
+
+        _, removed = install_codex_skills(tmp_path)
+
+        assert "eforge-scenario/references/config-personas.md" in removed
+        assert not old_ref.exists()
+
+    def test_codex_rewrites_claude_reference_invocations(self, tmp_path):
+        """Codex skills use local reference paths instead of Claude sub-skill syntax."""
+        install_codex_skills(tmp_path)
+
+        skill = (tmp_path / "eforge-scenario" / "SKILL.md").read_text()
+        assert "/eforge:references:scenario-reference" not in skill
+        assert "`references/scenario-reference.md`" in skill
+
+    def test_codex_removes_stale_evidenceforge_skill_only(self, tmp_path):
+        """Stale cleanup removes EvidenceForge-owned skills and preserves unrelated skills."""
+        stale_dir = tmp_path / "eforge-old"
+        stale_dir.mkdir()
+        (stale_dir / "SKILL.md").write_text(
+            "---\nname: eforge-old\ndescription: EvidenceForge old skill\n---\n"
+        )
+        unrelated_dir = tmp_path / "eforge-custom"
+        unrelated_dir.mkdir()
+        (unrelated_dir / "SKILL.md").write_text(
+            "---\nname: eforge-custom\ndescription: Personal helper\n---\n"
+        )
+
+        _, removed = install_codex_skills(tmp_path)
+
+        assert "eforge-old" in removed
+        assert not stale_dir.exists()
+        assert unrelated_dir.exists()
+
+    def test_codex_rejects_symlinked_skill_directory(self, tmp_path):
+        """install_codex_skills rejects a symlinked target skill directory."""
+        victim_dir = tmp_path / "victim"
+        victim_dir.mkdir()
+        (tmp_path / "eforge-scenario").symlink_to(victim_dir, target_is_directory=True)
+
+        with pytest.raises(PermissionError, match="symlinked path"):
+            install_codex_skills(tmp_path)
+
+
 class TestInstallSkillsCli:
     """Tests for the CLI command integration."""
 
@@ -174,6 +259,46 @@ class TestInstallSkillsCli:
         assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
         assert (tmp_path / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
         assert (tmp_path / ".claude" / "commands" / "eforge" / "config.md").is_file()
+
+    def test_install_skills_claude_global_with_agent(self, tmp_path, monkeypatch):
+        """eforge install-skills --agent claude --global keeps Claude global behavior."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+        result = runner.invoke(app, ["install-skills", "--agent", "claude", "--global"])
+
+        assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
+        assert (tmp_path / ".claude" / "commands" / "eforge" / "scenario.md").is_file()
+        assert "/eforge scenario" in result.stdout
+
+    def test_install_skills_codex(self, tmp_path, monkeypatch):
+        """eforge install-skills --agent codex copies files to ~/.codex/skills/."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+        result = runner.invoke(app, ["install-skills", "--agent", "codex"])
+
+        assert result.exit_code == EXIT_SUCCESS, f"Output: {result.stdout}"
+        assert (tmp_path / ".codex" / "skills" / "eforge-scenario" / "SKILL.md").is_file()
+        assert (tmp_path / ".codex" / "skills" / "eforge-config" / "SKILL.md").is_file()
+        assert "eforge-scenario" in result.stdout
+
+    def test_install_skills_codex_rejects_global(self, tmp_path, monkeypatch):
+        """--global is invalid for Codex installs."""
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+
+        result = runner.invoke(app, ["install-skills", "--agent", "codex", "--global"])
+
+        assert result.exit_code == 1
+        assert "--global is only valid for Claude installs" in result.stdout
+        assert not (tmp_path / ".codex" / "skills").exists()
+
+    def test_install_skills_rejects_unknown_agent(self, tmp_path, monkeypatch):
+        """Unknown agents return an input error."""
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(app, ["install-skills", "--agent", "other"])
+
+        assert result.exit_code == 1
+        assert "Unknown agent" in result.stdout
 
     def test_install_skills_shows_file_list(self, tmp_path, monkeypatch):
         """Command output lists installed files."""

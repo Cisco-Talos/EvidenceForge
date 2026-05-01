@@ -32,10 +32,13 @@ git clone https://github.com/cisco-foundation-ai/EvidenceForge.git
 cd EvidenceForge
 uv sync
 
-# Install Claude Code skills (recommended workflow)
+# Install agent skills (Claude Code by default)
 uv run eforge install-skills
 
-# Create a scenario interactively (requires Claude Code)
+# Or install Codex skills
+uv run eforge install-skills --agent codex
+
+# Create a scenario interactively
 # /eforge scenario
 
 # Or generate from an existing scenario
@@ -48,9 +51,9 @@ uv run eforge validate scenarios/retail-store-ftp-attack.yaml
 uv run eforge eval ./output --scenario scenarios/retail-store-ftp-attack.yaml
 ```
 
-## Claude Code Skills (Recommended)
+## Agent Skills (Recommended)
 
-EvidenceForge includes Claude Code Skills for interactive, guided workflows. These are the preferred way to use EvidenceForge.
+EvidenceForge includes agent skills for interactive, guided workflows. These are the preferred way to use EvidenceForge.
 
 | Skill | Description |
 |-------|-------------|
@@ -60,7 +63,7 @@ EvidenceForge includes Claude Code Skills for interactive, guided workflows. The
 | `/eforge evaluate` | Runs the data quality evaluation, interprets scores, reviews records for realism, and suggests improvements. |
 | `/eforge config` | Add, modify, or remove personas, domains, applications, and other configuration data. Handles cross-file dependencies automatically. See [Customizing Configuration](docs/reference/CUSTOMIZING_CONFIG.md). |
 
-Install skills with `uv run eforge install-skills` (project scope) or `uv run eforge install-skills --global`.
+Install Claude Code skills with `uv run eforge install-skills` (project scope) or `uv run eforge install-skills --global`. Install Codex skills with `uv run eforge install-skills --agent codex`.
 
 ## CLI Reference
 
@@ -73,7 +76,7 @@ For scripted or non-interactive use:
 | `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (5 dimensions, 23 sub-scores) |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
-| `eforge install-skills [--global]` | Install Claude Code skills |
+| `eforge install-skills [--agent claude\|codex] [--global]` | Install agent skills (`--global` is Claude-only) |
 | `eforge version` | Show version |
 
 Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output directory, `--force` / `-f` to overwrite existing output without prompting.

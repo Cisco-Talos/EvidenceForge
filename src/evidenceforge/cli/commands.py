@@ -771,33 +771,63 @@ def eval_cmd(
 
 @app.command("install-skills")
 def install_skills_cmd(
+    agent: str = typer.Option(
+        "claude",
+        "--agent",
+        help="Agent to install skills for: claude or codex",
+    ),
     global_install: bool = typer.Option(
         False, "--global", help="Install to ~/.claude/commands/ (global)"
     ),
 ) -> None:
-    """Install EvidenceForge Claude Code skills as custom slash commands.
+    """Install EvidenceForge skills for supported agent workflows.
 
-    Copies skill files, persona library, and reference docs to the Claude Code
-    commands directory. By default installs to .claude/commands/ in the current
-    directory (project scope). Use --global to install to ~/.claude/commands/.
+    By default, installs Claude Code slash commands to .claude/commands/ in the
+    current directory. Use --global with Claude installs to install to
+    ~/.claude/commands/. Use --agent codex to install Codex skills to
+    ~/.codex/skills/.
 
     Existing installations are updated: new files are copied, changed files
     are overwritten, and stale files from previous versions are removed.
     """
-    from evidenceforge.cli.install_skills import install_skills
+    from evidenceforge.cli.install_skills import install_codex_skills, install_skills
 
-    if global_install:
+    normalized_agent = agent.lower()
+    if normalized_agent not in {"claude", "codex"}:
+        console.print(
+            f"[bold red]Error:[/bold red] Unknown agent '{agent}'. Use 'claude' or 'codex'.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if normalized_agent == "codex" and global_install:
+        console.print(
+            "[bold red]Error:[/bold red] --global is only valid for Claude installs. "
+            "Codex skills install to ~/.codex/skills/.",
+            style="red",
+        )
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if normalized_agent == "codex":
+        target_dir = Path.home() / ".codex" / "skills"
+        scope = "user"
+        install_func = install_codex_skills
+    elif global_install:
         target_dir = Path.home() / ".claude" / "commands"
         scope = "global"
+        install_func = install_skills
     else:
         target_dir = Path.cwd() / ".claude" / "commands"
         scope = "project"
+        install_func = install_skills
 
-    console.print(f"[bold blue]Installing EvidenceForge skills ({scope})[/bold blue]")
+    console.print(
+        f"[bold blue]Installing EvidenceForge skills for {normalized_agent} ({scope})[/bold blue]"
+    )
     console.print(f"Target: {target_dir}\n")
 
     try:
-        installed, removed = install_skills(target_dir)
+        installed, removed = install_func(target_dir)
     except FileNotFoundError as e:
         console.print(f"[bold red]Error:[/bold red] {e}", style="red")
         raise typer.Exit(EXIT_INPUT_ERROR)
@@ -808,14 +838,30 @@ def install_skills_cmd(
     if installed:
         console.print(f"[green]✓[/green] Installed {len(installed)} files:")
         for f in installed:
-            console.print(f"  eforge/{f}")
+            if normalized_agent == "claude":
+                console.print(f"  eforge/{f}")
+            else:
+                console.print(f"  {f}")
 
     if removed:
         console.print(f"\n[yellow]Removed {len(removed)} stale files:[/yellow]")
         for f in removed:
-            console.print(f"  eforge/{f}", style="dim")
+            if normalized_agent == "claude":
+                console.print(f"  eforge/{f}", style="dim")
+            else:
+                console.print(f"  {f}", style="dim")
 
-    console.print(f"\n[bold green]✓ Skills installed to {target_dir / 'eforge'}[/bold green]")
+    if normalized_agent == "claude":
+        console.print(f"\n[bold green]✓ Skills installed to {target_dir / 'eforge'}[/bold green]")
+        console.print(
+            "Use /eforge scenario, /eforge generate, /eforge validate, /eforge evaluate, or /eforge config."
+        )
+    else:
+        console.print(f"\n[bold green]✓ Skills installed to {target_dir}[/bold green]")
+        console.print(
+            "Use the eforge-scenario, eforge-generate, eforge-validate, "
+            "eforge-evaluate, or eforge-config skills."
+        )
 
 
 @app.command()
