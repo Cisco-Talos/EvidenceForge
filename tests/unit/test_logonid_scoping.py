@@ -246,6 +246,42 @@ class TestLogonIdSystemScoping:
         assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
         assert kwargs["granted_access"] == "0x1010"
 
+    def test_storyline_process_termination_is_deferred_until_step_end(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Storyline process termination should see same-step dependent activity."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        start = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start)
+        pid = state_manager.create_process(
+            "WKS-A",
+            4,
+            r"C:\Windows\Temp\tool.exe",
+            "tool.exe",
+            attacker.username,
+            "Medium",
+            logon_id="0x12345",
+        )
+        proc = state_manager.get_process("WKS-A", pid)
+        assert proc is not None
+        proc.last_activity_time = start + timedelta(seconds=20)
+        engine.activity_generator.generate_process_termination = Mock()
+
+        engine._queue_story_process_termination(
+            actor=attacker,
+            system=system_a,
+            time=start + timedelta(seconds=5),
+            pid=pid,
+            process_name=r"C:\Windows\Temp\tool.exe",
+            logon_id="0x12345",
+        )
+        engine._flush_story_process_terminations()
+
+        engine.activity_generator.generate_process_termination.assert_called_once()
+        kwargs = engine.activity_generator.generate_process_termination.call_args.kwargs
+        assert kwargs["time"] == start + timedelta(seconds=5)
+        assert kwargs["from_storyline"] is True
+
 
 class _FixedRng:
     def uniform(self, a: float, b: float) -> float:

@@ -876,6 +876,15 @@ class StateManager:
         process termination) and updates (connection bytes).
         """
         with self._lock:
+            if event.event_type != "process_terminate" and event.process and event.src_host:
+                proc = self.state.running_processes.get(
+                    (event.src_host.hostname, event.process.pid)
+                )
+                if proc is not None:
+                    activity_time = ensure_utc(event.timestamp)
+                    if proc.last_activity_time is None or activity_time > proc.last_activity_time:
+                        proc.last_activity_time = activity_time
+
             if event.event_type == "logoff" and event.auth:
                 self.end_session(event.auth.logon_id)
             elif event.event_type == "process_terminate" and event.process and event.src_host:

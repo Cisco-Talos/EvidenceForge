@@ -417,6 +417,50 @@ class StorylineMixin:
             return -1, None
         return pid, image
 
+    def _queue_story_process_termination(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+    ) -> None:
+        """Defer storyline process termination until all same-step dependents run."""
+        if not hasattr(self, "_pending_story_process_terminations"):
+            self._pending_story_process_terminations = []
+        self._pending_story_process_terminations.append(
+            {
+                "actor": actor,
+                "system": system,
+                "time": time,
+                "pid": pid,
+                "process_name": process_name,
+                "logon_id": logon_id,
+            }
+        )
+
+    def _flush_story_process_terminations(self) -> None:
+        """Emit deferred storyline terminations after process activity is complete."""
+        pending = getattr(self, "_pending_story_process_terminations", [])
+        if not pending:
+            return
+        self._pending_story_process_terminations = []
+        for item in pending:
+            proc = self.state_manager.get_process(item["system"].hostname, item["pid"])
+            if proc is None:
+                continue
+            self.activity_generator.generate_process_termination(
+                user=item["actor"],
+                system=item["system"],
+                time=item["time"],
+                pid=item["pid"],
+                process_name=item["process_name"],
+                logon_id=item["logon_id"],
+                from_storyline=True,
+            )
+
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
 
@@ -491,6 +535,7 @@ class StorylineMixin:
                 )
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
+            self._flush_story_process_terminations()
 
             if cadence_offsets:
                 _prev_event_time = event_time + timedelta(seconds=cadence_offsets[-1])
@@ -544,6 +589,7 @@ class StorylineMixin:
             )
             if malicious_event:
                 self.malicious_events.append(malicious_event)
+        self._flush_story_process_terminations()
 
     def _execute_single_red_herring_event(self, event_idx: int) -> None:
         """Execute a single red herring event by index.
@@ -596,6 +642,7 @@ class StorylineMixin:
                 # Track as red herring, not malicious
                 result["explanation"] = rh_event.explanation
                 self.red_herring_events.append(result)
+        self._flush_story_process_terminations()
 
     def _execute_typed_event(
         self,
@@ -775,6 +822,7 @@ class StorylineMixin:
                 command_line=command_line,
                 parent_pid=parent_pid,
                 ensure_file_event=True,
+                from_storyline=True,
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name)
@@ -796,6 +844,7 @@ class StorylineMixin:
                         src_host=host_ctx,
                         auth=AuthContext(username=actor.username),
                         file=FileContext(path=output_file, action="create", pid=pid),
+                        storyline_origin=True,
                     )
                 )
                 malicious_event["output_file"] = output_file
@@ -835,15 +884,14 @@ class StorylineMixin:
             if lifetime is not None:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)
-                self.activity_generator.generate_process_termination(
-                    user=actor,
+                self._queue_story_process_termination(
+                    actor=actor,
                     system=system,
                     time=term_time,
                     pid=pid,
                     process_name=process_name,
                     logon_id=logon_id,
                 )
-                self.state_manager.end_process(system.hostname, pid)
 
         elif spec.type == "connection":
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]

@@ -44,6 +44,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Reduce Codex skill reference duplication — bundle only the references each Codex skill needs and rely on installer stale cleanup to prune no-longer-needed reference files from prior installs.
 - [x] Import existing Claude `/eforge assess` command as a Codex skill without modifying the source skill.
 - [x] Fix official Codex skill installs so generated `SKILL.md` frontmatter is valid and user-managed `eforge-*` skills are preserved.
+- [x] Create, validate, generate, evaluate, and blind-assess the iteration-test scenario from `scenarios/ITERATION-TEST-PROMPT.md`.
+- [ ] **IN PROGRESS** Run three additional iteration-test assessment loops, fixing prior-loop P0/P1 root causes, committing each pass, regenerating/evaluating as needed, and preserving blind-review artifacts.
 
 ### P1 Syslog BSD Timestamp Year Inference
 

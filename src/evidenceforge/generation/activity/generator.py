@@ -2590,6 +2590,7 @@ class ActivityGenerator:
         command_line: str,
         parent_pid: int = 4,
         ensure_file_event: bool = False,
+        from_storyline: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -2731,6 +2732,7 @@ class ActivityGenerator:
                 start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
+            storyline_origin=from_storyline,
         )
 
         # Phase 3: Dispatch to matching emitters
@@ -2763,6 +2765,7 @@ class ActivityGenerator:
                         ),
                         file=FileContext(path=process_name, action="create", pid=pid),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        storyline_origin=from_storyline,
                     )
                 )
 
@@ -2803,6 +2806,7 @@ class ActivityGenerator:
                     ),
                     file=FileContext(path=path, action=action.lower(), pid=pid),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                    storyline_origin=from_storyline,
                 )
             )
         if os_category == "windows" and rng.random() < 0.30:
@@ -2828,6 +2832,7 @@ class ActivityGenerator:
                     ),
                     image_load=ImageLoadContext(image_loaded=dll_path),
                     edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                    storyline_origin=from_storyline,
                 )
             )
         # Only emit registry events for processes that realistically modify registry
@@ -2882,6 +2887,7 @@ class ActivityGenerator:
                             key=_target, value=_details, action=reg_action, pid=pid
                         ),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        storyline_origin=from_storyline,
                     )
                 )
 
@@ -2924,6 +2930,7 @@ class ActivityGenerator:
         pid: int,
         process_name: str,
         logon_id: str,
+        from_storyline: bool = False,
     ) -> None:
         """Generate process termination event across all applicable log formats.
 
@@ -2941,6 +2948,18 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ProcessContext
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
+        if (
+            running_proc is not None
+            and running_proc.last_activity_time is not None
+            and time <= running_proc.last_activity_time
+        ):
+            delay_rng = random.Random(
+                _stable_seed(
+                    "process_terminate_after_activity:"
+                    f"{system.hostname}:{pid}:{running_proc.last_activity_time.isoformat()}"
+                )
+            )
+            time = running_proc.last_activity_time + timedelta(seconds=delay_rng.uniform(2.0, 30.0))
         process_username = running_proc.username if running_proc is not None else user.username
         process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
         if not process_logon_id:
@@ -2976,6 +2995,7 @@ class ActivityGenerator:
                 start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id),
+            storyline_origin=from_storyline,
         )
 
         self.dispatcher.dispatch(event)
@@ -6643,6 +6663,15 @@ class ActivityGenerator:
         start_module, start_function = pick_remote_thread_start(source_image, target_image, rng)
         start_address = rng.randint(0x01000000, 0x7FFFFFFF)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
+        if source_proc is None:
+            logger.debug(
+                "Skipping remote thread for non-running source process: %s pid=%s target=%s",
+                system.hostname,
+                source_pid,
+                target_image,
+            )
+            return
+        self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
         thread_obj_id = str(
@@ -6722,6 +6751,15 @@ class ActivityGenerator:
 
         time = self._clamp_time_after_process_start(system, source_pid, time)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
+        if source_proc is None:
+            logger.debug(
+                "Skipping process access for non-running source process: %s pid=%s target=%s",
+                system.hostname,
+                source_pid,
+                target_image,
+            )
+            return
+        self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
         source_thread_id = -1

@@ -849,6 +849,42 @@ class TestActivityGenerator:
 
         assert not mock_emitters["windows_event_security"].emit.called
 
+    def test_process_termination_waits_for_recorded_dependent_activity(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Termination should be delayed past the latest process-owned telemetry."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\Temp\tool.exe",
+            command_line="tool.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        proc = state_manager.get_process(test_system.hostname, pid)
+        assert proc is not None
+        proc.last_activity_time = timestamp + timedelta(seconds=30)
+
+        activity_gen.generate_process_termination(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=5),
+            pid,
+            r"C:\Windows\Temp\tool.exe",
+            "0x12345",
+        )
+
+        terminate_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_terminate"
+        ]
+        assert terminate_events
+        assert terminate_events[-1].timestamp > timestamp + timedelta(seconds=30)
+
     def test_wfp_connection_uses_state_process_image(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
