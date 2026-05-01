@@ -3648,6 +3648,15 @@ class ActivityGenerator:
                     orig_bytes=orig_bytes,
                     resp_bytes=resp_bytes,
                 )
+        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+            duration = min(duration or 0.02, 0.08)
+            orig_bytes = min(max(orig_bytes or 40, 40), 260)
+            if resp_bytes is None:
+                resp_bytes = 120
+            elif resp_bytes <= 0:
+                resp_bytes = 0
+            else:
+                resp_bytes = min(max(resp_bytes, 70), 512)
 
         if (
             service == "dns"
@@ -4054,9 +4063,10 @@ class ActivityGenerator:
                 if resp_bytes
                 else [],
                 rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
+                AA=_dns_is_internal_name(dns_query, getattr(self, "_ad_domain", "")),
             )
             if event.dns.rtt is not None:
-                event.network.duration = max(event.network.duration or 0.001, event.dns.rtt)
+                event.network.duration = event.dns.rtt
 
         # Proxy context: attach only for established outbound internet traffic.
         # Forward proxies only see egress that completes (not blocked/denied flows).

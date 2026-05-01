@@ -626,7 +626,30 @@ class TestWeirdProtocolConstraint:
         for path in tmp_path.glob("zeek-*/conn.json"):
             for line in path.read_text().splitlines():
                 row = json.loads(line)
-                assert row["duration"] >= event.dns.rtt
+                assert row["duration"] == event.dns.rtt
+
+    def test_generic_dns_service_accounting_is_clamped(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS-like IDS/background rows without dns.log context still use DNS-sized packets."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=4.5,
+            orig_bytes=1800,
+            resp_bytes=22000,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_bytes <= 260
+        assert event.network.resp_bytes <= 512
+        assert event.network.duration <= 0.08
 
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters

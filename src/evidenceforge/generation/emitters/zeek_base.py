@@ -313,7 +313,11 @@ class SensorMultiplexEmitter(LogEmitter):
                         elif isinstance(ts, (int, float)):
                             render_data["ts"] = ts + sensor_delay_us / 1_000_000
                     dur = render_data.get("duration")
-                    if dur is not None and isinstance(dur, (int, float)):
+                    if (
+                        dur is not None
+                        and isinstance(dur, (int, float))
+                        and not render_data.get("_lock_duration")
+                    ):
                         dur_jitter = (
                             (_stable_seed(f"dur_jitter_{hostname}_{original_uid}") % 200) - 100
                         ) / 1_000_000
