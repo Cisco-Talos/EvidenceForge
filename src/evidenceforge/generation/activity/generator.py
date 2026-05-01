@@ -3849,7 +3849,12 @@ class ActivityGenerator:
                 event.network.resp_bytes = 0
                 event.network.resp_pkts = 0
                 event.network.resp_ip_bytes = None
-        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+        elif (
+            service == "dns"
+            and proto in ("udp", "tcp")
+            and dst_port == 53
+            and dst_ip in set(getattr(self, "_dns_server_ips", []))
+        ):
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
             event.dns = DnsContext(
                 query=dns_query,

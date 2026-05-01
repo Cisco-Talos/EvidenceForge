@@ -1001,6 +1001,33 @@ class TestActivityGenerator:
             )
         assert any(event.dns.query == "dc01.corp.local" for event in dns_events)
 
+    def test_generate_connection_does_not_infer_dns_for_non_resolver_port_53(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Port-53 scan traffic to non-resolvers should not become dns.log evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._dns_server_ips = ["10.0.0.53"]
+
+        activity_gen.generate_connection(
+            src_ip="198.51.100.25",
+            dst_ip=test_system.ip,
+            time=timestamp,
+            dst_port=53,
+            proto="tcp",
+            service="dns",
+            duration=0.1,
+            orig_bytes=80,
+            resp_bytes=0,
+        )
+
+        dns_events = []
+        for emitter in mock_emitters.values():
+            dns_events.extend(
+                call.args[0] for call in emitter.emit.call_args_list if call.args[0].dns is not None
+            )
+        assert not dns_events
+
     def test_system_process_termination_defaults_logon_id_to_system(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
