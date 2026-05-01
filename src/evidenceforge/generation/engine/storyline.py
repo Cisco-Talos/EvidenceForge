@@ -39,6 +39,11 @@ from types import SimpleNamespace
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.http_content import (
+    normalize_mime_type_for_path,
+    response_size_for_mime,
+    response_size_for_status,
+)
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
@@ -952,11 +957,6 @@ class StorylineMixin:
             http_ctx = None
             if spec.method or spec.uri:
                 from evidenceforge.events.contexts import HttpContext
-                from evidenceforge.generation.activity.http_content import (
-                    normalize_mime_type_for_path,
-                    response_size_for_mime,
-                    response_size_for_status,
-                )
 
                 # Context-aware response sizing (or author-specified override)
                 _method = spec.method or "GET"
@@ -1485,10 +1485,6 @@ class StorylineMixin:
                 # even though no origin-side Zeek http.log is emitted for TLS.
                 if spec.method or spec.uri or spec.user_agent:
                     from evidenceforge.events.contexts import HttpContext
-                    from evidenceforge.generation.activity.http_content import (
-                        normalize_mime_type_for_path,
-                        response_size_for_mime,
-                    )
 
                     _method = spec.method or "GET"
                     _uri_raw = spec.uri or "/"
@@ -1795,10 +1791,6 @@ class StorylineMixin:
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")
                 _status = path_entry.get("status", 404)
-                from evidenceforge.generation.activity.http_content import (
-                    normalize_mime_type_for_path,
-                    response_size_for_mime,
-                )
 
                 _mime_type = normalize_mime_type_for_path(_uri, "text/html")
                 _scan_referrer = pick_scan_referrer(
