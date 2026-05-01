@@ -317,7 +317,10 @@ class SensorMultiplexEmitter(LogEmitter):
                         dur_jitter = (
                             (_stable_seed(f"dur_jitter_{hostname}_{original_uid}") % 200) - 100
                         ) / 1_000_000
-                        render_data["duration"] = max(0.0, dur + dur_jitter)
+                        min_duration = render_data.get("_min_duration")
+                        if not isinstance(min_duration, (int, float)):
+                            min_duration = 0.0
+                        render_data["duration"] = max(min_duration, dur + dur_jitter)
                 if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)

@@ -13,6 +13,7 @@ These tests verify that:
 - Multi-IP domains return full answer sets in DNS
 """
 
+import json
 import random
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -20,9 +21,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.contexts import DnsContext, FirewallContext
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import DnsContext, FirewallContext, NetworkContext
+from evidenceforge.formats import load_format
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -525,6 +529,41 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.duration == 0.08
+
+    def test_sensor_duration_jitter_respects_dns_rtt(self, timestamp, tmp_path):
+        fmt = load_format("zeek_conn")
+        emitter = ZeekEmitter(
+            format_def=fmt,
+            output_path=tmp_path,
+            sensor_hostnames=["zeek-a", "zeek-b"],
+        )
+        event = SecurityEvent(
+            timestamp=timestamp,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.50",
+                src_port=53000,
+                dst_ip="10.0.0.1",
+                dst_port=53,
+                protocol="udp",
+                service="dns",
+                duration=0.002,
+                orig_bytes=64,
+                resp_bytes=128,
+                conn_state="SF",
+                zeek_uid="CtestDnsDuration1",
+            ),
+            dns=DnsContext(query="example.com", query_type="A", rtt=0.002),
+        )
+        event._sensor_hostnames_by_format = {"zeek_conn": ["zeek-a", "zeek-b"]}
+
+        emitter.emit(event)
+        emitter.flush()
+
+        for path in tmp_path.glob("zeek-*/conn.json"):
+            for line in path.read_text().splitlines():
+                row = json.loads(line)
+                assert row["duration"] >= event.dns.rtt
 
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters

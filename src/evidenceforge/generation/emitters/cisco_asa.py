@@ -85,9 +85,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostnames: list[str] | None = None,
     ):
         super().__init__(format_def, output_path, buffer_size, threaded, sensor_hostnames)
-        # Per-sensor connection ID counters. Keep IDs monotonically increasing
-        # in emission order without encoding wall-clock buckets.
-        self._conn_id_sequences: dict[str, int] = {}
+        # Per-sensor, per-day connection ID sequences. IDs follow the final
+        # chronological log order without exposing epoch-sized timestamp buckets.
+        self._conn_id_sequences: dict[tuple[str, str, int], int] = {}
+        self._conn_id_day_offsets: dict[tuple[str, str], list[int]] = {}
+        self._conn_id_fallback_sequences: dict[str, int] = {}
         # Network segment config for interface resolution (set by emitter_setup)
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
@@ -106,16 +108,40 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
     def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
-        """Get a deterministic stateful ASA connection ID."""
+        """Get a deterministic ASA connection ID."""
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-        current = self._conn_id_sequences.get(sensor_hostname)
-        if current is None:
-            current = 1_000_000 + seed % 500_000
-        gap_seed = f"{sensor_hostname}:{current}:{getattr(ts, 'date', lambda: '')()}"
-        gap = 1 + int(hashlib.md5(gap_seed.encode()).hexdigest()[:2], 16) % 5
+        base = 1_000_000 + seed % 500_000
+
+        if isinstance(ts, datetime):
+            day_key = ts.date().isoformat()
+            second = ts.hour * 3600 + ts.minute * 60 + ts.second
+            sequence_key = (sensor_hostname, day_key, second)
+            sequence = self._conn_id_sequences.get(sequence_key, 0)
+            self._conn_id_sequences[sequence_key] = sequence + 1
+            return (
+                base + self._day_connection_id_offset(sensor_hostname, day_key, second) + sequence
+            )
+
+        current = self._conn_id_fallback_sequences.get(sensor_hostname, base)
+        gap = 1 + int(hashlib.md5(f"{sensor_hostname}:{current}".encode()).hexdigest()[:2], 16) % 5
         next_id = current + gap
-        self._conn_id_sequences[sensor_hostname] = next_id
+        self._conn_id_fallback_sequences[sensor_hostname] = next_id
         return next_id
+
+    def _day_connection_id_offset(self, sensor_hostname: str, day_key: str, second: int) -> int:
+        """Return a day-local cumulative counter offset for a timestamp second."""
+        cache_key = (sensor_hostname, day_key)
+        offsets = self._conn_id_day_offsets.get(cache_key)
+        if offsets is None:
+            offsets = [0]
+            for idx in range(86_400):
+                digest = hashlib.md5(
+                    f"{sensor_hostname}:{day_key}:{idx}".encode(),
+                    usedforsecurity=False,
+                ).hexdigest()
+                offsets.append(offsets[-1] + 24 + int(digest[:2], 16) % 32)
+            self._conn_id_day_offsets[cache_key] = offsets
+        return offsets[min(max(second, 0), 86_399)]
 
     @staticmethod
     def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:

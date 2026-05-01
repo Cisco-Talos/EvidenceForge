@@ -74,6 +74,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "proto": net.protocol,
             "service": net.service or None,
             "duration": duration,
+            "_min_duration": event.dns.rtt if event.dns is not None else None,
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
             "conn_state": net.conn_state,
