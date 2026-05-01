@@ -45,7 +45,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Import existing Claude `/eforge assess` command as a Codex skill without modifying the source skill.
 - [x] Fix official Codex skill installs so generated `SKILL.md` frontmatter is valid and user-managed `eforge-*` skills are preserved.
 - [x] Create, validate, generate, evaluate, and blind-assess the iteration-test scenario from `scenarios/ITERATION-TEST-PROMPT.md`.
-- [ ] **IN PROGRESS** Run three additional iteration-test assessment loops, fixing prior-loop P0/P1 root causes, committing each pass, regenerating/evaluating as needed, and preserving blind-review artifacts.
+- [x] Run three additional iteration-test assessment loops, fixing prior-loop P0/P1 root causes, committing each pass, regenerating/evaluating as needed, and preserving blind-review artifacts.
+- [ ] **P0** Loop 3 blind-review follow-up — final loop review still scored synthetic across all four agents after the eCAR/HTTPS/X.509/web-error fixes. Critical findings: Zeek DNS `rtt` exceeds owning `conn.duration` in 519 rendered rows; sequential foreground bash commands overlap in eCAR process lifetimes (`mysqldump -> gzip -> scp`, `nmap -> nmap`); generator-identifying `eforge-*.tmp` file artifacts leak into Sysmon/eCAR; Sysmon `ProcessGuid` visibly encodes PID; ASA connection IDs appear timestamp-bucket-derived; web scan and DNS tunnel repetitions are too evenly distributed. Fix root causes in the owning layers, then regenerate/evaluate and rerun blind review.
 
 ### P1 Syslog BSD Timestamp Year Inference
 
