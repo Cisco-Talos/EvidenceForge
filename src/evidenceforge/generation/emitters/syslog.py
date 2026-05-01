@@ -101,6 +101,13 @@ class SyslogEmitter(HostMultiplexEmitter):
     @staticmethod
     def _linux_host(event: SecurityEvent) -> "HostContext | None":
         """Return whichever host has os_category == 'linux'."""
+        if (
+            event.syslog is not None
+            and event.syslog.app_name == "sshd"
+            and event.dst_host
+            and event.dst_host.os_category == "linux"
+        ):
+            return event.dst_host
         if event.src_host and event.src_host.os_category == "linux":
             return event.src_host
         if event.dst_host and event.dst_host.os_category == "linux":

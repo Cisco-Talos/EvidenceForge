@@ -118,7 +118,7 @@ certificate_chains:
     - name: enterprise
       issuer_patterns: ["*Enterprise*"]
       intermediates:
-        - "CN=Acme Enterprise Root CA, O=Acme Corp, C=US"
+        - "CN=Enterprise Root CA, O=Enterprise IT, C=US"
     - name: default
       issuer_patterns: ["*"]
       intermediates:

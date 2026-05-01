@@ -709,6 +709,26 @@ class EmitterSetupMixin:
 
         pids["sshd"] = _c(pids["systemd"], "/usr/sbin/sshd", "/usr/sbin/sshd -D [listener]", "root")
 
+        roles = {role.lower() for role in (system.roles or [])}
+        service_defaults = getattr(self, "_system_service_defaults", {})
+        services = {svc.lower() for svc in service_defaults.get(system.hostname, [])}
+        web_markers = {"web_server", "forward_proxy", "apache", "apache2", "httpd", "nginx"}
+        if roles & web_markers or services & web_markers or "web" in system.hostname.lower():
+            if is_rhel:
+                pids["httpd"] = _c(
+                    pids["systemd"],
+                    "/usr/sbin/httpd",
+                    "/usr/sbin/httpd -DFOREGROUND",
+                    "apache",
+                )
+            else:
+                pids["apache2"] = _c(
+                    pids["systemd"],
+                    "/usr/sbin/apache2",
+                    "/usr/sbin/apache2 -DFOREGROUND",
+                    "www-data",
+                )
+
         cron_name = "/usr/sbin/crond" if is_rhel else "/usr/sbin/cron"
         cron_cmd = "/usr/sbin/crond -n" if is_rhel else "/usr/sbin/cron -f"
         pids["cron"] = _c(pids["systemd"], cron_name, cron_cmd, "root")

@@ -127,10 +127,17 @@ def get_dll_pool() -> list[str]:
     return pools.get("dll_pool", [])
 
 
-def materialize_edr_template(template: str, rng: random.Random, user: str = "SYSTEM") -> str:
+def materialize_edr_template(
+    template: str,
+    rng: random.Random,
+    user: str = "SYSTEM",
+    *,
+    host_ip: str = "",
+) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     replacements = {
         "user": user,
+        "host_ip": host_ip,
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",

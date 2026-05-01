@@ -742,14 +742,28 @@ def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str,
     return hashes
 
 
-def _enterprise_tls_issuer() -> dict[str, Any]:
+def _enterprise_org_from_domain(ad_domain: str) -> str:
+    """Derive a readable organization stem from the scenario AD domain."""
+    generic_labels = {"corp", "local", "internal", "test", "com", "net", "org", "lan"}
+    for label in ad_domain.split("."):
+        cleaned = label.strip().replace("-", " ").replace("_", " ")
+        if cleaned and cleaned.lower() not in generic_labels:
+            return cleaned.title()
+    return "Enterprise"
+
+
+def _enterprise_tls_issuer(ad_domain: str = "") -> dict[str, Any]:
     """Return the configured enterprise issuer for internal TLS certificates."""
     from evidenceforge.generation.activity.tls_issuers import load_tls_issuers
 
-    issuer_name = "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+    org_name = _enterprise_org_from_domain(ad_domain)
+    issuer_name = f"CN={org_name} Enterprise Issuing CA, O={org_name}, C=US"
+    fallback_name = "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
     for issuer in load_tls_issuers().get("issuers", []):
         if issuer.get("name") == issuer_name:
             return issuer
+        if issuer.get("name") == fallback_name:
+            return {**issuer, "name": issuer_name}
     return {
         "name": issuer_name,
         "weight": 0,
@@ -1266,7 +1280,7 @@ class ActivityGenerator:
 
         cert_rng = random.Random(_stable_seed(f"tls_cert_profile:{cert_name}"))
         issuer_cfg = (
-            _enterprise_tls_issuer()
+            _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
             if internal_cert_name
             else pick_issuer(cert_rng, server_name=cert_name)
         )
@@ -7447,6 +7461,51 @@ class ActivityGenerator:
         "code.exe",
     }
     _LINUX_SHELLS = {"/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/bash", "/usr/bin/zsh"}
+    _LINUX_SERVICE_USERS = {"apache", "www-data", "nginx", "httpd"}
+    _LINUX_SERVICE_PARENT_KEYS = ("apache2", "httpd", "nginx", "php-fpm")
+
+    def _active_session_shell_pid(
+        self,
+        system: System,
+        user: User,
+        time: datetime | None,
+        logon_id: str = "",
+    ) -> int | None:
+        """Return the actor's live per-session shell when one owns the command."""
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        if logon_id:
+            sessions = [sess for sess in sessions if sess.logon_id == logon_id]
+        for sess in sessions:
+            if sess.system != system.hostname or sess.session_shell_pid is None:
+                continue
+            is_active = (
+                self._is_pid_active_at(system, sess.session_shell_pid, time)
+                if time is not None
+                else self._is_pid_alive(system, sess.session_shell_pid)
+            )
+            if is_active:
+                return sess.session_shell_pid
+        return None
+
+    def _linux_service_parent_pid(
+        self,
+        system: System,
+        username: str,
+        time: datetime,
+        possible_parents: list[str] | None = None,
+    ) -> int | None:
+        """Return a live Linux service daemon parent for service-account commands."""
+        if username not in self._LINUX_SERVICE_USERS:
+            return None
+        parent_names = {parent.lower() for parent in possible_parents or []}
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for key in self._LINUX_SERVICE_PARENT_KEYS:
+            if parent_names and key not in parent_names:
+                continue
+            pid = sys_pids.get(key)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        return None
 
     def _is_pid_alive(self, system: System, pid: int) -> bool:
         """Check if a PID is still running in state manager."""
@@ -7591,21 +7650,12 @@ class ActivityGenerator:
             return explorer_pid
         else:
             # Linux: most user commands spawn from a shell
+            session_shell_pid = self._active_session_shell_pid(system, user, time)
+            if session_shell_pid is not None:
+                return session_shell_pid
             shells = [(pid, name) for pid, name in alive_history if name in self._LINUX_SHELLS]
             if shells:
                 return shells[-1][0]
-            # Prefer per-session bash from the user's SSH session
-            for sess in self.state_manager.get_sessions_for_user(user.username):
-                if (
-                    sess.system == system.hostname
-                    and sess.session_shell_pid is not None
-                    and (
-                        self._is_pid_active_at(system, sess.session_shell_pid, time)
-                        if time is not None
-                        else self._is_pid_alive(system, sess.session_shell_pid)
-                    )
-                ):
-                    return sess.session_shell_pid
             return sys_pids.get("bash", sys_pids.get("sshd", 1))
 
     def _resolve_parent(
@@ -7691,6 +7741,17 @@ class ActivityGenerator:
             reverse = get_reverse_index_linux()
 
         possible_parents = reverse.get(exe_name, [])
+        if os_cat == "linux":
+            service_parent = self._linux_service_parent_pid(
+                system, user.username, time, possible_parents
+            )
+            if service_parent is not None:
+                return service_parent
+            session_shell_pid = self._active_session_shell_pid(system, user, time, logon_id)
+            if session_shell_pid is not None and any(
+                parent in {"bash", "sh", "zsh"} for parent in possible_parents
+            ):
+                return session_shell_pid
 
         if not possible_parents:
             # No rules for this exe — fall back to legacy logic

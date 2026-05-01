@@ -33,6 +33,7 @@ Contains the StorylineMixin with methods for:
 import base64
 import logging
 import re
+import shlex
 import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -899,6 +900,27 @@ class StorylineMixin:
                     )
                 )
                 malicious_event["output_file"] = output_file
+
+            scp_target = self._extract_scp_target(command_line, os_category)
+            if scp_target is not None:
+                dst_ip = self._resolve_storyline_network_target(scp_target)
+                if dst_ip:
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        dst_port=22,
+                        proto="tcp",
+                        service="ssh",
+                        duration=rng.uniform(2.0, 30.0),
+                        orig_bytes=rng.randint(20_000, 250_000),
+                        resp_bytes=rng.randint(4_000, 40_000),
+                        conn_state="SF",
+                        emit_dns=not _is_private_ip(dst_ip),
+                        source_system=system,
+                        pid=pid,
+                        process_image=process_name,
+                    )
 
             _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks", "net.exe", "net1.exe"}
             proc_basename = (
@@ -2312,6 +2334,48 @@ class StorylineMixin:
             match = re.search(pattern, command_line, re.IGNORECASE)
             if match:
                 return match.group(1)
+        return None
+
+    @staticmethod
+    def _extract_scp_target(command_line: str, os_category: str) -> str | None:
+        """Extract the remote host from a Linux scp command line."""
+        if os_category != "linux":
+            return None
+        try:
+            parts = shlex.split(command_line)
+        except ValueError:
+            parts = command_line.split()
+        if not parts:
+            return None
+        exe = parts[0].rsplit("/", 1)[-1].lower()
+        if exe != "scp":
+            return None
+        for token in parts[1:]:
+            if token.startswith("-") or ":" not in token:
+                continue
+            remote, _path = token.split(":", 1)
+            if not remote:
+                continue
+            host = remote.rsplit("@", 1)[-1].strip("[]")
+            if host:
+                return host
+        return None
+
+    def _resolve_storyline_network_target(self, target: str) -> str | None:
+        """Resolve a storyline command target host/IP to an environment IP when possible."""
+        lowered = target.rstrip(".").lower()
+        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", lowered):
+            return target
+        ad_domain = getattr(self, "_ad_domain", "")
+        for system in self.scenario.environment.systems:
+            candidates = {
+                system.hostname.lower(),
+                system.ip,
+            }
+            if ad_domain:
+                candidates.add(f"{system.hostname}.{ad_domain}".lower())
+            if lowered in candidates:
+                return system.ip
         return None
 
     def _parse_storyline_time(self, time_str: str) -> datetime:

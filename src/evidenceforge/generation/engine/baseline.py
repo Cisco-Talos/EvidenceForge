@@ -3888,7 +3888,12 @@ class BaselineMixin:
                     _template_user = system.assigned_user or "SYSTEM"
                     _key = materialize_edr_template(_key, rng, _template_user)
                     _vname = materialize_edr_template(_vname, rng, _template_user)
-                    _details = materialize_edr_template(_details, rng, _template_user)
+                    _details = materialize_edr_template(
+                        _details,
+                        rng,
+                        _template_user,
+                        host_ip=system.ip,
+                    )
                     writer_candidates = _registry_writer_candidates(
                         _key,
                         sys_pids,

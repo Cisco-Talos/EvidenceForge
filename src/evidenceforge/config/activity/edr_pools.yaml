@@ -173,7 +173,7 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{hex}\\InstallProperties", "DisplayVersion", "{version}"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{guid}}}", "DisplayName", "Microsoft Update Health Tools"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\app-{doc}.exe", "Path", "C:\\Program Files\\Common Files\\Vendor\\app-{doc}.exe"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "10.10.1.{doc}"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "{host_ip}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "DynamicSiteName", "Default-First-Site-Name"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", "C:\\ProgramData\\Vendor\\Cache\\{doc}", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{guid}}}", "EndTimeHi", "DWORD (0x00000000)"]

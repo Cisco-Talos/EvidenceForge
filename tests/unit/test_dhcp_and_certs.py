@@ -433,7 +433,7 @@ class TestTlsIssuers:
 
         assert event.x509 is not None
         assert event.x509.certificate_subject == "CN=web01.example.com"
-        assert event.x509.certificate_issuer == "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+        assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
         assert event.x509.san_dns == ["web01.example.com", "web01"]
 
     def test_internal_tls_explicit_sni_controls_enterprise_sans(self):
@@ -473,7 +473,7 @@ class TestTlsIssuers:
         assert event.ssl.server_name == "srv-05.example.com"
         assert event.x509 is not None
         assert event.x509.certificate_subject == "CN=srv-05.example.com"
-        assert event.x509.certificate_issuer == "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+        assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
         assert event.x509.san_dns == ["srv-05.example.com", "srv-05"]
 
     def test_same_certificate_fingerprint_has_same_metadata(self):

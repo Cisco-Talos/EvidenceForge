@@ -166,6 +166,13 @@ class TestTemplateMaterialization:
         assert value.startswith(r"Interfaces\{")
         assert value.endswith(r"}\DhcpIPAddress")
 
+    def test_materializes_host_ip_context(self):
+        import random
+
+        value = materialize_edr_template("{host_ip}", random.Random(9), host_ip="10.10.2.20")
+
+        assert value == "10.10.2.20"
+
     def test_materializes_related_templates_with_shared_placeholders(self):
         import random
 
