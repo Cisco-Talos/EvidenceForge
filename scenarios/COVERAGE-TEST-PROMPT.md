@@ -107,15 +107,19 @@
   timeline looks organic. Each fumble should use the appropriate event type (failed_logon,
   process with the wrong command, connection to wrong host, etc.).
 
-  1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP
-  (dhcp_lease event). Use a realistic MAC address with a known vendor OUI prefix (e.g.,
-  DC:A6:32 for Raspberry Pi, 00:50:56 for VMware, 00:0C:29 for VMware, B4:2E:99 for
-  Glenfly Tech). Do NOT use sequential/placeholder MACs like 00:1A:2B:3C:4D:5E — these
-  are instantly recognizable as fake. Actor: attacker on rogue device.
-  2. Initial Access (+1h): External attacker (185.70.41.45) scans and exploits SQL injection on
-  WEB-EXT-01's EHR portal. Use connection events with HTTP fields (method: POST, uri with SQLi
-  payload, status_code: 500, user_agent, hostname: "ehr-portal.meridianhcs.com") — NOT raw events.
-  Actor: root.
+  1. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP.
+  Use a `dhcp_lease` event on the parent storyline `system` for the rogue device. Inside
+  the `dhcp_lease` event, use only `mac_address` and optionally `requested_ip`; do not
+  include `hostname` because DHCP hostname is derived from parent `system`. Use a realistic
+  MAC address with a known vendor OUI prefix (e.g., DC:A6:32 for Raspberry Pi, 00:50:56
+  for VMware, 00:0C:29 for VMware, B4:2E:99 for Glenfly Tech). Do NOT use sequential/
+  placeholder MACs like 00:1A:2B:3C:4D:5E. Actor should be a valid built-in, service
+  account, or defined user — do not create an obvious `attacker` account.
+
+  2. Initial Access (+1h): External attacker exploits SQL injection on WEB-EXT-01's EHR portal
+  from `source_ip: "185.70.41.45"`. Use `connection` events with HTTP fields (`source_ip`,
+  `dst_ip`, `dst_port`, `method: POST`, `uri` with SQLi payload, `status_code: 500`,
+  `user_agent`, `hostname: "ehr-portal.meridianhcs.com"`) — NOT raw events. Actor: root.
   3. Execution (+1h20m): Web shell upload, reverse shell to C2 at 45.33.32.30:8443. Use real
   base64-encoded reverse shell payload.
   4. Discovery (+1h40m-2h): Network enumeration from WEB-EXT-01 — ip addr, /etc/hosts, nmap ping sweep
@@ -165,13 +169,16 @@
   (workstation_lock event), then unlocks later (workstation_unlock event) — exercises 4800/4801.
   23. DNS Queries (+10h): Standalone DNS queries for attacker infrastructure (dns_query events with
   query, qtype, rcode, answer fields).
-  24. Web Scanning (+0h30m): External attacker (185.70.41.45) runs web vulnerability scan against
-  WEB-EXT-01 (web_scan event with preset: nikto, rate: 10, duration: "20m", dst_port: 443,
-  hostname: "ehr-portal.meridianhcs.com").
-  25. Port Scan (+0h30m): External attacker (185.70.41.45) scans the DMZ segment looking for
-  services before the initial exploit. Use port_scan event with target_segment: dmz, ports:
-  [22, 80, 443, 8080, 8443, 3306], scan_rate: 50. This should produce firewall denies visible
-  to the external Zeek/Snort sensors but NOT internal sensors.
+  24. Web Scanning (+0h30m): External attacker runs web vulnerability scanning against WEB-EXT-01.
+  Use a `web_scan` event with `source_ip: "185.70.41.45"`, `dst_ip: "10.10.3.10"`,
+  `dst_port: 443`, `hostname: "ehr-portal.meridianhcs.com"`, `preset: nikto`,
+  `rate: 10`, and exactly one termination field: `duration: "20m"`. Do not use `src_ip`.
+
+  25. Port Scan (+0h30m): External attacker scans the DMZ segment looking for services before
+  the initial exploit. Use a `port_scan` event with `source_ip: "185.70.41.45"`,
+  `target_segment: dmz`, `ports: [22, 80, 443, 8080, 8443, 3306]`, and `scan_rate: 50`.
+  Do not use `src_ip`. This should produce firewall denies visible to the external
+  Zeek/Snort sensors but NOT internal sensors.
   26. Blocked C2 (+6h): After compromising DC-01, attacker malware tries to beacon directly
   from DC-01 to 45.33.32.30:443 — but the firewall policy doesn't allow servers to reach
   external IPs on arbitrary ports. Use beacon event with action: deny, interval: "30m",
@@ -194,9 +201,13 @@
   in the same step or you'll get duplicate events.
   - NOTE: "c2" is NOT a valid event type — use "beacon" for C2 communication
   - Use connection events with HTTP fields (method, uri, status_code, user_agent, hostname) for web
-  access log entries showing the SQLi and web shell access — NOT raw events
+    access log entries showing the SQLi and web shell access — NOT raw events
   - Periodic events (beacon, web_scan, credential_spray, dga_queries, dns_tunnel) must each
-  specify exactly one of: end_time, duration, or count — plus interval (or rate for web_scan)
+    specify exactly one of: end_time, duration, or count — plus interval (or rate for web_scan)
+  - Typed event fields are strict. Use `source_ip`, never `src_ip`. Do not add `hostname`
+    to `dhcp_lease`; DHCP hostname comes from the parent storyline `system`. Do not put
+    parent storyline fields (`time`, `actor`, `system`, `activity`) inside individual
+    event objects.
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
   - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges).
