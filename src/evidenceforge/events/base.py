@@ -136,6 +136,10 @@ class SecurityEvent:
     # emit to host-based formats (eCAR, Windows, Sysmon).  Set when src_ip == dst_ip.
     local_only: bool = False
 
+    # Set by the storyline engine for events whose timestamp must not be shifted
+    # by per-host monotonic-clock normalisation or session-activity clamping.
+    storyline_origin: bool = False
+
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format
     _sensor_hostnames_by_format: dict[str, list[str]] = field(default_factory=dict)

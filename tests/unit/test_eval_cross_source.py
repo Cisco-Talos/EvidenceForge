@@ -558,3 +558,212 @@ class TestHostLogProfile:
         assert "pivot_linkability" in keys
         assert "temporal_integrity" in keys
         assert "storyline_trace_coverage" in keys
+
+
+class TestZeekDhcpIndexing:
+    """zeek_dhcp records must be indexed by client_addr and host_name."""
+
+    def test_dhcp_record_indexed_by_client_addr(self):
+        """zeek_dhcp record with client_addr should be findable by IP lookup."""
+        dhcp_rec = _record(
+            "zeek_dhcp",
+            {"client_addr": "10.0.1.50", "host_name": "workstation1"},
+            ts=T0,
+        )
+        records = {"zeek_dhcp": [dhcp_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        assert f"10.0.1.50|{bucket}" in index, "client_addr should be indexed as an IP key"
+        assert "zeek_dhcp" in index[f"10.0.1.50|{bucket}"]
+
+    def test_dhcp_record_indexed_by_host_name(self):
+        """zeek_dhcp record with host_name should be findable by hostname lookup."""
+        dhcp_rec = _record(
+            "zeek_dhcp",
+            {"client_addr": "10.0.1.50", "host_name": "workstation1"},
+            ts=T0,
+        )
+        records = {"zeek_dhcp": [dhcp_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        assert f"workstation1|{bucket}" in index, "host_name should be indexed as a hostname key"
+        assert "zeek_dhcp" in index[f"workstation1|{bucket}"]
+
+
+class TestBeaconProxyMatcher:
+    """Beacon allow/deny matchers must handle proxy_access 'host' field."""
+
+    def test_beacon_allow_proxy_matches_host_field(self):
+        """_beacon_dst_matches should match destination stored in proxy 'host' field."""
+        scorer = CrossSourceScorer()
+        fields = {"host": "evil.example.com", "status_code": 200, "method": "GET"}
+        assert scorer._beacon_dst_matches(fields, "evil.example.com")
+        assert not scorer._beacon_dst_matches(fields, "other.example.com")
+
+    def test_beacon_allow_proxy_matches_ip_in_url(self):
+        """_beacon_dst_matches should match IP found in url field."""
+        scorer = CrossSourceScorer()
+        fields = {"url": "https://45.33.32.30/check", "status_code": 200}
+        assert scorer._beacon_dst_matches(fields, "45.33.32.30")
+
+    def test_beacon_deny_proxy_403_counts_as_deny(self):
+        """proxy_access record with status_code 403 should match beacon deny."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        proxy_rec = _record(
+            "proxy_access",
+            {"host": "45.33.32.30", "status_code": 403, "method": "CONNECT"},
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="blocked c2",
+            details={"dst_ip": "45.33.32.30", "dst_port": 443, "action": "deny"},
+            event_types=["beacon"],
+        )
+        scorer = CrossSourceScorer()
+        assert scorer._record_matches(proxy_rec, "proxy_access", event, "beacon")
+
+    def test_beacon_deny_proxy_200_does_not_match_deny(self):
+        """proxy_access record with status 200 should NOT match beacon deny."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        proxy_rec = _record(
+            "proxy_access",
+            {"host": "45.33.32.30", "status_code": 200, "method": "GET"},
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="blocked c2",
+            details={"dst_ip": "45.33.32.30", "dst_port": 443, "action": "deny"},
+            event_types=["beacon"],
+        )
+        scorer = CrossSourceScorer()
+        assert not scorer._record_matches(proxy_rec, "proxy_access", event, "beacon")
+
+
+class TestPortScanSourceIp:
+    """port_scan events with external source_ip must use that IP for matching."""
+
+    def test_port_scan_matcher_uses_source_ip_over_system_ip(self):
+        """When spec.source_ip differs from system IP, matcher uses source_ip."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 80,
+                "conn_state": "S0",
+            },
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="port scan",
+            details={"source_ip": "185.70.41.45", "ports": [80, 443]},
+            event_types=["port_scan"],
+        )
+        scorer = CrossSourceScorer()
+        assert scorer._record_matches(zeek_rec, "zeek_conn", event, "port_scan")
+
+    def test_port_scan_external_source_ip_in_lookup_keys(self):
+        """External source_ip should appear as an extra lookup key in index search."""
+
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 80,
+                "conn_state": "S0",
+            },
+            ts=T0,
+        )
+        records = {"zeek_conn": [zeek_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        # Should be indexed under the origin IP
+        assert f"185.70.41.45|{bucket}" in index
+
+
+class TestSyslogYearInference:
+    """Syslog BSD parser must infer year from file mtime, not datetime.now()."""
+
+    def test_bsd_timestamp_uses_file_mtime_year(self, tmp_path):
+        """SyslogParser should infer year from file modification time."""
+        import os
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_path = tmp_path / "syslog.log"
+        # Write a record with a March timestamp
+        log_path.write_text("Mar 18 12:00:00 host sshd[1234]: session opened\n")
+        # Set mtime to 2024
+        target_ts = datetime(2024, 3, 18, 12, 0, 0).timestamp()
+        os.utime(log_path, (target_ts, target_ts))
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log_path))
+        assert len(records) == 1
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2024
+
+    def test_bsd_year_wrap_at_new_year(self, tmp_path):
+        """SyslogParser should increment year when Dec→Jan wrap is detected."""
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_path = tmp_path / "syslog.log"
+        # Two records: Dec 31 then Jan 1 (year wrap)
+        log_path.write_text(
+            "Dec 31 23:59:00 host sshd[1]: event1\nJan  1 00:01:00 host sshd[2]: event2\n"
+        )
+        # mtime = 2024-12-31
+        import os
+
+        target_ts = datetime(2024, 12, 31, 0, 0, 0).timestamp()
+        os.utime(log_path, (target_ts, target_ts))
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log_path))
+        assert records[0].timestamp.year == 2024
+        assert records[1].timestamp.year == 2025, "Jan record after Dec should be year+1"
+
+    def test_bsd_year_no_false_wrap_on_minor_reorder(self, tmp_path):
+        """Minor out-of-order records (not a Dec→Jan wrap) should NOT trigger year increment."""
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_path = tmp_path / "syslog.log"
+        # Two records in Aug, second slightly earlier (not a year wrap)
+        log_path.write_text(
+            "Aug 15 10:05:00 host sshd[1]: event1\nAug 15 10:03:00 host sshd[2]: event2\n"
+        )
+        import os
+
+        target_ts = datetime(2024, 8, 15, 0, 0, 0).timestamp()
+        os.utime(log_path, (target_ts, target_ts))
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log_path))
+        assert records[0].timestamp.year == 2024
+        assert records[1].timestamp.year == 2024, "Minor reorder should keep same year"

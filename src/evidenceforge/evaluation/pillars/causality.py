@@ -142,7 +142,7 @@ class CausalityScorer(DimensionScorer):
                 if rec.timestamp is None:
                     continue
                 hostname = None
-                for field_name in ("Computer", "hostname"):
+                for field_name in ("Computer", "hostname", "host_name"):
                     val = rec.fields.get(field_name)
                     if val and isinstance(val, str):
                         hostname = val
@@ -166,6 +166,7 @@ class CausalityScorer(DimensionScorer):
                     "dst_ip",
                     "mapped_src_ip",
                     "mapped_dst_ip",
+                    "client_addr",
                 ):
                     ip_val = rec.fields.get(ip_field)
                     if ip_val and ip_val not in (hostname, ""):
@@ -218,6 +219,11 @@ class CausalityScorer(DimensionScorer):
         lookup_keys = [event.system.lower()]
         if event.system_ip:
             lookup_keys.append(event.system_ip)
+        # For events with an explicit source_ip (e.g. external attack origin),
+        # also search records indexed under that IP.
+        explicit_src = event.details.get("source_ip")
+        if explicit_src and explicit_src != event.system_ip:
+            lookup_keys.append(explicit_src)
 
         seen: set[int] = set()
         for hostname_key in lookup_keys:
@@ -406,11 +412,14 @@ class CausalityScorer(DimensionScorer):
             if format_name == "zeek_dhcp":
                 return True
         elif event_type == "port_scan":
+            # Use explicit source_ip from spec when present (e.g. external attack origin);
+            # fall back to system_ip for internally-sourced scans.
+            scan_src = event.details.get("source_ip") or event.system_ip
             if format_name == "cisco_asa":
                 msg_id = f.get("msg_id")
-                return (msg_id == 106023 and f.get("src_ip") == event.system_ip) or msg_id == 733100
+                return (msg_id == 106023 and f.get("src_ip") == scan_src) or msg_id == 733100
             if format_name == "zeek_conn":
-                return f.get("id.orig_h") == event.system_ip and f.get("conn_state") in (
+                return f.get("id.orig_h") == scan_src and f.get("conn_state") in (
                     "S0",
                     "REJ",
                 )
@@ -431,13 +440,19 @@ class CausalityScorer(DimensionScorer):
                         and f.get("id.resp_p") == expected_port
                         and f.get("conn_state") in ("S0", "REJ")
                     )
+                if format_name == "proxy_access":
+                    # Proxy DENIED rows have status_code 403 or DENIED cache_result
+                    denied = f.get("status_code") == 403 or f.get("cache_result") == "DENIED"
+                    if not denied:
+                        return False
+                    return self._beacon_dst_matches(f, expected_dst)
             else:
                 if format_name == "zeek_conn":
                     return (
                         f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
                     )
                 if format_name in ("proxy_access", "web_access", "zeek_http"):
-                    return f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+                    return self._beacon_dst_matches(f, expected_dst)
         elif event_type == "dns_query":
             expected_query = event.details.get("query", "")
             if format_name == "zeek_dns":
@@ -573,6 +588,24 @@ class CausalityScorer(DimensionScorer):
             or record_str.startswith(expected_lower + ".")
             or expected_lower.startswith(record_str + ".")
         )
+
+    @staticmethod
+    def _beacon_dst_matches(fields: dict, expected_dst: str) -> bool:
+        """Check whether a record references expected_dst as a beacon destination.
+
+        Handles proxy_access (stores destination as 'host' hostname),
+        zeek_http (id.resp_h / uri), and fallback IP fields.
+        """
+        candidates = [
+            fields.get("id.resp_h"),
+            fields.get("dst_ip"),
+            fields.get("host"),
+        ]
+        # Also check hostname within full URL/URI
+        url = fields.get("url") or fields.get("uri")
+        if url:
+            candidates.append(url)
+        return any(expected_dst == c or (c and expected_dst in c) for c in candidates if c)
 
     # --- Sub-score 1: Causal Ordering ---
 

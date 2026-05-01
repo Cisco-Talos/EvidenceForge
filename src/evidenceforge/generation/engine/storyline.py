@@ -682,7 +682,7 @@ class StorylineMixin:
             target_session = next((s for s in sessions if s.system == system.hostname), None)
             if target_session:
                 self.activity_generator.generate_logoff(
-                    actor, system, time, target_session.logon_id
+                    actor, system, time, target_session.logon_id, from_storyline=True
                 )
 
         elif spec.type == "process":
@@ -1101,6 +1101,7 @@ class StorylineMixin:
                 time=time,
                 target_username=spec.target_username,
                 target_sid=target_sid,
+                from_storyline=True,
             )
             malicious_event["target_username"] = spec.target_username
 
@@ -1181,7 +1182,9 @@ class StorylineMixin:
             malicious_event["task_content"] = task_content
 
         elif spec.type == "log_cleared":
-            self.activity_generator.generate_log_cleared(user=actor, system=system, time=time)
+            self.activity_generator.generate_log_cleared(
+                user=actor, system=system, time=time, from_storyline=True
+            )
 
         elif spec.type == "create_remote_thread":
             source_pid, source_image = self._last_storyline_process_for_system(system)

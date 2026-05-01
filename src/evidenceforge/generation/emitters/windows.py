@@ -64,9 +64,26 @@ def _normalize_windows_time_created(
     *,
     jitter_existing_microseconds: bool = False,
 ) -> None:
-    """Apply deterministic jitter while preserving per-computer chronological order."""
+    """Apply deterministic jitter while preserving per-computer chronological order.
+
+    Storyline-origin events (_storyline_origin=True) are exempt from both the
+    monotonic-clock clamp and the last_by_computer update so that baseline events
+    in subsequent flush batches are not pushed forward past the storyline time.
+    """
     ts = event.get("TimeCreated")
     if not isinstance(ts, datetime):
+        return
+
+    # Storyline events have a fixed authoritative timestamp; skip normalization
+    # to avoid the per-host clock inheriting a far-future value that would shift
+    # all later baseline events on the same host.
+    if event.get("_storyline_origin"):
+        computer = str(event.get("Computer", ""))
+        original = ensure_utc(ts)
+        if original.microsecond == 0:
+            seed = f"{seed_prefix}_{computer}_{sequence}_{event.get('EventID', '')}_storyline"
+            rng = random.Random(_stable_seed(seed))
+            event["TimeCreated"] = original.replace(microsecond=rng.randint(100_000, 999_999))
         return
 
     computer = str(event.get("Computer", ""))
@@ -218,6 +235,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         """Dispatch to per-type render method."""
+        self._current_storyline_origin = event.storyline_origin
         renderer = {
             "logon": self._render_logon,
             "logoff": self._render_logoff,
@@ -258,7 +276,10 @@ class WindowsEventEmitter(LogEmitter):
             raise NotImplementedError(
                 f"WindowsEventEmitter: no render method for {event.event_type}"
             )
-        renderer(event)
+        try:
+            renderer(event)
+        finally:
+            self._current_storyline_origin = False
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
@@ -415,6 +436,8 @@ class WindowsEventEmitter(LogEmitter):
             "TargetLogonId": auth.logon_id,
             "LogonType": auth.logon_type,
         }
+        if event.storyline_origin:
+            event_data["_storyline_origin"] = True
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
@@ -1085,6 +1108,7 @@ class WindowsEventEmitter(LogEmitter):
         self._record_id_counters: dict[str, int] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
+        self._current_storyline_origin: bool = False
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -1115,6 +1139,8 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
+        if getattr(self, "_current_storyline_origin", False):
+            event_data["_storyline_origin"] = True
         if self.threaded:
             self._emit_threaded(event_data)
         else:
@@ -1126,6 +1152,9 @@ class WindowsEventEmitter(LogEmitter):
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Windows Event dict to XML format."""
         from xml.sax.saxutils import escape as xml_escape
+
+        # Strip internal metadata keys before rendering
+        event_data.pop("_storyline_origin", None)
 
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
@@ -1233,7 +1262,7 @@ class WindowsEventEmitter(LogEmitter):
             computer = str(event.get("Computer", ""))
             if event_id == 4634:
                 logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
-                if logon_id:
+                if logon_id and not event.get("_storyline_origin"):
                     logoffs.append(((computer, logon_id), event))
                 continue
             if event_id not in {4688, 4801}:

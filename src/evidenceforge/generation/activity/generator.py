@@ -2476,6 +2476,7 @@ class ActivityGenerator:
         time: datetime,
         logon_id: str,
         logon_type: int = 2,
+        from_storyline: bool = False,
     ) -> None:
         """Generate logoff event across all applicable log formats.
 
@@ -2488,6 +2489,8 @@ class ActivityGenerator:
             time: Logoff timestamp
             logon_id: LogonID from the logon event
             logon_type: Logon type for the session being ended
+            from_storyline: When True, skip min_logoff_time clamping so the
+                storyline-scheduled time is preserved exactly.
         """
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
@@ -2497,7 +2500,7 @@ class ActivityGenerator:
                 for marker in (session.last_activity_time, session.network_close_time)
                 if marker is not None
             ]
-            if session_end_markers:
+            if session_end_markers and not from_storyline:
                 # Source emitters add small native delays (for example Sysmon
                 # Event 1 after canonical process creation). Leave enough room
                 # that final logoff/logout records do not render before those
@@ -2531,6 +2534,7 @@ class ActivityGenerator:
                 logon_type=logon_type,
             ),
             edr=EdrContext(object_id=session_obj_id),
+            storyline_origin=from_storyline,
         )
 
         # Attach SyslogContext for Linux SSH sessions only (sshd session closed).
@@ -6337,6 +6341,7 @@ class ActivityGenerator:
         user: User,
         system: System,
         time: datetime,
+        from_storyline: bool = False,
     ) -> None:
         """Generate security log cleared event (1102) on target system."""
         event = SecurityEvent(
@@ -6350,6 +6355,7 @@ class ActivityGenerator:
                 subject_domain=self._build_host_context(system).netbios_domain,
                 subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
             ),
+            storyline_origin=from_storyline,
         )
         self.dispatcher.dispatch(event)
 
@@ -6513,6 +6519,7 @@ class ActivityGenerator:
         time: datetime,
         target_username: str,
         target_sid: str,
+        from_storyline: bool = False,
     ) -> None:
         """Generate user account deleted event (4726) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
@@ -6537,6 +6544,7 @@ class ActivityGenerator:
                 target_domain=host.netbios_domain,
                 target_sid=target_sid,
             ),
+            storyline_origin=from_storyline,
         )
         self.dispatcher.dispatch(event)
 
