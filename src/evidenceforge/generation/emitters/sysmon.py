@@ -611,12 +611,14 @@ class SysmonEventEmitter(LogEmitter):
             unix_ts ^= int(boot_time.timestamp())
         hex_ts = f"{unix_ts:08x}"
 
-        # Third segment: PID-based sequence for uniqueness
-        seq = f"{pid & 0xFFFF:04x}"
-
-        # Remaining segments: deterministic filler for uniqueness
         seed = f"{hostname}:{pid}:{unix_ts}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
+        # Third segment: source-native-looking deterministic sequence. Avoid
+        # directly exposing the PID in the GUID shape while preserving stable
+        # per-process correlation across Sysmon event types.
+        seq = h[:4]
+
+        # Remaining segments: deterministic filler for uniqueness
         return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
     @staticmethod

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import shlex
 from typing import Any
 
 import yaml
@@ -218,6 +219,10 @@ def select_file_side_effect(
     """Return a process-aware file side effect from data-driven EDR profiles."""
     exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     command_lower = command_line.lower()
+    semantic_effect = _select_command_semantic_file_effect(exe, command_line)
+    if semantic_effect is not None:
+        return semantic_effect
+
     profiles = load_edr_pools().get("file_side_effect_profiles", [])
     for profile in profiles:
         exact = {str(item).lower() for item in profile.get("executables", [])}
@@ -241,4 +246,37 @@ def select_file_side_effect(
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
         return action, path
+    return None
+
+
+def _select_command_semantic_file_effect(
+    exe: str,
+    command_line: str,
+) -> tuple[str, str] | None:
+    """Return command-owned file artifacts for common shell tools."""
+    if exe == "mysqldump":
+        match = re.search(r">\s*(?P<path>\S+)", command_line)
+        if match:
+            return "create", match.group("path")
+
+    if exe == "gzip":
+        try:
+            parts = shlex.split(command_line)
+        except ValueError:
+            parts = command_line.split()
+        operands = [part for part in parts[1:] if not part.startswith("-")]
+        if operands:
+            return "create", f"{operands[-1]}.gz"
+
+    if exe in {"tar", "zip"}:
+        try:
+            parts = shlex.split(command_line)
+        except ValueError:
+            parts = command_line.split()
+        for idx, part in enumerate(parts):
+            if part in {"-f", "--file"} and idx + 1 < len(parts):
+                return "create", parts[idx + 1]
+            if part.endswith((".tar", ".tar.gz", ".tgz", ".zip")):
+                return "create", part
+
     return None

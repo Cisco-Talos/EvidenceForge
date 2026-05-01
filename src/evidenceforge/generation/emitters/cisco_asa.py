@@ -85,9 +85,9 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostnames: list[str] | None = None,
     ):
         super().__init__(format_def, output_path, buffer_size, threaded, sensor_hostnames)
-        # Per-sensor, per-second connection ID sequence. IDs are compact and
-        # timestamp-ordered, but deliberately not epoch-shaped.
-        self._conn_id_sequences: dict[tuple[str, int], int] = {}
+        # Per-sensor connection ID counters. Keep IDs monotonically increasing
+        # in emission order without encoding wall-clock buckets.
+        self._conn_id_sequences: dict[str, int] = {}
         # Network segment config for interface resolution (set by emitter_setup)
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
@@ -106,22 +106,16 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
     def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
-        """Get a deterministic connection ID that sorts with event time."""
-        if isinstance(ts, datetime):
-            ts_bucket = int(ts.timestamp())
-            seconds_of_day = ts.hour * 3600 + ts.minute * 60 + ts.second
-        else:
-            ts_bucket = 0
-            seconds_of_day = 0
-        sequence_key = (sensor_hostname, ts_bucket)
-        sequence = self._conn_id_sequences.get(sequence_key, 0)
-        self._conn_id_sequences[sequence_key] = sequence + 1
+        """Get a deterministic stateful ASA connection ID."""
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-        sensor_offset = seed % 50_000
-        # Keep adjacent timestamp buckets disjoint during high-volume bursts.
-        # A small multiplier can collide when second N emits enough flows to
-        # overlap second N+1's base ID while both flows are still active.
-        return 1_000_000 + sensor_offset + seconds_of_day * 10_007 + sequence
+        current = self._conn_id_sequences.get(sensor_hostname)
+        if current is None:
+            current = 1_000_000 + seed % 500_000
+        gap_seed = f"{sensor_hostname}:{current}:{getattr(ts, 'date', lambda: '')()}"
+        gap = 1 + int(hashlib.md5(gap_seed.encode()).hexdigest()[:2], 16) % 5
+        next_id = current + gap
+        self._conn_id_sequences[sensor_hostname] = next_id
+        return next_id
 
     @staticmethod
     def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:

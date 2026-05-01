@@ -30,10 +30,10 @@ file_side_effect_profiles:
     executables: ["cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"]
     actions: ["create", "modify"]
     paths_windows:
-      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\eforge-{rand}.tmp"
+      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp"
       - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
     paths_linux:
-      - "/home/{user}/.cache/eforge/tmp-{rand}"
+      - "/home/{user}/.cache/{hex}.tmp"
       - "/home/{user}/.bash_history"
 
   - name: package_manager
@@ -49,18 +49,18 @@ file_side_effect_profiles:
     executable_contains: ["install", "setup", "update", "patch"]
     actions: ["create", "modify"]
     paths_windows:
-      - "C:\\Windows\\Temp\\eforge-{rand}.tmp"
+      - "C:\\Windows\\Temp\\MSI{rand}.tmp"
       - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
     paths_linux:
-      - "/var/tmp/eforge-{rand}.tmp"
+      - "/var/tmp/pkg-{rand}.tmp"
 
   - name: archive_and_runtime_artifacts
     executables: ["mysqldump", "gzip", "tar", "zip", "python", "python3", "node", "java"]
     actions: ["create", "modify"]
     paths_windows:
-      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\artifact-{rand}.tmp"
+      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp"
     paths_linux:
-      - "/tmp/artifact-{rand}"
+      - "/tmp/.tmp-{rand}"
 
 file_paths_windows:
   # User documents

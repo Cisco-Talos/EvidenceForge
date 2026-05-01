@@ -817,6 +817,14 @@ class StorylineMixin:
                 username=actor.username,
             )
             command_line = spec.command_line or process_name
+            shell_key = (system.hostname, actor.username)
+
+            if os_category == "linux":
+                if not hasattr(self, "_storyline_shell_available_at"):
+                    self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
+                available_at = self._storyline_shell_available_at.get(shell_key)
+                if available_at is not None and time < available_at:
+                    time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
             if os_category == "linux":
                 self.activity_generator.generate_bash_command_with_noise(
@@ -935,6 +943,8 @@ class StorylineMixin:
                     process_name=process_name,
                     logon_id=logon_id,
                 )
+                if os_category == "linux":
+                    self._storyline_shell_available_at[shell_key] = term_time
 
         elif spec.type == "connection":
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]
@@ -1672,6 +1682,13 @@ class StorylineMixin:
                 ttl_val = float(spec.ttl) if spec.ttl is not None else float(rng.randint(60, 3600))
                 ttls = [ttl_val] * len(answers)
 
+            # Resolve DNS server IP before choosing source-native DNS RTT so
+            # local resolvers do not get impossible multi-second timings.
+            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
+            dns_server_ip = rng.choice(dns_server_ips)
+            query_src_ip = spec.source_ip or system.ip
+            from evidenceforge.generation.activity.generator import _dns_rtt
+
             dns_ctx = DnsContext(
                 query=spec.query,
                 query_type=spec.qtype,
@@ -1685,13 +1702,8 @@ class StorylineMixin:
                 RD=True,
                 RA=True,
                 rejected=spec.rcode == "REFUSED",
-                rtt=rng.uniform(1.0, 50.0),
+                rtt=_dns_rtt(rng, dns_server_ip),
             )
-
-            # Resolve DNS server IP
-            dns_server_ips = getattr(self.activity_generator, "_dns_server_ips", ["10.0.0.1"])
-            dns_server_ip = rng.choice(dns_server_ips)
-            query_src_ip = spec.source_ip or system.ip
 
             self.activity_generator.generate_connection(
                 src_ip=query_src_ip,
@@ -2045,6 +2057,9 @@ class StorylineMixin:
                 if rcode_name == "NXDOMAIN":
                     nxdomain_count += 1
 
+                dns_server_ip = rng.choice(dns_server_ips)
+                from evidenceforge.generation.activity.generator import _dns_rtt
+
                 dns_ctx = DnsContext(
                     query=domain,
                     query_type="A",
@@ -2058,10 +2073,9 @@ class StorylineMixin:
                     RD=True,
                     RA=True,
                     rejected=False,
-                    rtt=rng.uniform(1.0, 50.0),
+                    rtt=_dns_rtt(rng, dns_server_ip),
                 )
 
-                dns_server_ip = rng.choice(dns_server_ips)
                 self.activity_generator.generate_connection(
                     src_ip=query_src_ip,
                     dst_ip=dns_server_ip,

@@ -176,7 +176,7 @@ class TestConnectionIdCounter:
         terminal_digits = {conn_id % 10 for conn_id in ids}
         assert len(terminal_digits) >= 8
 
-    def test_sorted_built_ids_follow_timestamp_order(self, asa_emitter, tmp_path):
+    def test_sorted_output_preserves_stateful_connection_ids(self, asa_emitter, tmp_path):
         late_event = _make_connection_event(
             timestamp=T0 + timedelta(seconds=30),
             src_port=50001,
@@ -193,15 +193,18 @@ class TestConnectionIdCounter:
         asa_emitter.flush()
 
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
-        built_ids = [
-            int(match.group(1))
-            for line in output.splitlines()
-            if "Built outbound TCP connection" in line
-            for match in [re.search(r"connection (\d+) for", line)]
-            if match is not None
+        built_lines = [
+            line for line in output.splitlines() if "Built outbound TCP connection" in line
         ]
+        built_ids = []
+        for line in built_lines:
+            match = re.search(r"connection (\d+) for", line)
+            assert match is not None
+            built_ids.append(int(match.group(1)))
 
-        assert built_ids == sorted(built_ids)
+        assert built_lines == sorted(built_lines)
+        assert len(built_ids) == len(set(built_ids))
+        assert abs(built_ids[0] - built_ids[1]) < 100
 
 
 class TestPermitRecords:

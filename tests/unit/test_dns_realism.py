@@ -497,6 +497,35 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.duration == 0.35
 
+    def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Caller-provided short durations should still cover dns.log RTT."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.01,
+            dns=DnsContext(
+                query="www.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                rtt=0.08,
+            ),
+            resp_bytes=120,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.duration == 0.08
+
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

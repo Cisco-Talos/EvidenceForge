@@ -3,6 +3,8 @@
 
 """Unit tests for EDR pools YAML loader."""
 
+import random
+
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
     get_dll_pool,
@@ -178,6 +180,36 @@ class TestTemplateMaterialization:
         key_doc = key.rsplit("app-", 1)[1].split(".exe", 1)[0]
         details_doc = details.rsplit("app-", 1)[1].split(".exe", 1)[0]
         assert key_doc == details_doc
+
+
+class TestFileSideEffectRealism:
+    def test_default_side_effect_pools_do_not_leak_generator_names(self):
+        data = load_edr_pools()
+        haystack = str(data)
+        assert "eforge-" not in haystack
+        assert "artifact-" not in haystack
+
+    def test_gzip_side_effect_uses_compressed_operand_path(self):
+        effect = select_file_side_effect(
+            "gzip",
+            "gzip -9 /tmp/patient_claims.sql",
+            "linux",
+            random.Random(7),
+            user="root",
+        )
+
+        assert effect == ("create", "/tmp/patient_claims.sql.gz")
+
+    def test_mysqldump_side_effect_uses_redirect_path(self):
+        effect = select_file_side_effect(
+            "mysqldump",
+            "mysqldump ehr patients > /tmp/patient_claims.sql",
+            "linux",
+            random.Random(7),
+            user="root",
+        )
+
+        assert effect == ("create", "/tmp/patient_claims.sql")
 
 
 class TestOverlayValidation:

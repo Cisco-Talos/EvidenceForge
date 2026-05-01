@@ -3143,7 +3143,11 @@ class ActivityGenerator:
             if not _is_private_ip(dst_ip):
                 hostname = _generate_random_hostname(_get_rng(), dst_ip)
 
-        if hostname and hostname_was_explicit:
+        if (
+            hostname
+            and hostname_was_explicit
+            and not (service == "dns" and proto in ("udp", "tcp") and dst_port == 53)
+        ):
             from evidenceforge.generation.activity.dns_registry import (
                 get_domain_ips,
                 resolve_domain_ip,
@@ -3519,8 +3523,8 @@ class ActivityGenerator:
                 min_query_payload += 10
             if orig_bytes is None or orig_bytes < min_query_payload:
                 orig_bytes = min_query_payload
-            if duration is None and dns is not None and dns.rtt is not None:
-                duration = max(0.001, dns.rtt)
+            if dns is not None and dns.rtt is not None:
+                duration = max(duration or 0.001, dns.rtt)
 
         if pid > 0 and resolved_source_system:
             resolved_process = self.state_manager.get_process(resolved_source_system.hostname, pid)
@@ -3924,12 +3928,7 @@ class ActivityGenerator:
                 event.network.resp_bytes = 0
                 event.network.resp_pkts = 0
                 event.network.resp_ip_bytes = None
-        elif (
-            service == "dns"
-            and proto in ("udp", "tcp")
-            and dst_port == 53
-            and dst_ip in set(getattr(self, "_dns_server_ips", []))
-        ):
+        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and hostname:
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
             event.dns = DnsContext(
                 query=dns_query,
@@ -3951,6 +3950,8 @@ class ActivityGenerator:
                 else [],
                 rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
             )
+            if event.dns.rtt is not None:
+                event.network.duration = max(event.network.duration or 0.001, event.dns.rtt)
 
         # Proxy context: attach only for established outbound internet traffic.
         # Forward proxies only see egress that completes (not blocked/denied flows).

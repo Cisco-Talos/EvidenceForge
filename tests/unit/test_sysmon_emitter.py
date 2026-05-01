@@ -482,3 +482,4 @@ class TestSysmonEventEmitter:
         assert guid1 != guid3  # Different PID → different GUID
         assert guid1.startswith("{") and guid1.endswith("}")
         assert len(guid1) == 38  # {8-4-4-4-12} = 38 chars
+        assert guid1.strip("{}").split("-")[3] != f"{1234:04x}"
