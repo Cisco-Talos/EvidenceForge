@@ -22,6 +22,7 @@
 
 """Tests for evaluation log parsers."""
 
+from datetime import UTC
 from pathlib import Path
 
 GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
@@ -205,6 +206,76 @@ class TestSyslogParser:
         parser = SyslogParser()
         records = list(parser.parse_file(GOOD_FIXTURES / "syslog.log"))
         assert all(r.timestamp is not None for r in records)
+
+    def test_scenario_year_overrides_mtime(self, tmp_path):
+        """Scenario time_window.start year wins over file mtime year."""
+        from types import SimpleNamespace
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log = tmp_path / "syslog.log"
+        log.write_text(
+            "Mar 18 12:00:00 host sshd[1]: Connected from 10.0.0.1\n",
+            encoding="utf-8",
+        )
+        # Force mtime to 2026
+        import os
+
+        mtime_2026 = 1746057600  # approximately 2026-01-01
+        os.utime(log, (mtime_2026, mtime_2026))
+
+        scenario = SimpleNamespace(
+            time_window=SimpleNamespace(
+                start=__import__("datetime").datetime(2024, 3, 1, 0, 0, 0, tzinfo=UTC)
+            )
+        )
+        parser = SyslogParser()
+        parser.scenario = scenario
+        records = list(parser.parse_file(log))
+
+        assert len(records) == 1
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2024
+
+    def test_mtime_fallback_when_no_scenario(self, tmp_path):
+        """Without a scenario, year falls back to mtime."""
+        from evidenceforge.evaluation.parsers.syslog import _infer_seed_year
+
+        log = tmp_path / "syslog.log"
+        log.write_text("placeholder\n", encoding="utf-8")
+        import os
+
+        # Set mtime to 2023
+        mtime_2023 = 1672531200  # 2023-01-01 00:00:00 UTC
+        os.utime(log, (mtime_2023, mtime_2023))
+
+        year = _infer_seed_year(log, scenario=None)
+        assert year == 2023
+
+    def test_year_boundary_wrap(self, tmp_path):
+        """Dec→Jan year wrap is applied when scenario seeds year=2025."""
+        from types import SimpleNamespace
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log = tmp_path / "syslog.log"
+        # Dec 31 then Jan 1 — second line should be bumped to 2026
+        log.write_text(
+            "Dec 31 23:59:00 host cron[1]: job start\nJan  1 00:01:00 host cron[1]: job end\n",
+            encoding="utf-8",
+        )
+        scenario = SimpleNamespace(
+            time_window=SimpleNamespace(
+                start=__import__("datetime").datetime(2025, 12, 31, 0, 0, 0)
+            )
+        )
+        parser = SyslogParser()
+        parser.scenario = scenario
+        records = list(parser.parse_file(log))
+
+        assert len(records) == 2
+        assert records[0].timestamp.year == 2025
+        assert records[1].timestamp.year == 2026
 
 
 class TestSnortAlertParser:

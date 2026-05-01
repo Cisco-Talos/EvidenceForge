@@ -260,6 +260,7 @@ class EvaluationEngine:
                 },
             )
             parser = get_parser(format_name)
+            parser.scenario = self.scenario
             format_records: list[ParsedRecord] = []
             for path in paths:
                 logger.info(f"Parsing {format_name}: {path.name}")

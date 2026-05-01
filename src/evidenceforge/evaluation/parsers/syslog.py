@@ -51,12 +51,25 @@ SYSLOG_ISO_PATTERN = re.compile(
 _WRAP_THRESHOLD_SECONDS = 180 * 24 * 3600  # ~6 months
 
 
-def _infer_seed_year(path: Path) -> int:
+def _infer_seed_year(path: Path, scenario: object | None = None) -> int:
     """Return the best-guess year for BSD syslog records in *path*.
 
-    Tries file modification time first (reliable for generated/synthetic logs),
-    falls back to current year.
+    Preference order:
+    1. scenario.time_window.start year — the canonical date the scenario targets.
+    2. File modification time — fallback for use outside the evaluation engine.
+    3. Current year — last resort.
     """
+    if scenario is not None:
+        try:
+            tw = getattr(scenario, "time_window", None)
+            start = getattr(tw, "start", None) if tw is not None else None
+            if start is not None:
+                if isinstance(start, datetime):
+                    return start.year
+                # String ISO timestamp: "2024-03-18T12:00:00Z"
+                return int(str(start)[:4])
+        except Exception:
+            pass
     try:
         return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).year
     except OSError:
@@ -98,7 +111,7 @@ class SyslogParser(LogParser):
         return path.name == "syslog.log"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
-        seed_year = _infer_seed_year(path)
+        seed_year = _infer_seed_year(path, getattr(self, "scenario", None))
         last_ts: datetime | None = None
 
         with path.open(encoding="utf-8") as f:

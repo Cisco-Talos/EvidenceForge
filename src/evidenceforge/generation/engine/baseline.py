@@ -4213,6 +4213,48 @@ class BaselineMixin:
                                 ssh_user, system, cmd_time, cmd
                             )
 
+            # Bash: interactive shell usage on Linux workstations for assigned user
+            if os_cat == "linux" and sys_type == "workstation" and system.assigned_user:
+                ws_user = next(
+                    (
+                        u
+                        for u in self.scenario.environment.users
+                        if u.username == system.assigned_user and u.enabled
+                    ),
+                    None,
+                )
+                if ws_user is not None:
+                    from evidenceforge.generation.activity.bash_commands import (
+                        pick_bash_command_entry,
+                    )
+
+                    n_cmds = rng.randint(1, 4)
+                    ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                    hour_end = current_hour + timedelta(hours=1)
+                    cumulative = 0
+                    typo_count = 0
+                    for _ in range(n_cmds):
+                        gap = rng.randint(30, 300)
+                        cumulative += gap
+                        cmd_time = ts0 + timedelta(seconds=cumulative)
+                        if cmd_time >= hour_end:
+                            break
+                        cmd, is_typo = pick_bash_command_entry(
+                            rng,
+                            ws_user.persona or "",
+                            system.hostname,
+                            system.services,
+                            username=ws_user.username,
+                            session_command_count=n_cmds,
+                            prior_typo_count=typo_count,
+                        )
+                        if is_typo:
+                            typo_count += 1
+                        self.state_manager.set_current_time(cmd_time)
+                        self.activity_generator.generate_bash_command(
+                            ws_user, system, cmd_time, cmd
+                        )
+
         # RDP: IT admin connections to Windows servers/DCs
         for system in self.scenario.environment.systems:
             os_cat_rdp = _get_os_category(system.os)
