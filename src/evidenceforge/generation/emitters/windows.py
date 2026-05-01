@@ -132,6 +132,40 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     return netbios_domain
 
 
+def _special_privilege_fallback(username: str) -> str:
+    """Return a realistic 4672 privilege set when AuthContext omits one."""
+    normalized = username.upper()
+    if normalized in {"LOCAL SERVICE", "NETWORK SERVICE"}:
+        return (
+            "SeAssignPrimaryTokenPrivilege\n\t\t\t"
+            "SeAuditPrivilege\n\t\t\t"
+            "SeImpersonatePrivilege\n\t\t\t"
+            "SeChangeNotifyPrivilege"
+        )
+    if normalized == "SYSTEM" or normalized.endswith("$"):
+        return (
+            "SeTcbPrivilege\n\t\t\t"
+            "SeSecurityPrivilege\n\t\t\t"
+            "SeTakeOwnershipPrivilege\n\t\t\t"
+            "SeLoadDriverPrivilege\n\t\t\t"
+            "SeBackupPrivilege\n\t\t\t"
+            "SeRestorePrivilege\n\t\t\t"
+            "SeDebugPrivilege\n\t\t\t"
+            "SeAuditPrivilege\n\t\t\t"
+            "SeSystemEnvironmentPrivilege\n\t\t\t"
+            "SeImpersonatePrivilege\n\t\t\t"
+            "SeDelegateSessionUserImpersonatePrivilege"
+        )
+    return (
+        "SeSecurityPrivilege\n\t\t\t"
+        "SeBackupPrivilege\n\t\t\t"
+        "SeRestorePrivilege\n\t\t\t"
+        "SeTakeOwnershipPrivilege\n\t\t\t"
+        "SeDebugPrivilege\n\t\t\t"
+        "SeImpersonatePrivilege"
+    )
+
+
 class WindowsEventEmitter(LogEmitter):
     """Emitter for Windows Event Log format (XML).
 
@@ -326,7 +360,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
-            privs = auth.privilege_list or "SeChangeNotifyPrivilege"
+            privs = auth.privilege_list or _special_privilege_fallback(auth.username)
             priv_data = {
                 "EventID": 4672,
                 "TimeCreated": event.timestamp,
@@ -354,7 +388,7 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
 
-        privs = auth.privilege_list or "SeChangeNotifyPrivilege"
+        privs = auth.privilege_list or _special_privilege_fallback(auth.username)
 
         priv_data = {
             "EventID": 4672,

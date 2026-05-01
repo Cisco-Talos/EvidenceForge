@@ -9,6 +9,59 @@
 #
 # Template variables: {user} = process owner username, {rand} = 5-digit random
 
+# Process-aware file side effects for ambient eCAR/Sysmon FILE telemetry.
+# Only processes matching one of these profiles emit probabilistic file events;
+# read-only recon tools intentionally have no profile, so they cannot create
+# impossible side effects such as dsquery.exe writing installers or browsers
+# deleting Security.evtx.
+file_side_effect_profiles:
+  - name: browser_cache
+    executables: ["chrome.exe", "msedge.exe", "firefox.exe", "chrome", "firefox"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\Cache_Data\\f_{hex}"
+      - "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\Cache_Data\\f_{hex}"
+      - "C:\\Users\\{user}\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\default-release\\cache2\\entries\\{hex}"
+    paths_linux:
+      - "/home/{user}/.cache/mozilla/firefox/default-release/cache2/entries/{hex}"
+      - "/home/{user}/.cache/google-chrome/Default/Cache/Cache_Data/f_{hex}"
+
+  - name: shell_temp
+    executables: ["cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\eforge-{rand}.tmp"
+      - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+    paths_linux:
+      - "/home/{user}/.cache/eforge/tmp-{rand}"
+      - "/home/{user}/.bash_history"
+
+  - name: package_manager
+    executables: ["apt", "apt-get", "dnf", "yum", "dpkg", "rpm"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/apt/history.log"
+      - "/var/lib/dpkg/status"
+      - "/var/lib/dnf/history.sqlite"
+
+  - name: installer_update
+    executables: ["msiexec.exe", "tiworker.exe", "usoclient.exe"]
+    executable_contains: ["install", "setup", "update", "patch"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Windows\\Temp\\eforge-{rand}.tmp"
+      - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
+    paths_linux:
+      - "/var/tmp/eforge-{rand}.tmp"
+
+  - name: archive_and_runtime_artifacts
+    executables: ["mysqldump", "gzip", "tar", "zip", "python", "python3", "node", "java"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\artifact-{rand}.tmp"
+    paths_linux:
+      - "/tmp/artifact-{rand}"
+
 file_paths_windows:
   # User documents
   - "C:\\Users\\{user}\\Documents\\report.docx"

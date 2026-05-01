@@ -25,6 +25,7 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -55,8 +56,19 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
         http = event.http
+        event_ts = event.timestamp + sample_timing_delta(
+            "source.zeek_http_request",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+        )
         event_data: dict[str, Any] = {
-            "ts": event.timestamp,
+            "ts": event_ts,
             "uid": net.zeek_uid,
             "id.orig_h": net.src_ip,
             "id.orig_p": net.src_port,

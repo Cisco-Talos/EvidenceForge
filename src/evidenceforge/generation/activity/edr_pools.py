@@ -91,6 +91,13 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
                 "Invalid EDR pool section %s in overlay-merged config; falling back to package defaults",
                 key,
             )
+    candidate_profiles = merged.get("file_side_effect_profiles")
+    if isinstance(candidate_profiles, list) and all(
+        isinstance(p, dict) for p in candidate_profiles
+    ):
+        sanitized["file_side_effect_profiles"] = candidate_profiles
+    elif "file_side_effect_profiles" in defaults:
+        sanitized["file_side_effect_profiles"] = defaults["file_side_effect_profiles"]
     return sanitized
 
 
@@ -152,3 +159,39 @@ def materialize_edr_template(template: str, rng: random.Random, user: str = "SYS
 
     materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
     return materialized.replace("{{", "{").replace("}}", "}")
+
+
+def select_file_side_effect(
+    process_name: str,
+    command_line: str,
+    os_category: str,
+    rng: random.Random,
+    user: str = "SYSTEM",
+) -> tuple[str, str] | None:
+    """Return a process-aware file side effect from data-driven EDR profiles."""
+    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    command_lower = command_line.lower()
+    profiles = load_edr_pools().get("file_side_effect_profiles", [])
+    for profile in profiles:
+        exact = {str(item).lower() for item in profile.get("executables", [])}
+        contains = [str(item).lower() for item in profile.get("executable_contains", [])]
+        command_contains = [str(item).lower() for item in profile.get("command_contains", [])]
+        if exe not in exact and not any(marker in exe for marker in contains):
+            if not any(marker in command_lower for marker in command_contains):
+                continue
+
+        probability = float(profile.get("probability", 1.0))
+        if probability <= 0 or rng.random() > probability:
+            return None
+
+        paths_key = "paths_windows" if os_category == "windows" else "paths_linux"
+        paths = profile.get(paths_key, [])
+        actions = profile.get("actions", ["modify"])
+        if not paths or not actions:
+            return None
+        action = str(rng.choice(actions)).lower()
+        path = materialize_edr_template(str(rng.choice(paths)), rng, user=user)
+        if os_category == "linux" and user == "root":
+            path = path.replace("/home/root/", "/root/")
+        return action, path
+    return None

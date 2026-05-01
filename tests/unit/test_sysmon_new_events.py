@@ -614,7 +614,7 @@ class TestRenderEventRegistry:
         output_path = list(emitter._host_writers.values())[0].output_path
         content = output_path.read_text()
         assert "<EventID>12</EventID>" in content
-        assert "DeleteValue" in content
+        assert "DeleteKey" in content
 
 
 class TestRenderEvent22:

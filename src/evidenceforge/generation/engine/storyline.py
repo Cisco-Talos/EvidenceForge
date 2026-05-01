@@ -523,20 +523,25 @@ class StorylineMixin:
 
             cadence_offsets = typing_cadence(len(storyline_event.events), rng)
 
-            for i, spec in enumerate(storyline_event.events):
-                event_t = event_time + timedelta(seconds=cadence_offsets[i])
-                self.state_manager.set_current_time(event_t)
-                malicious_event = self._execute_typed_event(
-                    spec=spec,
-                    actor=actor,
-                    system=system,
-                    time=event_t,
-                    activity=storyline_event.activity,
-                    explicit_types=explicit_types,
-                )
-                if malicious_event:
-                    self.malicious_events.append(malicious_event)
-            self._flush_story_process_terminations()
+            previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
+            self.dispatcher.storyline_cluster_id = storyline_event.id
+            try:
+                for i, spec in enumerate(storyline_event.events):
+                    event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    self.state_manager.set_current_time(event_t)
+                    malicious_event = self._execute_typed_event(
+                        spec=spec,
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        activity=storyline_event.activity,
+                        explicit_types=explicit_types,
+                    )
+                    if malicious_event:
+                        self.malicious_events.append(malicious_event)
+                self._flush_story_process_terminations()
+            finally:
+                self.dispatcher.storyline_cluster_id = previous_cluster
 
             if cadence_offsets:
                 _prev_event_time = event_time + timedelta(seconds=cadence_offsets[-1])
@@ -577,20 +582,25 @@ class StorylineMixin:
 
         cadence_offsets = typing_cadence(len(storyline_event.events), rng)
 
-        for i, spec in enumerate(storyline_event.events):
-            event_t = event_time + timedelta(seconds=cadence_offsets[i])
-            self.state_manager.set_current_time(event_t)
-            malicious_event = self._execute_typed_event(
-                spec=spec,
-                actor=actor,
-                system=system,
-                time=event_t,
-                activity=storyline_event.activity,
-                explicit_types=explicit_types,
-            )
-            if malicious_event:
-                self.malicious_events.append(malicious_event)
-        self._flush_story_process_terminations()
+        previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
+        self.dispatcher.storyline_cluster_id = storyline_event.id
+        try:
+            for i, spec in enumerate(storyline_event.events):
+                event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                self.state_manager.set_current_time(event_t)
+                malicious_event = self._execute_typed_event(
+                    spec=spec,
+                    actor=actor,
+                    system=system,
+                    time=event_t,
+                    activity=storyline_event.activity,
+                    explicit_types=explicit_types,
+                )
+                if malicious_event:
+                    self.malicious_events.append(malicious_event)
+            self._flush_story_process_terminations()
+        finally:
+            self.dispatcher.storyline_cluster_id = previous_cluster
 
     def _execute_single_red_herring_event(self, event_idx: int) -> None:
         """Execute a single red herring event by index.
@@ -628,22 +638,27 @@ class StorylineMixin:
 
         cadence_offsets = typing_cadence(len(rh_event.events), rng)
 
-        for i, spec in enumerate(rh_event.events):
-            event_t = event_time + timedelta(seconds=cadence_offsets[i])
-            self.state_manager.set_current_time(event_t)
-            result = self._execute_typed_event(
-                spec=spec,
-                actor=actor,
-                system=system,
-                time=event_t,
-                activity=rh_event.activity,
-                explicit_types=explicit_types,
-            )
-            if result:
-                # Track as red herring, not malicious
-                result["explanation"] = rh_event.explanation
-                self.red_herring_events.append(result)
-        self._flush_story_process_terminations()
+        previous_cluster = getattr(self.dispatcher, "storyline_cluster_id", None)
+        self.dispatcher.storyline_cluster_id = f"red_herring:{rh_event.id}"
+        try:
+            for i, spec in enumerate(rh_event.events):
+                event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                self.state_manager.set_current_time(event_t)
+                result = self._execute_typed_event(
+                    spec=spec,
+                    actor=actor,
+                    system=system,
+                    time=event_t,
+                    activity=rh_event.activity,
+                    explicit_types=explicit_types,
+                )
+                if result:
+                    # Track as red herring, not malicious
+                    result["explanation"] = rh_event.explanation
+                    self.red_herring_events.append(result)
+            self._flush_story_process_terminations()
+        finally:
+            self.dispatcher.storyline_cluster_id = previous_cluster
 
     def _execute_typed_event(
         self,
@@ -833,6 +848,9 @@ class StorylineMixin:
 
             output_file = self._extract_output_file(command_line, os_category)
             if output_file:
+                if os_category == "linux" and output_file.startswith("~/"):
+                    home = "/root" if actor.username == "root" else f"/home/{actor.username}"
+                    output_file = f"{home}/{output_file[2:]}"
                 file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
                 from evidenceforge.events.base import SecurityEvent
                 from evidenceforge.events.contexts import (

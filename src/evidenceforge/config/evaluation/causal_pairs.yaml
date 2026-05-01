@@ -59,6 +59,7 @@ pairs:
       after: principal
     extra_match: hostname
     exclude_accounts: ["SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "root", "www-data", "nobody", "daemon", "mysql", "postgres", "syslog"]
+    allow_missing_prior: true
 
   - name: "Process creation before process termination"
     before:
@@ -134,6 +135,7 @@ pairs:
     # Allow up to 3% of TCP connections without preceding DNS (hardcoded IPs,
     # static hosts entries, infrastructure services configured by IP).
     tolerance: 0.03
+    allow_missing_prior: true
 
   - name: "Kerberos TGT before service ticket"
     before:

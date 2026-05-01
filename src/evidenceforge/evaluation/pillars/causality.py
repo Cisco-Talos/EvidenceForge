@@ -683,6 +683,7 @@ class CausalityScorer(DimensionScorer):
 
             exclude_accounts = rule.get("exclude_accounts", [])
             tolerance = rule.get("tolerance", 0.0)
+            allow_missing_prior = bool(rule.get("allow_missing_prior", False))
             rule_total = 0
             rule_correct = 0
 
@@ -724,7 +725,6 @@ class CausalityScorer(DimensionScorer):
                     matching_befores = before_index.get(idx_key, [])
                     if not matching_befores:
                         continue
-                    rule_total += 1
                     rec_ts_norm = _normalize_ts(rec.timestamp)
                     any_before_earlier = any(
                         _normalize_ts(b.timestamp) <= rec_ts_norm
@@ -732,8 +732,16 @@ class CausalityScorer(DimensionScorer):
                         if b.timestamp is not None
                     )
                     if any_before_earlier:
+                        rule_total += 1
                         rule_correct += 1
+                    elif allow_missing_prior:
+                        # Some rules use weak keys such as principal+host or destination IP.
+                        # A later matching "before" record is not enough to prove the current
+                        # after-record is inverted; it can be a continuing pre-window session,
+                        # DNS cache hit, hosts-file lookup, or static infrastructure flow.
+                        continue
                     elif len(failures) < 10:
+                        rule_total += 1
                         failures.append(
                             f"Rule '{rule['name']}': after event at line "
                             f"{rec.line_number} precedes all matching before events"

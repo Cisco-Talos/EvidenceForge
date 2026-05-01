@@ -2807,40 +2807,44 @@ class ActivityGenerator:
         host_ctx = self._build_host_context(system)
         auth_ctx = AuthContext(username=process_username)
         if rng.random() < 0.40:
-            action = rng.choice(["CREATE", "MODIFY", "MODIFY", "DELETE"])
-            from evidenceforge.generation.activity.edr_pools import get_file_paths
+            from evidenceforge.generation.activity.edr_pools import select_file_side_effect
 
-            pool = get_file_paths(os_category)
-            path = (
-                rng.choice(pool)
-                .replace("{user}", user.username)
-                .replace("{rand}", f"{rng.randint(10000, 99999)}")
+            side_effect = select_file_side_effect(
+                process_name=process_name,
+                command_line=command_line,
+                os_category=os_category,
+                rng=rng,
+                user=process_username,
             )
-            event_type = {
-                "CREATE": "file_create",
-                "MODIFY": "file_modify",
-                "DELETE": "file_delete",
-            }[action]
-            self.dispatcher.dispatch(
-                SecurityEvent(
-                    timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
-                    event_type=event_type,
-                    src_host=host_ctx,
-                    auth=auth_ctx,
-                    process=ProcessContext(
-                        pid=pid,
-                        parent_pid=parent_pid,
-                        image=process_name,
-                        command_line=command_line,
-                        username=process_username,
-                        logon_id=process_logon_id,
-                        start_time=running_proc.start_time if running_proc is not None else None,
+            if side_effect is not None:
+                action, path = side_effect
+                event_type = {
+                    "create": "file_create",
+                    "modify": "file_modify",
+                    "delete": "file_delete",
+                }[action]
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time + timedelta(milliseconds=rng.randint(110, 650)),
+                        event_type=event_type,
+                        src_host=host_ctx,
+                        auth=auth_ctx,
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=process_name,
+                            command_line=command_line,
+                            username=process_username,
+                            logon_id=process_logon_id,
+                            start_time=running_proc.start_time
+                            if running_proc is not None
+                            else None,
+                        ),
+                        file=FileContext(path=path, action=action, pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        storyline_origin=from_storyline,
                     ),
-                    file=FileContext(path=path, action=action.lower(), pid=pid),
-                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
-                    storyline_origin=from_storyline,
                 )
-            )
         if os_category == "windows" and rng.random() < 0.30:
             from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 

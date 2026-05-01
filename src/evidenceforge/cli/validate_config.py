@@ -201,11 +201,10 @@ def validate_config() -> ValidationResult:
             "list_fields": {"patterns": None},
         },
         "activity/edr_pools.yaml": {
+            "list_fields": {"file_side_effect_profiles": None},
             "string_list_fields": {
                 "file_paths_windows",
                 "file_paths_linux",
-                "registry_keys_hkcu",
-                "registry_keys_hklm",
                 "dll_pool",
             },
         },
@@ -265,7 +264,8 @@ def validate_config() -> ValidationResult:
             dict_fields = file_schema.get("dict_fields", set())
 
             # Reject unexpected top-level keys (they will be silently ignored by the engine)
-            known_keys = set(list_fields.keys()) | dict_fields
+            string_list_fields = file_schema.get("string_list_fields", set())
+            known_keys = set(list_fields.keys()) | dict_fields | set(string_list_fields)
             if known_keys:
                 for key in data:
                     if key not in known_keys and key != "_replace":
@@ -342,7 +342,6 @@ def validate_config() -> ValidationResult:
                     overlay_errors = True
 
             # Check string list fields (lists of plain strings, e.g., edr_pools paths)
-            string_list_fields = file_schema.get("string_list_fields", set())
             for field_name in string_list_fields:
                 if field_name in data:
                     value = data[field_name]
@@ -1375,6 +1374,7 @@ def validate_config() -> ValidationResult:
         CreateRemoteThreadPatternEntry,
         DnsEntry,
         DnsTunnelRttConfig,
+        EdrFileSideEffectProfile,
         KerberosRealismConfig,
         OuiEntry,
         PersonaEntry,
@@ -1461,6 +1461,18 @@ def validate_config() -> ValidationResult:
             "create_remote_thread_patterns.yaml start_locations",
         )
     )
+
+    from evidenceforge.generation.activity.edr_pools import load_edr_pools
+
+    edr_pools_data = load_edr_pools()
+    if edr_pools_data:
+        _SCHEMA_CHECKS.append(
+            (
+                edr_pools_data.get("file_side_effect_profiles", []),
+                EdrFileSideEffectProfile,
+                "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
 
     # traffic_profiles.yaml: connection entries
     all_traffic_connection_entries = []

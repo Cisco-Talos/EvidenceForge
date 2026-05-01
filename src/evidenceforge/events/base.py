@@ -140,6 +140,11 @@ class SecurityEvent:
     # by per-host monotonic-clock normalisation or session-activity clamping.
     storyline_origin: bool = False
 
+    # Provenance-only cluster identifier for events generated while executing a
+    # storyline/red-herring context. Unlike storyline_origin, this does not
+    # change timestamp normalization or source-native rendering behavior.
+    storyline_cluster_id: str | None = None
+
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format
     _sensor_hostnames_by_format: dict[str, list[str]] = field(default_factory=dict)

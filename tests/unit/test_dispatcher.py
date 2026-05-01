@@ -93,6 +93,19 @@ class TestDispatchRouting:
         sm.apply.assert_called_once_with(event)
         emitter.emit.assert_not_called()
 
+    def test_dispatch_applies_storyline_cluster_provenance_only(self):
+        """storyline_cluster_id marks context provenance without changing origin flag."""
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        dispatcher.dispatch(event)
+
+        assert event.storyline_cluster_id == "story-001"
+        assert event.storyline_origin is False
+
 
 class TestNetworkVisibilityFiltering:
     """Tests for network visibility integration in dispatcher."""

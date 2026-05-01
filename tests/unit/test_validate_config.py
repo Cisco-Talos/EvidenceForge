@@ -216,6 +216,35 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_edr_side_effect_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import edr_pools
+
+        real_loader = edr_pools.load_edr_pools
+
+        def load_invalid_edr_pools():
+            data = real_loader()
+            return {
+                **data,
+                "file_side_effect_profiles": [
+                    {
+                        "name": "bad",
+                        "actions": ["modify"],
+                        "paths_windows": [r"C:\Temp\x.tmp"],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(edr_pools, "load_edr_pools", load_invalid_edr_pools)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_side_effect_profiles)"
+            and "profile must define executables" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_windows_collision_spacing(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 

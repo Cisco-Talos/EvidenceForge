@@ -11,6 +11,7 @@ from evidenceforge.generation.activity.edr_pools import (
     get_registry_keys_hklm,
     load_edr_pools,
     materialize_edr_template,
+    select_file_side_effect,
 )
 
 
@@ -33,8 +34,39 @@ class TestLoadEdrPools:
             "registry_keys_hkcu",
             "registry_keys_hklm",
             "dll_pool",
+            "file_side_effect_profiles",
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
+
+    def test_read_only_recon_tool_has_no_file_side_effect(self):
+        import random
+
+        effect = select_file_side_effect(
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line='dsquery.exe group -name "Domain Admins"',
+            os_category="windows",
+            rng=random.Random(5),
+            user="alice",
+        )
+
+        assert effect is None
+
+    def test_browser_side_effect_uses_browser_cache_profile(self):
+        import random
+
+        effect = select_file_side_effect(
+            process_name=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line="chrome.exe --type=renderer",
+            os_category="windows",
+            rng=random.Random(5),
+            user="alice",
+        )
+
+        assert effect is not None
+        action, path = effect
+        assert action in {"create", "modify"}
+        assert "cache" in path.lower()
+        assert "Security.evtx" not in path
 
 
 class TestFilePaths:

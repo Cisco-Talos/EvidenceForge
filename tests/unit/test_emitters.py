@@ -34,7 +34,10 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
-from evidenceforge.generation.emitters.windows import _normalize_windows_time_created
+from evidenceforge.generation.emitters.windows import (
+    _normalize_windows_time_created,
+    _special_privilege_fallback,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 
@@ -598,6 +601,14 @@ class TestWindowsEventEmitter:
         sec_pos = content.index("SeSecurityPrivilege")
         backup_pos = content.index("SeBackupPrivilege")
         assert sec_pos < backup_pos
+
+    def test_network_service_privilege_fallback_is_not_single_low_privilege(self):
+        """4672 fallback for NETWORK SERVICE includes real special privileges."""
+        privs = _special_privilege_fallback("NETWORK SERVICE")
+
+        assert "SeImpersonatePrivilege" in privs
+        assert "SeAssignPrimaryTokenPrivilege" in privs
+        assert privs != "SeChangeNotifyPrivilege"
 
     def test_emit_explicit_credentials_event(self, format_def, temp_output):
         """Test emitting 4648 (explicit credentials)."""

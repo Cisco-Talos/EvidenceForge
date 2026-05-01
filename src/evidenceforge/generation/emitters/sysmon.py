@@ -1261,7 +1261,7 @@ class SysmonEventEmitter(LogEmitter):
             event_type = "SetValue"
         elif action == "delete":
             event_id = 12
-            event_type = "DeleteValue"
+            event_type = "DeleteKey"
         elif action == "create":
             event_id = 12
             event_type = "CreateKey"
