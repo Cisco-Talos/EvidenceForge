@@ -20,15 +20,17 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for Dimension 4: Temporal Realism scoring."""
+"""Tests for Timing and Causality scoring (merged from temporal)."""
 
 from datetime import UTC, datetime, timedelta
 
-from evidenceforge.evaluation.dimensions.temporal import (
-    TemporalRealismScorer,
-    _extract_username,
-)
+from evidenceforge.evaluation._shared import _extract_username
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.causality import CausalityScorer
+from evidenceforge.evaluation.pillars.timing import TimingScorer, _group_by_user
+
+# Alias for tests that use the old TemporalRealismScorer name
+TemporalRealismScorer = TimingScorer
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
@@ -117,71 +119,6 @@ class TestUsernameExtraction:
         assert _extract_username(r) is None
 
 
-class TestWorkHourDistribution:
-    def test_events_in_work_hours(self):
-        """~90% of events during 9am-5pm should score well (80-95% target)."""
-        scenario = _make_scenario(personas=True, work_hours="9am-5pm")
-        # 9 events during work hours + 1 outside (3am) = 90% in work hours
-        records = {
-            "windows_event_security": [
-                _record(
-                    "windows_event_security",
-                    {"TargetUserName": "jsmith"},
-                    ts=T0 + timedelta(hours=h),
-                )
-                for h in range(0, 6)  # 10am-3pm (work hours)
-            ]
-            + [
-                _record(
-                    "windows_event_security",
-                    {"TargetUserName": "jsmith"},
-                    ts=datetime(2024, 1, 15, 3, 0, 0, tzinfo=UTC),
-                ),
-            ]
-        }
-        scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
-        result = scorer._score_work_hours(user_events, scenario)
-        # ~86% in work hours → within 80-95% target
-        assert result.score >= 50.0
-
-    def test_events_outside_work_hours(self):
-        """Events at 3am should score poorly."""
-        scenario = _make_scenario(personas=True, work_hours="9am-5pm")
-        # All events at 3am UTC (well outside 9-17 UTC work hours)
-        records = {
-            "windows_event_security": [
-                _record(
-                    "windows_event_security",
-                    {"TargetUserName": "jsmith"},
-                    ts=datetime(2024, 1, 15, 3, i, 0, tzinfo=UTC),
-                )
-                for i in range(10)
-            ]
-        }
-        scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
-        result = scorer._score_work_hours(user_events, scenario)
-        assert result.score < 50.0
-
-    def test_no_personas(self):
-        """Without personas, work hours check is skipped → score 100."""
-        scenario = _make_scenario(personas=False)
-        records = {
-            "windows_event_security": [
-                _record(
-                    "windows_event_security",
-                    {"TargetUserName": "jsmith"},
-                    ts=T0 + timedelta(hours=1),
-                )
-            ]
-        }
-        scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
-        result = scorer._score_work_hours(user_events, scenario)
-        assert result.score == 100.0
-
-
 class TestHumanBurstiness:
     def test_bursty_events(self):
         """Events with varied inter-event gaps should score well."""
@@ -200,7 +137,7 @@ class TestHumanBurstiness:
             ]
         }
         scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
+        user_events = _group_by_user(records)
         result = scorer._score_burstiness(user_events)
         # CV should be high (bursty) → good score
         assert result.score > 50.0
@@ -215,7 +152,7 @@ class TestHumanBurstiness:
             ]
         }
         scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
+        user_events = _group_by_user(records)
         result = scorer._score_burstiness(user_events)
         # CV near 0 → low score
         assert result.score < 20.0
@@ -282,7 +219,7 @@ class TestCausalOrdering:
             ]
         }
         scenario = _make_scenario()
-        scorer = TemporalRealismScorer()
+        scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
@@ -310,7 +247,7 @@ class TestCausalOrdering:
             ]
         }
         scenario = _make_scenario()
-        scorer = TemporalRealismScorer()
+        scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score < 100.0
 
@@ -330,7 +267,7 @@ class TestCausalOrdering:
             ]
         }
         scenario = _make_scenario()
-        scorer = TemporalRealismScorer()
+        scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
         # Within grace period → skipped → no pairs → perfect score
         assert result.score == 100.0
@@ -362,7 +299,7 @@ class TestCausalOrdering:
             ],
         }
         scenario = _make_scenario()
-        scorer = TemporalRealismScorer()
+        scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
@@ -386,7 +323,7 @@ class TestCausalOrdering:
             ],
         }
         scenario = _make_scenario()
-        scorer = TemporalRealismScorer()
+        scorer = CausalityScorer()
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
@@ -402,8 +339,8 @@ class TestTimingPlausibility:
             ]
         }
         scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
-        result = scorer._score_timing_plausibility(user_events, records)
+        user_events = _group_by_user(records)
+        result = scorer._score_rate_plausibility(user_events, records)
         assert result.score == 100.0
 
     def test_impossible_rate(self):
@@ -416,14 +353,14 @@ class TestTimingPlausibility:
             ]
         }
         scorer = TemporalRealismScorer()
-        user_events = scorer._group_by_user(records)
-        result = scorer._score_timing_plausibility(user_events, records)
+        user_events = _group_by_user(records)
+        result = scorer._score_rate_plausibility(user_events, records)
         assert result.score < 100.0
 
 
 class TestEndToEnd:
     def test_returns_full_dimension_score(self):
-        """Full scorer returns DimensionScore with 5 sub-scores."""
+        """Full scorer returns DimensionScore with expected sub-scores."""
         scenario = _make_scenario()
         records = {
             "windows_event_security": [
@@ -438,7 +375,11 @@ class TestEndToEnd:
         scorer = TemporalRealismScorer()
         result = scorer.score(records, scenario)
         assert result.number == 4
-        assert result.name == "Temporal Realism"
-        assert result.weight == 0.15
+        assert result.name == "Timing"
+        assert result.weight == 0.20
         assert result.score is not None
-        assert len(result.sub_scores) == 5
+        assert len(result.sub_scores) == 6
+        sub_keys = {s.key for s in result.sub_scores}
+        assert "diurnal_pattern" in sub_keys
+        assert "attack_chain_timing" in sub_keys
+        assert "rate_plausibility" in sub_keys

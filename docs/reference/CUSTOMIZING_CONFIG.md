@@ -173,6 +173,23 @@ Configuration files are interconnected. When you add an entry to one file, other
 
 The `/eforge:config` skill handles these dependencies automatically. If editing manually, run `/eforge:config validate my config files` to check for missing cross-references.
 
+## Customizing Data Quality Evaluation
+
+The `eforge eval` scoring rules are also YAML-based and can be tuned per-project:
+
+| File | Purpose |
+|------|---------|
+| `thresholds.yaml` | Hard-gate minimums and aspirational targets for each sub-score |
+| `co_occurrence.yaml` | Co-occurrence rules (field combinations that must/must not occur together) |
+| `distributions.yaml` | Reference distributions for format field populations |
+| `causal_pairs.yaml` | Before/after event pairs that must be correctly ordered |
+| `timing_bounds.yaml` | Min/max elapsed-time bounds between consecutive storyline steps |
+| `cross_source_pairs.yaml` | Format pairs and fields that must agree when the same event appears in both |
+
+All eval config files live in `src/evidenceforge/config/evaluation/`. They are **not** overlaid from `.eforge/config/` — edit them in-place if you want project-specific tuning, or copy the package files into your project and set the `EFORGE_EVAL_CONFIG_DIR` environment variable to point to your copies.
+
+For full schema documentation for each file, see the skill reference: `/eforge:references:config-evaluation`.
+
 ## Reference Documentation
 
 For full field schemas and conventions, see the reference docs installed with the skills:

@@ -58,14 +58,22 @@ class ProxyAccessParser(LogParser):
         return path.name == "proxy_access.log"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        hostname = self._source_host_from_path(path)
         with open(path) as f:
             for i, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
-                yield self._parse_line(line, i)
+                yield self._parse_line(line, i, hostname=hostname)
 
-    def _parse_line(self, line: str, line_number: int) -> ParsedRecord:
+    @staticmethod
+    def _source_host_from_path(path: Path) -> str | None:
+        parent = path.parent
+        if parent.name in {"data", "logs", "output"}:
+            return None
+        return parent.name
+
+    def _parse_line(self, line: str, line_number: int, hostname: str | None = None) -> ParsedRecord:
         fields: dict = {}
         errors: list[str] = []
         timestamp = None
@@ -80,6 +88,7 @@ class ProxyAccessParser(LogParser):
                 timestamp=None,
                 parse_errors=errors,
                 line_number=line_number,
+                source_host=hostname,
             )
 
         ts_str = match.group(1)
@@ -123,4 +132,5 @@ class ProxyAccessParser(LogParser):
             timestamp=timestamp,
             parse_errors=errors,
             line_number=line_number,
+            source_host=hostname,
         )

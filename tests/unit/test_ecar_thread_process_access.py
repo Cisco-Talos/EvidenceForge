@@ -100,7 +100,7 @@ class TestCreateRemoteThread:
         assert record["action"] == "REMOTE_CREATE"
 
     def test_source_target_pids_in_properties(self, emitter, ts, windows_host, tmp_path):
-        """Properties should include src_pid and tgt_pid as strings."""
+        """Properties should include src_pid and target_pid as strings."""
         event = SecurityEvent(
             timestamp=ts,
             event_type="create_remote_thread",
@@ -125,8 +125,8 @@ class TestCreateRemoteThread:
         record = json.loads(output_file.read_text().strip().split("\n")[0])
         props = record["properties"]
         assert props["src_pid"] == "2120"
-        assert props["tgt_pid"] == "4"
-        assert "tgt_pid_uuid" in props
+        assert props["target_pid"] == "4"
+        assert "target_process_uuid" in props
         assert "start_address" in props
 
     def test_top_level_pid_is_source(self, emitter, ts, windows_host, tmp_path):

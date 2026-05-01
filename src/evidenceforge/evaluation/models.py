@@ -1,23 +1,4 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
 # SPDX-License-Identifier: MIT
 
 """Data models for the evaluation framework.
@@ -32,7 +13,7 @@ from pydantic import BaseModel, Field
 
 
 class SubScore(BaseModel):
-    """A sub-score within a quality dimension."""
+    """A sub-score within a quality pillar."""
 
     name: str
     key: str
@@ -43,28 +24,39 @@ class SubScore(BaseModel):
     failure_summary: dict[str, dict[str, int]] = Field(default_factory=dict)
     """Aggregated failure counts by format and category.
     e.g. {"windows_event_security": {"parse_error": 2, "missing_field": 1}}"""
+    skipped: bool = False
+    """If true, this sub-score is excluded from the pillar's weighted mean and
+    its weight is redistributed proportionally across the remaining sub-scores."""
 
 
 class AcceptanceCriterion(BaseModel):
     """A pass/fail acceptance criterion checked against a sub-score."""
 
     name: str
-    dimension: int
+    pillar: str
     sub_score_key: str
     threshold: float
+    aspirational: float | None = None
     actual: float | None = None
     passed: bool | None = None
+    meets_aspirational: bool | None = None
     level: Literal["hard", "target"]
 
 
-class DimensionScore(BaseModel):
-    """Score for a single quality dimension."""
+class PillarScore(BaseModel):
+    """Score for a single quality pillar."""
 
-    number: int = Field(ge=1, le=5)
+    number: int = Field(ge=1)
     name: str
     weight: float = Field(ge=0.0, le=1.0)
     score: float | None = Field(None, ge=0.0, le=100.0)
     sub_scores: list[SubScore] = Field(default_factory=list)
+    supplementary: dict[str, Any] = Field(default_factory=dict)
+    """Per-pillar diagnostic data merged into QualityReport.supplementary."""
+
+
+# Backward-compat alias — removed once all scorer modules are migrated
+DimensionScore = PillarScore
 
 
 class LLMSpotCheck(BaseModel):
@@ -84,9 +76,17 @@ class QualityReport(BaseModel):
     total_records: int = 0
     source_counts: dict[str, int] = Field(default_factory=dict)
     overall_score: float | None = Field(None, ge=0.0, le=100.0)
-    dimensions: list[DimensionScore] = Field(default_factory=list)
+    pillars: list[PillarScore] = Field(default_factory=list)
     acceptance_passed: bool | None = None
     acceptance_criteria: list[AcceptanceCriterion] = Field(default_factory=list)
+    aspirational_met: int | None = None
+    """Number of aspirational targets met (out of total gated sub-scores)."""
+    aspirational_total: int | None = None
     flags: list[str] = Field(default_factory=list)
     supplementary: dict[str, Any] = Field(default_factory=dict)
     llm_spot_checks: list[LLMSpotCheck] | None = None
+
+    @property
+    def dimensions(self) -> list[PillarScore]:
+        """Backward-compat alias for pillars."""
+        return self.pillars

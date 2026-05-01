@@ -20,13 +20,13 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Dimension scoring base class for the evaluation framework."""
+"""Pillar scoring base class for the evaluation framework."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from typing import Any
 
-from evidenceforge.evaluation.models import DimensionScore
+from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.models.scenario import Scenario
 
@@ -38,8 +38,29 @@ def _noop_callback(event_type: str, data: dict[str, Any]) -> None:
     pass
 
 
+def aggregate_sub_scores(sub_scores: Iterable[SubScore]) -> float:
+    """Compute a pillar score from sub-scores, excluding skipped ones.
+
+    Skipped sub-scores (score=None or skipped=True) are dropped and the
+    remaining sub-score weights are proportionally renormalized so the pillar
+    score stays on a 0–100 scale regardless of how many sub-scores were skipped.
+    Returns 100.0 if every sub-score is skipped.
+    """
+    active = [s for s in sub_scores if s.score is not None and not s.skipped]
+    if not active:
+        return 100.0
+    total_weight = sum(s.weight for s in active)
+    if total_weight <= 0:
+        return 100.0
+    return sum(s.score * s.weight for s in active) / total_weight
+
+
 class DimensionScorer(ABC):
-    """Base class for quality dimension scorers."""
+    """Base class for quality pillar scorers.
+
+    The class is named DimensionScorer for backward compatibility; new
+    subclasses should treat 'dimension' as synonymous with 'pillar'.
+    """
 
     number: int = 0
     name: str = ""
@@ -51,8 +72,8 @@ class DimensionScorer(ABC):
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
         progress: ProgressCallback = _noop_callback,
-    ) -> DimensionScore:
-        """Score a dataset on this dimension.
+    ) -> PillarScore:
+        """Score a dataset on this pillar.
 
         Args:
             records: Parsed records grouped by format name.
@@ -60,6 +81,6 @@ class DimensionScorer(ABC):
             progress: Optional callback for reporting sub-score progress.
 
         Returns:
-            DimensionScore with sub-scores populated.
+            PillarScore with sub-scores populated.
         """
         ...

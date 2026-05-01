@@ -182,17 +182,16 @@ See [Scenario Reference](docs/reference/scenario-reference.md) for complete sche
 
 ## Data Quality Evaluation
 
-EvidenceForge includes a built-in evaluation framework that scores generated data across 5 dimensions:
+EvidenceForge includes a built-in evaluation framework that scores generated data across 4 pillars:
 
-| Dimension | Weight | What it measures |
-|-----------|--------|-----------------|
-| Record-Level Fidelity | 15% | Parsability, field co-occurrence, population statistics |
-| Cross-Source Coherence | 25% | Source correctness, trace coverage, cross-format agreement |
-| Background Noise Realism | 25% | Volume adequacy, diversity, plausibility, anomaly absence |
-| Temporal Realism | 15% | Work-hour distribution, burstiness, causal ordering, timing |
-| Signal Integrity | 20% | Event presence, indicator accuracy, pivot linkability |
+| Pillar | Weight | What it measures |
+|--------|--------|-----------------|
+| Parseability | 30% | Spec conformance, format constraints |
+| Plausibility | 25% | Value/OS correctness, co-occurrence, distributions, user diversity, anomaly rate |
+| Causality | 25% | Causal ordering, event presence, indicator accuracy, pivot linkability |
+| Timing | 20% | Attack-chain timing, burstiness, diurnal patterns, volume adequacy |
 
-**Acceptance criteria** (hard pass/fail): Parsability >= 98%, Source Correctness >= 95%, Causal Ordering >= 99%, Event Presence >= 90%.
+**Two-tier acceptance**: hard gates (minimum, must pass) + aspirational targets (stretch goals, informational). Hard gates: Spec Conformance ≥ 95%, Value Plausibility ≥ 95%, Causal Ordering ≥ 90%, Event Presence ≥ 85%. Thresholds are configurable in `src/evidenceforge/config/evaluation/thresholds.yaml`.
 
 ```bash
 uv run eforge eval ./output -s scenario.yaml

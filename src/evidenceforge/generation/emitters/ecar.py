@@ -396,7 +396,7 @@ class EcarEmitter(HostMultiplexEmitter):
         Source process creates a thread in a different target process.
 
         OpTC field structure: objectID = new thread UUID, actorID = source
-        process UUID, tgt_pid_uuid = target process UUID in properties.
+        process UUID, target_process_uuid = target process UUID in properties.
         """
         host = event.src_host
         proc = event.process
@@ -421,8 +421,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "image_path": proc.image,
             "src_pid": str(proc.pid),
             "src_tid": str(remote_thread.source_thread_id if remote_thread else 0),
-            "tgt_pid": str(target_pid),
-            "tgt_pid_uuid": remote_thread.target_process_object_id
+            "target_pid": str(target_pid),
+            "target_process_uuid": remote_thread.target_process_object_id
             if remote_thread
             else str(uuid.uuid4()),
             "tgt_tid": str(remote_thread.new_thread_id if remote_thread else 0),
@@ -541,9 +541,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "sub_status",
         "src_pid",
         "src_tid",
-        "tgt_pid",
         "tgt_tid",
-        "tgt_pid_uuid",
         "start_address",
         "stack_base",
         "stack_limit",

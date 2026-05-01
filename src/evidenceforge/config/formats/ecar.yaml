@@ -152,6 +152,23 @@ fields:
     required: false
     description: "Reason for failure on USER_SESSION/LOGIN events (e.g., bad_password)"
 
+  - name: outcome
+    type: string
+    required: false
+    description: "Logon outcome for USER_SESSION/LOGIN events (success or failure)"
+    constraints:
+      allowed_values: [success, failure]
+
+  - name: status_code
+    type: string
+    required: false
+    description: "Windows status hex (e.g., 0xC000006D) on USER_SESSION/LOGIN failures"
+
+  - name: sub_status
+    type: string
+    required: false
+    description: "Windows sub-status hex (e.g., 0xC0000064) on USER_SESSION/LOGIN failures"
+
   # Cross-process event properties (THREAD/REMOTE_CREATE, PROCESS/OPEN)
   - name: src_pid
     type: string
@@ -163,20 +180,25 @@ fields:
     required: false
     description: "Source thread ID"
 
-  - name: tgt_pid
+  - name: target_pid
     type: string
     required: false
-    description: "Target process ID"
+    description: "Target process ID (THREAD/REMOTE_CREATE, PROCESS/OPEN)"
 
   - name: tgt_tid
     type: string
     required: false
     description: "Target thread ID (new thread for REMOTE_CREATE)"
 
-  - name: tgt_pid_uuid
+  - name: target_process_uuid
     type: string
     required: false
     description: "Target process objectID UUID for cross-reference"
+
+  - name: target_image_path
+    type: string
+    required: false
+    description: "Target executable path for PROCESS/OPEN events"
 
   - name: start_address
     type: string

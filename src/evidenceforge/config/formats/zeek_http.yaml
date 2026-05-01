@@ -95,9 +95,9 @@ fields:
     description: "HTTP response status message"
 
   - name: tags
-    type: string
+    type: list
     required: false
-    description: "Tags array (rendered as JSON array)"
+    description: "Zeek http.log tags (JSON array of strings)"
 
   - name: referrer
     type: string

@@ -27,8 +27,10 @@ Uses json-logic-py for complex validation rules.
 """
 
 import ipaddress
+import json
 import logging
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
 
@@ -241,6 +243,185 @@ def validate_field(field_def: FieldDefinition, field_value: Any) -> ValidationRe
         result.merge(constraint_result)
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Strict-mode validators — format-specific raw-content checks
+# ---------------------------------------------------------------------------
+
+# RFC 5424 syslog header: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID
+# BSD syslog: <PRI>MONTH DD HH:MM:SS HOSTNAME
+_RFC5424_RE = re.compile(r"^<(\d{1,3})>(?:(\d+) [\w:+\-Z.]+|[A-Z][a-z]{2}\s+\d+\s+[\d:]+)\s+\S")
+_RFC5424_PRIORITY_MAX = 191  # 23 facilities × 8 severities - 1
+
+# eCAR valid object/action combos
+_ECAR_VALID_OBJECTS = frozenset(
+    {"PROCESS", "FILE", "FLOW", "REGISTRY", "MODULE", "THREAD", "USER_SESSION", "SERVICE"}
+)
+_ECAR_VALID_ACTIONS = frozenset(
+    {
+        "CREATE",
+        "DELETE",
+        "MODIFY",
+        "READ",
+        "WRITE",
+        "OPEN",
+        "CLOSE",
+        "EXECUTE",
+        "TERMINATE",
+        "LOGIN",
+        "LOGOUT",
+        "START",
+        "STOP",
+        "LOAD",
+        "UNLOAD",
+        "CONNECT",
+        "DISCONNECT",
+        "REMOTE_CREATE",
+    }
+)
+
+# Formats that support strict-mode validation
+STRICT_FORMATS: frozenset[str] = frozenset(
+    {
+        "syslog",
+        "zeek_files",
+        "zeek_conn",
+        "zeek_http",
+        "zeek_ssl",
+        "zeek_dns",
+        "zeek_x509",
+        "zeek_dhcp",
+        "zeek_ntp",
+        "zeek_pe",
+        "zeek_weird",
+        "zeek_ocsp",
+        "zeek_reporter",
+        "zeek_packet_filter",
+        "windows_event_security",
+        "windows_event_sysmon",
+        "ecar",
+    }
+)
+
+
+def validate_strict(format_name: str, raw: str, fields: dict[str, Any]) -> ValidationResult:
+    """Perform strict format-specific validation on a raw log line.
+
+    This supplements the lenient schema validator with format-specific
+    invariants that are well-defined by spec.
+
+    Args:
+        format_name: The format identifier (e.g., "syslog", "zeek_conn").
+        raw: The original raw log line string.
+        fields: Already-parsed fields dict from the normal parser.
+
+    Returns:
+        ValidationResult — valid=True if strict checks pass.
+    """
+    result = ValidationResult()
+
+    if format_name == "syslog":
+        _validate_strict_syslog(raw, result)
+    elif format_name.startswith("zeek_"):
+        _validate_strict_zeek_json(raw, result)
+    elif format_name in ("windows_event_security", "windows_event_sysmon"):
+        _validate_strict_windows_xml(raw, result)
+    elif format_name == "ecar":
+        _validate_strict_ecar(raw, fields, result)
+
+    return result
+
+
+_BSD_SYSLOG_RE = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S")
+
+
+def _validate_strict_syslog(raw: str, result: ValidationResult) -> None:
+    """RFC 5424 / BSD syslog structural checks.
+
+    Accepts:
+      - RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME ...
+      - BSD syslog with PRI: <PRI>Mon DD HH:MM:SS HOSTNAME ...
+      - BSD syslog without PRI: Mon DD HH:MM:SS HOSTNAME ... (common generator output)
+    """
+    if raw.startswith("<"):
+        # PRI-prefixed: validate PRI value
+        m = re.match(r"^<(\d{1,3})>", raw)
+        if not m:
+            result.add_error("syslog_pri", "Malformed PRI field")
+            return
+        pri = int(m.group(1))
+        if pri > _RFC5424_PRIORITY_MAX:
+            result.add_error("syslog_pri", f"PRI {pri} exceeds maximum {_RFC5424_PRIORITY_MAX}")
+    else:
+        # BSD syslog without PRI — must match MMM DD HH:MM:SS pattern
+        if not _BSD_SYSLOG_RE.match(raw):
+            result.add_error(
+                "syslog",
+                "Syslog line does not match BSD (Mon DD HH:MM:SS) or RFC 5424 pattern",
+            )
+
+
+def _validate_strict_zeek_json(raw: str, result: ValidationResult) -> None:
+    """Zeek JSON Lines: each line must be valid JSON and a top-level object."""
+    raw = raw.strip()
+    if not raw:
+        return
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError as e:
+        result.add_error("zeek_json", f"Invalid JSON: {e}")
+        return
+    if not isinstance(obj, dict):
+        result.add_error("zeek_json", f"Expected JSON object, got {type(obj).__name__}")
+
+
+def _validate_strict_windows_xml(raw: str, result: ValidationResult) -> None:
+    """Windows event XML: must be well-formed with <Event><System> structure."""
+    raw = raw.strip()
+    if not raw:
+        return
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as e:
+        result.add_error("windows_xml", f"XML parse error: {e}")
+        return
+    # Accept any namespace variant of Event/System
+    tag = root.tag
+    local = tag.split("}")[-1] if "}" in tag else tag
+    if local != "Event":
+        result.add_error("windows_xml", f"Root element must be 'Event', got '{local}'")
+        return
+    # Check for System child
+    system_child = None
+    for child in root:
+        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if ctag == "System":
+            system_child = child
+            break
+    if system_child is None:
+        result.add_error("windows_xml", "Missing <System> child element")
+
+
+def _validate_strict_ecar(raw: str, fields: dict[str, Any], result: ValidationResult) -> None:
+    """eCAR: valid JSON, valid object/action enum values."""
+    raw = raw.strip()
+    if not raw:
+        return
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError as e:
+        result.add_error("ecar_json", f"Invalid JSON: {e}")
+        return
+    if not isinstance(obj, dict):
+        result.add_error("ecar_json", f"Expected JSON object, got {type(obj).__name__}")
+        return
+    obj_type = obj.get("object")
+    action = obj.get("action")
+    if obj_type is not None and obj_type not in _ECAR_VALID_OBJECTS:
+        result.add_error("ecar_object", f"Unknown object type: {obj_type!r}")
+    if action is not None and action not in _ECAR_VALID_ACTIONS:
+        result.add_error("ecar_action", f"Unknown action: {action!r}")
 
 
 def validate_event(

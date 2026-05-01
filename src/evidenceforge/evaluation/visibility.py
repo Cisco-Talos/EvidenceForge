@@ -48,11 +48,17 @@ def _get_os_category(os_string: str) -> str:
 
 
 def _has_web_service(system: System) -> bool:
-    """Check if a system runs a web server."""
-    for svc in system.services:
-        if any(p in svc.lower() for p in _WEB_SERVICE_PATTERNS):
-            return True
-    return False
+    """Check if a system serves web_access logs.
+
+    Requires both a web-service process (nginx/apache/iis/httpd) AND a
+    web_server role.  Application servers that run nginx as an upstream
+    reverse-proxy backend emit no customer-facing web_access log.
+    """
+    has_web_role = "web_server" in (system.roles or [])
+    has_web_svc = any(
+        any(p in svc.lower() for p in _WEB_SERVICE_PATTERNS) for svc in system.services
+    )
+    return has_web_role and has_web_svc
 
 
 class VisibilityModel:

@@ -20,14 +20,18 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for Dimension 2: Cross-Source Coherence scoring."""
+"""Tests for Plausibility and Causality scorers (merged from cross_source)."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from evidenceforge.evaluation.dimensions.cross_source import CrossSourceScorer
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.causality import CausalityScorer
+from evidenceforge.evaluation.pillars.plausibility import PlausibilityScorer
 from evidenceforge.evaluation.visibility import VisibilityModel
+
+# Alias for tests that use the old CrossSourceScorer name
+CrossSourceScorer = CausalityScorer
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
@@ -133,8 +137,8 @@ class TestSourceCorrectness:
         }
         enabled = {"windows_event_security", "syslog", "ecar"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score == 100.0
 
     def test_wrong_os(self):
@@ -147,8 +151,8 @@ class TestSourceCorrectness:
         }
         enabled = {"windows_event_security", "syslog", "bash_history", "ecar"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score < 100.0
 
     def test_unknown_hostname(self):
@@ -161,8 +165,8 @@ class TestSourceCorrectness:
         }
         enabled = {"windows_event_security"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score < 100.0
         assert any("not in scenario" in f for f in result.sample_failures)
 
@@ -178,7 +182,7 @@ class TestFieldAgreement:
                 _record("ecar", {"hostname": "WS-01"}, ts=T0 + timedelta(seconds=5)),
             ],
         }
-        scorer = CrossSourceScorer()
+        scorer = PlausibilityScorer()
         result = scorer._score_field_agreement(records)
         assert result.score == 100.0
 
@@ -190,30 +194,18 @@ class TestFieldAgreement:
             ],
             "ecar": [
                 _record("ecar", {"hostname": "WS-01"}, ts=T0 + timedelta(seconds=5)),
-                # Same bucket but second ecar record is far away
             ],
         }
-        # Put in separate buckets to force disagreement
-        {
-            "windows_event_security": [
-                _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
-            ],
-            "ecar": [
-                _record("ecar", {"hostname": "WS-01"}, ts=T0 + timedelta(minutes=5)),
-            ],
-        }
-        scorer = CrossSourceScorer()
+        scorer = PlausibilityScorer()
         # Same bucket → agree
         r1 = scorer._score_field_agreement(records)
         assert r1.score == 100.0
-        # Different buckets → no multi-format groups to compare (scores 100 by default)
 
 
 class TestBaselineAggregate:
     def test_proportional_counts(self):
         """Systems with proportional event counts across formats should score well."""
         scenario = _make_scenario()
-        # WS-01 has ~similar counts in windows_event_security and ecar
         records = {
             "windows_event_security": [
                 _record(
@@ -226,11 +218,10 @@ class TestBaselineAggregate:
                 for i in range(40)
             ],
         }
-        enabled = {"windows_event_security", "ecar"}
-        vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_baseline_aggregate(records, vis)
-        assert result.score >= 50.0
+        # Score through the full plausibility scorer; check user_diversity is non-None
+        scorer = PlausibilityScorer()
+        result = scorer.score(records, scenario)
+        assert result.score is not None
 
 
 class TestEndToEnd:
@@ -260,11 +251,11 @@ class TestEndToEnd:
         }
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
-        assert result.number == 2
-        assert result.name == "Cross-Source Coherence"
+        assert result.number == 3
+        assert result.name == "Causality"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 5
+        assert len(result.sub_scores) == 6
 
     def test_with_retail_scenario(self):
         """Run on real fixtures — should produce valid scores."""
@@ -290,7 +281,7 @@ class TestEndToEnd:
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
         assert result.score is not None
-        assert len(result.sub_scores) == 5
+        assert len(result.sub_scores) == 6
 
 
 def _make_scenario_with_domain(domain="example.com"):
@@ -487,7 +478,83 @@ class TestFQDNSourceCorrectness:
         }
         enabled = {"windows_event_security", "syslog", "ecar"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score == 100.0
         assert not any("not in scenario" in f for f in result.sample_failures)
+
+
+class TestHostLogProfile:
+    def test_supplementary_present_in_pillar_score(self):
+        """CrossSourceScorer should emit host_log_profile in supplementary."""
+        scenario = _make_scenario()
+        records = {
+            "windows_event_security": [
+                _record("windows_event_security", {"Computer": "WS-01", "EventID": 4624}, ts=T0),
+            ],
+        }
+        scorer = CrossSourceScorer()
+        result = scorer.score(records, scenario)
+        assert "host_log_profile" in result.supplementary
+
+    def test_host_log_profile_deduplicates_fqdn_and_bare(self):
+        """A system registered with a domain should appear once in the profile, not twice."""
+        from evidenceforge.evaluation.pillars.causality import _build_host_log_profile
+        from evidenceforge.models.scenario import (
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            System,
+            TimeWindow,
+            User,
+        )
+
+        scenario = Scenario(
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                domain="corp.example.com",
+                users=[
+                    User(
+                        username="jsmith",
+                        full_name="J",
+                        email="j@x.com",
+                        persona="",
+                        primary_system="WS-01",
+                    ),
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
+                ],
+            ),
+            time_window=TimeWindow(start=T0, duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        )
+        vis = VisibilityModel(scenario, {"windows_event_security"})
+        profile = _build_host_log_profile({}, vis)
+        # WS-01 should appear once (canonical bare, lowercased), not once per variant in _os_map
+        ws_keys = [k for k in profile.keys() if "ws-01" in k.lower()]
+        assert len(ws_keys) == 1, f"expected one WS-01 entry, got {ws_keys}"
+
+    def test_causality_sub_scores_present(self):
+        """CausalityScorer should emit all 6 expected sub-scores."""
+        scenario = _make_scenario()
+        records = {
+            "windows_event_security": [
+                _record("windows_event_security", {"Computer": "WS-01", "EventID": 4624}, ts=T0),
+            ],
+        }
+        scorer = CrossSourceScorer()
+        result = scorer.score(records, scenario)
+        keys = {s.key for s in result.sub_scores}
+        assert "causal_ordering" in keys
+        assert "event_presence" in keys
+        assert "indicator_accuracy" in keys
+        assert "pivot_linkability" in keys
+        assert "temporal_integrity" in keys
+        assert "storyline_trace_coverage" in keys

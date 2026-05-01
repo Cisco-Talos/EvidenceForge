@@ -1320,6 +1320,10 @@ def validate_config() -> ValidationResult:
         if err or not eval_data:
             continue
 
+        if eval_file.stem in {"thresholds", "timing_bounds", "cross_source_pairs"}:
+            # These files use non-format-keyed schemas; skip format-key validation
+            continue
+
         if eval_file.stem == "causal_pairs":
             # causal_pairs has a different structure
             for pair in eval_data.get("pairs", []):

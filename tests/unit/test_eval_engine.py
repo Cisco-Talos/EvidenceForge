@@ -1,23 +1,4 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
 # SPDX-License-Identifier: MIT
 
 """Tests for the evaluation engine."""
@@ -64,39 +45,52 @@ class TestEvaluationEngine:
         )
         report = engine.run()
 
-        # Our fixtures have all 7 formats
         assert len(report.source_counts) == 7
 
-    def test_produces_dimension_scores(self, retail_scenario):
-        """Engine should produce at least Dimension 1 scores."""
+    def test_produces_pillar_scores(self, retail_scenario):
+        """Engine should produce at least Pillar 1 scores."""
         engine = EvaluationEngine(
             output_dir=GOOD_FIXTURES,
             scenario=retail_scenario,
         )
         report = engine.run()
 
-        assert len(report.dimensions) >= 1
-        dim1 = report.dimensions[0]
-        assert dim1.number == 1
-        assert dim1.name == "Record-Level Fidelity"
-        assert dim1.score is not None
+        # pillars property holds scored pillars
+        assert len(report.pillars) >= 1
+        pillar1 = report.pillars[0]
+        assert pillar1.number == 1
+        assert pillar1.score is not None
 
-    def test_acceptance_criteria_evaluated(self, retail_scenario):
-        """Engine should evaluate acceptance criteria."""
+        # backward-compat alias
+        assert report.dimensions is report.pillars
+
+    def test_acceptance_criteria_from_thresholds(self, retail_scenario):
+        """Engine should evaluate hard-gated acceptance criteria from thresholds.yaml."""
         engine = EvaluationEngine(
             output_dir=GOOD_FIXTURES,
             scenario=retail_scenario,
         )
         report = engine.run()
 
-        # Should have at least the parsability criterion
-        parsability = next(
-            (c for c in report.acceptance_criteria if c.name == "Parsability"),
-            None,
+        # thresholds.yaml defines hard gates for spec_conformance and causal_ordering
+        hard_criteria = [c for c in report.acceptance_criteria if c.level == "hard"]
+        assert len(hard_criteria) > 0
+        for c in hard_criteria:
+            assert c.actual is not None
+            assert c.passed is not None
+
+    def test_aspirational_counts(self, retail_scenario):
+        """Engine should compute aspirational_met and aspirational_total."""
+        engine = EvaluationEngine(
+            output_dir=GOOD_FIXTURES,
+            scenario=retail_scenario,
         )
-        assert parsability is not None
-        assert parsability.actual is not None
-        assert parsability.passed is not None
+        report = engine.run()
+
+        # These are populated when there are scored sub-scores
+        if report.aspirational_total:
+            assert report.aspirational_met is not None
+            assert 0 <= report.aspirational_met <= report.aspirational_total
 
     def test_empty_directory(self, retail_scenario, tmp_path):
         """Engine should handle empty output directory gracefully."""

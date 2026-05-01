@@ -160,6 +160,16 @@ zeek_conn:
       - field: proto
         in: ["tcp", "udp", "icmp"]
 
+  # Impossible combinations
+  - name: "Completed TCP (SF) cannot have zero duration"
+    condition:
+      conn_state: "SF"
+      proto: "tcp"
+    checks:
+      - field: duration
+        not_equal: 0
+
+
 ecar:
   # Core fields: always present on every eCAR record
   - name: "All records have pid"
@@ -211,7 +221,7 @@ ecar:
       object: "THREAD"
       action: "REMOTE_CREATE"
     checks:
-      - field: tgt_pid
+      - field: target_pid
         present: true
       - field: image_path
         present: true
@@ -308,6 +318,20 @@ zeek_dns:
     checks:
       - field: rcode_name
         present: true
+
+zeek_http:
+  - name: "HTTP CONNECT must not have response body"
+    condition:
+      method: "CONNECT"
+    checks:
+      - field: response_body_len
+        equals: 0
+
+  - name: "HTTP response has method"
+    condition: {}
+    checks:
+      - field: method
+        in: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE"]
 
 bash_history:
   - name: "Command is non-empty"

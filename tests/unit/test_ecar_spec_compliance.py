@@ -177,9 +177,9 @@ class TestRemoteThreadRendering:
         emitter._render_create_remote_thread(event)
 
         rendered = emitter.emit_event.call_args[0][0]
-        assert rendered["tgt_pid"] == "688"
+        assert rendered["target_pid"] == "688"
         assert rendered["tgt_tid"] == "840"
-        assert rendered["tgt_pid_uuid"] == "target-process-id"
+        assert rendered["target_process_uuid"] == "target-process-id"
         assert rendered["start_address"] == "0000000002060000"
 
 

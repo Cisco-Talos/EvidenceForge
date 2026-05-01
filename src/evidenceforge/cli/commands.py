@@ -597,6 +597,12 @@ def eval_cmd(
         "-v",
         help="Show detailed sub-scores and sample failures",
     ),
+    real_parsers: bool = typer.Option(
+        False,
+        "--real-parsers",
+        help="[Reserved] Evaluate using real downstream parser binaries (not yet implemented).",
+        is_flag=True,
+    ),
 ) -> None:
     """Evaluate a generated dataset for quality across multiple dimensions.
 
@@ -609,6 +615,10 @@ def eval_cmd(
     - 2: Schema validation error in scenario
     - 22: Evaluation engine error
     """
+    if real_parsers:
+        console.print("[yellow]--real-parsers: real parser backend not yet implemented.[/yellow]")
+        return
+
     setup_logging(verbose)
 
     # Use stderr for status messages in JSON mode to keep stdout clean

@@ -4,6 +4,146 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.5.3 (2026-04-30)
+
+Five pre-existing evaluation false-positives eliminated. No generator behavior changes.
+
+**Evaluator bug fixes**
+
+- **Windows 4800/4801**: Added `workstation_locked` and `workstation_unlocked` entries to `WINDOWS_VARIANT_MAP` in `parseability.py`. Records for those EventIDs were evaluated against the base variant (missing required fields) rather than the correct variant, producing spurious "Unknown field" warnings and spec-conformance failures.
+- **eCAR field declarations**: Declared six previously-emitted-but-undeclared optional base fields in `ecar.yaml`: `outcome`, `status_code`, `sub_status` (USER_SESSION/LOGIN) and `target_pid`, `target_process_uuid`, `target_image_path` (PROCESS/OPEN). Eliminated 6× "Unknown field in ecar" warnings per eval run.
+- **eCAR rename**: THREAD/REMOTE_CREATE fields `tgt_pid` / `tgt_pid_uuid` renamed to `target_pid` / `target_process_uuid` to match the OpTC eCAR spec and the naming used by PROCESS events. Updated emitter, YAML, co_occurrence config, tests, and docs.
+- **Host Log Profile deduplication**: `_build_host_log_profile` in `causality.py` now normalizes `VisibilityModel._os_map` keys via `resolve_hostname` before deduplication. Each host now appears exactly once (bare form) instead of appearing as both `WS-01` and `WS-01.corp.example.com`.
+- **Diurnal pattern skip on short scenarios**: `_score_diurnal_pattern` returns a skipped `SubScore` (score=None) when the event span is <24 h or covers only one weekday — conditions under which JSD is not meaningful. The Timing pillar aggregator renormalizes weights across the remaining active sub-scores. Previously this produced a hard-zero score on typical single-day scenarios.
+- **proxy_access ↔ zeek_http**: Added `condition_a/b: method_not: CONNECT` to exclude CONNECT tunnel rows from the pair. Proxy emits two rows per HTTPS request (CONNECT + inner); the pivot previously matched them against a single zeek_http row, causing status_code false-failures. Extended `_matches_condition` in `plausibility.py` to support `<field>_not` inequality checks.
+- **zeek_ssl ↔ zeek_x509**: Added `condition_b: host_cert: true` to restrict the `server_name ∈ san.dns` agreement check to leaf certificates. Intermediate and root CA certs correctly have empty `san.dns` — the evaluator rule was incorrectly flagging them as failures.
+
+**New / updated tests**
+
+- `test_eval_record_fidelity.py`: `TestWindowsVariantMapCoverage` — all mapped variant names exist in the format YAML; 4800/4801 explicitly covered.
+- `test_eval_cross_source_pairs.py`: `TestMatchesCondition` extended with three `_not` cases; `TestProxyZeekHttpConnectExclusion` (2 tests); `TestZeekSslX509IntermediateCAExclusion` (2 tests).
+- `test_eval_timing_bounds.py`: `test_short_scenario_span_is_skipped` asserts `skipped=True, score=None` (was: `score=100`).
+- `test_ecar_thread_process_access.py`, `test_ecar_spec_compliance.py`: updated assertions for `target_pid`/`target_process_uuid` rename.
+
+---
+
+## v0.5.2 (2026-04-30)
+
+Completion of the 4-pillar evaluation restructure: rewritten field agreement scorer, strict-mode validators, two new timing sub-scores, Zeek schema fixes, and extended rule coverage.
+
+**Signal integrity fixes (Phase A)**
+
+- `event_presence` improved from 69.05 → 85.71 on apt-healthcare-breach dataset (acceptance_passed now True).
+- Fixed FQDN hostname indexing: records with FQDN Computer fields (e.g., `WS-DEV-02.meridianhcs.com`) are now indexed under both FQDN and bare hostname keys. Eliminated the primary cause of missed storyline traces.
+- Added `_DURATION_EVENT_TYPES` (beacon, dns_tunnel, dga_queries, web_scan): extended forward search window to `min(interval_seconds, 3600)` for duration-based events. Beacons with 10-minute intervals no longer require trace at exact `time:` offset.
+- Added `logoff` and `raw` matchers in `_record_matches`. Both had fallthrough-to-False behavior; now logoff matches 4634/4647 on Windows, session-closed on syslog.
+- Documented 6 remaining generator gaps (rogue DHCP, DC-01 C2 beacons without NAT, standalone DNS): categorized as (c) scenario topology gaps, not eval bugs.
+
+**Cross-source field agreement (Phase C)**
+
+- Replaced the no-op `_timestamps_agree` implementation with real pivot-key joins.
+- New `src/evidenceforge/config/evaluation/cross_source_pairs.yaml` with 5 defined pairs: Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+hostname+60s window), zeek_conn ↔ Cisco ASA flow (4-tuple match), web_access ↔ zeek_http and proxy_access ↔ zeek_http (client+URI+10s bucket), zeek_ssl ↔ zeek_x509 (cert_chain_fuids list → x509 id, server_name ∈ san.dns).
+- Supports: multi-field pivots, `list_contains` pivot (ssl fuids), `require_hostname_match`, `time_window_seconds`, normalizers (`lower`, `path_basename_ci`, `cn_from_dn`), numeric tolerance, `b_is_list` for list-valued fields, nested properties access (`b_nested`).
+- `field_agreement` score on apt-healthcare-breach: 93% (real disagreements: proxy vs Zeek HTTP status codes diverge because proxy records upstream status; these are genuine generator behavior differences).
+
+**Parseability strict mode (Phase D)**
+
+- New `validate_strict(format_name, raw, fields)` in `src/evidenceforge/formats/validator.py`. Dispatches to per-format checks when a format appears in `STRICT_FORMATS`.
+- syslog: accepts BSD format (Mon DD HH:MM:SS HOSTNAME) and RFC 5424 with PRI (`<N>`); validates PRI ≤ 191 when present.
+- zeek_*: each raw line must be valid JSON and a top-level object.
+- windows_event_security / windows_event_sysmon: XML must be well-formed with root `<Event>` and `<System>` child.
+- eCAR: JSON must be valid; `object` and `action` fields must be in the known enum sets.
+- Strict mode runs only when `record.raw` is non-empty and the format is in `STRICT_FORMATS`; results merged into the Parsability sub-score.
+
+**Zeek schema fixes (Phase B)**
+
+- Fixed `zeek_files.yaml`: `tx_hosts`, `rx_hosts`, `conn_uids`, `analyzers` changed from `type: string` to `type: list`. These fields are emitted as JSON arrays; the validator was rejecting them with false positives, causing 15,395 spec_conformance failures.
+- Fixed `zeek_http.yaml`: `tags` changed from `type: string` to `type: list`.
+- Fixed `zeek_pe.yaml`: `section_names` changed from `type: string` to `type: list`.
+- `spec_conformance` on apt-healthcare-breach: 99.22% → 100% after fixes.
+
+**Evaluation rule extensions (Phase E)**
+
+- `co_occurrence.yaml`: added impossible-combo rules — `zeek_conn` SF+TCP cannot have `duration=0`; `zeek_http` CONNECT must have `response_body_len=0`; `zeek_ssl` established connections must have `server_name`.
+- `co_occurrence.yaml`: added new sections for `zeek_http` and `zeek_ssl`.
+- `co_occurrence.yaml`: added `equals` check type (alongside existing `not_equal`, `in`, `present`, `min_length`). Fixed `min_value`/`max_value` to work as standalone checks (not just combined).
+- `distributions.yaml`: added `zeek_http` (method, status_code) and `zeek_ssl` (version, established) reference distributions.
+
+**New timing sub-scores (Phase F)**
+
+- `diurnal_pattern` replaces `work_hours` as the active scoring sub-score (work_hours demoted to weight=0 informational). Scores 2D hour×weekday distribution via Jensen-Shannon divergence vs persona reference profile. Penalizes artificially uniform distributions (JSD < 0.01 treated as robotic). Requires ≥30 events per user.
+- `attack_chain_timing`: checks elapsed time between consecutive storyline events against bounds from new `src/evidenceforge/config/evaluation/timing_bounds.yaml`. Default bounds 5s–2h; per-action-type overrides (lateral movement, exfiltration, recon, credential, persistence, C2, beacon, deploy, escalation). Activity matching: case-insensitive substring on step activity field.
+- Temporal Realism sub-score weights updated: diurnal 0.20, burstiness 0.20, system_regularity 0.15, causal_ordering 0.20, timing_plausibility 0.15, attack_chain_timing 0.10 (sum=1.0).
+
+**New tests (Phase G)**
+
+- `tests/unit/test_eval_cross_source_pairs.py` (29 tests): pivot helpers, normalizers, values_agree, score_pair, integration with empty records.
+- `tests/unit/test_eval_strict_parsers.py` (29 tests): all four format-specific strict validators, STRICT_FORMATS set.
+- `tests/unit/test_eval_timing_bounds.py` (15 tests): attack_chain_timing (bounds loading, keyword matching, in/out-of-bounds), diurnal_pattern (work-hours clustering, uniform distribution penalty, insufficient-event fallback).
+- Updated `test_eval_temporal.py` end-to-end test to expect 7 sub-scores.
+- Total: 252 unit tests (was 173).
+
+**Docs (Phase G.5)**
+
+- `commands/eforge/references/config-evaluation.md`: removed "planned" markers from timing_bounds and cross_source_pairs sections; added full schema documentation for both.
+- `commands/eforge/evaluate.md`: updated Cross-Source Field Agreement, Diurnal Pattern, and Attack-Chain Timing descriptions; added improvements-table rows for low field_agreement and low attack-chain timing.
+- `docs/reference/CUSTOMIZING_CONFIG.md`: added eval config section documenting the six YAML files and how to tune them per-project.
+
+**Score changes on apt-healthcare-breach (1.02M records, 14h, 17 users, 42 storyline events)**
+
+| Sub-score | Before | After |
+|-----------|--------|-------|
+| event_presence | 69.05 (FAIL) | 85.71 (PASS) |
+| spec_conformance | 99.22 | 100.00 |
+| field_agreement | 100 (no-op) | 93.00 (real) |
+| population_statistics | 78.58 | 81.14 |
+| diurnal_pattern | — (new) | 100.00 |
+| attack_chain_timing | — (new) | 90.24 |
+| Overall | 87.63 | 94.13 |
+| acceptance_passed | False | **True** |
+
+---
+
+## v0.5.1 (2026-04-30)
+
+Evaluation framework restructure: 5 dimensions → 4 pillars (Parseability, Plausibility, Causality, Timing).
+
+**Framework restructure**
+
+- Replaced the 5-dimension / 23-sub-score model with 4 pillars (20 sub-scores). All existing sub-scores are re-homed, not dropped. Two baseline-coherence sub-scores (D2.4, D2.5) are demoted to a supplementary "Host Log Profile" diagnostic (informational, not scored). One old sub-score (`work_hours`) is replaced by the planned `diurnal_pattern`.
+- Two-tier acceptance model: every sub-score now has a **minimum** (hard gate — dataset fails if missed) and an **aspirational** target (informational stretch goal). Thresholds stored in `src/evidenceforge/config/evaluation/thresholds.yaml` for tuning without code changes.
+- Pillar weights: Parseability 0.30, Plausibility 0.25, Causality 0.25, Timing 0.20.
+- Hard gates: `spec_conformance ≥ 95`, `value_plausibility ≥ 95`, `causal_ordering ≥ 90`, `event_presence ≥ 85`.
+
+**Engine changes**
+
+- `DimensionScore` renamed to `PillarScore`; `DimensionScore` kept as a backward-compat alias.
+- `QualityReport.dimensions` kept as a property alias for `pillars`.
+- `AcceptanceCriterion` gains `pillar` (string), `aspirational`, and `meets_aspirational` fields.
+- `QualityReport` gains `aspirational_met` / `aspirational_total` counts.
+- Engine reads thresholds from YAML; acceptance criteria are no longer hard-coded.
+- Pillar-level `supplementary` dicts merged into `QualityReport.supplementary`.
+- Transition-period machinery: `_LEGACY_SUB_SCORE_LOCATIONS` maps new sub-score keys to old dimension numbers/keys so thresholds.yaml can use new vocabulary while legacy scorers still run.
+
+**Sub-score fixes**
+
+- `CrossSourceScorer`: D2.4 (`baseline_sampled`) and D2.5 (`baseline_aggregate`) zeroed to `weight=0` (not scored); S1/S2/S3 re-weighted to 1/3 each. Emits `host_log_profile` diagnostic in `supplementary`.
+- `NoiseRealismScorer` / `anomaly.py`: red herring events no longer inflate the organic anomaly rate. Red herrings are pre-declared storyline injections — they are not background anomalies.
+- `TemporalScorer`: fixed pre-existing timezone-naive/aware comparison bug in causal ordering check.
+
+**Report**
+
+- Pillar-oriented text report replaces the old dimension table.
+- Shows minimum (PASS/FAIL) and aspirational (met/missed) side-by-side for each gated sub-score.
+- Summary line: "Aspirational targets: N/M (P%)".
+- Host Log Profile supplementary section shows per-host expected vs. present formats (only when missing formats exist or `--verbose`).
+
+**CLI**
+
+- Added `--real-parsers` flag (no-op, reserved): prints "real parser backend not yet implemented" and exits cleanly. Reserves the interface for a future strict-parser evaluation backend.
+
+---
+
 ## v0.5.0 (2026-04-29)
 
 Version bump only; no code changes. Releases a known-good snapshot after the v0.4.3 correlated-timing review.
