@@ -339,6 +339,36 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
 
+    def test_process_termination_shifted_after_visible_child_create(self, format_def, temp_output):
+        """Security 4689 should not visibly terminate a parent before later child 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        child_time = terminate_time + timedelta(seconds=15)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x116c",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x116c",
+                "NewProcessId": "0x2200",
+            },
+        ]
+
+        emitter._shift_process_terminations_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_child",
+            seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
+
     def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
         """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
         base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

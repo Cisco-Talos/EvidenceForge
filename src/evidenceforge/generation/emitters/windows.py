@@ -1233,6 +1233,7 @@ class WindowsEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
+        self._shift_process_terminations_after_dependents()
         self._shift_logoffs_after_dependents()
 
         def _sort_key(event: dict) -> Any:
@@ -1321,6 +1322,41 @@ class WindowsEventEmitter(LogEmitter):
             if isinstance(ts, datetime) and latest is not None and ts <= latest:
                 event["TimeCreated"] = latest + sample_timing_delta(
                     "windows.logoff_after_rendered_dependents",
+                    seed_parts=(key[0], key[1], latest),
+                )
+
+    def _shift_process_terminations_after_dependents(self) -> None:
+        """Keep Security 4689 aligned with visible child-process lifecycle.
+
+        Sysmon Event 5 already moves after visible same-process follow-on
+        telemetry. Security 4689 needs the same source-native lifecycle truth
+        for parent processes that visibly spawn children later in the buffer.
+        """
+        latest_child_create: dict[tuple[str, str], datetime] = {}
+        terminations: list[tuple[tuple[str, str], dict[str, Any]]] = []
+
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            event_id = event.get("EventID")
+            if event_id == 4688:
+                parent_pid = str(event.get("ProcessId") or "")
+                if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                    key = (computer, parent_pid.lower())
+                    latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            elif event_id == 4689:
+                process_pid = str(event.get("ProcessId") or "")
+                if process_pid:
+                    terminations.append(((computer, process_pid.lower()), event))
+
+        for key, event in terminations:
+            ts = event.get("TimeCreated")
+            latest = latest_child_create.get(key)
+            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + sample_timing_delta(
+                    "windows.process_exit_after_visible_child",
                     seed_parts=(key[0], key[1], latest),
                 )
 

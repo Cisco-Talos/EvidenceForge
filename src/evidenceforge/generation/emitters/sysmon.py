@@ -641,6 +641,16 @@ class SysmonEventEmitter(LogEmitter):
         imphash = hashlib.md5(f"imp:{seed}".encode(), usedforsecurity=False).hexdigest().upper()
         return f"SHA1={sha1},MD5={md5},SHA256={sha256},IMPHASH={imphash}"
 
+    @staticmethod
+    def _generate_logon_guid(hostname: str, logon_id: str) -> str:
+        """Generate one stable Sysmon LogonGuid per host/logon session."""
+        normalized = logon_id or "0x0"
+        digest = hashlib.md5(
+            f"sysmon_logon_guid:{hostname}:{normalized}".encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+        return f"{{{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}}}"
+
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
         random.Random()
@@ -702,13 +712,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": proc.image,
             "CommandLine": proc.command_line,
             "User": user,
-            "LogonGuid": self._generate_process_guid(
-                host.hostname,
-                int(logon_id, 16)
-                if logon_id.startswith("0x")
-                else _stable_seed(f"sysmon_logon_{logon_id}") & 0xFFFFFFFF,
-                event.timestamp,
-            ),
+            "LogonGuid": self._generate_logon_guid(host.hostname, logon_id),
             "LogonId": logon_id,
             "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,

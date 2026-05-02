@@ -677,7 +677,7 @@ _SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
 _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 _AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
-_EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 300
+_EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 240
 
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
@@ -3016,23 +3016,57 @@ class ActivityGenerator:
             _is_system_binary = _is_windows_system_binary or _is_linux_system_binary
             if not _is_system_binary:
                 file_create_time = time + timedelta(milliseconds=120)
+                file_process_pid = pid
+                file_process_parent_pid = parent_pid
+                file_process_image = process_name
+                file_process_command_line = command_line
+                file_process_username = process_username
+                file_process_logon_id = process_logon_id
+                file_process_start_time = (
+                    running_proc.start_time if running_proc is not None else None
+                )
+                file_actor_obj_id = proc_obj_id
                 if _exe_lower in {"psexesvc.exe", "healthmonitorsvc.exe"}:
                     file_create_time = time - timedelta(milliseconds=180)
+                    parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+                    if parent_proc is not None and parent_proc.start_time < file_create_time:
+                        file_process_pid = parent_proc.pid
+                        file_process_parent_pid = parent_proc.parent_pid
+                        file_process_image = parent_proc.image
+                        file_process_command_line = parent_proc.command_line
+                        file_process_username = parent_proc.username
+                        file_process_logon_id = parent_proc.logon_id
+                        file_process_start_time = parent_proc.start_time
+                        file_actor_obj_id = parent_proc.ecar_object_id
+                    elif parent_pid in {4, 0}:
+                        file_process_pid = 4
+                        file_process_parent_pid = 0
+                        file_process_image = "System"
+                        file_process_command_line = "System"
+                        file_process_username = "SYSTEM"
+                        file_process_logon_id = "0x3e7"
+                        file_process_start_time = None
+                        file_actor_obj_id = self.state_manager.get_process_object_id(
+                            system.hostname,
+                            4,
+                        )
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=file_create_time,
                         event_type="file_create",
                         src_host=self._build_host_context(system),
-                        auth=AuthContext(username=process_username),
+                        auth=AuthContext(username=file_process_username),
                         process=ProcessContext(
-                            pid=pid,
-                            parent_pid=parent_pid,
-                            image=process_name,
-                            command_line=command_line,
-                            username=process_username,
+                            pid=file_process_pid,
+                            parent_pid=file_process_parent_pid,
+                            image=file_process_image,
+                            command_line=file_process_command_line,
+                            username=file_process_username,
+                            logon_id=file_process_logon_id,
+                            start_time=file_process_start_time,
                         ),
-                        file=FileContext(path=process_name, action="create", pid=pid),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        file=FileContext(path=process_name, action="create", pid=file_process_pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=file_actor_obj_id),
                         storyline_origin=from_storyline,
                     )
                 )
@@ -4044,6 +4078,10 @@ class ActivityGenerator:
             tls_min_duration = tls_min_window.min_ms / 1000
             if duration is None or duration < tls_min_duration:
                 duration = tls_min_duration + rng.uniform(0.0, 0.4)
+            else:
+                duration += rng.expovariate(1.0 / 0.35)
+                if rng.random() < 0.08:
+                    duration += rng.uniform(1.5, 8.0)
 
         if http is not None and conn_state == "SF":
             http_timing = get_timing_window(
@@ -4074,6 +4112,9 @@ class ActivityGenerator:
             byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
+            if dst_port == 443 and conn_state == "SF":
+                orig_pkts += rng.choices([0, 1, 2, 3, 5], weights=[45, 25, 15, 10, 5], k=1)[0]
+                resp_pkts += rng.choices([0, 1, 2, 4, 8], weights=[35, 25, 20, 15, 5], k=1)[0]
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
@@ -4775,6 +4816,17 @@ class ActivityGenerator:
             event.network.resp_pkts = max(
                 hist_resp, max(1, ((event.network.resp_bytes or 0) // 1460) + 1)
             )
+            if event.network.service == "ssl":
+                event.network.orig_pkts += rng.choices(
+                    [0, 1, 2, 3, 5],
+                    weights=[45, 25, 15, 10, 5],
+                    k=1,
+                )[0]
+                event.network.resp_pkts += rng.choices(
+                    [0, 1, 2, 4, 8],
+                    weights=[35, 25, 20, 15, 5],
+                    k=1,
+                )[0]
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
             orig_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
             resp_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
@@ -7073,7 +7125,12 @@ class ActivityGenerator:
                 reporting_pid=reporting_pid,
             ),
             group_membership=GroupMembershipContext(
-                member_name="-",
+                member_name=self._distinguished_name_for_account(
+                    member_username,
+                    host.fqdn,
+                    getattr(system, "domain", ""),
+                    host.netbios_domain,
+                ),
                 member_sid=member_sid,
                 group_name=group_name,
                 group_domain=host.netbios_domain,
@@ -7081,6 +7138,21 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    @staticmethod
+    def _distinguished_name_for_account(
+        username: str,
+        host_fqdn: str,
+        domain: str = "",
+        netbios_domain: str = "",
+    ) -> str:
+        """Build a realistic Active Directory DN for group-member audit fields."""
+        dns_domain = host_fqdn.split(".", 1)[1] if "." in host_fqdn else domain
+        if not dns_domain and netbios_domain:
+            dns_domain = f"{netbios_domain.lower()}.local"
+        domain_parts = ",".join(f"DC={part}" for part in dns_domain.split(".") if part)
+        escaped_username = username.replace("\\", "\\5c").replace(",", "\\,")
+        return f"CN={escaped_username},CN=Users,{domain_parts}" if domain_parts else username
 
     def generate_account_created(
         self,

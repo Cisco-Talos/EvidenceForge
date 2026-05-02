@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from evidenceforge.generation.engine.storyline import (
     _effective_rate_interval,
+    _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
@@ -278,6 +279,19 @@ class TestIterPeriodicTicks:
         ticks = list(_iter_periodic_ticks(start, 60.0, None, 1, 0.0, rng))
         assert len(ticks) == 1
         assert ticks[0] == start
+
+    def test_dns_tunnel_ticks_include_natural_gaps(self):
+        rng = random.Random(42)
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        ticks = list(_iter_dns_tunnel_ticks(start, 2.0, 900.0, None, 0.25, rng))
+        intervals = [
+            (later - earlier).total_seconds()
+            for earlier, later in zip(ticks, ticks[1:], strict=False)
+        ]
+
+        assert len(ticks) < 451
+        assert max(intervals) > 8.0
+        assert len({round(interval, 1) for interval in intervals}) > 20
 
     def test_duration_shorter_than_interval(self):
         rng = random.Random(42)

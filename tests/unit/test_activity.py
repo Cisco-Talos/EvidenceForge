@@ -829,6 +829,9 @@ class TestActivityGenerator:
             and event.file.path == r"C:\Windows\PSEXESVC.exe"
         )
         assert file_event.timestamp < process_event.timestamp
+        assert file_event.process.pid == process_event.process.parent_pid
+        assert file_event.file.pid == process_event.process.parent_pid
+        assert file_event.process.pid != process_event.process.pid
 
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -858,6 +861,64 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "process_terminate"
         assert event.process.image == r"C:\Windows\PSEXESVC.exe"
+
+    def test_group_membership_change_uses_member_distinguished_name(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Group membership events should include a resolvable member DN."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="server",
+            domain="corp.local",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_group_membership_change(
+            actor=test_user,
+            system=dc,
+            time=timestamp,
+            action="add",
+            scope="global",
+            group_name="Domain Admins",
+            group_sid="S-1-5-21-1-2-3-512",
+            member_username="svc_sqlreader",
+            member_sid="S-1-5-21-1-2-3-1201",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "group_member_added_global"
+        assert event.group_membership.member_name == "CN=svc_sqlreader,CN=Users,DC=corp,DC=local"
+
+    def test_completed_tls_connections_vary_packet_counts(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Completed TLS conn rows should not all collapse to the handshake packet floor."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        for idx in range(20):
+            activity_gen.generate_connection(
+                src_ip="10.0.0.10",
+                dst_ip="203.0.113.10",
+                time=timestamp + timedelta(seconds=idx),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=1.0,
+                orig_bytes=200,
+                resp_bytes=1500,
+                src_port=40000 + idx,
+                conn_state="SF",
+            )
+
+        events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        packet_pairs = {(event.network.orig_pkts, event.network.resp_pkts) for event in events}
+        durations = {round(event.network.duration, 1) for event in events}
+        assert len(packet_pairs) > 3
+        assert len(durations) > 3
 
     def test_system_process_registry_side_effects_use_hklm(
         self, activity_gen, test_system, state_manager, mock_emitters

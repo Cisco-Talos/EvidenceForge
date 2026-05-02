@@ -202,6 +202,23 @@ class TestSysmonEventEmitter:
         assert "<EventID>5</EventID>" in content
         assert '<Data Name="ProcessId">8052</Data>' in content
 
+    def test_logon_guid_is_stable_per_host_logon_session(self, format_def, temp_output):
+        """Sysmon LogonGuid should identify the logon session, not each process."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+
+        guid_a = emitter._generate_logon_guid("WKS-01", "0xabc123")
+        guid_b = emitter._generate_logon_guid("WKS-01", "0xabc123")
+        guid_other_session = emitter._generate_logon_guid("WKS-01", "0xdef456")
+        guid_other_host = emitter._generate_logon_guid("WKS-02", "0xabc123")
+
+        assert guid_a == guid_b
+        assert guid_a != guid_other_session
+        assert guid_a != guid_other_host
+        assert re.fullmatch(
+            r"\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}",
+            guid_a,
+        )
+
     def test_create_remote_thread_uses_canonical_context_values(self, format_def, tmp_path):
         """Sysmon Event 8 should not derive fields independently from eCAR."""
         from evidenceforge.events.base import SecurityEvent

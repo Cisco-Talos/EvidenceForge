@@ -146,6 +146,32 @@ def _iter_periodic_ticks(
         t += interval_sec
 
 
+def _iter_dns_tunnel_ticks(
+    start_time: datetime,
+    interval_sec: float,
+    duration_sec: float | None,
+    count: int | None,
+    jitter: float,
+    rng,
+):
+    """Yield DNS tunnel timestamps with pauses, skips, and variable pacing."""
+    end_time = start_time + timedelta(seconds=duration_sec) if duration_sec is not None else None
+    pause_offset = 0.0
+    for tick_index, tick_time in enumerate(
+        _iter_periodic_ticks(start_time, interval_sec, duration_sec, count, jitter, rng)
+    ):
+        if tick_index > 0 and rng.random() < 0.025:
+            pause_offset += rng.uniform(interval_sec * 3.0, interval_sec * 18.0)
+        if tick_index > 0 and rng.random() < 0.035:
+            continue
+        paced_time = tick_time + timedelta(
+            seconds=pause_offset + rng.expovariate(1.0 / max(interval_sec * 0.18, 0.001))
+        )
+        if end_time is not None and paced_time > end_time:
+            break
+        yield paced_time
+
+
 def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     """Return interval for rate-based bulk events.
 
@@ -1673,7 +1699,7 @@ class StorylineMixin:
             story_pid, story_image = self._last_storyline_process_for_system(src_sys)
 
             attempt_count = 0
-            for tick_time in _iter_periodic_ticks(
+            for tick_time in _iter_dns_tunnel_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
