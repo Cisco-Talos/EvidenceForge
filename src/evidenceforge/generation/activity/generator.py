@@ -166,6 +166,21 @@ def _windows_token_profile(username: str, integrity_level: str) -> tuple[str, st
     return "Medium", "%%1938", "S-1-16-8192"
 
 
+def _windows_service_process_account(process_name: str, command_line: str) -> str | None:
+    """Return the built-in service identity for service-hosted Windows processes."""
+    exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    command = command_line.lower()
+    if exe_name != "svchost.exe":
+        return None
+    if "localservice" in command:
+        return "LOCAL SERVICE"
+    if "networkservice" in command:
+        return "NETWORK SERVICE"
+    if "dcomlaunch" in command or "netsvcs" in command or "-s schedule" in command:
+        return "SYSTEM"
+    return None
+
+
 def _dns_payload_accounting(
     *,
     dns: DnsContext,
@@ -2589,11 +2604,19 @@ class ActivityGenerator:
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
         if session:
+            logon_type = session.logon_type
             session_end_markers = [
                 marker
                 for marker in (session.last_activity_time, session.network_close_time)
                 if marker is not None
             ]
+            session_end_markers.extend(
+                marker
+                for proc in self.state_manager.list_running_processes()
+                if proc.system == system.hostname and proc.logon_id == logon_id
+                for marker in (proc.last_activity_time or proc.start_time,)
+                if marker is not None
+            )
             if session_end_markers and not from_storyline:
                 # Source emitters add small native delays (for example Sysmon
                 # Event 1 after canonical process creation). Leave enough room
@@ -2758,6 +2781,11 @@ class ActivityGenerator:
             process_name=process_name,
             time=time,
         )
+        service_process_account = _windows_service_process_account(process_name, command_line)
+        if _get_os_category(system.os) == "windows" and service_process_account is not None:
+            process_username = service_process_account
+            process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_process_account]
+            _integrity = "System"
         session = self.state_manager.get_session(process_logon_id)
         if session is not None and time <= session.start_time:
             offset_ms = 100 + (
@@ -3104,6 +3132,20 @@ class ActivityGenerator:
             time = running_proc.last_activity_time + timedelta(seconds=delay_rng.uniform(2.0, 30.0))
         process_username = running_proc.username if running_proc is not None else user.username
         process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
+        session_logon_type = self.state_manager.get_session_logon_type(process_logon_id)
+        session_end_time = self.state_manager.get_session_end_time(process_logon_id)
+        if session_end_time is not None and time >= session_end_time:
+            end_margin_ms = 150 + (
+                _stable_seed(
+                    f"process_terminate_before_logoff:{system.hostname}:{pid}:{process_logon_id}"
+                )
+                % 850
+            )
+            latest_allowed = session_end_time - timedelta(milliseconds=end_margin_ms)
+            if running_proc is not None and running_proc.start_time >= latest_allowed:
+                latest_allowed = running_proc.start_time + timedelta(milliseconds=100)
+            if latest_allowed < session_end_time:
+                time = min(time, latest_allowed)
         if not process_logon_id:
             if process_username in _SYSTEM_ACCOUNTS:
                 process_logon_id = "0x3e7"
@@ -3126,6 +3168,7 @@ class ActivityGenerator:
                 username=process_username,
                 user_sid=self._get_sid(process_username),
                 logon_id=process_logon_id,
+                logon_type=session_logon_type or 0,
             ),
             process=ProcessContext(
                 pid=pid,
@@ -3708,17 +3751,25 @@ class ActivityGenerator:
             dst_port = 0
         elif conn_state is not None:
             # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
-            history = {
-                "REJ": "Sr",
-                "S0": "S",
-                "SF": "ShADadfF",
-                "OTH": "Cc",
-                "S2": "ShADadF",
-                "S3": "ShADadf",
-                "RSTO": "ShADaR",
-                "RSTR": "ShADadR",
-                "S1": "ShR",
-            }.get(conn_state, "ShADadfF")
+            if proto == "udp":
+                history = {
+                    "SF": "Dd" if resp_bytes else "D",
+                    "S0": "D",
+                    "REJ": "D",
+                    "OTH": "D",
+                }.get(conn_state, "Dd" if resp_bytes else "D")
+            else:
+                history = {
+                    "REJ": "Sr",
+                    "S0": "S",
+                    "SF": "ShADadfF",
+                    "OTH": "Cc",
+                    "S2": "ShADadF",
+                    "S3": "ShADadf",
+                    "RSTO": "ShADaR",
+                    "RSTR": "ShADadR",
+                    "S1": "ShR",
+                }.get(conn_state, "ShADadfF")
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
@@ -4926,6 +4977,14 @@ class ActivityGenerator:
         else:
             # Literal command string (direct commands, typos, etc.)
             command = activity_type_or_command
+
+        if user.username.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}:
+            logger.debug(
+                "Skipping bash_history for noninteractive web service user %s on %s",
+                user.username,
+                system.hostname,
+            )
+            return
 
         event = SecurityEvent(
             timestamp=time,

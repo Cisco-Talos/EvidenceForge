@@ -651,6 +651,31 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_bytes <= 512
         assert event.network.duration <= 0.08
 
+    def test_udp_dns_with_explicit_conn_state_uses_udp_history(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Caller-forced successful DNS rows must not inherit TCP handshake history."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.02,
+            orig_bytes=54,
+            resp_bytes=140,
+            conn_state="SF",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.protocol == "udp"
+        assert event.network.conn_state == "SF"
+        assert event.network.history in {"Dd", "D"}
+        assert not set(event.network.history) & set("SshAaFfRr")
+
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

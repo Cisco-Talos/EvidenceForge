@@ -241,6 +241,36 @@ class TestActivityGenerator:
         assert username == "SYSTEM"
         assert logon_id == "0x3e7"
 
+    def test_service_hosted_svchost_uses_builtin_service_identity(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Core svchost service groups should not inherit an interactive domain user."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k DcomLaunch -p",
+            parent_pid=4,
+        )
+
+        event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process
+            and call.args[0].process.pid == pid
+        ][0]
+        assert event.auth.username == "SYSTEM"
+        assert event.auth.logon_id == "0x3e7"
+        assert event.process.integrity_level == "System"
+        assert event.process.token_elevation == "%%1936"
+
     def test_process_activity_does_not_reuse_network_logon_session(
         self, activity_gen, test_user, test_system, state_manager
     ):
@@ -272,7 +302,11 @@ class TestActivityGenerator:
         ]
         assert process_events
         assert process_events[-1].auth.logon_id != "0xnetwork"
-        assert state_manager.get_session(process_events[-1].auth.logon_id).logon_type == 2
+        if process_events[-1].auth.username == "SYSTEM":
+            assert process_events[-1].auth.logon_id == "0x3e7"
+            assert process_events[-1].process.integrity_level == "System"
+        else:
+            assert state_manager.get_session(process_events[-1].auth.logon_id).logon_type == 2
 
     def test_account_management_subject_logon_ignores_future_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -579,6 +613,72 @@ class TestActivityGenerator:
         assert logoff_event.event_type == "logoff"
         assert logoff_event.auth.username == test_user.username
         assert logoff_event.auth.logon_id == logon_id
+
+    def test_generate_logoff_uses_original_session_logon_type(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A Type 3 session must not log off later as an interactive Type 2 session."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip="10.0.0.99",
+        )
+
+        activity_gen.generate_logoff(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            logon_id,
+            logon_type=2,
+        )
+
+        logoff_event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logoff"
+        ][-1]
+        assert logoff_event.auth.logon_type == 3
+
+    def test_process_termination_after_ended_session_clamps_before_logoff(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Late process teardown for a closed session should render before 4634."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe /c whoami",
+        )
+        logoff_time = timestamp + timedelta(minutes=5)
+        activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id)
+
+        activity_gen.generate_process_termination(
+            test_user,
+            test_system,
+            logoff_time + timedelta(minutes=20),
+            pid,
+            r"C:\Windows\System32\cmd.exe",
+            logon_id,
+        )
+
+        termination_event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate"
+            and call.args[0].process
+            and call.args[0].process.pid == pid
+        ][-1]
+        assert termination_event.timestamp < logoff_time
+        assert termination_event.auth.logon_id == logon_id
 
     def test_generate_process_creates_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
