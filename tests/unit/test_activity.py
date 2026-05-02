@@ -1410,6 +1410,54 @@ class TestActivityGenerator:
         assert logon.timestamp < explicit.timestamp
         assert explicit.auth.subject_logon_id == logon.auth.logon_id
 
+    def test_generate_explicit_credentials_defaults_remote_network_endpoint(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Remote 4648 records should carry source endpoint metadata by default."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == test_system.ip
+        assert 49152 <= explicit.auth.source_port <= 65535
+
+    def test_generate_explicit_credentials_local_target_keeps_blank_network_endpoint(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Local 4648 records should preserve native blank network endpoint semantics."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server=test_system.hostname,
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == "-"
+        assert explicit.auth.source_port == 0
+
     def test_generate_explicit_credentials_linux_target_uses_host_domain(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

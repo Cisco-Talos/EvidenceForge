@@ -6348,6 +6348,10 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
         subject = self._account_subject_fields(user.username, system, subject_logon_id)
+        network_source_ip = source_ip or self._explicit_credentials_source_ip(system, target_server)
+        network_source_port = source_port
+        if network_source_ip not in {"", "-"} and network_source_port <= 0:
+            network_source_port = _ephemeral_port(_get_rng(), _get_os_category(system.os))
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",
@@ -6367,11 +6371,27 @@ class ActivityGenerator:
                 process_pid=process_pid,
                 target_server=target_server,
                 process_name=process_name,
-                source_ip=source_ip or "-",
-                source_port=source_port,
+                source_ip=network_source_ip or "-",
+                source_port=network_source_port,
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def _explicit_credentials_source_ip(self, system: System, target_server: str) -> str:
+        """Return source network metadata for remote explicit-credential use."""
+        target = target_server.strip().lower()
+        if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
+            return "-"
+        system_domain = getattr(system, "domain", "")
+        local_names = {
+            system.hostname.lower(),
+            f"{system.hostname}.{system_domain}".lower() if system_domain else "",
+            system.ip,
+        }
+        target_host = target.split(".", 1)[0]
+        if target in local_names or target_host == system.hostname.lower():
+            return "-"
+        return system.ip
 
     def _ensure_explicit_credentials_subject_logon(
         self,
