@@ -2832,6 +2832,7 @@ class ActivityGenerator:
             parent_pid=parent_pid,
             process_username=process_username,
         )
+        self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
         # Phase 1: Allocate IDs from StateManager
         pid = self.state_manager.create_process(
@@ -3748,12 +3749,30 @@ class ActivityGenerator:
         # Protocol-aware connection state selection
         rng = _get_rng()
 
+        dns_has_response = (
+            proto == "udp"
+            and service == "dns"
+            and dns is not None
+            and (
+                dns.rtt is not None
+                or bool(dns.answers)
+                or dns.rcode.upper() in {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+            )
+        )
+
         # ICMP is connectionless — always OTH regardless of what the caller passed
         if proto == "icmp":
             conn_state = "OTH"
             history = "-"
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
+        elif dns_has_response:
+            conn_state = "SF"
+            history = "Dd"
+            orig_bytes = max(orig_bytes or 0, rng.randint(35, 95))
+            resp_bytes = max(resp_bytes or 0, rng.randint(80, 220))
+            if dns.rtt is not None and (duration is None or duration < dns.rtt):
+                duration = dns.rtt
         elif conn_state is not None:
             # Explicit conn_state for TCP/UDP (e.g., UFW BLOCK → REJ)
             if proto == "udp":

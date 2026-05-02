@@ -501,6 +501,39 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.duration == 0.35
 
+    def test_explicit_dns_response_state_keeps_responder_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS rows with response metadata must not render as one-way UDP."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            conn_state="SF",
+            orig_bytes=0,
+            resp_bytes=0,
+            dns=DnsContext(
+                query="missing.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="NXDOMAIN",
+                rcode_num=3,
+                rtt=0.08,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_bytes > 0
+        assert event.network.duration == 0.08
+
     def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

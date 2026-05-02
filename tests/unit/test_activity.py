@@ -1140,6 +1140,46 @@ class TestActivityGenerator:
         assert terminate_events
         assert terminate_events[-1].timestamp > timestamp + timedelta(seconds=30)
 
+    def test_process_create_extends_parent_lifecycle_marker(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Visible child creation should keep the parent alive past that timestamp."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.register_session(
+            logon_id="0x12345",
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp,
+            session_kind="interactive",
+        ).logon_id
+        parent_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+
+        child_time = timestamp + timedelta(minutes=30)
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            child_time,
+            logon_id,
+            r"C:\Windows\System32\whoami.exe",
+            "whoami.exe",
+            parent_pid=parent_pid,
+        )
+
+        parent = state_manager.get_process(test_system.hostname, parent_pid)
+        assert parent is not None
+        assert parent.last_activity_time == child_time
+
     def test_wfp_connection_uses_state_process_image(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
