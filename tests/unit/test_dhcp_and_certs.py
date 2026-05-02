@@ -505,6 +505,7 @@ class TestTlsIssuers:
         assert event.x509.certificate_subject == "CN=45.33.32.30"
         assert event.x509.certificate_issuer == "CN=45.33.32.30"
         assert event.x509.san_dns == []
+        assert event.x509_chain == [event.x509]
 
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""

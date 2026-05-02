@@ -1748,6 +1748,8 @@ class ActivityGenerator:
         )
 
         chain = [leaf]
+        if _is_ip_literal(cert_name):
+            return chain
         config = certificate_chain_config()
         include_probability = float(config.get("include_intermediate_probability", 0.86))
         if rng.random() >= include_probability:
