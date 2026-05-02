@@ -515,6 +515,96 @@ class TestActivityGenerator:
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
 
+    def test_generate_rdp_session_updates_preallocated_session_time(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Preplanned RDP sessions should not pull the target 4624 before source evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.99.50",
+            session_kind="rdp",
+        )
+
+        activity_gen.generate_rdp_session(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+            logon_id=logon_id,
+        )
+
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 10
+        )
+        session = state_manager.get_session(logon_id)
+
+        assert logon_event.timestamp > network_event.timestamp
+        assert session is not None
+        assert session.start_time == logon_event.timestamp
+        assert session.source_port == network_event.network.src_port
+
+    def test_nmap_process_emits_matching_network_scan_evidence(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Nmap process commands should leave network scan evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        target_a = System(
+            hostname="APP-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        target_b = System(
+            hostname="FILE-01",
+            ip="10.10.2.20",
+            os="Windows Server 2019",
+            type="server",
+        )
+        activity_gen._ip_to_system = {
+            source.ip: source,
+            target_a.ip: target_a,
+            target_b.ip: target_b,
+        }
+        state_manager.set_current_time(timestamp)
+
+        pid = activity_gen.generate_process(
+            user=test_user,
+            system=source,
+            time=timestamp,
+            logon_id="0x123",
+            process_name="/usr/bin/nmap",
+            command_line="nmap -sT -p 22,80,443,445,3306 10.10.2.0/24",
+            parent_pid=0,
+        )
+
+        scan_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.src_ip == source.ip
+            and call.args[0].network.initiating_pid == pid
+        ]
+        assert scan_events
+        assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
+        assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445, 3306}
+
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

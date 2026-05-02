@@ -24,6 +24,7 @@ from evidenceforge.generation.activity.tls_issuers import (
 )
 from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
+    chain_template_for_issuer,
     multi_label_public_suffixes,
     ocsp_config,
     pick_ocsp_responder,
@@ -317,6 +318,23 @@ class TestTlsIssuers:
 
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
         assert "download.windowsupdate.com" not in linux_domains
+
+    def test_public_ca_chain_templates_keep_issuer_family(self):
+        """Public CA intermediates should not fall through to an unrelated root family."""
+        globalsign = chain_template_for_issuer(
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+        )
+        sectigo = chain_template_for_issuer(
+            "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, "
+            "L=Salford, ST=Greater Manchester, C=GB"
+        )
+
+        assert globalsign["name"] == "globalsign"
+        assert all("GlobalSign" in subject for subject in globalsign["intermediates"])
+        assert sectigo["name"] == "sectigo"
+        assert any(
+            "Sectigo" in subject or "USERTrust" in subject for subject in sectigo["intermediates"]
+        )
 
     def test_tls_destination_servers_avoid_human_saas_profiles(self):
         """Server-origin TLS background should not pick browser/SaaS-heavy destinations."""

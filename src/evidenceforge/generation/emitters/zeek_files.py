@@ -22,6 +22,7 @@
 
 """Zeek files.log emitter."""
 
+import hashlib
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -83,6 +84,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
         for depth, cert in enumerate(certificates):
             size = 900 + (cert.certificate_key_length // 8) + (0 if cert.host_cert else 240)
+            cert_hashes = _certificate_file_hashes(cert.fuid, cert.fingerprint)
             event_data = {
                 "ts": event.timestamp,
                 "fuid": cert.fuid,
@@ -102,9 +104,9 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "missing_bytes": 0,
                 "overflow_bytes": 0,
                 "timedout": False,
-                "md5": cert.fingerprint[:32] if cert.fingerprint else None,
-                "sha1": cert.fingerprint[:40] if cert.fingerprint else None,
-                "sha256": cert.fingerprint or None,
+                "md5": cert_hashes["md5"],
+                "sha1": cert_hashes["sha1"],
+                "sha256": cert_hashes["sha256"],
                 "_sensor_hostnames": sensor_hostnames,
             }
             self.emit_event(event_data)
@@ -125,3 +127,20 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             if f not in event_data:
                 event_data[f] = None
         return self._render_zeek_json(event_data)
+
+
+def _certificate_file_hashes(fuid: str, fingerprint: str) -> dict[str, str | None]:
+    """Return independent file hashes for a certificate body.
+
+    ``x509.fingerprint`` is the certificate SHA256 fingerprint. Zeek files.log
+    hashes represent the file-analysis bytes for the same certificate and must
+    not look like truncated versions of one another.
+    """
+    if not fingerprint:
+        return {"md5": None, "sha1": None, "sha256": None}
+    seed = f"zeek-cert-file:{fuid}:{fingerprint}"
+    return {
+        "md5": hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest(),
+        "sha1": hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest(),
+        "sha256": fingerprint,
+    }

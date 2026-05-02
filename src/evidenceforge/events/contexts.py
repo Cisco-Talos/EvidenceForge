@@ -459,7 +459,7 @@ class OcspContext:
     """OCSP response details for Zeek ocsp.log."""
 
     id: str = ""  # F-prefix file ID
-    hash_algorithm: str = "sha256"
+    hash_algorithm: str = "sha1"
     issuer_name_hash: str = ""
     issuer_key_hash: str = ""
     serial_number: str = ""

@@ -711,6 +711,9 @@ class TestSslContextPopulation:
             )
             assert event.ocsp.this_update <= event.timestamp.timestamp()
             assert event.ocsp.next_update > event.timestamp.timestamp()
+            assert event.ocsp.hash_algorithm == "sha1"
+            assert len(event.ocsp.issuer_name_hash) == 40
+            assert len(event.ocsp.issuer_key_hash) == 40
             assert event.network.service == "http"
             assert event.http is not None
             assert event.http.resp_fuids == [event.ocsp.id]
@@ -721,6 +724,40 @@ class TestSslContextPopulation:
 
         assert all(len(statuses) == 1 for statuses in statuses_by_serial.values())
         assert all(len(windows) <= 2 for windows in windows_by_serial.values())
+
+    def test_linux_proxy_originated_ocsp_uses_linux_agent(self, activity_gen):
+        """Proxy-side OCSP fetches should not inherit Windows CryptoAPI identity."""
+        gen, events = activity_gen
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {proxy.ip: proxy}
+
+        for offset in range(120):
+            gen.generate_connection(
+                src_ip=proxy.ip,
+                dst_ip="91.189.91.81",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(minutes=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="changelogs.ubuntu.com",
+                conn_state="SF",
+                source_system=proxy,
+            )
+            gen._tls_seen_server_names.clear()
+
+        ocsp_events = [event for event in events if event.ocsp is not None]
+        assert ocsp_events
+        assert all(event.http is not None for event in ocsp_events)
+        assert all(event.http.user_agent != "Microsoft-CryptoAPI/10.0" for event in ocsp_events)
 
     def test_same_certificate_identity_has_stable_validity_window(self, activity_gen):
         gen, events = activity_gen

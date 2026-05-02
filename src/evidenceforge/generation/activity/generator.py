@@ -112,6 +112,14 @@ _SYSTEM_ACCOUNT_LOGON_IDS = {
     "LOCAL SERVICE": "0x3e5",
     "NETWORK SERVICE": "0x3e4",
 }
+_NMAP_PORT_SERVICES = {
+    22: "ssh",
+    80: "http",
+    443: "ssl",
+    445: "smb",
+    3306: "mysql",
+    3389: "rdp",
+}
 _WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
     "smss.exe": "smss",
     "csrss.exe": "csrss_s0",
@@ -119,6 +127,54 @@ _WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
     "services.exe": "services",
     "lsass.exe": "lsass",
 }
+
+
+def _extract_nmap_ports(command_line: str) -> list[int]:
+    """Extract an nmap ``-p`` port list from a command line."""
+    tokens = command_line.replace(",", " ").split()
+    ports: list[int] = []
+    for idx, token in enumerate(tokens):
+        if token == "-p" and idx + 1 < len(tokens):
+            ports.extend(_parse_port_tokens(tokens[idx + 1 : idx + 13]))
+            break
+        if token.startswith("-p") and len(token) > 2:
+            ports.extend(_parse_port_tokens([token[2:]]))
+            break
+    return list(dict.fromkeys(port for port in ports if 0 < port <= 65535))
+
+
+def _parse_port_tokens(tokens: list[str]) -> list[int]:
+    """Parse nmap port tokens until the next option or target token."""
+    ports: list[int] = []
+    for token in tokens:
+        stripped = token.strip("'\"")
+        if stripped.startswith("-") or "/" in stripped:
+            break
+        for value in stripped.split(","):
+            if "-" in value:
+                start_text, end_text = value.split("-", 1)
+                if start_text.isdigit() and end_text.isdigit():
+                    start = int(start_text)
+                    end = min(int(end_text), start + 20)
+                    ports.extend(range(start, end + 1))
+                continue
+            if value.isdigit():
+                ports.append(int(value))
+    return ports
+
+
+def _service_for_port(port: int) -> str | None:
+    """Return a common service name for an nmap destination port."""
+    return _NMAP_PORT_SERVICES.get(port)
+
+
+def _nmap_conn_state(port: int) -> str:
+    """Return a plausible Zeek conn_state for a TCP-connect scan probe."""
+    if port in {22, 80, 443, 445, 3306, 3389}:
+        return "SF"
+    return "REJ"
+
+
 _WINDOWS_USER_SESSION_PROCESSES = {
     "sihost.exe",
     "searchhost.exe",
@@ -1676,16 +1732,20 @@ class ActivityGenerator:
                 ocsp_window = (this_update, next_update)
                 self._tls_ocsp_windows[ocsp_window_key] = ocsp_window
             this_update, next_update = ocsp_window
+            issuer_name_hash = hashlib.sha1(
+                event.x509.certificate_issuer.encode(),
+                usedforsecurity=False,
+            ).hexdigest()
+            issuer_key_hash = hashlib.sha1(
+                f"key_{event.x509.certificate_issuer}".encode(),
+                usedforsecurity=False,
+            ).hexdigest()
             ocsp_id = _gen_uid("F")
             ocsp_ctx = OcspContext(
                 id=ocsp_id,
-                hash_algorithm="sha256",
-                issuer_name_hash=hashlib.sha256(event.x509.certificate_issuer.encode()).hexdigest()[
-                    :40
-                ],
-                issuer_key_hash=hashlib.sha256(
-                    f"key_{event.x509.certificate_issuer}".encode()
-                ).hexdigest()[:40],
+                hash_algorithm="sha1",
+                issuer_name_hash=issuer_name_hash,
+                issuer_key_hash=issuer_key_hash,
                 serial_number=event.x509.certificate_serial,
                 cert_status=_ocsp_status_for_certificate(cert_name, event.x509.certificate_serial),
                 this_update=this_update,
@@ -1718,12 +1778,18 @@ class ActivityGenerator:
             milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
         )
         uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
+        source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
+        user_agent = pick_proxy_user_agent(
+            random.Random(_stable_seed(f"ocsp_user_agent:{ocsp.id}:{responder}:{net.src_ip}")),
+            source_system,
+            hostname=responder,
+        )
         http_ctx = HttpContext(
             method="GET",
             host=responder,
             uri=f"/{uri_seed}",
             version="1.1",
-            user_agent="Microsoft-CryptoAPI/10.0",
+            user_agent=user_agent,
             request_body_len=0,
             response_body_len=ocsp_size,
             status_code=200,
@@ -1749,7 +1815,6 @@ class ActivityGenerator:
             overflow_bytes=0,
             timedout=False,
         )
-        source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
         self.generate_connection(
             src_ip=net.src_ip,
             dst_ip=responder_ip,
@@ -3037,6 +3102,14 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
+        self._emit_process_command_network_effects(
+            user=user,
+            system=system,
+            time=time,
+            pid=pid,
+            process_name=process_name,
+            command_line=command_line,
+        )
 
         # Guaranteed FILE/CREATE for the process image when requested (storyline processes).
         # Skip for pre-existing binaries in System32/SysWOW64/Program Files — Event 11
@@ -3260,6 +3333,80 @@ class ActivityGenerator:
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
+
+    def _emit_process_command_network_effects(
+        self,
+        *,
+        user: User,
+        system: System,
+        time: datetime,
+        pid: int,
+        process_name: str,
+        command_line: str,
+    ) -> None:
+        """Emit direct network effects for well-known network-scanning commands."""
+        del user  # Reserved for future command families that need user profile context.
+        command_lower = command_line.lower()
+        image_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if image_lower != "nmap" and " nmap " not in f" {command_lower} ":
+            return
+        ports = _extract_nmap_ports(command_line)
+        if not ports:
+            return
+        targets = self._resolve_nmap_targets(command_line, system)
+        if not targets:
+            return
+
+        rng = random.Random(
+            _stable_seed(f"nmap_effects:{system.hostname}:{pid}:{command_line}:{time.isoformat()}")
+        )
+        for idx, target_ip in enumerate(targets[:32]):
+            for port_idx, port in enumerate(ports[:12]):
+                offset = timedelta(milliseconds=180 + idx * 260 + port_idx * rng.randint(45, 140))
+                self.generate_connection(
+                    src_ip=system.ip,
+                    dst_ip=target_ip,
+                    time=time + offset,
+                    dst_port=port,
+                    proto="tcp",
+                    service=_service_for_port(port),
+                    duration=rng.uniform(0.02, 0.45),
+                    orig_bytes=rng.randint(40, 180),
+                    resp_bytes=rng.randint(0, 900),
+                    emit_dns=False,
+                    pid=pid,
+                    source_system=system,
+                    conn_state=_nmap_conn_state(port),
+                    proxy_bypass=True,
+                    process_image=process_name,
+                )
+
+    def _resolve_nmap_targets(self, command_line: str, system: System) -> list[str]:
+        """Resolve nmap CIDR/IP arguments to visible scenario hosts when possible."""
+        tokens = command_line.replace(",", " ").split()
+        candidates: list[str] = []
+        for token in tokens:
+            stripped = token.strip("'\"")
+            try:
+                network = ipaddress.ip_network(stripped, strict=False)
+            except ValueError:
+                try:
+                    ipaddress.ip_address(stripped)
+                except ValueError:
+                    continue
+                candidates.append(stripped)
+                continue
+            ip_map = getattr(self, "_ip_to_system", {})
+            in_scenario = [
+                ip
+                for ip in sorted(ip_map)
+                if ip != system.ip and ipaddress.ip_address(ip) in network
+            ]
+            if in_scenario:
+                candidates.extend(in_scenario)
+            else:
+                candidates.extend(str(host) for host in list(network.hosts())[:8])
+        return list(dict.fromkeys(candidates))
 
     def _clamp_time_after_process_start(
         self, system: System, pid: int, time: datetime, *, offset_ms: int = 100
@@ -6889,6 +7036,13 @@ class ActivityGenerator:
         # connection, so leave enough collection margin for source Sysmon/WFP
         # and Zeek evidence to appear first in a bounded time slice.
         logon_time = observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600))
+        if logon_id is not None:
+            self.state_manager.update_session_metadata(
+                logon_id,
+                start_time=logon_time,
+                source_port=src_port,
+                session_kind="rdp",
+            )
         self.generate_logon(
             user=user,
             system=target_system,
