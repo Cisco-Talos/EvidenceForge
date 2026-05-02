@@ -1841,8 +1841,6 @@ class StorylineMixin:
             elif spec.end_time is not None:
                 end_dt = self._parse_storyline_time(spec.end_time)
                 duration_sec = (end_dt - start).total_seconds()
-            interval_sec = _effective_rate_interval(spec.rate, count, rng)
-
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip
             service = "http" if spec.dst_port == 80 else "ssl"
@@ -1873,6 +1871,12 @@ class StorylineMixin:
             ids_ua_def = preset_data.get("ids_ua") if preset_data else None
             ids_rate_def = preset_data.get("ids_rate") if preset_data else None
             rate_threshold = ids_rate_def.get("threshold", 20) if ids_rate_def else 20
+            effective_rate = spec.rate
+            if count is None and preset_data:
+                max_effective_rate = preset_data.get("max_effective_rate")
+                if max_effective_rate is not None:
+                    effective_rate = min(effective_rate, float(max_effective_rate))
+            interval_sec = _effective_rate_interval(effective_rate, count, rng)
             ua_fired = False
             last_rate_alert_ts = None
             _send_referrer_config = preset_data.get("send_referrer") if preset_data else None

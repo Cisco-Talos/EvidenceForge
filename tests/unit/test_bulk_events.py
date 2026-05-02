@@ -488,6 +488,15 @@ class TestWebScanPresets:
         assert len(nikto["paths"]) > 10
         assert "user_agent" in nikto
         assert "default_rate" in nikto
+        assert "max_effective_rate" in nikto
+
+    def test_presets_have_positive_effective_rate_cap(self):
+        from evidenceforge.config.web_scan_presets import get_preset, list_preset_names
+
+        for name in list_preset_names():
+            preset = get_preset(name)
+            assert preset is not None
+            assert 0 < preset["max_effective_rate"] <= preset["default_rate"]
 
     def test_get_unknown_preset(self):
         from evidenceforge.config.web_scan_presets import get_preset

@@ -40,6 +40,7 @@ presets:
     # Non-crawl probes send none. This approximates a mixed crawl+probe run.
     send_referrer: {mode: same_origin, probability: 0.3}
     default_rate: 10.0
+    max_effective_rate: 0.7
     ids_ua:
       sid: 2002677
       rev: 14
@@ -127,6 +128,7 @@ presets:
     user_agent: "DirBuster-1.0-RC1 (http://www.owasp.org/index.php/Category:OWASP_DirBuster_Project)"
     send_referrer: none
     default_rate: 50.0
+    max_effective_rate: 1.5
     ids_ua:
       sid: 2008186
       rev: 5
@@ -219,6 +221,7 @@ presets:
     user_agent: "gobuster/3.6"
     send_referrer: none
     default_rate: 100.0
+    max_effective_rate: 2.0
     ids_ua:
       sid: 2008186
       rev: 5
@@ -270,6 +273,7 @@ presets:
     user_agent: "sqlmap/1.7.12#stable (https://sqlmap.org)"
     send_referrer: none
     default_rate: 5.0
+    max_effective_rate: 0.5
     ids_ua:
       sid: 2008538
       rev: 8
@@ -324,6 +328,7 @@ presets:
     user_agent: "Mozilla/5.0 (compatible; Nmap Scripting Engine; https://nmap.org/book/nse.html)"
     send_referrer: none
     default_rate: 3.0
+    max_effective_rate: 0.4
     ids_ua:
       sid: 2009358
       rev: 5
