@@ -306,6 +306,94 @@ class TestSysmonEventEmitter:
         assert f'<Data Name="ProcessGuid">{expected_guid}</Data>' in content
         assert terminate_time_guid not in content
 
+    def test_process_terminate_payload_time_updates_after_followon_shift(
+        self, format_def, temp_output
+    ):
+        """Event 5 UtcTime should follow final source-native TimeCreated normalization."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=100)
+        guid = "{12345678-abcd-ef01-2345-678901234567}"
+        base = {
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": 2756,
+            "ExecutionThreadID": 3632,
+            "ProcessGuid": guid,
+            "ProcessId": 8052,
+            "Image": r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
+            "User": r"CORP\jsmith",
+        }
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 7,
+                "TimeCreated": datetime(2024, 1, 15, 16, 32, 44, 527000, tzinfo=UTC),
+                "UtcTime": "2024-01-15 16:32:44.527",
+                "ImageLoaded": r"C:\Program Files\Microsoft Office\root\Office16\mso.dll",
+                "Hashes": "SHA1=ABC,MD5=DEF,SHA256=GHI,IMPHASH=JKL",
+                "Signed": "true",
+                "Signature": "Microsoft Corporation",
+                "SignatureStatus": "Valid",
+            }
+        )
+        emitter.emit_event(
+            {
+                **base,
+                "EventID": 5,
+                "TimeCreated": datetime(2024, 1, 15, 15, 44, 49, 138000, tzinfo=UTC),
+                "UtcTime": "2024-01-15 15:44:49.138",
+            }
+        )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        event5 = content.split("<EventID>5</EventID>", 1)[1]
+        assert "2024-01-15 15:44:49.138" not in event5
+        assert '<Data Name="UtcTime">2024-01-15 16:32:44.' in event5
+
+    def test_interactive_process_create_uses_nonzero_terminal_session(self, format_def, tmp_path):
+        """Interactive user process creates should not all render TerminalSessionId 0."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Windows\explorer.exe",
+                command_line=r"C:\Windows\explorer.exe",
+                username="jsmith",
+                logon_id="0xabc123",
+            ),
+            auth=AuthContext(username="jsmith", logon_id="0xabc123", logon_type=2),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
+        match = re.search(r'<Data Name="TerminalSessionId">(\d+)</Data>', content)
+        assert match is not None
+        assert int(match.group(1)) > 0
+
     def test_process_create_parent_guid_uses_context_parent_start_time(self, format_def, tmp_path):
         """ParentProcessGuid should not be recomputed from a later reused parent PID."""
         from evidenceforge.events.base import SecurityEvent

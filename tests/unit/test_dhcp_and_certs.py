@@ -476,6 +476,36 @@ class TestTlsIssuers:
         assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
         assert event.x509.san_dns == ["srv-05.example.com", "srv-05"]
 
+    def test_raw_ip_tls_certificate_avoids_public_ca_dnsless_identity(self):
+        """Raw-IP TLS should not render a public-CA CN-only certificate."""
+        generator = ActivityGenerator(StateManager(), {})
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip="45.33.32.30",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestRawIpTls",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname="",
+            dns=None,
+            dst_ip="45.33.32.30",
+            rng=random.Random(42),
+            allow_failure=False,
+        )
+
+        assert event.x509 is not None
+        assert event.x509.certificate_subject == "CN=45.33.32.30"
+        assert event.x509.certificate_issuer == "CN=45.33.32.30"
+        assert event.x509.san_dns == []
+
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""
         generator = ActivityGenerator(StateManager(), {})

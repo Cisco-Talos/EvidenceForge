@@ -89,6 +89,11 @@ _DNS_STATUS_MAP: dict[str, str] = {
 }
 
 
+def _format_sysmon_utc_time(timestamp: datetime) -> str:
+    """Return Sysmon EventData UtcTime from the rendered source timestamp."""
+    return ensure_utc(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
 class SysmonEventEmitter(LogEmitter):
     """Emitter for Windows Sysmon Event Log format (XML).
 
@@ -651,7 +656,7 @@ class SysmonEventEmitter(LogEmitter):
             maximum_ms=85,
         )
 
-        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        utc_time = _format_sysmon_utc_time(render_time)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -705,6 +710,7 @@ class SysmonEventEmitter(LogEmitter):
                 event.timestamp,
             ),
             "LogonId": logon_id,
+            "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,
             "Hashes": self._generate_hashes(proc.image, host.hostname),
             "ParentProcessGuid": parent_guid,
@@ -747,7 +753,7 @@ class SysmonEventEmitter(LogEmitter):
         auth = event.auth
         host = event.src_host
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        utc_time = _format_sysmon_utc_time(event.timestamp)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -788,6 +794,18 @@ class SysmonEventEmitter(LogEmitter):
 
             return resolve_image_path(image, "windows", username=username)
         return image
+
+    @staticmethod
+    def _terminal_session_id(auth, logon_id: str) -> int:
+        """Return a source-native TerminalSessionId for Sysmon process creates."""
+        if auth is None:
+            return 0
+        username = (auth.username or "").upper()
+        if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
+            return 0
+        if auth.logon_type in {2, 7, 10, 11}:
+            return 1 + (_stable_seed(f"sysmon_terminal_session:{logon_id or username}") % 8)
+        return 0
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
@@ -1420,6 +1438,8 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
+                if "UtcTime" in event_data:
+                    event_data["UtcTime"] = _format_sysmon_utc_time(ts)
                 event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":

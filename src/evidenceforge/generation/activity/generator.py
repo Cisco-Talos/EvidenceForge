@@ -27,6 +27,7 @@ activity events (logon, logoff, process creation, network connections) and
 coordinates them across multiple log formats for consistency.
 """
 
+import ipaddress
 import logging
 import math
 import random
@@ -754,6 +755,27 @@ def _tls_san_dns_names(cert_name: str) -> list[str]:
     return [cert_name, f"*.{wildcard_base}"]
 
 
+def _is_ip_literal(value: str) -> bool:
+    """Return whether a certificate/SNI identity is an IP literal."""
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
+
+
+def _raw_ip_tls_issuer(cert_name: str) -> dict[str, Any]:
+    """Return a non-public-CA profile for raw-IP TLS certificates."""
+    return {
+        "name": f"CN={cert_name}",
+        "weight": 0,
+        "validity_days_min": 30,
+        "validity_days_max": 397,
+        "not_before_max_days": 180,
+        "key_types": [{"type": "rsa", "length": 2048, "weight": 100}],
+    }
+
+
 def _ocsp_status_for_certificate(cert_name: str, serial_number: str) -> str:
     """Pick a stable mostly-good OCSP status per certificate identity."""
     from evidenceforge.generation.activity.tls_realism import ocsp_config
@@ -1363,11 +1385,12 @@ class ActivityGenerator:
         from evidenceforge.generation.activity.tls_issuers import pick_issuer, pick_key_type
 
         cert_rng = random.Random(_stable_seed(f"tls_cert_profile:{cert_name}"))
-        issuer_cfg = (
-            _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
-            if internal_cert_name
-            else pick_issuer(cert_rng, server_name=cert_name)
-        )
+        if internal_cert_name:
+            issuer_cfg = _enterprise_tls_issuer(getattr(self, "_ad_domain", ""))
+        elif _is_ip_literal(cert_name):
+            issuer_cfg = _raw_ip_tls_issuer(cert_name)
+        else:
+            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name)
         key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
         key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
         is_ecdsa = key_type == "ecdsa"

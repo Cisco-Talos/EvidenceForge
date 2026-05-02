@@ -132,6 +132,15 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     return netbios_domain
 
 
+def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
+    """Normalize SubjectDomainName for well-known Windows subject identities."""
+    subject_name = getattr(auth, "subject_username", "") or getattr(auth, "username", "")
+    subject_sid = getattr(auth, "subject_sid", "") or getattr(auth, "user_sid", "")
+    if subject_sid == "S-1-5-18" or subject_name.upper() in _NT_AUTHORITY_ACCOUNTS:
+        return "NT AUTHORITY"
+    return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
+
+
 def _special_privilege_fallback(username: str) -> str:
     """Return a realistic 4672 privilege set when AuthContext omits one."""
     normalized = username.upper()
@@ -336,7 +345,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -491,7 +500,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -588,7 +597,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "NewProcessId": f"0x{proc.pid:x}",
             "NewProcessName": proc.image,
@@ -622,7 +631,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -800,7 +809,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "LogonGuid": auth.logon_guid or "{00000000-0000-0000-0000-000000000000}",
             "TargetUserName": auth.username,
@@ -824,6 +833,10 @@ class WindowsEventEmitter(LogEmitter):
         is_outbound = net.src_ip == host.ip
         pid = net.initiating_pid if net.initiating_pid > 0 else 4
         image = proc.image if proc else ""
+        if is_outbound and net.protocol.lower() == "udp" and net.dst_port == 53:
+            sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+            pid = sys_pids.get("svchost_local_svc", sys_pids.get("svchost_netsvcs", pid))
+            image = r"C:\Windows\System32\svchost.exe"
         if not image and pid > 0:
             sm = getattr(self, "_state_manager", None)
             if sm is not None:
@@ -933,7 +946,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
         }
         self.emit_event(event_data)
@@ -957,7 +970,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "ServiceName": svc.service_name,
             "ServiceFileName": svc.service_file_name,
@@ -993,7 +1006,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TaskName": task.task_name,
             "TaskContent": task.task_content,
@@ -1033,7 +1046,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetSid": grp.group_sid,
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "PrivilegeList": "-",
         }
@@ -1069,7 +1082,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetSid": acct.target_sid,
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "SamAccountName": acct.sam_account_name or acct.target_username,
             "OldUacValue": acct.old_uac_value,
@@ -1114,7 +1127,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetSid": acct.target_sid,
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
         }
         if include_privs:
