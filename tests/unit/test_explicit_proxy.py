@@ -557,6 +557,17 @@ class TestExplicitProxyVisibility:
         ]
         assert egress_events
         assert egress_events[0].network.resp_bytes >= 107_000
+        egress_http_events = [
+            call.args[0]
+            for call in emitters["zeek_http"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.3.10"
+            and call.args[0].network.dst_ip == "93.184.216.34"
+            and call.args[0].network.dst_port == 443
+        ]
+        assert egress_http_events
+        assert egress_http_events[0].http.host == "example.com"
+        assert egress_http_events[0].http.uri == "/jquery.js"
+        assert egress_http_events[0].http.user_agent == "Mozilla/5.0"
 
     def test_inspected_https_upload_client_leg_does_not_double_count_request_body(self):
         generator, emitters = _generator(

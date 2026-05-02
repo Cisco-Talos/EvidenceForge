@@ -298,11 +298,11 @@ def _registry_writer_candidates(
 
     candidates: list[tuple[int, str, str] | None]
     if key.startswith("HKCU\\"):
-        user = desktop_user or "SYSTEM"
+        if desktop_user is None:
+            return []
         candidates = [
-            _candidate("explorer", r"C:\Windows\explorer.exe", user),
-            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", user),
-            _candidate("search_indexer", r"C:\Windows\System32\SearchIndexer.exe", "SYSTEM"),
+            _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", desktop_user),
         ]
     elif "windows defender" in key_lower:
         candidates = [

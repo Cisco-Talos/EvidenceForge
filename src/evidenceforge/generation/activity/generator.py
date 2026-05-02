@@ -172,6 +172,8 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     """Return the built-in service identity for service-hosted Windows processes."""
     exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
     command = command_line.lower()
+    if exe_name in {"psexesvc.exe", "healthmonitorsvc.exe"}:
+        return "SYSTEM"
     if exe_name != "svchost.exe":
         return None
     if "localservice" in command:
@@ -181,6 +183,25 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     if "dcomlaunch" in command or "netsvcs" in command or "-s schedule" in command:
         return "SYSTEM"
     return None
+
+
+def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
+    """Estimate foreground Linux command lifetime for shell-history ordering."""
+    exe_name = process_name.rsplit("/", 1)[-1].lower()
+    command = command_line.lower()
+    if any(pattern in command for pattern in ("tail -f", "watch ", "--follow", " -f ")):
+        return None
+    if exe_name in {"cat", "ls", "pwd", "whoami", "id", "uname", "hostname", "df", "free"}:
+        return (0.2, 2.0)
+    if exe_name in {"grep", "head", "tail", "wc", "env", "printenv", "ss", "ip", "ps"}:
+        return (0.5, 4.0)
+    if exe_name in {"gzip", "tar", "zip", "scp", "curl", "wget", "kubectl", "docker"}:
+        return (3.0, 18.0)
+    if exe_name in {"make", "gcc", "cargo", "npm", "python", "python3", "mysqldump"}:
+        return (8.0, 45.0)
+    if exe_name in {"vim", "vi", "nano"}:
+        return (6.0, 35.0)
+    return (1.0, 8.0)
 
 
 def _dns_payload_accounting(
@@ -2791,6 +2812,11 @@ class ActivityGenerator:
             "psexesvc.exe",
         }
         _exe_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if _get_os_category(system.os) == "windows" and _exe_lower == "psexesvc.exe":
+            process_name = r"C:\Windows\PSEXESVC.exe"
+            command_line = (
+                r"C:\Windows\PSEXESVC.exe" if "accepteula" in command_line.lower() else command_line
+            )
         if _exe_lower in _HIGH_INTEGRITY_EXES:
             _integrity = "High"
         else:
@@ -3060,7 +3086,9 @@ class ActivityGenerator:
             _pool_hkcu = get_registry_keys_hkcu()
             _pool_hklm = get_registry_keys_hklm()
             for _ in range(_reg_count):
-                if _exe in _HKLM_WRITERS:
+                if _exe in _HKLM_WRITERS and process_username in _SYSTEM_ACCOUNTS:
+                    _key, _vname, _details = rng.choice(_pool_hklm)
+                elif _exe in _HKLM_WRITERS:
                     _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
                 else:
                     _key, _vname, _details = rng.choice(_pool_hkcu)
@@ -3567,7 +3595,9 @@ class ActivityGenerator:
             if proxy_context.cache_result == "HIT":
                 return client_uid
 
-            egress_http = http if dst_port == 80 and service == "http" else None
+            egress_http = (
+                http if http is not None and proxy_context.cache_result == "MISS" else None
+            )
             egress_resp_bytes = resp_bytes
             if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
                 egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
@@ -3606,7 +3636,7 @@ class ActivityGenerator:
                 file_transfer=file_transfer,
                 ocsp=ocsp,
                 firewall=firewall,
-                hostname=hostname,
+                hostname=proxy_context.host,
                 proxy_bypass=True,
             )
             if dst_port == 443:
@@ -6002,6 +6032,16 @@ class ActivityGenerator:
                     # Also generate bash history for Linux processes
                     if os_category == "linux":
                         self.generate_bash_command(user, system, time, activity_type)
+                        lifetime = _linux_foreground_lifetime(process_name, command_line)
+                        if lifetime is not None:
+                            self.generate_process_termination(
+                                user=user,
+                                system=system,
+                                time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                                pid=pid,
+                                process_name=process_name,
+                                logon_id=logon_id,
+                            )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
             elif activity_type == "process_system":
@@ -6037,6 +6077,16 @@ class ActivityGenerator:
                     )
                     self._record_user_process(system, user, pid, process_name)
                     self.generate_bash_command(user, system, time, activity_type)
+                    lifetime = _linux_foreground_lifetime(process_name, command_line)
+                    if lifetime is not None:
+                        self.generate_process_termination(
+                            user=user,
+                            system=system,
+                            time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                            pid=pid,
+                            process_name=process_name,
+                            logon_id=logon_id,
+                        )
 
         # Connection activities
         elif activity_type in EXTERNAL_IPS:
@@ -7362,6 +7412,7 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import NetworkContext
 
+        dhcp_duration = _get_rng().uniform(0.01, 0.5)
         event = SecurityEvent(
             timestamp=time,
             event_type="dhcp_lease",
@@ -7374,7 +7425,7 @@ class ActivityGenerator:
                 protocol="udp",
                 service="dhcp",
                 zeek_uid=uid,
-                duration=0.01,
+                duration=dhcp_duration,
                 orig_bytes=300 if "DISCOVER" in msg_types else 180,
                 resp_bytes=300,
                 orig_pkts=2 if "DISCOVER" in msg_types else 1,
@@ -7398,7 +7449,7 @@ class ActivityGenerator:
                 lease_time=lease_time,
                 uids=[uid] if uid else [],
                 msg_types=msg_types,
-                duration=_get_rng().uniform(0.01, 0.5),
+                duration=dhcp_duration,
             ),
         )
         self.dispatcher.dispatch(event)

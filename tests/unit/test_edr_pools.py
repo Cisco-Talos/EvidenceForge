@@ -71,6 +71,40 @@ class TestLoadEdrPools:
         assert "cache" in path.lower()
         assert "Security.evtx" not in path
 
+    def test_browser_side_effect_matches_executable_family(self):
+        import random
+
+        cases = [
+            (
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "chrome.exe --type=renderer",
+                r"google\chrome",
+            ),
+            (
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                "msedge.exe --type=renderer",
+                r"microsoft\edge",
+            ),
+            (
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                "firefox.exe -contentproc",
+                r"mozilla\firefox",
+            ),
+        ]
+
+        for process_name, command_line, expected_path_fragment in cases:
+            effect = select_file_side_effect(
+                process_name=process_name,
+                command_line=command_line,
+                os_category="windows",
+                rng=random.Random(5),
+                user="alice",
+            )
+
+            assert effect is not None
+            _action, path = effect
+            assert expected_path_fragment in path.lower()
+
 
 class TestFilePaths:
     """Test file path pool content."""

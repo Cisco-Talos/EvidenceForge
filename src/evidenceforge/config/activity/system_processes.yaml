@@ -139,13 +139,13 @@ system_services:
         - "SearchProtocolHost.exe Global\\UsGthrFltPipeMssGthrPipe_S-1-5-21 1 {search_filter}"
       params:
         search_filter: ["Search", "Indexer", "Protocol"]
-      parent: svchost_netsvcs
+      parent: search_indexer
     - image: "C:\\Windows\\System32\\SearchFilterHost.exe"
       command_templates:
         - "SearchFilterHost.exe 0 {filter_id} 0 0 0"
       params:
         filter_id: ["804", "812", "820", "828"]
-      parent: svchost_netsvcs
+      parent: search_indexer
     - image: "C:\\Windows\\System32\\CompatTelRunner.exe"
       command_templates:
         - "CompatTelRunner.exe -m:appraiser.dll -f:DoScheduledTelemetryRun"

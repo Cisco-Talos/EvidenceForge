@@ -241,6 +241,37 @@ class TestActivityGenerator:
         assert username == "SYSTEM"
         assert logon_id == "0x3e7"
 
+    def test_psexesvc_process_uses_service_path_and_system_identity(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """PsExec service binaries should render as service execution, not client execution."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(process_time)
+
+        pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=process_time,
+            logon_id="0xadmin",
+            process_name=r"C:\Windows\System32\PSEXESVC.exe",
+            command_line="PSEXESVC.exe -accepteula",
+            parent_pid=4,
+        )
+
+        process_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.pid == pid
+        ]
+        assert process_events
+        event = process_events[-1]
+        assert event.process.image == r"C:\Windows\PSEXESVC.exe"
+        assert event.process.command_line == r"C:\Windows\PSEXESVC.exe"
+        assert event.process.username == "SYSTEM"
+        assert event.process.logon_id == "0x3e7"
+
     def test_prefixed_system_user_session_process_identity_resolves_to_user(
         self, activity_gen, state_manager, test_system
     ):
@@ -1836,6 +1867,60 @@ class TestActivityGenerator:
         event_types = [c[0][0].event_type for c in emitter.emit.call_args_list]
         assert "logon" in event_types
         assert "process_create" in event_types
+
+    def test_execute_baseline_linux_foreground_process_terminates_promptly(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Foreground Linux shell commands should not outlive later bash history."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
+        state_manager.set_current_time(process_time)
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid}}
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/bin/cat", "cat /etc/hosts")]},
+        ):
+            activity_gen.execute_baseline_activity(test_user, linux, process_time, "process_system")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        create_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/cat"
+        ]
+        assert create_events
+        create_event = create_events[-1]
+        terminate_events = [
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == create_event.process.pid
+        ]
+        assert terminate_events
+        assert create_event.timestamp < terminate_events[-1].timestamp
+        assert terminate_events[-1].timestamp <= process_time + timedelta(seconds=2)
 
     def test_generate_process_shifts_after_existing_session_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

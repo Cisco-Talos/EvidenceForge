@@ -15,16 +15,27 @@
 # impossible side effects such as dsquery.exe writing installers or browsers
 # deleting Security.evtx.
 file_side_effect_profiles:
-  - name: browser_cache
-    executables: ["chrome.exe", "msedge.exe", "firefox.exe", "chrome", "firefox"]
+  - name: chrome_cache
+    executables: ["chrome.exe", "chrome"]
     actions: ["create", "modify"]
     paths_windows:
       - "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\Cache_Data\\f_{hex}"
+    paths_linux:
+      - "/home/{user}/.cache/google-chrome/Default/Cache/Cache_Data/f_{hex}"
+
+  - name: edge_cache
+    executables: ["msedge.exe"]
+    actions: ["create", "modify"]
+    paths_windows:
       - "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\Cache_Data\\f_{hex}"
+
+  - name: firefox_cache
+    executables: ["firefox.exe", "firefox"]
+    actions: ["create", "modify"]
+    paths_windows:
       - "C:\\Users\\{user}\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\default-release\\cache2\\entries\\{hex}"
     paths_linux:
       - "/home/{user}/.cache/mozilla/firefox/default-release/cache2/entries/{hex}"
-      - "/home/{user}/.cache/google-chrome/Default/Cache/Cache_Data/f_{hex}"
 
   - name: shell_temp
     executables: ["cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"]
