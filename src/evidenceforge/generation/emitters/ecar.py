@@ -557,6 +557,74 @@ class EcarEmitter(HostMultiplexEmitter):
         host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
 
+    @staticmethod
+    def _referenced_process_ids(record: dict[str, Any]) -> set[str]:
+        """Return process object IDs referenced by an eCAR record."""
+        refs = set()
+        object_id = record.get("objectID")
+        if object_id and not (
+            record.get("object") == "PROCESS" and record.get("action") == "TERMINATE"
+        ):
+            refs.add(str(object_id))
+        actor_id = record.get("actorID")
+        if actor_id:
+            refs.add(str(actor_id))
+        props = record.get("properties") or {}
+        for key in (
+            "target_process_uuid",
+            "target_process_object_id",
+            "source_process_object_id",
+        ):
+            value = props.get(key)
+            if value:
+                refs.add(str(value))
+        return refs
+
+    @classmethod
+    def _normalize_process_termination_order(cls, lines: list[str]) -> list[str]:
+        """Move PROCESS/TERMINATE rows after later same-process references."""
+        records: list[dict[str, Any] | None] = []
+        latest_reference_ms: dict[str, int] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            timestamp_ms = int(record.get("timestamp_ms", 0))
+            for process_id in cls._referenced_process_ids(record):
+                latest_reference_ms[process_id] = max(
+                    latest_reference_ms.get(process_id, 0),
+                    timestamp_ms,
+                )
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS" and record.get("action") == "TERMINATE":
+                process_id = str(record.get("objectID", ""))
+                latest_ms = latest_reference_ms.get(process_id)
+                timestamp_ms = int(record.get("timestamp_ms", 0))
+                if latest_ms is not None and latest_ms >= timestamp_ms:
+                    stable_delay_ms = 100 + (sum(ord(ch) for ch in process_id) % 1900)
+                    record["timestamp_ms"] = latest_ms + stable_delay_ms
+                    line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
+    def flush(self, force: bool = False) -> None:
+        """Flush per-host eCAR records after final lifecycle normalization."""
+        if force:
+            with self._writers_lock:
+                writers = list(self._writers.values())
+            for writer in writers:
+                with writer._lock:
+                    writer.buffer = self._normalize_process_termination_order(writer.buffer)
+        super().flush(force=force)
+
     # Property keys that belong in the eCAR properties map.
     _PROPERTY_KEYS = (
         "command_line",

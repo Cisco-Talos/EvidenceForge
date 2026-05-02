@@ -191,7 +191,13 @@ def _dns_payload_accounting(
     """Normalize DNS conn.log payload accounting to the DNS transaction."""
     query = dns.query or ""
     query_type = (dns.query_type or "").upper()
-    has_response = dns.rcode_num in (None, 0) and dns.rcode != "SERVFAIL"
+    response_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+    has_response = (
+        dns.rtt is not None
+        or bool(dns.answers)
+        or dns.rcode.upper() in response_rcodes
+        or dns.rcode_num in {0, 2, 3, 5}
+    )
     answers = dns.answers or []
 
     query_floor = max(40, len(query.encode("utf-8", errors="ignore")) + 18)

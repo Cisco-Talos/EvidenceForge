@@ -312,6 +312,64 @@ class TestChronologicalOutput:
         ]
         assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
 
+    def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
+        """eCAR output should not terminate a process before later same-process telemetry."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "MODULE",
+                "action": "LOAD",
+                "actorID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        module_ts = next(row["timestamp_ms"] for row in rows if row["object"] == "MODULE")
+        terminate_ts = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+        )
+        assert terminate_ts > module_ts
+
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
