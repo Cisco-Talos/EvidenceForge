@@ -13,11 +13,17 @@ domain_overrides:
     hosts:
       - download.windowsupdate.com
       - ctldl.windowsupdate.com
-      - dl.google.com
-      - update.googleapis.com
       - packages.microsoft.com
     user_agents:
       - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+  google_update:
+    os_keywords: ["windows", "mac", "linux"]
+    hosts:
+      - dl.google.com
+      - update.googleapis.com
+    user_agents:
+      - "Google Update/1.3.36.372;winhttp"
+      - "GoogleSoftwareUpdateAgent/1.3.18.202 CFNetwork/1494.0.7 Darwin/23.4.0"
   windows_cryptoapi:
     os_keywords: ["windows"]
     hosts:

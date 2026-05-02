@@ -2213,6 +2213,14 @@ class ActivityGenerator:
             src_ip=dc_source_ip,
             os_category=_get_os_category(system.os),
         )
+        if (
+            auth_package_name == "NTLM"
+            and logon_type in (3, 10)
+            and _get_os_category(system.os) == "windows"
+            and source_ip
+            and source_ip != "-"
+        ):
+            self._emit_dc_ntlm_for_logon(user, system, time, source_ip)
 
         self._maybe_emit_remote_logon_network_connection(
             system=system,
@@ -2295,6 +2303,35 @@ class ActivityGenerator:
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
+
+    def _emit_dc_ntlm_for_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        source_ip: str,
+    ) -> None:
+        """Emit DC-side 4776 validation for successful domain NTLM logons."""
+        if _get_os_category(system.os) != "windows":
+            return
+
+        dc_hostnames = getattr(self, "_dc_hostnames", [])
+        dc_ips = getattr(self, "_dc_ips", [])
+        if not dc_hostnames:
+            return
+        if system.hostname in dc_hostnames or system.ip in dc_ips:
+            return
+
+        rng = _get_rng()
+        dc_hostname = dc_hostnames[rng.randint(0, len(dc_hostnames) - 1)]
+        workstation = self._workstation_name_for_source(source_ip)
+        self.generate_ntlm_validation(
+            username=user.username,
+            workstation=workstation,
+            dc_hostname=dc_hostname,
+            time=time - timedelta(milliseconds=rng.randint(8, 120)),
+            status="0x0",
+        )
 
     def _emit_dc_kerberos_for_logon(
         self,
@@ -6152,7 +6189,8 @@ class ActivityGenerator:
                         system, process_name, command_line, time, pid, rng
                     )
 
-                    # Also generate bash history for Linux processes
+                    # Also generate bash history for Linux processes from the same
+                    # canonical command so eCAR and shell artifacts do not diverge.
                     if os_category == "windows":
                         lifetime = _windows_foreground_lifetime(process_name, command_line)
                         if lifetime is not None:
@@ -6165,7 +6203,7 @@ class ActivityGenerator:
                                 logon_id=logon_id,
                             )
                     elif os_category == "linux":
-                        self.generate_bash_command(user, system, time, activity_type)
+                        self.generate_bash_command(user, system, time, command_line)
                         lifetime = _linux_foreground_lifetime(process_name, command_line)
                         if lifetime is not None:
                             self.generate_process_termination(
@@ -6220,7 +6258,7 @@ class ActivityGenerator:
                         parent_pid=parent_pid,
                     )
                     self._record_user_process(system, user, pid, process_name)
-                    self.generate_bash_command(user, system, time, activity_type)
+                    self.generate_bash_command(user, system, time, command_line)
                     lifetime = _linux_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
                         self.generate_process_termination(

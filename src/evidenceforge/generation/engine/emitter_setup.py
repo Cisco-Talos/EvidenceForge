@@ -288,6 +288,12 @@ class EmitterSetupMixin:
 
         # Track lease state for periodic renewals
         self._dhcp_lease_state: dict[str, dict] = {}
+        storyline_dhcp_hosts = {
+            entry.system
+            for entry in getattr(self.scenario, "storyline", [])
+            for event in getattr(entry, "events", [])
+            if getattr(event, "type", None) == "dhcp_lease"
+        }
 
         # Stagger across first 5 minutes using per-host deterministic offsets
         base_time = getattr(self, "warmup_start_time", self.start_time)
@@ -299,6 +305,8 @@ class EmitterSetupMixin:
         _oui_values = [o["prefix"] for o in _oui_prefixes]
 
         for system in self.scenario.environment.systems:
+            if system.hostname in storyline_dhcp_hosts:
+                continue
             ip_seed = _stable_seed(f"mac_{system.ip}")
             # Select OUI prefix deterministically per host using weighted distribution
             oui_rng = random.Random(ip_seed)

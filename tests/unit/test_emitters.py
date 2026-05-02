@@ -1667,6 +1667,11 @@ class TestZeekEmitter:
         print(content)
         print(f"{'=' * 80}\n")
 
+    def test_rstr_history_uses_responder_reset_direction(self):
+        """Zeek RSTR histories should end with responder-side lowercase r."""
+        assert ZeekEmitter._normalize_history_for_state("RSTR", "ShADadR") == "ShADadr"
+        assert ZeekEmitter._normalize_history_for_state("RSTO", "ShADadr") == "ShADadR"
+
     def test_multiple_connections(self, format_def, temp_output):
         """Test emitting multiple connections (one per line JSON)."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=10)

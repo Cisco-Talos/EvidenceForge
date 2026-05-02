@@ -1508,14 +1508,22 @@ class StorylineMixin:
             # Use DC as DHCP server (common in AD environments)
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
             dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
+            lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=time,
                 mac=mac,
                 server_addr=dhcp_server,
-                lease_time=float(rng.choice([3600, 7200, 14400, 86400])),
+                lease_time=lease_time,
                 uid=generate_zeek_uid("C"),
             )
+            if hasattr(self, "_dhcp_lease_state"):
+                self._dhcp_lease_state[system.hostname] = {
+                    "mac": mac,
+                    "lease_time": lease_time,
+                    "last_renewal": time.timestamp(),
+                    "system": system,
+                }
             malicious_event["mac_address"] = mac
 
         elif spec.type == "port_scan":
@@ -1973,6 +1981,8 @@ class StorylineMixin:
                     if _status < 400
                     else response_size_for_status(_status, scan_host, _uri)
                 )
+                if _status >= 400:
+                    _response_body_len = max(128, _response_body_len + rng.randint(-90, 180))
                 http_ctx = HttpContext(
                     method=_method,
                     host=scan_host,

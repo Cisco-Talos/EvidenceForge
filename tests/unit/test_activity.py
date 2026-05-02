@@ -43,6 +43,18 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
 
+class TestStateObjectIds:
+    def test_missing_process_object_id_is_allocated_once(self):
+        """Unseen process IDs should still get stable eCAR object IDs."""
+        state = StateManager()
+
+        first = state.get_process_object_id("WS-01", 4444)
+        second = state.get_process_object_id("WS-01", 4444)
+
+        assert first
+        assert second == first
+
+
 class TestNetworkValidation:
     """Tests for network connection validation."""
 
@@ -2097,6 +2109,52 @@ class TestActivityGenerator:
         assert create_event.timestamp < terminate_events[-1].timestamp
         assert terminate_events[-1].timestamp <= process_time + timedelta(seconds=2)
 
+    def test_linux_process_activity_bash_history_uses_canonical_command(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Linux bash_history should mirror the same command rendered in process telemetry."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(process_time)
+        mock_emitters["bash_history"] = Mock()
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        activity_gen._system_pids = {linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid}}
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/bin/cat", "cat /etc/hosts")]},
+        ):
+            activity_gen.execute_baseline_activity(test_user, linux, process_time, "process_system")
+
+        bash_events = [
+            call.args[0]
+            for call in mock_emitters["bash_history"].emit.call_args_list
+            if call.args[0].event_type == "bash_command"
+        ]
+        assert bash_events
+        assert bash_events[-1].shell.command == "cat /etc/hosts"
+
     def test_generate_process_shifts_after_existing_session_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -2129,6 +2187,37 @@ class TestActivityGenerator:
         )
         assert event.event_type == "process_create"
         assert event.timestamp > logon_time
+
+    def test_successful_ntlm_network_logon_emits_dc_validation(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Member-host NTLM logons should produce DC-side 4776 validation."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._dc_hostnames = ["DC-01"]
+        activity_gen._dc_ips = ["10.0.0.10"]
+
+        with patch.object(
+            activity_gen,
+            "_select_auth_package",
+            return_value={
+                "AuthenticationPackageName": "NTLM",
+                "LogonProcessName": "NtLmSsp",
+                "LmPackageName": "NTLM V2",
+            },
+        ):
+            activity_gen.generate_logon(
+                test_user,
+                test_system,
+                timestamp,
+                logon_type=3,
+                source_ip="10.0.0.50",
+            )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert any(event.event_type == "ntlm_validation" for event in events)
 
     def test_execute_baseline_activity_connection_web(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
