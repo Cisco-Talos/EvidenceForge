@@ -1323,6 +1323,52 @@ class TestActivityGenerator:
             )
         assert not dns_events
 
+    def test_dns_connection_uses_resolver_process_pid(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Canonical DNS flows should use the local resolver service PID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        resolver_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line=r"svchost.exe -k NetworkService -p",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        app_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -NoProfile",
+            username="testuser",
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"svchost_netsvcs": resolver_pid}}
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="10.0.0.53",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.02,
+            orig_bytes=60,
+            resp_bytes=120,
+            pid=app_pid,
+            source_system=test_system,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "wfp_connection"
+        assert event.network.initiating_pid == resolver_pid
+        assert event.process.pid == resolver_pid
+        assert event.process.image.endswith("svchost.exe")
+
     def test_system_process_termination_defaults_logon_id_to_system(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):

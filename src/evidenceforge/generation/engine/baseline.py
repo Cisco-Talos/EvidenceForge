@@ -1722,7 +1722,11 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    term_offset = rng.uniform(0, 3599)
+                    start_offset = (proc.start_time - current_hour).total_seconds()
+                    lower_bound = max(0.0, start_offset + 1.0)
+                    if lower_bound >= 3599.0:
+                        continue
+                    term_offset = rng.uniform(lower_bound, 3599)
                     term_time = current_hour + timedelta(seconds=term_offset)
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
@@ -3955,16 +3959,6 @@ class BaselineMixin:
                     parent_pid = sys_pids.get(
                         task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
-                    cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
-                    self.activity_generator.generate_explicit_credentials(
-                        user=_SYSTEM_USER,
-                        system=system,
-                        time=cred_ts,
-                        target_username="SYSTEM",
-                        target_server=system.hostname,
-                        process_name=r"C:\Windows\System32\svchost.exe",
-                        process_pid=parent_pid,
-                    )
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
@@ -4004,17 +3998,17 @@ class BaselineMixin:
                         if s.type == "domain_controller"
                     ]
                     if dcs:
-                        dc = dcs[_stable_seed(f"gpo_dc_{system.hostname}") % len(dcs)]
                         gpo_ts = current_hour + timedelta(seconds=rng.uniform(60, 300))
                         self.state_manager.set_current_time(gpo_ts)
-                        self.activity_generator.generate_explicit_credentials(
-                            user=_SYSTEM_USER,
+                        # Group Policy refresh runs as SYSTEM but does not normally
+                        # create a 4648 explicit-credential audit for SYSTEM->SYSTEM.
+                        self.activity_generator.generate_system_process(
                             system=system,
                             time=gpo_ts,
-                            target_username="SYSTEM",
-                            target_server=dc.hostname,
-                            process_name=r"C:\Windows\System32\svchost.exe",
-                            process_pid=sys_pids.get("svchost_netsvcs", 0),
+                            process_name=r"C:\Windows\System32\gpupdate.exe",
+                            command_line=r"gpupdate.exe /target:computer /force",
+                            parent_pid=sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4)),
+                            username="SYSTEM",
                         )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
@@ -4928,6 +4922,14 @@ class BaselineMixin:
                     ]
                     if not _filtered:
                         _filtered = _pool
+                    _filtered = [
+                        s
+                        for s in _filtered
+                        if not (
+                            s.get("direction") == "in"
+                            and "response" in str(s.get("message", "")).lower()
+                        )
+                    ]
                     if not _filtered:
                         continue
                     sig = rng.choice(_filtered)

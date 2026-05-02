@@ -3684,7 +3684,11 @@ class ActivityGenerator:
         else:
             self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
 
-        if pid <= 0:
+        if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
+            dns_pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
+            if dns_pid > 0:
+                pid = dns_pid
+        elif pid <= 0:
             pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
 
         resolved_process = None

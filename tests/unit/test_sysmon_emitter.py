@@ -558,6 +558,33 @@ class TestSysmonEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == network_time + timedelta(milliseconds=1)
 
+    def test_parent_termination_shifted_after_child_create(self, format_def, temp_output):
+        """A visible child Event 1 should keep the parent ProcessGuid alive."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        child_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        parent_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 5,
+                "TimeCreated": terminate_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": parent_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": child_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": "{22222222-abcd-ef01-2345-678901234567}",
+                "ParentProcessGuid": parent_guid,
+            },
+        ]
+
+        emitter._shift_terminations_after_followons()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == child_time + timedelta(milliseconds=1)
+
     def test_process_guid_deterministic(self, format_def, temp_output):
         """Test that ProcessGuid generation is deterministic."""
         emitter = SysmonEventEmitter(format_def, temp_output)

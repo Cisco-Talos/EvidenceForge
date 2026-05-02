@@ -1192,6 +1192,7 @@ class SysmonEventEmitter(LogEmitter):
         # PE metadata for the loaded DLL
         fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
         hashes = self._generate_hashes(il.image_loaded, host.hostname)
+        signature_status = il.signature_status if il.signed else "Unavailable"
 
         event_data = {
             "EventID": 7,
@@ -1214,7 +1215,7 @@ class SysmonEventEmitter(LogEmitter):
             "Hashes": hashes,
             "Signed": "true" if il.signed else "false",
             "Signature": il.signature if il.signed else "-",
-            "SignatureStatus": il.signature_status,
+            "SignatureStatus": signature_status,
         }
         self.emit_event(event_data)
 
@@ -1573,6 +1574,10 @@ class SysmonEventEmitter(LogEmitter):
                 terminations.append((key, event))
                 continue
             if event.get("EventID") == 1:
+                parent_guid = event.get("ParentProcessGuid")
+                if parent_guid:
+                    parent_key = (str(event.get("Computer", "")), str(parent_guid))
+                    latest_followon[parent_key] = max(ts, latest_followon.get(parent_key, ts))
                 continue
             latest_followon[key] = max(ts, latest_followon.get(key, ts))
 
