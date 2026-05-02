@@ -1670,7 +1670,31 @@ class BaselineMixin:
             "bash",
             "agetty",
         )
-        short_lived = ("msbuild", "gcc", "npm", "make", "dotnet", "cargo", "node.exe")
+        short_lived = (
+            "msbuild",
+            "gcc",
+            "npm",
+            "make",
+            "dotnet",
+            "cargo",
+            "node.exe",
+            "whoami.exe",
+            "hostname.exe",
+            "ipconfig.exe",
+            "nltest.exe",
+            "klist.exe",
+            "qwinsta.exe",
+            "quser.exe",
+            "query.exe",
+            "cmdkey.exe",
+            "net.exe",
+            "net1.exe",
+            "dsquery.exe",
+            "dsget.exe",
+            "tasklist.exe",
+            "sc.exe",
+            "wevtutil.exe",
+        )
 
         # Collect all seeded system PIDs for this system as a safety net
         seeded_pids: dict[str, set[int]] = {}
@@ -1694,7 +1718,8 @@ class BaselineMixin:
                 if proc.story_created:
                     continue
 
-                if any(p in image_lower for p in short_lived):
+                is_short_lived = any(p in image_lower for p in short_lived)
+                if is_short_lived:
                     max_hours = rng.uniform(0.08, 0.5)
                 elif any(
                     p in image_lower
@@ -1722,12 +1747,17 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    start_offset = (proc.start_time - current_hour).total_seconds()
-                    lower_bound = max(0.0, start_offset + 1.0)
-                    if lower_bound >= 3599.0:
-                        continue
-                    term_offset = rng.uniform(lower_bound, 3599)
-                    term_time = current_hour + timedelta(seconds=term_offset)
+                    if is_short_lived:
+                        term_time = proc.start_time + timedelta(seconds=rng.uniform(2.0, 45.0))
+                        if term_time > current_hour + timedelta(seconds=3599):
+                            continue
+                    else:
+                        start_offset = (proc.start_time - current_hour).total_seconds()
+                        lower_bound = max(0.0, start_offset + 1.0)
+                        if lower_bound >= 3599.0:
+                            continue
+                        term_offset = rng.uniform(lower_bound, 3599)
+                        term_time = current_hour + timedelta(seconds=term_offset)
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
                     self.state_manager.set_current_time(term_time)

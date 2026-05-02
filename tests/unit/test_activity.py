@@ -800,6 +800,120 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp > process_event.timestamp
 
+    def test_service_payload_file_event_precedes_service_process_create(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Dropped service binaries should be written before the service process starts."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0x12345",
+            r"C:\Windows\PSEXESVC.exe",
+            r"C:\Windows\PSEXESVC.exe",
+            ensure_file_event=True,
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_event = next(event for event in events if event.event_type == "process_create")
+        file_event = next(
+            event
+            for event in events
+            if event.event_type == "file_create"
+            and event.file is not None
+            and event.file.path == r"C:\Windows\PSEXESVC.exe"
+        )
+        assert file_event.timestamp < process_event.timestamp
+
+    def test_process_termination_uses_canonical_running_image(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Termination should render the image from process state, not stale caller text."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0x12345",
+            r"C:\Windows\System32\PSEXESVC.exe",
+            r"C:\Windows\System32\PSEXESVC.exe -accepteula",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_process_termination(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=3),
+            pid,
+            r"C:\Windows\System32\PSEXESVC.exe",
+            "0x12345",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "process_terminate"
+        assert event.process.image == r"C:\Windows\PSEXESVC.exe"
+
+    def test_system_process_registry_side_effects_use_hklm(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """SYSTEM-owned registry side effects should not write per-user HKCU keys."""
+
+        class RegistryOnlyRandom:
+            def __init__(self):
+                self.random_calls = 0
+
+            def random(self):
+                self.random_calls += 1
+                return 0.1 if self.random_calls == 3 else 0.99
+
+            def choice(self, values):
+                return values[0]
+
+            def choices(self, population, weights=None, k=1):
+                return [population[0]]
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def uniform(self, lower, _upper):
+                return lower
+
+            def getrandbits(self, bits):
+                return (1 << min(bits, 8)) - 1
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        with patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom):
+            activity_gen.generate_process(
+                system_user,
+                test_system,
+                timestamp,
+                "0x3e7",
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "powershell.exe -NoProfile",
+            )
+
+        registry_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "registry_modify"
+        ]
+        assert registry_events
+        assert registry_events[-1].registry.key.startswith("HKLM\\")
+
     def test_image_load_is_clamped_after_process_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

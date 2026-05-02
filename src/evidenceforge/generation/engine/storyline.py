@@ -32,6 +32,7 @@ Contains the StorylineMixin with methods for:
 
 import base64
 import logging
+import random
 import re
 import shlex
 import uuid
@@ -952,6 +953,39 @@ class StorylineMixin:
                     )
                 )
                 malicious_event["output_file"] = output_file
+
+            http_url = self._extract_http_url(command_line)
+            if http_url is not None:
+                from urllib.parse import urlparse
+
+                parsed_url = urlparse(http_url)
+                if parsed_url.hostname:
+                    hostname = parsed_url.hostname
+                    dst_ip = self._resolve_storyline_network_target(hostname)
+                    if dst_ip is None:
+                        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+                        dst_ip = resolve_domain_ip(hostname, src_host=system.hostname)
+                    dst_port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
+                    service = "ssl" if dst_port == 443 else "http"
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=dst_ip,
+                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        dst_port=dst_port,
+                        proto="tcp",
+                        service=service,
+                        duration=rng.uniform(0.8, 6.0),
+                        orig_bytes=rng.randint(300, 1400),
+                        resp_bytes=rng.randint(12_000, 250_000),
+                        conn_state="SF",
+                        emit_dns=not _is_private_ip(dst_ip),
+                        source_system=system,
+                        pid=pid,
+                        hostname=hostname,
+                        process_image=process_name,
+                    )
+                    malicious_event["network_url"] = http_url
 
             scp_target = self._extract_scp_target(command_line, os_category)
             if scp_target is not None:
@@ -2207,7 +2241,10 @@ class StorylineMixin:
             import base64 as _b64
 
             from evidenceforge.events.contexts import DnsContext
-            from evidenceforge.generation.activity.network_params import dns_tunnel_rtt_range
+            from evidenceforge.generation.activity.network_params import (
+                dns_tunnel_response_templates,
+                dns_tunnel_rtt_range,
+            )
 
             _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
             _RCODE_MAP = {"NOERROR": 0}
@@ -2248,9 +2285,11 @@ class StorylineMixin:
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
+            response_templates = dns_tunnel_response_templates() or ["status={token}"]
             total_bytes = 0
             query_count = 0
             chunk_idx = 0
+            tunnel_salt = rng.randbytes(4)
 
             for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
@@ -2259,9 +2298,14 @@ class StorylineMixin:
 
                 chunk = chunks[chunk_idx % len(chunks)]
                 chunk_idx += 1
-                sequence = query_count.to_bytes(4, "big", signed=False)
+                sequence_mask = random.Random(
+                    _stable_seed(
+                        f"dns_tunnel_seq:{spec.base_domain}:{tunnel_salt.hex()}:{query_count}"
+                    )
+                ).getrandbits(32)
+                sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
                 pad_len = max(0, bytes_per_label - len(chunk) - len(sequence))
-                padded_chunk = sequence + chunk + rng.randbytes(pad_len)
+                padded_chunk = chunk + rng.randbytes(pad_len) + sequence
 
                 # Encode chunk
                 if spec.encoding == "hex":
@@ -2282,6 +2326,8 @@ class StorylineMixin:
                     resp_bytes = rng.randint(200, 2000)
                 else:
                     resp_bytes = rng.randint(50, 200)
+                response_token = f"{random.Random(_stable_seed(f'dns_tunnel_response:{spec.base_domain}:{query_count}:{tunnel_salt.hex()}')).getrandbits(32):08x}"
+                response_template = rng.choice(response_templates)
 
                 dns_ctx = DnsContext(
                     query=tunnel_query,
@@ -2289,7 +2335,7 @@ class StorylineMixin:
                     qtype=qtype_num,
                     rcode="NOERROR",
                     rcode_num=0,
-                    answers=[f"ack={query_count:04x}"],
+                    answers=[response_template.replace("{token}", response_token)],
                     TTLs=[float(rng.randint(1, 10))],
                     trans_id=rng.randint(1, 65535),
                     AA=False,
@@ -2445,6 +2491,14 @@ class StorylineMixin:
             if host:
                 return host
         return None
+
+    @staticmethod
+    def _extract_http_url(command_line: str) -> str | None:
+        """Extract the first HTTP(S) URL from a storyline process command line."""
+        match = re.search(r"https?://[^\s'\"),;]+", command_line, re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(0).rstrip(".")
 
     def _resolve_storyline_network_target(self, target: str) -> str | None:
         """Resolve a storyline command target host/IP to an environment IP when possible."""

@@ -1564,6 +1564,25 @@ def validate_config() -> ValidationResult:
         )
         if err:
             result.issues.append(Issue("ERROR", "network_params.yaml (dns_tunnel_rtt)", err))
+        templates = net_params.get("dns_tunnel_response_templates", [])
+        if not isinstance(templates, list) or not templates:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_response_templates)",
+                    "dns_tunnel_response_templates must be a non-empty list",
+                )
+            )
+        else:
+            for idx, template in enumerate(templates):
+                if not isinstance(template, str) or "{token}" not in template:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_response_templates)",
+                            f"entry {idx} must be a string containing '{{token}}'",
+                        )
+                    )
 
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:

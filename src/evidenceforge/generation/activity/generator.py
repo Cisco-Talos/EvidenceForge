@@ -204,6 +204,54 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     return (1.0, 8.0)
 
 
+def _windows_foreground_lifetime(
+    process_name: str, command_line: str
+) -> tuple[float, float] | None:
+    """Estimate Windows foreground command lifetime for baseline process state."""
+    exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    command = command_line.lower()
+    if any(
+        pattern in command
+        for pattern in (
+            "tcpclient",
+            "tcplistener",
+            "$s.read",
+            "start-sleep -seconds 99",
+            "while(true)",
+            "while true",
+            " -listen",
+            " -l ",
+        )
+    ):
+        return None
+    if exe_name in {
+        "whoami.exe",
+        "hostname.exe",
+        "ipconfig.exe",
+        "nltest.exe",
+        "klist.exe",
+        "qwinsta.exe",
+        "quser.exe",
+        "query.exe",
+        "cmdkey.exe",
+        "net.exe",
+        "net1.exe",
+        "dsquery.exe",
+        "dsget.exe",
+        "dsmod.exe",
+        "tasklist.exe",
+        "arp.exe",
+        "route.exe",
+        "netstat.exe",
+        "sc.exe",
+        "wevtutil.exe",
+    }:
+        return (0.4, 6.0)
+    if exe_name in {"powershell.exe", "pwsh.exe", "cmd.exe", "wmic.exe", "certutil.exe"}:
+        return (4.0, 35.0)
+    return None
+
+
 def _dns_payload_accounting(
     *,
     dns: DnsContext,
@@ -2967,9 +3015,12 @@ class ActivityGenerator:
             _is_linux_system_binary = _lower.startswith(_linux_system_binary_prefixes)
             _is_system_binary = _is_windows_system_binary or _is_linux_system_binary
             if not _is_system_binary:
+                file_create_time = time + timedelta(milliseconds=120)
+                if _exe_lower in {"psexesvc.exe", "healthmonitorsvc.exe"}:
+                    file_create_time = time - timedelta(milliseconds=180)
                 self.dispatcher.dispatch(
                     SecurityEvent(
-                        timestamp=time + timedelta(milliseconds=120),
+                        timestamp=file_create_time,
                         event_type="file_create",
                         src_host=self._build_host_context(system),
                         auth=AuthContext(username=process_username),
@@ -3086,7 +3137,7 @@ class ActivityGenerator:
             _pool_hkcu = get_registry_keys_hkcu()
             _pool_hklm = get_registry_keys_hklm()
             for _ in range(_reg_count):
-                if _exe in _HKLM_WRITERS and process_username in _SYSTEM_ACCOUNTS:
+                if process_username in _SYSTEM_ACCOUNTS:
                     _key, _vname, _details = rng.choice(_pool_hklm)
                 elif _exe in _HKLM_WRITERS:
                     _key, _vname, _details = rng.choice(_pool_hklm + _pool_hkcu)
@@ -3196,6 +3247,8 @@ class ActivityGenerator:
                 )
             )
             time = running_proc.last_activity_time + timedelta(seconds=delay_rng.uniform(2.0, 30.0))
+        if running_proc is not None:
+            process_name = running_proc.image
         process_username = running_proc.username if running_proc is not None else user.username
         process_logon_id = running_proc.logon_id if running_proc is not None else logon_id
         session_logon_type = self.state_manager.get_session_logon_type(process_logon_id)
@@ -3560,6 +3613,16 @@ class ActivityGenerator:
 
             client_orig_bytes = max(1, proxy_context.cs_bytes or orig_bytes or 1)
             client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
+            will_emit_egress = (
+                proxy_context.status_code < 400 and proxy_context.cache_result != "HIT"
+            )
+            egress_delay = timedelta(0)
+            if will_emit_egress:
+                egress_delay = timedelta(
+                    milliseconds=random.Random(
+                        _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
+                    ).lognormvariate(3.0, 0.65)
+                )
             client_duration = min(duration or 0.2, 2.0)
             if dst_port == 443 and proxy_context.status_code < 400:
                 client_duration = duration or _get_rng().uniform(0.5, 10.0)
@@ -3567,6 +3630,19 @@ class ActivityGenerator:
                     rng = _get_rng()
                     client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
                     client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
+            if will_emit_egress:
+                egress_duration = duration or 0.1
+                response_flush = random.Random(
+                    _stable_seed(f"proxy_response_flush:{src_ip}:{dst_ip}:{time.timestamp()}")
+                ).uniform(0.02, 0.25)
+                client_duration = max(
+                    client_duration,
+                    egress_delay.total_seconds() + egress_duration + response_flush,
+                )
+                proxy_context.time_taken = max(
+                    proxy_context.time_taken,
+                    int(client_duration * 1000),
+                )
 
             client_uid = self.generate_connection(
                 src_ip=src_ip,
@@ -3601,11 +3677,6 @@ class ActivityGenerator:
             egress_resp_bytes = resp_bytes
             if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
                 egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
-            egress_delay = timedelta(
-                milliseconds=random.Random(
-                    _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
-                ).lognormvariate(3.0, 0.65)
-            )
             if proxy_context.host:
                 self._emit_dns_lookup(
                     proxy_sys.ip,
@@ -6030,7 +6101,18 @@ class ActivityGenerator:
                     )
 
                     # Also generate bash history for Linux processes
-                    if os_category == "linux":
+                    if os_category == "windows":
+                        lifetime = _windows_foreground_lifetime(process_name, command_line)
+                        if lifetime is not None:
+                            self.generate_process_termination(
+                                user=user,
+                                system=system,
+                                time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                                pid=pid,
+                                process_name=process_name,
+                                logon_id=logon_id,
+                            )
+                    elif os_category == "linux":
                         self.generate_bash_command(user, system, time, activity_type)
                         lifetime = _linux_foreground_lifetime(process_name, command_line)
                         if lifetime is not None:
@@ -6061,6 +6143,16 @@ class ActivityGenerator:
                         parent_pid=parent_pid,
                     )
                     self._record_user_process(system, user, pid, process_name)
+                    lifetime = _windows_foreground_lifetime(process_name, command_line)
+                    if lifetime is not None:
+                        self.generate_process_termination(
+                            user=user,
+                            system=system,
+                            time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                            pid=pid,
+                            process_name=process_name,
+                            logon_id=logon_id,
+                        )
                 elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
                     rng = _get_rng()
                     process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])

