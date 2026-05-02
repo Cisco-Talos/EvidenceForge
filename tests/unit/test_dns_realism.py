@@ -565,6 +565,31 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_pkts > 0
         assert event.network.resp_bytes > 0
 
+    def test_inferred_servfail_dns_row_keeps_responder_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Fallback DNS synthesis should not pair SERVFAIL with a one-way conn row."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            hostname="flaky.example.com",
+            orig_bytes=60,
+            resp_bytes=0,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns.rcode == "SERVFAIL"
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_bytes > 0
+
     def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

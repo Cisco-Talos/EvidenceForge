@@ -4146,6 +4146,18 @@ class ActivityGenerator:
                 rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
                 AA=_dns_is_internal_name(dns_query, getattr(self, "_ad_domain", "")),
             )
+            if not resp_bytes:
+                event.network.conn_state = "SF"
+                event.network.history = "Dd"
+                event.network.duration = rng.uniform(0.001, 0.03)
+                event.network.resp_bytes = rng.randint(80, 220)
+                event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
+                overhead = rng.choices(
+                    _UDP_OVERHEAD_VALUES,
+                    weights=_UDP_OVERHEAD_WEIGHTS,
+                    k=1,
+                )[0]
+                event.network.resp_ip_bytes = event.network.resp_bytes + overhead
             if event.dns.rtt is not None:
                 event.network.duration = event.dns.rtt
 
