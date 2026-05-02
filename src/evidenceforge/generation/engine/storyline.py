@@ -2304,8 +2304,14 @@ class StorylineMixin:
                     )
                 ).getrandbits(32)
                 sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
-                pad_len = max(0, bytes_per_label - len(chunk) - len(sequence))
-                padded_chunk = chunk + rng.randbytes(pad_len) + sequence
+                visible_nonce = rng.randbytes(2)
+                visible_payload_len = max(1, bytes_per_label - len(visible_nonce))
+                visible_payload = chunk[:visible_payload_len]
+                pad_len = max(
+                    0,
+                    bytes_per_label - len(visible_nonce) - len(visible_payload) - len(sequence),
+                )
+                padded_chunk = visible_nonce + visible_payload + rng.randbytes(pad_len) + sequence
 
                 # Encode chunk
                 if spec.encoding == "hex":
