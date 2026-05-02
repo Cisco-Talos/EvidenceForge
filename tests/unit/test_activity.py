@@ -874,6 +874,30 @@ class TestActivityGenerator:
         assert event.auth.subject_domain == "NT AUTHORITY"
         assert event.auth.subject_logon_id == service_logon_id
 
+    def test_log_cleared_can_inherit_causative_process_logon_id(
+        self, activity_gen, test_system, mock_emitters
+    ):
+        """1102 inferred from a process should inherit that process token."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        user = User(
+            username="jsmith",
+            full_name="John Smith",
+            email="jsmith@example.com",
+            enabled=True,
+        )
+
+        activity_gen.generate_log_cleared(
+            user,
+            test_system,
+            timestamp,
+            subject_logon_id="0xabc123",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "log_cleared"
+        assert event.auth.subject_username == "jsmith"
+        assert event.auth.subject_logon_id == "0xabc123"
+
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):

@@ -70,6 +70,7 @@ class ExpansionContext:
     source_image: str | None = None
     target_pid: int | None = None
     target_image: str | None = None
+    logon_id: str | None = None
 
     # Supplementary event dedup: event types explicitly declared in the
     # storyline step, so the engine skips auto-generating them.

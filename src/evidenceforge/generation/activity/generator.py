@@ -1886,6 +1886,7 @@ class ActivityGenerator:
             source_image=kwargs.get("source_image"),
             target_pid=kwargs.get("target_pid"),
             target_image=kwargs.get("target_image"),
+            logon_id=kwargs.get("logon_id"),
             skip_types=kwargs.get("skip_types", set()),
             dns_cache=self._dns_cache,
             kerberos_cache=self._kerberos_cache,
@@ -6654,9 +6655,12 @@ class ActivityGenerator:
         system: System,
         time: datetime,
         from_storyline: bool = False,
+        subject_logon_id: str | None = None,
     ) -> None:
         """Generate security log cleared event (1102) on target system."""
-        subject_logon_id = self._get_subject_logon_id(user.username, system.hostname, time)
+        subject_logon_id = subject_logon_id or self._get_subject_logon_id(
+            user.username, system.hostname, time
+        )
         subject = self._account_subject_fields(user.username, system, logon_id=subject_logon_id)
         event = SecurityEvent(
             timestamp=time,

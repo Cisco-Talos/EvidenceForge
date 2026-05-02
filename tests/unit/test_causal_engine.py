@@ -520,10 +520,12 @@ class TestSupplementaryAuditEvents:
             command_line="wevtutil cl Security",
             actor="attacker",
             target_system="WS-01",
+            logon_id="0xabc123",
         )
         result = rule.expand("process_create", ctx)
         assert len(result) == 1
         assert result[0].method == "generate_log_cleared"
+        assert result[0].kwargs["subject_logon_id"] == "0xabc123"
 
     def test_skip_types_prevents_duplicate(self):
         rule = SupplementaryAuditEvents()

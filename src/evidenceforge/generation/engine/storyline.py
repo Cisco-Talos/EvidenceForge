@@ -962,6 +962,7 @@ class StorylineMixin:
                     target_system=system,
                     command_line=command_line,
                     os_category=os_category,
+                    logon_id=logon_id,
                     skip_types=explicit_types,
                 )
 
