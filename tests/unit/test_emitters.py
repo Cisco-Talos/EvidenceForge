@@ -323,7 +323,7 @@ class TestWindowsEventEmitter:
                 "TargetLogonId": "0xabc123",
             },
             {
-                "EventID": 4688,
+                "EventID": 4689,
                 "TimeCreated": process_time,
                 "Computer": "WIN-TEST-01.corp.local",
                 "SubjectLogonId": "0xabc123",

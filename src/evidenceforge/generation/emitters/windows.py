@@ -1277,8 +1277,8 @@ class WindowsEventEmitter(LogEmitter):
         """Prevent visible 4634 records from preceding same-session dependents.
 
         Sysmon and EDR sources render small source-native collection offsets after
-        canonical process creation. A visible Security logoff needs to clear that
-        offset window, not just the Security 4688 timestamp.
+        canonical process lifecycle events. A visible Security logoff needs to clear
+        that offset window, not just the Security 4688 timestamp.
         """
         latest_dependent: dict[tuple[str, str], datetime] = {}
         logoffs: list[tuple[tuple[str, str], dict[str, Any]]] = []
@@ -1293,7 +1293,7 @@ class WindowsEventEmitter(LogEmitter):
                 if logon_id and not event.get("_storyline_origin"):
                     logoffs.append(((computer, logon_id), event))
                 continue
-            if event_id not in {4688, 4801}:
+            if event_id not in {4688, 4689, 4801}:
                 continue
             logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
             if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:

@@ -516,11 +516,11 @@ UDP_CONN_STATE_DISTRIBUTION = [
     ("SF", 55, "Dd"),  # Normal bidirectional exchange (query + response)
     ("SF", 8, "DdDd"),  # Multi-packet exchange
     ("SF", 5, "DdDdDd"),  # Extended multi-packet exchange
-    ("SF", 4, "DdA"),  # Additional acknowledgment packet
+    ("SF", 4, "DDd"),  # Retransmitted query before response
     ("S0", 12, "D"),  # Originator only, no response (timeout)
     ("S0", 6, "DD"),  # Retransmitted datagram, no response
     ("OTH", 6, "Dd"),  # Midstream UDP exchange
-    ("OTH", 4, "DdDdA"),  # Midstream multi-packet with ACK
+    ("OTH", 4, "DdDd"),  # Midstream multi-packet exchange
 ]
 
 # Pre-extract for random.choices — TCP (select full tuples, not just states)
