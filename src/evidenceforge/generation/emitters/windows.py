@@ -813,14 +813,15 @@ class WindowsEventEmitter(LogEmitter):
             "SubjectLogonId": auth.subject_logon_id,
             "LogonGuid": auth.logon_guid or "{00000000-0000-0000-0000-000000000000}",
             "TargetUserName": auth.username,
-            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
+            "TargetDomainName": auth.target_domain
+            or _subject_domain(auth.username, host.netbios_domain),
             "TargetLogonGuid": "{00000000-0000-0000-0000-000000000000}",
             "TargetServerName": auth.target_server or "localhost",
             "TargetInfo": auth.target_server or "localhost",
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
-            "IpAddress": auth.source_ip or "-",
-            "IpPort": auth.source_port or 0,
+            "NetworkAddress": auth.source_ip or "-",
+            "NetworkPort": auth.source_port or 0,
         }
         self.emit_event(event_data)
 

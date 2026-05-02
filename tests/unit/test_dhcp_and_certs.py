@@ -198,7 +198,7 @@ class TestTlsIssuers:
                 "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US",
                 random.Random(1),
             )
-            == "ocsp.example.com"
+            == "ocsp.meridianhcs.local"
         )
 
     def test_tls_realism_overlay_extends_lists_and_replaces_scalars(self, tmp_path, monkeypatch):

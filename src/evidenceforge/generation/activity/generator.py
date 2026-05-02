@@ -72,6 +72,7 @@ from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 from .helpers import _get_os_category, _get_rng, _parameterize_command
 from .network import (
@@ -6345,7 +6346,8 @@ class ActivityGenerator:
         or other explicit credential usage.
         """
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
-        subject = self._account_subject_fields(user.username, system)
+        subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
+        subject = self._account_subject_fields(user.username, system, subject_logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="explicit_credentials",
@@ -6353,6 +6355,9 @@ class ActivityGenerator:
             auth=AuthContext(
                 username=target_username,
                 user_sid=self._get_sid(target_username),
+                target_domain=self._explicit_credentials_target_domain(
+                    target_username, target_server, system
+                ),
                 subject_sid=subject["sid"],
                 subject_username=subject["username"],
                 subject_domain=subject["domain"],
@@ -6367,6 +6372,63 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def _ensure_explicit_credentials_subject_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> str:
+        """Return a visible subject session for a Windows 4648 event."""
+        existing = self._get_user_logon_id(user.username, system.hostname, time)
+        if existing != "0x0":
+            return existing
+        if user.username in _SYSTEM_ACCOUNT_LOGON_IDS:
+            return _SYSTEM_ACCOUNT_LOGON_IDS[user.username]
+
+        logon_time = time - timedelta(seconds=2)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+            if ensure_utc(logon_time) < scenario_start:
+                logon_time = time - timedelta(milliseconds=500)
+        return self.generate_logon(user, system, logon_time, logon_type=2, source_ip="-")
+
+    def _explicit_credentials_target_domain(
+        self,
+        target_username: str,
+        target_server: str,
+        source_system: System,
+    ) -> str:
+        """Return a source-native TargetDomainName for explicit credentials."""
+        if "\\" in target_username:
+            return target_username.split("\\", 1)[0]
+        if "@" in target_username:
+            return target_username.rsplit("@", 1)[1].upper()
+
+        netbios_domain = self._build_host_context(source_system).netbios_domain
+        if target_username in getattr(self, "_users_by_username", {}):
+            return netbios_domain
+        if target_username in self.sid_registry and target_username.lower() not in {
+            "root",
+            "apache",
+        }:
+            return netbios_domain
+
+        target_host = target_server.split(".", 1)[0].upper() if target_server else ""
+        world_model = getattr(self, "_world_model", None)
+        target_system = None
+        if world_model is not None:
+            target_system = world_model.systems_by_hostname.get(target_server) or (
+                world_model.systems_by_hostname.get(target_server.split(".", 1)[0])
+                if target_server
+                else None
+            )
+        if target_system is not None and _get_os_category(target_system.os) != "windows":
+            return target_host or netbios_domain
+        if target_username.lower() in {"root", "apache"}:
+            return target_host or "-"
+        return netbios_domain
 
     def generate_workstation_lock(
         self,

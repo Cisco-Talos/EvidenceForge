@@ -37,6 +37,7 @@ import shlex
 import uuid
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Any
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.helpers import _get_os_category
@@ -169,6 +170,23 @@ def _web_scan_connection_profile(rng) -> tuple[str, float, int, int]:
     if conn_state in {"RSTO", "RSTR"}:
         return conn_state, rng.uniform(0.01, 0.3), rng.randint(80, 900), rng.randint(0, 400)
     return conn_state, rng.uniform(0.01, 0.5), rng.randint(200, 2000), rng.randint(200, 5000)
+
+
+def _web_scan_path_allows_referrer(path_entry: dict[str, Any]) -> bool:
+    """Return whether a scanner path plausibly carries a crawl Referer."""
+    uri = str(path_entry.get("uri", ""))
+    status = int(path_entry.get("status", 404))
+    if path_entry.get("ids") or status >= 400:
+        return False
+    suspicious_prefixes = (
+        "/.",
+        "/admin",
+        "/wp-",
+        "/phpmyadmin",
+        "/server-status",
+        "/cgi-bin",
+    )
+    return not uri.lower().startswith(suspicious_prefixes)
 
 
 def _normalize_storyline_process_image(
@@ -1882,8 +1900,10 @@ class StorylineMixin:
                 _status = path_entry.get("status", 404)
 
                 _mime_type = normalize_mime_type_for_path(_uri, "text/html")
-                _scan_referrer = pick_scan_referrer(
-                    rng, scan_host, _send_referrer_config, port=spec.dst_port
+                _scan_referrer = (
+                    pick_scan_referrer(rng, scan_host, _send_referrer_config, port=spec.dst_port)
+                    if _web_scan_path_allows_referrer(path_entry)
+                    else ""
                 )
 
                 _response_body_len = (
@@ -2237,14 +2257,19 @@ class StorylineMixin:
 
                 chunk = chunks[chunk_idx % len(chunks)]
                 chunk_idx += 1
+                sequence = query_count.to_bytes(4, "big", signed=False)
+                pad_len = max(0, bytes_per_label - len(chunk) - len(sequence))
+                padded_chunk = sequence + chunk + rng.randbytes(pad_len)
 
                 # Encode chunk
                 if spec.encoding == "hex":
-                    encoded = chunk.hex()
+                    encoded = padded_chunk.hex()
                 elif spec.encoding == "base32":
-                    encoded = _b64.b32encode(chunk).decode("ascii").rstrip("=").lower()
+                    encoded = _b64.b32encode(padded_chunk).decode("ascii").rstrip("=").lower()
                 else:  # base64
-                    encoded = _b64.urlsafe_b64encode(chunk).decode("ascii").rstrip("=").lower()
+                    encoded = (
+                        _b64.urlsafe_b64encode(padded_chunk).decode("ascii").rstrip("=").lower()
+                    )
 
                 # Truncate to label_length
                 encoded = encoded[: spec.label_length]
@@ -2262,7 +2287,7 @@ class StorylineMixin:
                     qtype=qtype_num,
                     rcode="NOERROR",
                     rcode_num=0,
-                    answers=[f"v={encoded[:20]}"],
+                    answers=[f"ack={query_count:04x}"],
                     TTLs=[float(rng.randint(1, 10))],
                     trans_id=rng.randint(1, 65535),
                     AA=False,

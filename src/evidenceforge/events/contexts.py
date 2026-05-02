@@ -77,6 +77,7 @@ class AuthContext:
     reporting_pid: int = 0  # PID of the process reporting this event (e.g., lsass for logons)
     process_pid: int = 0  # PID of process using explicit credentials (4648 ProcessId)
     target_server: str = ""  # 4648 TargetServerName (e.g., "fileserver01", "localhost")
+    target_domain: str = ""  # 4648 TargetDomainName for target credentials
     process_name: str = ""  # 4648 ProcessName (process using explicit creds)
     workstation_name: str = ""  # Windows WorkstationName for logon/failure events
 

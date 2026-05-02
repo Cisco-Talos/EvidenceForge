@@ -617,7 +617,7 @@ domains:
     content_type: "application/json"
     methods: ["GET"]
 
-  www.example.com:
+  www.healthcareitnews.com:
     paths:
       - "/"
     content_type: "text/html"

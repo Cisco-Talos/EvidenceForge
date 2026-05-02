@@ -1385,6 +1385,54 @@ class TestActivityGenerator:
         assert event.event_type == "explicit_credentials"
         assert event.auth.process_pid == 4242
 
+    def test_generate_explicit_credentials_bootstraps_subject_logon(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4648 should not reference a subject LogonID before its visible 4624."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        logon = next(event for event in emitted if event.event_type == "logon")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert logon.timestamp < explicit.timestamp
+        assert explicit.auth.subject_logon_id == logon.auth.logon_id
+
+    def test_generate_explicit_credentials_linux_target_uses_host_domain(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Linux local accounts should not render as AD-domain target credentials."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="root",
+            target_server="DB-PROD-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.50",
+            source_port=50123,
+        )
+
+        explicit = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert explicit.event_type == "explicit_credentials"
+        assert explicit.auth.target_domain == "DB-PROD-01"
+
     def test_generate_process_with_parent_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

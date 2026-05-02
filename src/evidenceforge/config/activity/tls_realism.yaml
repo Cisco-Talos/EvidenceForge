@@ -27,7 +27,7 @@ ocsp:
   next_update_max_seconds: 604800
   responders:
     - issuer_patterns: ["*Acme Enterprise*", "*Enterprise*"]
-      domains: ["ocsp.example.com"]
+      domains: ["ocsp.meridianhcs.local"]
     - issuer_patterns: ["*Let's Encrypt*"]
       domains: ["r3.o.lencr.org", "ocsp.int-x3.letsencrypt.org"]
     - issuer_patterns: ["*DigiCert*"]

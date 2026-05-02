@@ -13,6 +13,7 @@ from evidenceforge.generation.engine.storyline import (
     _effective_rate_interval,
     _iter_periodic_ticks,
     _web_scan_connection_profile,
+    _web_scan_path_allows_referrer,
 )
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
@@ -321,6 +322,14 @@ class TestWebScanConnectionProfile:
         state, _duration, _orig_bytes, resp_bytes = _web_scan_connection_profile(S0Rng(42))
         assert state == "S0"
         assert resp_bytes == 0
+
+    def test_referrer_only_allowed_for_crawl_like_successes(self):
+        assert _web_scan_path_allows_referrer({"uri": "/", "status": 200})
+        assert not _web_scan_path_allows_referrer({"uri": "/.git/HEAD", "status": 404})
+        assert not _web_scan_path_allows_referrer({"uri": "/wp-admin/", "status": 404})
+        assert not _web_scan_path_allows_referrer(
+            {"uri": "/robots.txt", "status": 200, "ids": {"sid": 1}}
+        )
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────
