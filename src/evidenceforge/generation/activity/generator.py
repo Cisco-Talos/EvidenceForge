@@ -1243,7 +1243,12 @@ class ActivityGenerator:
 
         candidates: list[str] = []
         if proto == "udp" and dst_port == 53 or service_name == "dns":
-            candidates = ["systemd_resolved", "svchost_netsvcs", "svchost_net_svc"]
+            candidates = [
+                "systemd_resolved",
+                "svchost_local_svc",
+                "svchost_netsvcs",
+                "svchost_net_svc",
+            ]
         elif proto == "udp" and dst_port == 123 or service_name == "ntp":
             candidates = ["timesyncd", "chronyd", "svchost_netsvcs"]
         elif service_name in ("kerberos", "ldap") or dst_port in (88, 389):
@@ -4696,7 +4701,7 @@ class ActivityGenerator:
                 dns=dns,
                 dst_ip=dst_ip,
                 rng=rng,
-                allow_failure=True,
+                allow_failure=not caller_provided_conn_state,
             )
         if (
             proto == "tcp"

@@ -246,6 +246,39 @@ class TestLogonIdSystemScoping:
         assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
         assert kwargs["granted_access"] == "0x1010"
 
+    def test_storyline_create_remote_thread_normalizes_target_image(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed create_remote_thread should share full target image paths across sources."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        engine._record_last_storyline_process(
+            system_a,
+            4242,
+            r"C:\Windows\Temp\procdump64.exe",
+        )
+        engine.activity_generator.generate_create_remote_thread = Mock()
+        engine.activity_generator._expand_and_emit = Mock()
+        engine.activity_generator._system_pids = {"WKS-A": {"lsass": 620}}
+
+        spec = Mock()
+        spec.type = "create_remote_thread"
+        spec.target_process = "lsass.exe"
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=attacker,
+            system=system_a,
+            time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+            activity="Inject into lsass",
+            explicit_types={"create_remote_thread"},
+        )
+
+        kwargs = engine.activity_generator.generate_create_remote_thread.call_args.kwargs
+        assert kwargs["target_pid"] == 620
+        assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
+        expand_kwargs = engine.activity_generator._expand_and_emit.call_args.kwargs
+        assert expand_kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
+
     def test_storyline_process_termination_is_deferred_until_step_end(
         self, state_manager, mock_emitters, system_a, attacker
     ):

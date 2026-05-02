@@ -1145,13 +1145,20 @@ class StorylineMixin:
                 from evidenceforge.generation.activity.referrer import pick_referrer
 
                 _http_host = spec.hostname or dst_ip
+                request_body_len = (
+                    max(0, spec.orig_bytes or 0)
+                    if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
+                    else 0
+                )
+                if request_body_len == 0 and _method == "POST":
+                    request_body_len = rng.randint(100, 10000)
                 http_ctx = HttpContext(
                     method=_method,
                     host=_http_host,
                     uri=_uri_raw,
                     version="1.1",
                     user_agent=spec.user_agent or "Mozilla/5.0",
-                    request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
+                    request_body_len=request_body_len,
                     response_body_len=resp_bytes,
                     status_code=spec.status_code or 200,
                     status_msg={
@@ -1454,7 +1461,12 @@ class StorylineMixin:
                 source_image = "unknown"
             # Use a realistic target PID — look up the process name from
             # system PIDs or use a plausible default (not 4 = System kernel)
-            target_name = spec.target_process.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            target_image = _normalize_storyline_process_image(
+                spec.target_process,
+                _get_os_category(system.os),
+                username=actor.username,
+            )
+            target_name = target_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
             target_pid = self.activity_generator._get_system_pid(
                 system.hostname,
                 target_name.replace(".exe", ""),
@@ -1467,7 +1479,7 @@ class StorylineMixin:
                 source_pid=source_pid,
                 source_image=source_image,
                 target_pid=target_pid,
-                target_image=spec.target_process,
+                target_image=target_image,
             )
             # Emit ProcessAccess via causal expansion engine (or legacy fallback)
             # when targeting lsass.exe — primary credential-dumping detection signal
@@ -1480,9 +1492,9 @@ class StorylineMixin:
                     source_pid=source_pid,
                     source_image=source_image,
                     target_pid=target_pid,
-                    target_image=spec.target_process,
+                    target_image=target_image,
                 )
-            malicious_event["target_process"] = spec.target_process
+            malicious_event["target_process"] = target_image
 
         elif spec.type == "process_access":
             source_pid, source_image = self._last_storyline_process_for_system(system)
@@ -1680,13 +1692,20 @@ class StorylineMixin:
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
                     _http_host2 = spec.hostname or spec.dst_ip
+                    request_body_len = (
+                        max(0, spec.orig_bytes or 0)
+                        if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
+                        else 0
+                    )
+                    if request_body_len == 0 and _method == "POST":
+                        request_body_len = rng.randint(100, 10000)
                     http_ctx = HttpContext(
                         method=_method,
                         host=_http_host2,
                         uri=_uri_raw,
                         version="1.1",
                         user_agent=spec.user_agent or "Mozilla/5.0",
-                        request_body_len=rng.randint(100, 10000) if _method == "POST" else 0,
+                        request_body_len=request_body_len,
                         response_body_len=resp_bytes,
                         status_code=spec.status_code or 200,
                         status_msg={
@@ -2597,13 +2616,6 @@ class StorylineMixin:
             ProcessContext,
         )
 
-        sshd_pid = 1000 + (
-            _stable_seed(
-                f"scp_receiver_sshd:{source_system.hostname}:{target_system.hostname}:"
-                f"{source_pid}:{transfer_time.isoformat()}"
-            )
-            % 59000
-        )
         source_port = 32768 + (
             _stable_seed(
                 f"scp_receiver_port:{source_system.ip}:{target_system.ip}:"
@@ -2611,6 +2623,17 @@ class StorylineMixin:
             )
             % 28232
         )
+        self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
+        parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
+        sshd_pid = self.state_manager.create_process(
+            system=target_system.hostname,
+            parent_pid=parent_pid if parent_pid > 0 else 0,
+            image="/usr/sbin/sshd",
+            command_line=f"sshd: {target_user}@notty",
+            username=target_user,
+            integrity_level="High" if target_user == "root" else "Medium",
+        )
+        sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
         self.activity_generator.generate_syslog_event(
             system=target_system,
             time=transfer_time + timedelta(milliseconds=80),
@@ -2645,7 +2668,7 @@ class StorylineMixin:
         host_ctx = self.activity_generator._build_host_context(target_system)
         target_proc = ProcessContext(
             pid=sshd_pid,
-            parent_pid=self.activity_generator._get_system_pid(target_system.hostname, "sshd", 22),
+            parent_pid=parent_pid if parent_pid > 0 else 0,
             image="/usr/sbin/sshd",
             command_line=f"sshd: {target_user}@notty",
             username=target_user,
@@ -2660,10 +2683,7 @@ class StorylineMixin:
                 file=FileContext(path=target_path, action="create", pid=sshd_pid),
                 edr=EdrContext(
                     object_id=str(uuid.uuid4()),
-                    actor_id=self.state_manager.get_process_object_id(
-                        source_system.hostname,
-                        source_pid,
-                    ),
+                    actor_id=sshd_actor_id,
                 ),
                 storyline_origin=True,
             )

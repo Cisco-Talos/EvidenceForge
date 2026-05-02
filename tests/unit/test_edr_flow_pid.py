@@ -181,6 +181,50 @@ class TestConnectionPidPropagation:
         assert event.edr is not None
         assert event.edr.actor_id == state_manager.get_process_object_id("WKS-01", pid)
 
+    def test_inferred_dns_pid_prefers_dns_client_service(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """DNS FLOW attribution should match Sysmon Event 22's DNS Client PID."""
+        state_manager.set_current_time(timestamp)
+        netsvcs_pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "NETWORK SERVICE",
+            "System",
+        )
+        local_svc_pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k LocalService",
+            "LOCAL SERVICE",
+            "System",
+        )
+        activity_gen._ip_to_system = {"10.0.10.1": win_system}
+        activity_gen._system_pids = {
+            "WKS-01": {
+                "svchost_netsvcs": netsvcs_pid,
+                "svchost_local_svc": local_svc_pid,
+            }
+        }
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == local_svc_pid
+        assert event.edr is not None
+        assert event.edr.actor_id == state_manager.get_process_object_id("WKS-01", local_svc_pid)
+
     def test_connection_timestamp_not_before_process_start(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters
     ):

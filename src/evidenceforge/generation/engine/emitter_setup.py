@@ -294,7 +294,6 @@ class EmitterSetupMixin:
             for event in getattr(entry, "events", [])
             if getattr(event, "type", None) == "dhcp_lease"
         }
-
         # Stagger across first 5 minutes using per-host deterministic offsets
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
@@ -305,15 +304,18 @@ class EmitterSetupMixin:
         _oui_values = [o["prefix"] for o in _oui_prefixes]
 
         for system in self.scenario.environment.systems:
-            if system.hostname in storyline_dhcp_hosts:
-                continue
             ip_seed = _stable_seed(f"mac_{system.ip}")
             # Select OUI prefix deterministically per host using weighted distribution
             oui_rng = random.Random(ip_seed)
             oui = oui_rng.choices(_oui_values, weights=_oui_weights, k=1)[0]
             mac = f"{oui}:{(ip_seed >> 16) & 0xFF:02x}:{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}"
             offset = (_stable_seed(f"dhcp_offset_{system.hostname}") % 300) + rng.uniform(0, 5)
-            ts = base_time + timedelta(seconds=offset)
+            if system.hostname in storyline_dhcp_hosts:
+                ts = self.start_time + timedelta(seconds=offset)
+                msg_types = ["REQUEST", "ACK"]
+            else:
+                ts = base_time + timedelta(seconds=offset)
+                msg_types = None
             uid = generate_zeek_uid("C")
             lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
             self.state_manager.set_current_time(ts)
@@ -323,6 +325,7 @@ class EmitterSetupMixin:
                 mac=mac,
                 lease_time=lease_time,
                 uid=uid,
+                msg_types=msg_types,
             )
             # Store state for renewals
             self._dhcp_lease_state[system.hostname] = {

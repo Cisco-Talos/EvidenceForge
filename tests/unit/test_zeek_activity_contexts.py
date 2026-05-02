@@ -111,6 +111,82 @@ class TestSslContextPopulation:
             assert event.x509_chain[0] is event.x509
             assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
+    def test_explicit_successful_tls_does_not_fail_handshake(self, activity_gen):
+        """A caller-pinned SF TLS connection should not be downgraded by SSL failure noise."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="45.33.32.30",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=8443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=620,
+            resp_bytes=1840,
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.network.conn_state == "SF"
+        assert event.network.orig_bytes >= 620
+        assert event.network.resp_bytes >= 1840
+        assert event.ssl is not None
+        assert event.ssl.established is True
+
+    def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
+        """Proxy egress should preserve canonical POST body size for exfil-style uploads."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        body_bytes = 268_435_700
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="45.33.32.30",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=4.0,
+            orig_bytes=body_bytes,
+            resp_bytes=1711,
+            conn_state="SF",
+            source_system=source,
+            hostname="cdn-assets-update.com",
+            http=HttpContext(
+                method="POST",
+                host="cdn-assets-update.com",
+                uri="/upload/telemetry/7f3a2b19",
+                user_agent="Mozilla/5.0",
+                request_body_len=body_bytes,
+                response_body_len=1711,
+                resp_mime_types=["application/json"],
+            ),
+        )
+
+        egress_events = [
+            event
+            for event in events
+            if event.network
+            and event.network.src_ip == proxy.ip
+            and event.network.dst_ip == "45.33.32.30"
+        ]
+        assert egress_events
+        egress = egress_events[-1]
+        assert egress.network.conn_state == "SF"
+        assert egress.network.orig_bytes >= body_bytes
+
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""
         gen, events = activity_gen
