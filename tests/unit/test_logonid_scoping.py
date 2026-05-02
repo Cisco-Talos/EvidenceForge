@@ -365,3 +365,54 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
     assert observed_times == sorted(observed_times)
     assert observed_times[1] == observed_times[0] + timedelta(seconds=10)
     assert observed_times[2] > observed_times[1]
+
+
+def test_log_cleared_storyline_event_inherits_recent_wevtutil_logon_id(
+    state_manager, mock_emitters, system_a, attacker, monkeypatch
+):
+    """Typed log_cleared events should stay attached to the clearing process token."""
+    ag = ActivityGenerator(state_manager, mock_emitters)
+    engine = type("FakeEngine", (StorylineMixin,), {}).__new__(
+        type("FakeEngine", (StorylineMixin,), {})
+    )
+    engine.state_manager = state_manager
+    engine.activity_generator = ag
+    engine.dispatcher = ag.dispatcher
+    engine.malicious_events = []
+
+    process_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+    state_manager.set_current_time(process_time)
+    logon_id = state_manager.create_session(
+        username=attacker.username,
+        system=system_a.hostname,
+        logon_type=2,
+        source_ip=system_a.ip,
+    )
+    pid = state_manager.create_process(
+        system_a.hostname,
+        4,
+        r"C:\Windows\System32\wevtutil.exe",
+        "wevtutil cl Security",
+        attacker.username,
+        "High",
+        logon_id=logon_id,
+    )
+    engine._record_last_storyline_process(system_a, pid, r"C:\Windows\System32\wevtutil.exe")
+
+    captured: dict[str, str | None] = {}
+
+    def fake_generate_log_cleared(*args, **kwargs):
+        captured["subject_logon_id"] = kwargs["subject_logon_id"]
+
+    monkeypatch.setattr(ag, "generate_log_cleared", fake_generate_log_cleared)
+
+    engine._execute_typed_event(
+        spec=Mock(type="log_cleared"),
+        actor=attacker,
+        system=system_a,
+        time=process_time + timedelta(seconds=2),
+        activity="clear security log",
+        explicit_types=set(),
+    )
+
+    assert captured["subject_logon_id"] == logon_id

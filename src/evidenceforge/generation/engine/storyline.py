@@ -438,6 +438,28 @@ class StorylineMixin:
             return -1, None
         return pid, image
 
+    def _recent_storyline_process_logon_id(
+        self,
+        system: System,
+        time: datetime,
+        *,
+        executable: str | None = None,
+    ) -> str | None:
+        """Return the LogonID from a recent storyline process on the same host."""
+        pid, image = self._last_storyline_process_for_system(system)
+        if pid <= 0 or not image:
+            return None
+        if executable:
+            image_name = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if image_name != executable.lower():
+                return None
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None or not proc.logon_id or proc.start_time is None:
+            return None
+        if proc.start_time > time or time - proc.start_time > timedelta(minutes=5):
+            return None
+        return proc.logon_id
+
     def _queue_story_process_termination(
         self,
         *,
@@ -1316,8 +1338,17 @@ class StorylineMixin:
             malicious_event["task_content"] = task_content
 
         elif spec.type == "log_cleared":
+            subject_logon_id = self._recent_storyline_process_logon_id(
+                system,
+                time,
+                executable="wevtutil.exe",
+            )
             self.activity_generator.generate_log_cleared(
-                user=actor, system=system, time=time, from_storyline=True
+                user=actor,
+                system=system,
+                time=time,
+                from_storyline=True,
+                subject_logon_id=subject_logon_id,
             )
 
         elif spec.type == "create_remote_thread":
