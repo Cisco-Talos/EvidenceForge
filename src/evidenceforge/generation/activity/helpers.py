@@ -116,6 +116,13 @@ _GENERAL_PARAMS = {
         "deploy.sh",
         "requirements.txt",
     ],
+    "c_source_file": [
+        "main.c",
+        "server.c",
+        "worker.c",
+        "src/healthcheck.c",
+        "src/agent.c",
+    ],
     "git_branch": ["main", "develop", "feature/auth-refactor", "fix/memory-leak", "release/v2.4"],
     "k8s_namespace": ["production", "staging", "monitoring", "kube-system", "default", "logging"],
     "k8s_pod": [

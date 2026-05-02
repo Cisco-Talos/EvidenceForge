@@ -227,13 +227,15 @@ class TestSslUidCorrelation:
             assert data["uid"] == "CMySpecificUID123"
 
     def test_ssl_cert_chain_fuids_link_to_x509_id(self):
-        """ssl.cert_chain_fuids should reference the x509 certificate id."""
+        """ssl.cert_chain_fuids should reference x509 and files.log certificate IDs."""
         ssl_fmt = load_format("zeek_ssl")
         x509_fmt = load_format("zeek_x509")
+        files_fmt = load_format("zeek_files")
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
             ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
             x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
 
             event = SecurityEvent(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
@@ -253,7 +255,7 @@ class TestSslUidCorrelation:
                 ),
                 x509=X509Context(
                     fuid="Fabcdef1234567890",
-                    fingerprint="abc123",
+                    fingerprint="a" * 64,
                     certificate_serial="01",
                     certificate_subject="CN=example.com",
                     certificate_issuer="CN=Example CA",
@@ -263,13 +265,19 @@ class TestSslUidCorrelation:
             )
             ssl_emitter.emit(event)
             x509_emitter.emit(event)
+            files_emitter.emit(event)
             ssl_emitter.close()
             x509_emitter.close()
+            files_emitter.close()
 
             ssl_data = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])
             x509_data = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
+            files_data = json.loads((out_dir / "files.json").read_text().splitlines()[0])
 
             assert ssl_data["cert_chain_fuids"] == [x509_data["id"]]
+            assert files_data["fuid"] == x509_data["id"]
+            assert files_data["source"] == "SSL"
+            assert files_data["analyzers"] == ["X509"]
 
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
@@ -416,7 +424,9 @@ class TestSslUidCorrelation:
             x509_ts = json.loads((out_dir / "x509.json").read_text().splitlines()[0])["ts"]
             ocsp_ts = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])["ts"]
             ocsp_row = json.loads((out_dir / "ocsp.json").read_text().splitlines()[0])
-            files_row = json.loads((out_dir / "files.json").read_text().splitlines()[0])
+            file_rows = [
+                json.loads(line) for line in (out_dir / "files.json").read_text().splitlines()
+            ]
 
         conn_ts = base_ts.timestamp()
         assert conn_ts < ssl_ts < conn_ts + 0.1
@@ -426,13 +436,15 @@ class TestSslUidCorrelation:
         assert "uid" not in ocsp_row
         assert "id.orig_h" not in ocsp_row
         assert "id.resp_h" not in ocsp_row
-        assert files_row["fuid"] == ocsp_row["id"]
-        assert files_row["conn_uids"] == ["CMySpecificUID123"]
-        assert files_row["tx_hosts"] == ["8.8.8.8"]
-        assert files_row["rx_hosts"] == ["10.0.0.1"]
-        assert "uid" not in files_row
-        assert "id.orig_h" not in files_row
-        assert files_row["mime_type"] == "application/ocsp-response"
+        files_by_fuid = {row["fuid"]: row for row in file_rows}
+        ocsp_file_row = files_by_fuid[ocsp_row["id"]]
+        assert ocsp_file_row["conn_uids"] == ["CMySpecificUID123"]
+        assert files_by_fuid["Fabcdef1234567890"]["source"] == "SSL"
+        assert ocsp_file_row["tx_hosts"] == ["8.8.8.8"]
+        assert ocsp_file_row["rx_hosts"] == ["10.0.0.1"]
+        assert "uid" not in ocsp_file_row
+        assert "id.orig_h" not in ocsp_file_row
+        assert ocsp_file_row["mime_type"] == "application/ocsp-response"
 
     def test_tls_conn_duration_contains_ssl_analyzer_offset(self):
         """Zeek conn duration for completed TLS should contain ssl/x509 analyzer evidence."""

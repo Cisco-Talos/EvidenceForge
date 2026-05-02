@@ -513,6 +513,7 @@ class TestActivityGenerator:
         assert network_event.network.dst_port == 3389
         assert network_event.network.src_port > 0
         assert logon_event.auth.source_port == network_event.network.src_port
+        assert logon_event.timestamp > network_event.timestamp
 
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -844,6 +845,34 @@ class TestActivityGenerator:
         assert file_event.process.pid == process_event.process.parent_pid
         assert file_event.file.pid == process_event.process.parent_pid
         assert file_event.process.pid != process_event.process.pid
+
+    def test_service_payload_file_event_precedes_service_install(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Dropped service binaries should be visible before 4697 service install."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_service_installed(
+            test_user,
+            test_system,
+            timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        service_event = next(event for event in events if event.event_type == "service_installed")
+        file_event = next(
+            event
+            for event in events
+            if event.event_type == "file_create"
+            and event.file is not None
+            and event.file.path == r"C:\Windows\PSEXESVC.exe"
+        )
+        assert file_event.timestamp < service_event.timestamp
 
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1722,10 +1751,10 @@ class TestActivityGenerator:
         assert explicit.auth.source_ip == "-"
         assert explicit.auth.source_port == 0
 
-    def test_generate_explicit_credentials_linux_target_uses_host_domain(
+    def test_generate_explicit_credentials_skips_linux_local_target_on_windows(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Linux local accounts should not render as AD-domain target credentials."""
+        """Linux local accounts should not render as Windows 4648 target credentials."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -1741,9 +1770,10 @@ class TestActivityGenerator:
             source_port=50123,
         )
 
-        explicit = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        assert explicit.event_type == "explicit_credentials"
-        assert explicit.auth.target_domain == "DB-PROD-01"
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert all(event.event_type != "explicit_credentials" for event in emitted)
 
     def test_generate_process_with_parent_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

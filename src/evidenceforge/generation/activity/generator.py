@@ -93,6 +93,15 @@ from .network import (
 logger = logging.getLogger(__name__)
 
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_LINUX_LOCAL_ACCOUNTS = {
+    "apache",
+    "mysql",
+    "nginx",
+    "postgres",
+    "root",
+    "sshd",
+    "www-data",
+}
 _SYSTEM_ACCOUNT_SIDS = {
     "SYSTEM": "S-1-5-18",
     "LOCAL SERVICE": "S-1-5-19",
@@ -457,7 +466,7 @@ PROCESS_TEMPLATES_LINUX = {
     ],
     "process_build": [
         ("/usr/bin/make", "make -j4 -C {linux_project}"),
-        ("/usr/bin/gcc", "gcc -o output {linux_source_file}"),
+        ("/usr/bin/gcc", "gcc -o output {c_source_file}"),
         ("/usr/bin/npm", "npm run {npm_script}"),
         ("/usr/bin/cargo", "cargo build --release"),
         ("/usr/bin/python3", "python3 -m pip install -e {linux_project}"),
@@ -6581,6 +6590,11 @@ class ActivityGenerator:
         Fires when a process uses RunAs, scheduled tasks, PsExec, WMIC,
         or other explicit credential usage.
         """
+        if (
+            _get_os_category(system.os) == "windows"
+            and target_username.split("\\")[-1].split("@", 1)[0].lower() in _LINUX_LOCAL_ACCOUNTS
+        ):
+            return
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
         subject = self._account_subject_fields(user.username, system, subject_logon_id)
@@ -6857,8 +6871,24 @@ class ActivityGenerator:
             pid=source_pid,
         )
 
-        # 2. Host logon on target (4624 type 10 + 4672 if elevated)
-        logon_time = time + timedelta(milliseconds=rng.randint(50, 200))
+        observed_connection_time = time + sample_timing_delta(
+            "source.zeek_conn_start",
+            seed_parts=(
+                source_ip,
+                src_port,
+                target_system.ip,
+                3389,
+                "tcp",
+                "rdp",
+                time,
+            ),
+        )
+
+        # 2. Host logon on target (4624 type 10 + 4672 if elevated).
+        # RDP target logons are a result of the source-side client and TCP
+        # connection, so leave enough collection margin for source Sysmon/WFP
+        # and Zeek evidence to appear first in a bounded time slice.
+        logon_time = observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600))
         self.generate_logon(
             user=user,
             system=target_system,
@@ -7072,6 +7102,40 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ServiceContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        if _get_os_category(system.os) == "windows":
+            service_path = service_file_name.replace("%SystemRoot%", r"C:\Windows")
+            service_path = service_path.replace("%systemroot%", r"C:\Windows")
+            service_path_lower = service_path.lower().replace("/", "\\")
+            is_preexisting_binary = (
+                service_path_lower.startswith("c:\\windows\\system32\\")
+                or service_path_lower.startswith("c:\\windows\\syswow64\\")
+                or service_path_lower.startswith("c:\\program files\\")
+                or service_path_lower.startswith("c:\\program files (x86)\\")
+            )
+            if not is_preexisting_binary:
+                services_pid = self._get_system_pid(system.hostname, "services", 0x2BC)
+                services_obj_id = self.state_manager.get_process_object_id(
+                    system.hostname,
+                    services_pid,
+                )
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time - timedelta(milliseconds=250),
+                        event_type="file_create",
+                        src_host=self._build_host_context(system),
+                        auth=AuthContext(username="SYSTEM"),
+                        process=ProcessContext(
+                            pid=services_pid,
+                            parent_pid=self._get_system_pid(system.hostname, "wininit", 0x1F4),
+                            image=r"C:\Windows\System32\services.exe",
+                            command_line=r"C:\Windows\System32\services.exe",
+                            username="SYSTEM",
+                            logon_id="0x3e7",
+                        ),
+                        file=FileContext(path=service_path, action="create", pid=services_pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=services_obj_id),
+                    )
+                )
         event = SecurityEvent(
             timestamp=time,
             event_type="service_installed",

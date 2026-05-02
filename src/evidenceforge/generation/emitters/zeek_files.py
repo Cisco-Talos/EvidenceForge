@@ -31,8 +31,9 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 class ZeekFilesEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek files.log format (NDJSON).
 
-    Generates file transfer metadata logs. Requires both NetworkContext and
-    FileTransferContext. Uses own fuid (F-prefix) alongside conn.log uid.
+    Generates file transfer metadata logs. Requires NetworkContext plus either
+    FileTransferContext or TLS X.509 certificate contexts. Uses own fuid
+    (F-prefix) alongside conn.log uid.
     """
 
     _log_filename = "files.json"
@@ -43,37 +44,70 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         return (
             event.event_type in self._supported_types
             and event.network is not None
-            and event.file_transfer is not None
+            and (
+                event.file_transfer is not None or bool(event.x509_chain) or event.x509 is not None
+            )
         )
 
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
         ft = event.file_transfer
-        event_data: dict[str, Any] = {
-            "ts": event.timestamp,
-            "fuid": ft.fuid,
-            "tx_hosts": [net.src_ip] if ft.is_orig else [net.dst_ip],
-            "rx_hosts": [net.dst_ip] if ft.is_orig else [net.src_ip],
-            "conn_uids": [net.zeek_uid] if net.zeek_uid else [],
-            "source": ft.source,
-            "depth": ft.depth,
-            "filename": ft.filename or None,
-            "analyzers": ft.analyzers if ft.analyzers else None,
-            "mime_type": ft.mime_type or None,
-            "duration": ft.duration,
-            "local_orig": ft.local_orig,
-            "is_orig": ft.is_orig,
-            "seen_bytes": ft.seen_bytes,
-            "total_bytes": ft.total_bytes,
-            "missing_bytes": ft.missing_bytes,
-            "overflow_bytes": ft.overflow_bytes,
-            "timedout": ft.timedout,
-            "md5": ft.md5 or None,
-            "sha1": ft.sha1 or None,
-            "sha256": ft.sha256 or None,
-            "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
-        }
-        self.emit_event(event_data)
+        sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
+        if ft is not None:
+            event_data: dict[str, Any] = {
+                "ts": event.timestamp,
+                "fuid": ft.fuid,
+                "tx_hosts": [net.src_ip] if ft.is_orig else [net.dst_ip],
+                "rx_hosts": [net.dst_ip] if ft.is_orig else [net.src_ip],
+                "conn_uids": [net.zeek_uid] if net.zeek_uid else [],
+                "source": ft.source,
+                "depth": ft.depth,
+                "filename": ft.filename or None,
+                "analyzers": ft.analyzers if ft.analyzers else None,
+                "mime_type": ft.mime_type or None,
+                "duration": ft.duration,
+                "local_orig": ft.local_orig,
+                "is_orig": ft.is_orig,
+                "seen_bytes": ft.seen_bytes,
+                "total_bytes": ft.total_bytes,
+                "missing_bytes": ft.missing_bytes,
+                "overflow_bytes": ft.overflow_bytes,
+                "timedout": ft.timedout,
+                "md5": ft.md5 or None,
+                "sha1": ft.sha1 or None,
+                "sha256": ft.sha256 or None,
+                "_sensor_hostnames": sensor_hostnames,
+            }
+            self.emit_event(event_data)
+
+        certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        for depth, cert in enumerate(certificates):
+            size = 900 + (cert.certificate_key_length // 8) + (0 if cert.host_cert else 240)
+            event_data = {
+                "ts": event.timestamp,
+                "fuid": cert.fuid,
+                "tx_hosts": [net.dst_ip],
+                "rx_hosts": [net.src_ip],
+                "conn_uids": [net.zeek_uid] if net.zeek_uid else [],
+                "source": "SSL",
+                "depth": depth,
+                "filename": None,
+                "analyzers": ["X509"],
+                "mime_type": "application/pkix-cert",
+                "duration": None,
+                "local_orig": net.local_orig,
+                "is_orig": False,
+                "seen_bytes": size,
+                "total_bytes": size,
+                "missing_bytes": 0,
+                "overflow_bytes": 0,
+                "timedout": False,
+                "md5": cert.fingerprint[:32] if cert.fingerprint else None,
+                "sha1": cert.fingerprint[:40] if cert.fingerprint else None,
+                "sha256": cert.fingerprint or None,
+                "_sensor_hostnames": sensor_hostnames,
+            }
+            self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = [

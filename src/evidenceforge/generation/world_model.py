@@ -1074,7 +1074,7 @@ class WorldPlanner:
                 user=user,
                 source_system=plan.source_system,
                 target_system=plan.target_system,
-                time=logon_time - timedelta(milliseconds=rng.randint(50, 300)),
+                time=logon_time - timedelta(milliseconds=rng.randint(1800, 3200)),
                 rng=rng,
             )
         logon_id = self.state_manager.create_session(

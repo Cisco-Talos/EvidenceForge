@@ -509,7 +509,7 @@ applications:
         image_path: "/usr/bin/curl"
         command_templates:
           - "curl -s https://api.example.com/status"
-          - "curl -sS -o /dev/null -w '%{{http_code}}' {internal_url}"
+          - "curl -sS -o /dev/null -w '%{http_code}' {internal_url}"
           - "curl -X GET {internal_url} -H 'Accept: application/json'"
     categories: [user_app]
     personas: [developer, analyst, sysadmin, default]
@@ -576,8 +576,8 @@ applications:
       linux:
         image_path: "/usr/bin/gcc"
         command_templates:
-          - "gcc -o output {linux_source_file}"
-          - "gcc -Wall -O2 -o output {linux_source_file}"
+          - "gcc -o output {c_source_file}"
+          - "gcc -Wall -O2 -o output {c_source_file}"
     categories: [build]
     personas: [developer]
 
