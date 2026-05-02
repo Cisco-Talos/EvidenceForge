@@ -284,6 +284,47 @@ class TestSslUidCorrelation:
             assert len(files_data["md5"]) == 32
             assert len(files_data["sha1"]) == 40
 
+    def test_files_host_lists_follow_sensor_nat_view(self):
+        """files.log tx/rx hosts should agree with the same-sensor conn endpoint view."""
+        files_fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            files_emitter = ZeekFilesEmitter(
+                files_fmt,
+                out_dir,
+                sensor_hostnames=["zeek-dmz"],
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="185.70.41.45",
+                    src_port=50000,
+                    dst_ip="203.14.220.10",
+                    dst_port=443,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                ),
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="a" * 64,
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+            )
+            event._sensor_hostnames_by_format = {"zeek_files": ["zeek-dmz"]}
+            event._nat_swaps_by_sensor = {"zeek-dmz": {"dst_ip": "10.10.3.10"}}
+
+            files_emitter.emit(event)
+            files_emitter.close()
+
+            files_data = json.loads((out_dir / "zeek-dmz" / "files.json").read_text())
+            assert files_data["tx_hosts"] == ["10.10.3.10"]
+            assert files_data["rx_hosts"] == ["185.70.41.45"]
+
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
         x509_fmt = load_format("zeek_x509")

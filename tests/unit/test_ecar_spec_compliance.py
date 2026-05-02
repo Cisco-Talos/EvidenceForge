@@ -244,6 +244,11 @@ class TestRemoteThreadRendering:
         emitter._render_create_remote_thread(event)
 
         rendered = emitter.emit_event.call_args[0][0]
+        expected_delta = sample_timing_delta(
+            "source.ecar_remote_thread",
+            seed_parts=("WS-01", 4321, 688, 840, ts),
+        )
+        assert rendered["timestamp"] == ts + expected_delta
         assert rendered["target_pid"] == "688"
         assert rendered["tgt_tid"] == "840"
         assert rendered["target_process_uuid"] == "target-process-id"

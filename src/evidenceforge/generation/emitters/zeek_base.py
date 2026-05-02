@@ -52,6 +52,17 @@ from evidenceforge.utils.paths import sanitize_path_component
 logger = logging.getLogger(__name__)
 
 
+def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
+    """Apply a per-sensor NAT IP view to Zeek list-valued host fields."""
+    if (
+        not isinstance(value, list)
+        or not isinstance(original_ip, str)
+        or not isinstance(visible_ip, str)
+    ):
+        return value
+    return [visible_ip if item == original_ip else item for item in value]
+
+
 class _SingleZeekWriter:
     """Writes Zeek NDJSON for one sensor. Thread-safe via lock."""
 
@@ -293,6 +304,34 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["local_orig"] = swaps["local_orig"]
                     if "local_resp" in swaps:
                         render_data["local_resp"] = swaps["local_resp"]
+                    if "src_ip" in swaps:
+                        original_src_ip = event_data.get("id.orig_h") or event_data.get(
+                            "_id.orig_h"
+                        )
+                        render_data["tx_hosts"] = _swap_host_list_value(
+                            render_data.get("tx_hosts"),
+                            original_src_ip,
+                            swaps["src_ip"],
+                        )
+                        render_data["rx_hosts"] = _swap_host_list_value(
+                            render_data.get("rx_hosts"),
+                            original_src_ip,
+                            swaps["src_ip"],
+                        )
+                    if "dst_ip" in swaps:
+                        original_dst_ip = event_data.get("id.resp_h") or event_data.get(
+                            "_id.resp_h"
+                        )
+                        render_data["tx_hosts"] = _swap_host_list_value(
+                            render_data.get("tx_hosts"),
+                            original_dst_ip,
+                            swaps["dst_ip"],
+                        )
+                        render_data["rx_hosts"] = _swap_host_list_value(
+                            render_data.get("rx_hosts"),
+                            original_dst_ip,
+                            swaps["dst_ip"],
+                        )
                 # Directional propagation delay: farther sensors see packets later,
                 # but with per-event jitter so independent sensors do not have a
                 # perfectly fixed microsecond offset across every log stream.

@@ -554,6 +554,41 @@ class TestActivityGenerator:
         assert session.start_time == logon_event.timestamp
         assert session.source_port == network_event.network.src_port
 
+    def test_generate_rdp_session_uses_prior_successful_windows_account(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Windows RDP should use the sprayed domain user, not a Unix local actor."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        domain_user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+        )
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        activity_gen.generate_logon(
+            domain_user,
+            test_system,
+            timestamp - timedelta(seconds=10),
+            logon_type=3,
+            source_ip="10.0.99.50",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_rdp_session(
+            user=root_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+        )
+
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        assert logon_event.auth.username == "aisha.johnson"
+
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -748,6 +783,28 @@ class TestActivityGenerator:
         assert event.auth.subject_sid == "S-1-5-18"
         assert event.auth.subject_username == "SYSTEM"
         assert event.auth.subject_domain == "NT AUTHORITY"
+
+    def test_explicit_credentials_system_target_uses_nt_authority(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Local SYSTEM target credentials should not render as AD-domain SYSTEM."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        system_user = User(username="SYSTEM", full_name="System", email="system@example.local")
+
+        activity_gen.generate_explicit_credentials(
+            user=system_user,
+            system=test_system,
+            time=timestamp,
+            target_username="SYSTEM",
+            target_server="localhost",
+            process_name=r"C:\Windows\System32\net.exe",
+            process_pid=1234,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.username == "SYSTEM"
+        assert event.auth.target_domain == "NT AUTHORITY"
 
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

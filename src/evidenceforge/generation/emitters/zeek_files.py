@@ -60,6 +60,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "fuid": ft.fuid,
                 "tx_hosts": [net.src_ip] if ft.is_orig else [net.dst_ip],
                 "rx_hosts": [net.dst_ip] if ft.is_orig else [net.src_ip],
+                "_id.orig_h": net.src_ip,
+                "_id.resp_h": net.dst_ip,
                 "conn_uids": [net.zeek_uid] if net.zeek_uid else [],
                 "source": ft.source,
                 "depth": ft.depth,
@@ -79,6 +81,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "sha256": ft.sha256 or None,
                 "_sensor_hostnames": sensor_hostnames,
             }
+            if event._nat_swaps_by_sensor:
+                event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
             self.emit_event(event_data)
 
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
@@ -90,6 +94,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "fuid": cert.fuid,
                 "tx_hosts": [net.dst_ip],
                 "rx_hosts": [net.src_ip],
+                "_id.orig_h": net.src_ip,
+                "_id.resp_h": net.dst_ip,
                 "conn_uids": [net.zeek_uid] if net.zeek_uid else [],
                 "source": "SSL",
                 "depth": depth,
@@ -109,6 +115,8 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "sha256": cert_hashes["sha256"],
                 "_sensor_hostnames": sensor_hostnames,
             }
+            if event._nat_swaps_by_sensor:
+                event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
             self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:

@@ -6824,6 +6824,8 @@ class ActivityGenerator:
             return target_username.rsplit("@", 1)[1].upper()
 
         netbios_domain = self._build_host_context(source_system).netbios_domain
+        if target_username in _SYSTEM_ACCOUNT_LOGON_IDS:
+            return "NT AUTHORITY"
         if target_username in getattr(self, "_users_by_username", {}):
             return netbios_domain
         if target_username in self.sid_registry and target_username.lower() not in {
@@ -6989,6 +6991,7 @@ class ActivityGenerator:
         Returns Zeek UID.
         """
         rng = _get_rng()
+        user = self._coerce_windows_rdp_user_from_existing_session(user, target_system, source_ip)
         src_port = self._allocate_ephemeral_port(
             source_ip,
             target_system.ip,
@@ -7054,6 +7057,37 @@ class ActivityGenerator:
         )
 
         return uid
+
+    def _coerce_windows_rdp_user_from_existing_session(
+        self,
+        user: User,
+        target_system: System,
+        source_ip: str,
+    ) -> User:
+        """Use a recent successful Windows credential instead of a Unix local actor."""
+        if _get_os_category(target_system.os) != "windows":
+            return user
+        if user.username.lower() not in _LINUX_LOCAL_ACCOUNTS:
+            return user
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_on_system(target_system.hostname)
+            if session.source_ip == source_ip
+            and session.username.lower() not in _LINUX_LOCAL_ACCOUNTS
+            and session.username not in _SYSTEM_ACCOUNT_LOGON_IDS
+        ]
+        if not sessions:
+            return user
+        selected = max(sessions, key=lambda session: session.start_time)
+        known_users = getattr(self, "_users_by_username", {})
+        if selected.username in known_users:
+            return known_users[selected.username]
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        return User(
+            username=selected.username,
+            full_name=selected.username,
+            email=f"{selected.username}@{ad_domain}",
+        )
 
     def generate_service_logon(
         self,

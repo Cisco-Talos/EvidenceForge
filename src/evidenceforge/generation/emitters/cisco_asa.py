@@ -279,8 +279,14 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:
+                if self._should_suppress_outside_private_deny(
+                    net, src_iface, dst_iface, sensor_hostname
+                ):
+                    continue
                 self._emit_deny(event, net, fw, src_iface, dst_iface, sensor_hostname, fw_hostname)
             else:
+                if src_iface == dst_iface and event.nat is None:
+                    continue
                 self._emit_built(
                     event,
                     net,
@@ -478,6 +484,24 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._dispatch(event_data)
         # Check threat detection thresholds after each deny
         self._check_threat_detection(net.src_ip, event.timestamp, sensor_hostname, fw_hostname)
+
+    def _should_suppress_outside_private_deny(
+        self,
+        net: Any,
+        src_iface: str,
+        dst_iface: str,
+        sensor_hostname: str,
+    ) -> bool:
+        """Suppress impossible outside denies to unmapped private post-NAT hosts."""
+        if src_iface != "outside" or dst_iface != "dmz":
+            return False
+        try:
+            dst_addr = ipaddress.ip_address(net.dst_ip)
+        except ValueError:
+            return False
+        if not dst_addr.is_private:
+            return False
+        return net.dst_ip not in set(self._vip_to_real_ip.values())
 
     def _emit_nat_built(
         self,

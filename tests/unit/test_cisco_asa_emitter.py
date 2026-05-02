@@ -231,6 +231,20 @@ class TestPermitRecords:
         assert "bytes 5120" in lines[1]
         assert "SYN Timeout" not in lines[1]
 
+    def test_same_interface_permit_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
+        """ASA should not mirror same-interface internal permits by default."""
+        event = _make_connection_event(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            dst_port=88,
+            protocol="tcp",
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
+
     def test_syn_timeout_requires_handshake_only_connection(self, asa_emitter, tmp_path):
         """SYN Timeout should not be used for connections with payload bytes."""
         event = _make_connection_event(
@@ -357,6 +371,27 @@ class TestDenyRecords:
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
         assert "(type 8, code 0)" in output
         assert "Deny icmp" in output
+
+    def test_outside_private_deny_without_static_mapping_is_suppressed(self, asa_emitter, tmp_path):
+        """Outside scanners should not be logged against unmapped private DMZ targets."""
+        event = _make_connection_event(
+            src_ip="198.51.100.1",
+            dst_ip="172.16.0.77",
+            dst_port=443,
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106023,
+                connection_id=0,
+                src_interface="outside",
+                dst_interface="dmz",
+                access_group="outside_access_in",
+            ),
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
 
     def test_deny_uses_firewall_context_message_id_and_interfaces(self, asa_emitter, tmp_path):
         """Deny records keep canonical firewall context metadata when provided."""

@@ -407,8 +407,18 @@ class EcarEmitter(HostMultiplexEmitter):
             if auth and auth.source_port
             else -1
         )
+        event_ts = self._after_process_create_timestamp(event, proc) + sample_timing_delta(
+            "source.ecar_remote_thread",
+            seed_parts=(
+                host.hostname,
+                proc.pid,
+                target_pid,
+                remote_thread.new_thread_id if remote_thread else 0,
+                event.timestamp,
+            ),
+        )
         event_data = {
-            "timestamp": self._after_process_create_timestamp(event, proc),
+            "timestamp": event_ts,
             "hostname": self._host_name(host),
             "object": "THREAD",
             "action": "REMOTE_CREATE",
