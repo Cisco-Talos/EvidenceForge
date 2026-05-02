@@ -990,7 +990,11 @@ class ActivityGenerator:
             return username, logon_id
 
         exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if exe_name not in _WINDOWS_USER_SESSION_PROCESSES or username not in _SYSTEM_ACCOUNTS:
+        normalized_username = username.upper().split("\\")[-1]
+        if (
+            exe_name not in _WINDOWS_USER_SESSION_PROCESSES
+            or normalized_username not in _SYSTEM_ACCOUNTS
+        ):
             return username, logon_id
 
         candidates = [
@@ -6599,6 +6603,23 @@ class ActivityGenerator:
                 return active.logon_id
         return "0x0"
 
+    def _get_subject_logon_id(
+        self,
+        username: str,
+        hostname: str,
+        at_time: datetime | None = None,
+    ) -> str:
+        """Look up the visible subject session, including service-account sessions."""
+        sessions = self.state_manager.get_sessions_for_user(username)
+        if sessions:
+            host_sessions = [s for s in sessions if s.system == hostname]
+            if at_time is not None:
+                host_sessions = [s for s in host_sessions if _session_started_by(s, at_time)]
+            active = max(host_sessions, key=lambda s: s.start_time) if host_sessions else None
+            if active:
+                return active.logon_id
+        return self._get_user_logon_id(username, hostname, at_time)
+
     def _ensure_account_management_subject_logon(
         self,
         actor: User,
@@ -6635,16 +6656,18 @@ class ActivityGenerator:
         from_storyline: bool = False,
     ) -> None:
         """Generate security log cleared event (1102) on target system."""
+        subject_logon_id = self._get_subject_logon_id(user.username, system.hostname, time)
+        subject = self._account_subject_fields(user.username, system, logon_id=subject_logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="log_cleared",
             src_host=self._build_host_context(system),
             auth=AuthContext(
                 username=user.username,
-                subject_sid=self._get_sid(user.username),
-                subject_username=user.username,
-                subject_domain=self._build_host_context(system).netbios_domain,
-                subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
+                subject_sid=subject["sid"],
+                subject_username=subject["username"],
+                subject_domain=subject["domain"],
+                subject_logon_id=subject["logon_id"],
             ),
             storyline_origin=from_storyline,
         )

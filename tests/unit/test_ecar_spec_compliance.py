@@ -353,6 +353,45 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
+    def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
+        """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=1234,
+            parent_pid=4,
+            image=r"C:\Windows\System32\dsquery.exe",
+            command_line='dsquery.exe group -name "Domain Admins"',
+            username="alice",
+            start_time=ts,
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=389,
+                protocol="tcp",
+                initiating_pid=1234,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id="process-1"),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
+
     def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
         """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""
         fmt = Mock()

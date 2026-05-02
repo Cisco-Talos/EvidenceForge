@@ -157,6 +157,20 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     return 1.0 / effective_rate
 
 
+def _web_scan_connection_profile(rng) -> tuple[str, float, int, int]:
+    """Return source-native connection outcome fields for one web-scan attempt."""
+    conn_state = rng.choices(
+        ["SF", "S0", "RSTO", "RSTR"],
+        weights=[88, 4, 5, 3],
+        k=1,
+    )[0]
+    if conn_state == "S0":
+        return conn_state, rng.uniform(0.002, 0.08), rng.randint(44, 220), 0
+    if conn_state in {"RSTO", "RSTR"}:
+        return conn_state, rng.uniform(0.01, 0.3), rng.randint(80, 900), rng.randint(0, 400)
+    return conn_state, rng.uniform(0.01, 0.5), rng.randint(200, 2000), rng.randint(200, 5000)
+
+
 def _normalize_storyline_process_image(
     process_name: str,
     os_category: str,
@@ -1815,9 +1829,18 @@ class StorylineMixin:
 
             request_count = 0
             path_idx = 0
+            pause_until: datetime | None = None
             for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
+                if pause_until is not None and tick_time < pause_until:
+                    continue
+                if request_count > 0 and rng.random() < 0.025:
+                    continue
+                if request_count > 0 and rng.random() < 0.008:
+                    pause_until = tick_time + timedelta(seconds=rng.uniform(3.0, 45.0))
+                    continue
+
                 self.state_manager.set_current_time(tick_time)
                 path_entry = scan_paths[path_idx % len(scan_paths)]
                 path_idx += 1
@@ -1901,19 +1924,22 @@ class StorylineMixin:
                         )
                         last_rate_alert_ts = tick_time
 
+                conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(rng)
+                http_for_conn = http_ctx if conn_state == "SF" else None
+
                 self.activity_generator.generate_connection(
                     src_ip=scan_src_ip,
                     dst_ip=scan_dst_ip,
                     time=tick_time,
                     dst_port=spec.dst_port,
                     service=service,
-                    duration=rng.uniform(0.01, 0.5),
-                    orig_bytes=rng.randint(200, 2000),
-                    resp_bytes=rng.randint(200, 5000),
-                    conn_state="SF",
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                    conn_state=conn_state,
                     emit_dns=request_count == 0,
                     source_system=src_sys,
-                    http=http_ctx,
+                    http=http_for_conn,
                     hostname=scan_host if spec.hostname else None,
                     pid=story_pid,
                     ids=ids_ctx,

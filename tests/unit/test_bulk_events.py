@@ -9,7 +9,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.generation.engine.storyline import _effective_rate_interval, _iter_periodic_ticks
+from evidenceforge.generation.engine.storyline import (
+    _effective_rate_interval,
+    _iter_periodic_ticks,
+    _web_scan_connection_profile,
+)
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
     CredentialSprayEventSpec,
@@ -300,6 +304,23 @@ class TestEffectiveRateInterval:
             _effective_rate_interval(10.0, None, random.Random(seed)) for seed in range(10)
         }
         assert len(intervals) > 1
+
+
+class TestWebScanConnectionProfile:
+    def test_profile_includes_failed_connection_outcomes(self):
+        rng = random.Random(42)
+        states = {_web_scan_connection_profile(rng)[0] for _ in range(200)}
+        assert "SF" in states
+        assert states & {"S0", "RSTO", "RSTR"}
+
+    def test_s0_profile_has_no_response_bytes(self):
+        class S0Rng(random.Random):
+            def choices(self, population, weights=None, k=1):
+                return ["S0"]
+
+        state, _duration, _orig_bytes, resp_bytes = _web_scan_connection_profile(S0Rng(42))
+        assert state == "S0"
+        assert resp_bytes == 0
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────

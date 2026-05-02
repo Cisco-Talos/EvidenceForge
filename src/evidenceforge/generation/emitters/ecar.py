@@ -332,6 +332,8 @@ class EcarEmitter(HostMultiplexEmitter):
                     event.timestamp,
                 ),
             )
+            if event.process is not None:
+                event_ts = max(event_ts, self._after_process_create_timestamp(event, event.process))
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.src_host.hostname,

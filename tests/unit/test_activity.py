@@ -241,6 +241,32 @@ class TestActivityGenerator:
         assert username == "SYSTEM"
         assert logon_id == "0x3e7"
 
+    def test_prefixed_system_user_session_process_identity_resolves_to_user(
+        self, activity_gen, state_manager, test_system
+    ):
+        """User-shell process correction should recognize NT AUTHORITY\\SYSTEM."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.register_session(
+            logon_id="0xuser",
+            username="alice",
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=process_time - timedelta(minutes=5),
+            session_kind="interactive",
+        )
+
+        username, logon_id = activity_gen._resolve_process_identity(
+            system=test_system,
+            username=r"NT AUTHORITY\SYSTEM",
+            logon_id="0x3e7",
+            process_name=r"C:\Windows\System32\SearchHost.exe",
+            time=process_time,
+        )
+
+        assert username == "alice"
+        assert logon_id == "0xuser"
+
     def test_service_hosted_svchost_uses_builtin_service_identity(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -819,6 +845,34 @@ class TestActivityGenerator:
         assert event.process.username == "jsmith"
         assert event.process.logon_id == session_logon_id
         assert event.process.integrity_level == "Medium"
+
+    def test_log_cleared_uses_service_subject_identity(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """1102 should use the clearing service token's source-native subject fields."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        service_logon_id = activity_gen.generate_service_logon(
+            system=test_system,
+            time=timestamp - timedelta(seconds=1),
+            service_account="SYSTEM",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        activity_gen.generate_log_cleared(system_user, test_system, timestamp)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "log_cleared"
+        assert event.auth.subject_sid == "S-1-5-18"
+        assert event.auth.subject_username == "SYSTEM"
+        assert event.auth.subject_domain == "NT AUTHORITY"
+        assert event.auth.subject_logon_id == service_logon_id
 
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters
