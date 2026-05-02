@@ -5081,6 +5081,8 @@ class ActivityGenerator:
         source_ip: str,
         source_system: Optional["System"] = None,
         source_port: int | None = None,
+        source_pid: int = -1,
+        source_process_image: str = "",
         sshd_pid: int | None = None,
         logon_id: str = "",
         session_obj_id: str = "",
@@ -5103,7 +5105,7 @@ class ActivityGenerator:
         Returns:
             Zeek UID for the connection
         """
-        from evidenceforge.events.contexts import NetworkContext
+        from evidenceforge.events.contexts import NetworkContext, ProcessContext
 
         rng = _get_rng()
         _src_os = "windows"
@@ -5163,6 +5165,7 @@ class ActivityGenerator:
             source_system=src_host_ctx.hostname if src_host_ctx else "",
             source_hostname=src_host_ctx.fqdn if src_host_ctx else "",
             hostname=self._build_host_context(target_system).fqdn,
+            initiating_pid=source_pid,
             close_time=close_time,
         )
         uid = self.state_manager.get_zeek_uid(conn_id)
@@ -5172,6 +5175,28 @@ class ActivityGenerator:
         # attacker IPs don't query the victim's internal resolver).
         if _is_private_ip(source_ip):
             self._emit_dns_lookup(source_ip, target_system.ip, time)
+
+        source_process = None
+        if source_system is not None and source_pid > 0:
+            running = self.state_manager.get_process(source_system.hostname, source_pid)
+            if running is not None:
+                source_process = ProcessContext(
+                    pid=source_pid,
+                    parent_pid=running.parent_pid,
+                    image=running.image,
+                    command_line=running.command_line,
+                    username=running.username,
+                    logon_id=running.logon_id,
+                    start_time=running.start_time,
+                )
+            elif source_process_image:
+                source_process = ProcessContext(
+                    pid=source_pid,
+                    parent_pid=0,
+                    image=source_process_image,
+                    command_line="",
+                    username="",
+                )
 
         # Build compound SSH session event
         event = SecurityEvent(
@@ -5207,7 +5232,9 @@ class ActivityGenerator:
                 local_orig=_is_private_ip(source_ip),
                 local_resp=_is_private_ip(target_system.ip),
                 ip_proto=6,
+                initiating_pid=source_pid,
             ),
+            process=source_process,
             edr=EdrContext(object_id=session_obj_id),
         )
 

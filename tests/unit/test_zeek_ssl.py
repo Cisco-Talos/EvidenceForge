@@ -283,6 +283,7 @@ class TestSslUidCorrelation:
             assert files_data["sha1"] != files_data["sha256"][:40]
             assert len(files_data["md5"]) == 32
             assert len(files_data["sha1"]) == 40
+            assert files_data["ts"] >= ssl_data["ts"]
 
     def test_files_host_lists_follow_sensor_nat_view(self):
         """files.log tx/rx hosts should agree with the same-sensor conn endpoint view."""

@@ -1013,14 +1013,16 @@ class StorylineMixin:
                     )
                     malicious_event["network_url"] = http_url
 
-            scp_target = self._extract_scp_target(command_line, os_category)
+            scp_destination = self._extract_scp_destination(command_line, os_category)
+            scp_target = scp_destination[0] if scp_destination is not None else None
             if scp_target is not None:
                 dst_ip = self._resolve_storyline_network_target(scp_target)
                 if dst_ip:
+                    transfer_time = time + timedelta(milliseconds=rng.randint(250, 900))
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=dst_ip,
-                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        time=transfer_time,
                         dst_port=22,
                         proto="tcp",
                         service="ssh",
@@ -1033,6 +1035,24 @@ class StorylineMixin:
                         pid=pid,
                         process_image=process_name,
                     )
+                    target_system = self._system_for_ip(dst_ip)
+                    if (
+                        target_system is not None
+                        and _get_os_category(target_system.os) == "linux"
+                        and scp_destination is not None
+                    ):
+                        self._emit_scp_receiver_artifacts(
+                            source_system=system,
+                            target_system=target_system,
+                            actor=actor,
+                            source_pid=pid,
+                            source_process=process_name,
+                            source_command=command_line,
+                            target_user=scp_destination[2] or actor.username,
+                            target_path=scp_destination[1],
+                            transfer_time=transfer_time,
+                            rng=rng,
+                        )
 
             _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks", "net.exe", "net1.exe"}
             proc_basename = (
@@ -2510,8 +2530,10 @@ class StorylineMixin:
         return None
 
     @staticmethod
-    def _extract_scp_target(command_line: str, os_category: str) -> str | None:
-        """Extract the remote host from a Linux scp command line."""
+    def _extract_scp_destination(
+        command_line: str, os_category: str
+    ) -> tuple[str, str, str] | None:
+        """Extract remote host, path, and username from a Linux scp command line."""
         if os_category != "linux":
             return None
         try:
@@ -2526,13 +2548,126 @@ class StorylineMixin:
         for token in parts[1:]:
             if token.startswith("-") or ":" not in token:
                 continue
-            remote, _path = token.split(":", 1)
+            remote, path = token.split(":", 1)
             if not remote:
                 continue
-            host = remote.rsplit("@", 1)[-1].strip("[]")
-            if host:
-                return host
+            user = ""
+            if "@" in remote:
+                user, host = remote.rsplit("@", 1)
+            else:
+                host = remote
+            host = host.strip("[]")
+            if host and path:
+                return host, path, user
         return None
+
+    @staticmethod
+    def _extract_scp_target(command_line: str, os_category: str) -> str | None:
+        """Extract the remote host from a Linux scp command line."""
+        destination = StorylineMixin._extract_scp_destination(command_line, os_category)
+        return destination[0] if destination is not None else None
+
+    def _system_for_ip(self, ip: str) -> System | None:
+        """Return the scenario system with the given IP."""
+        for system in self.scenario.environment.systems:
+            if system.ip == ip:
+                return system
+        return None
+
+    def _emit_scp_receiver_artifacts(
+        self,
+        *,
+        source_system: System,
+        target_system: System,
+        actor: User,
+        source_pid: int,
+        source_process: str,
+        source_command: str,
+        target_user: str,
+        target_path: str,
+        transfer_time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Emit target-side SSH and file evidence for a storyline scp transfer."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import (
+            AuthContext,
+            EdrContext,
+            FileContext,
+            ProcessContext,
+        )
+
+        sshd_pid = 1000 + (
+            _stable_seed(
+                f"scp_receiver_sshd:{source_system.hostname}:{target_system.hostname}:"
+                f"{source_pid}:{transfer_time.isoformat()}"
+            )
+            % 59000
+        )
+        source_port = 32768 + (
+            _stable_seed(
+                f"scp_receiver_port:{source_system.ip}:{target_system.ip}:"
+                f"{source_pid}:{transfer_time.isoformat()}"
+            )
+            % 28232
+        )
+        self.activity_generator.generate_syslog_event(
+            system=target_system,
+            time=transfer_time + timedelta(milliseconds=80),
+            app_name="sshd",
+            message=(
+                f"Connection from {source_system.ip} port {source_port} "
+                f'on {target_system.ip} port 22 rdomain ""'
+            ),
+            pid=sshd_pid,
+            facility=10,
+        )
+        self.activity_generator.generate_syslog_event(
+            system=target_system,
+            time=transfer_time + timedelta(milliseconds=350),
+            app_name="sshd",
+            message=f"Accepted publickey for {target_user} from {source_system.ip} port {source_port} ssh2",
+            pid=sshd_pid,
+            facility=10,
+        )
+        self.activity_generator.generate_syslog_event(
+            system=target_system,
+            time=transfer_time + timedelta(milliseconds=900),
+            app_name="sshd",
+            message=(
+                f"pam_unix(sshd:session): session opened for user "
+                f"{target_user}(uid={0 if target_user == 'root' else 1000}) by (uid=0)"
+            ),
+            pid=sshd_pid,
+            facility=10,
+        )
+
+        host_ctx = self.activity_generator._build_host_context(target_system)
+        target_proc = ProcessContext(
+            pid=sshd_pid,
+            parent_pid=self.activity_generator._get_system_pid(target_system.hostname, "sshd", 22),
+            image="/usr/sbin/sshd",
+            command_line=f"sshd: {target_user}@notty",
+            username=target_user,
+        )
+        self.dispatcher.dispatch(
+            SecurityEvent(
+                timestamp=transfer_time + timedelta(seconds=rng.uniform(1.2, 3.0)),
+                event_type="file_create",
+                src_host=host_ctx,
+                auth=AuthContext(username=target_user),
+                process=target_proc,
+                file=FileContext(path=target_path, action="create", pid=sshd_pid),
+                edr=EdrContext(
+                    object_id=str(uuid.uuid4()),
+                    actor_id=self.state_manager.get_process_object_id(
+                        source_system.hostname,
+                        source_pid,
+                    ),
+                ),
+                storyline_origin=True,
+            )
+        )
 
     @staticmethod
     def _extract_http_url(command_line: str) -> str | None:

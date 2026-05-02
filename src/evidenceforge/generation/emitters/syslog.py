@@ -64,6 +64,21 @@ def _ssh_lifecycle_priority(line: str) -> int:
     return 50
 
 
+def _systemd_lifecycle_priority(line: str) -> int:
+    """Order same-second systemd unit lifecycle messages after second-precision render."""
+    if " systemd[" not in line or ".service" not in line:
+        return 50
+    if ": Starting " in line:
+        return 10
+    if ": Started " in line:
+        return 20
+    if ": Stopping " in line:
+        return 30
+    if ": Stopped " in line or ": Finished " in line:
+        return 40
+    return 50
+
+
 def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
     """Sort traditional syslog lines by their rendered month/day/time prefix."""
     match = _SYSLOG_TS_RE.match(line)
@@ -73,7 +88,7 @@ def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
         _SYSLOG_MONTHS.get(match.group("mon"), 13),
         int(match.group("day")),
         match.group("hms"),
-        _ssh_lifecycle_priority(line),
+        min(_ssh_lifecycle_priority(line), _systemd_lifecycle_priority(line)),
         line,
     )
 

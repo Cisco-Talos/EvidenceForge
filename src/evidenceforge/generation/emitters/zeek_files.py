@@ -26,6 +26,7 @@ import hashlib
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -88,9 +89,19 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
         for depth, cert in enumerate(certificates):
             size = 900 + (cert.certificate_key_length // 8) + (0 if cert.host_cert else 240)
-            cert_hashes = _certificate_file_hashes(cert.fuid, cert.fingerprint)
+            cert_hashes = _certificate_file_hashes(cert.fingerprint)
+            analyzer_delay_ms = (
+                int(
+                    sample_timing_delta(
+                        "source.zeek_x509_analyzer",
+                        seed_parts=(net.zeek_uid, event.timestamp),
+                    ).total_seconds()
+                    * 1000
+                )
+                + depth * 8
+            )
             event_data = {
-                "ts": event.timestamp,
+                "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
                 "fuid": cert.fuid,
                 "tx_hosts": [net.dst_ip],
                 "rx_hosts": [net.src_ip],
@@ -137,16 +148,16 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         return self._render_zeek_json(event_data)
 
 
-def _certificate_file_hashes(fuid: str, fingerprint: str) -> dict[str, str | None]:
+def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
     """Return independent file hashes for a certificate body.
 
     ``x509.fingerprint`` is the certificate SHA256 fingerprint. Zeek files.log
-    hashes represent the file-analysis bytes for the same certificate and must
-    not look like truncated versions of one another.
+    hashes represent the file-analysis bytes for the same certificate. Repeated
+    observations of the same fingerprint must therefore keep the same MD5/SHA1.
     """
     if not fingerprint:
         return {"md5": None, "sha1": None, "sha256": None}
-    seed = f"zeek-cert-file:{fuid}:{fingerprint}"
+    seed = f"zeek-cert-file:{fingerprint}"
     return {
         "md5": hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest(),
         "sha1": hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest(),

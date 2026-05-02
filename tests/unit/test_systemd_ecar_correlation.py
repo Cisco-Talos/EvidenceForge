@@ -32,6 +32,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.emitters.syslog import _syslog_sort_key
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System
 
@@ -212,3 +213,15 @@ class TestSystemdProcessLifecycle:
         assert event.syslog is not None
         assert event.syslog.app_name == "CRON"
         assert "(root) CMD (test -x /usr/sbin/anacron)" in event.syslog.message
+
+
+def test_syslog_sort_orders_same_second_systemd_start_before_finish():
+    """Second-precision syslog sorting should preserve systemd unit lifecycle order."""
+    lines = [
+        "Mar 18 12:04:02 WEB-EXT-01 systemd[1]: Finished phpsessionclean.service - Clean PHP session files.",
+        "Mar 18 12:04:02 WEB-EXT-01 systemd[1]: Starting phpsessionclean.service - Clean PHP session files.",
+    ]
+
+    assert sorted(lines, key=_syslog_sort_key)[0].endswith(
+        "Starting phpsessionclean.service - Clean PHP session files."
+    )
