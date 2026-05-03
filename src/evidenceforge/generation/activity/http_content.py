@@ -6,6 +6,8 @@
 import random
 from pathlib import PurePosixPath
 
+from evidenceforge.utils.rng import _stable_seed
+
 _EXTENSION_MIME_TYPES: dict[str, str] = {
     ".cab": "application/vnd.ms-cab-compressed",
     ".css": "text/css",
@@ -69,3 +71,26 @@ def response_size_for_mime(rng: random.Random, content_type: str) -> int:
     """Generate a realistic response size for a MIME type."""
     lo, hi = _RESPONSE_SIZE_RANGES.get(content_type, (500, 50_000))
     return rng.randint(lo, hi)
+
+
+def response_size_for_status(status_code: int, host: str, uri: str) -> int:
+    """Return a stable source-native web response body size for an HTTP status."""
+    if status_code < 400:
+        rng = random.Random(_stable_seed(f"web_response:{status_code}:{host}:{uri}"))
+        return response_size_for_mime(rng, normalize_mime_type_for_path(uri, "text/html"))
+
+    ranges = {
+        403: (360, 1400),
+        404: (420, 1800),
+        405: (420, 1600),
+        500: (800, 2600),
+        502: (600, 1800),
+        503: (600, 1800),
+        504: (600, 1800),
+    }
+    lo, hi = ranges.get(status_code, (300, 1600))
+    # Real error templates are mostly per-site/status, with small path-specific variance.
+    base_rng = random.Random(_stable_seed(f"web_error_template:{host}:{status_code}"))
+    path_rng = random.Random(_stable_seed(f"web_error_path:{host}:{status_code}:{uri}"))
+    template_size = base_rng.randint(lo, hi)
+    return max(128, template_size + path_rng.randint(-80, 80))

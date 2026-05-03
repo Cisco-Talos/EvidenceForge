@@ -1,0 +1,110 @@
+# cross_source_pairs.yaml — Cross-source field agreement rules
+#
+# Purpose: Defines pairs of log formats that share records about the same
+#   underlying event. For each pair, a pivot key links records across formats
+#   and agree_on fields must carry matching values.
+#
+# Depends on: format definitions in config/formats/
+# Depended on by: evaluation engine (eforge eval), CrossSourceScorer
+#
+# Schema:
+#   pairs[]:
+#     name: human-readable label
+#     format_a: source format name
+#     format_b: source format name
+#     condition_a: optional {field: value} filter on format_a records
+#     condition_b: optional {field: value} filter on format_b records
+#     pivot_key:
+#       a_field / a_fields: field(s) on format_a side of the join
+#       b_field / b_fields: field(s) on format_b side of the join
+#       coerce: optional coercion ("hex_to_int" converts hex strings to int)
+#       list_contains: if true, b_field is a list and a_field must appear in it
+#     agree_on[]:
+#       a_field: field name in format_a record
+#       b_field: field name in format_b record
+#       normalize: optional transform applied to both values before comparison
+#                  "path_basename_ci" — take basename, lowercase
+#                  "lower"            — lowercase
+#                  "cn_from_dn"       — extract CN= value from a DN string
+#       tolerance: optional ±fraction for numeric comparisons (0.10 = ±10%)
+#       b_is_list: if true, b_field is a list; a_field value must appear in it
+#
+# Full schema: see commands/eforge/references/config-evaluation.md
+
+pairs:
+  - name: "Windows 4688 ↔ eCAR PROCESS/CREATE"
+    format_a: windows_event_security
+    format_b: ecar
+    condition_a:
+      EventID: 4688
+    condition_b:
+      object: PROCESS
+      action: CREATE
+    pivot_key:
+      a_field: NewProcessId
+      b_field: pid
+      coerce: hex_to_int
+      require_hostname_match: true
+      time_window_seconds: 60
+    agree_on:
+      - a_field: NewProcessName
+        b_field: image_path
+        b_nested: properties
+        normalize: path_basename_ci
+      - a_field: SubjectUserName
+        b_field: principal
+        normalize: lower
+
+  - name: "Zeek conn ↔ Cisco ASA flow"
+    format_a: zeek_conn
+    format_b: cisco_asa
+    condition_b:
+      msg_id_in: [302013, 302014, 302015, 302016]
+    pivot_key:
+      a_fields: ["id.orig_h", "id.resp_h", "id.orig_p", "id.resp_p"]
+      b_fields: [src_ip, dst_ip, src_port, dst_port]
+    agree_on: []
+    # Note: field agreement for this pair is validated by the 4-tuple pivot match itself.
+    # ASA 302013/302015 records don't carry independent comparable fields beyond the 5-tuple.
+
+  - name: "web_access ↔ zeek_http"
+    format_a: web_access
+    format_b: zeek_http
+    pivot_key:
+      a_fields: [client_ip, path, timestamp_bucket_10s]
+      b_fields: ["id.orig_h", uri, ts_bucket_10s]
+    agree_on:
+      - a_field: status_code
+        b_field: status_code
+      - a_field: method
+        b_field: method
+
+  - name: "proxy_access ↔ zeek_http"
+    format_a: proxy_access
+    format_b: zeek_http
+    condition_a:
+      method_not: CONNECT
+    condition_b:
+      method_not: CONNECT
+    pivot_key:
+      a_fields: [client_ip, url, timestamp_bucket_10s]
+      b_fields: ["id.orig_h", uri, ts_bucket_10s]
+    agree_on:
+      - a_field: status_code
+        b_field: status_code
+      - a_field: method
+        b_field: method
+
+  - name: "zeek_ssl ↔ zeek_x509"
+    format_a: zeek_ssl
+    format_b: zeek_x509
+    condition_b:
+      host_cert: true
+    pivot_key:
+      a_field: cert_chain_fuids
+      b_field: id
+      list_contains: true
+    agree_on:
+      - a_field: server_name
+        b_field: san.dns
+        b_is_list: true

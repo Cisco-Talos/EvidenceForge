@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Install EvidenceForge Claude Code commands to .claude/commands/ directory."""
+"""Install EvidenceForge agent skills."""
 
 import importlib.resources
 import os
@@ -28,6 +28,47 @@ import shutil
 from pathlib import Path
 
 from evidenceforge.utils.files import ensure_directory
+
+CODEX_SKILL_NAMES = ("scenario", "generate", "validate", "evaluate", "config")
+
+_CODEX_REFERENCES_BY_SKILL = {
+    "config": (
+        "references/config-apps-processes.md",
+        "references/config-dependency-graph.md",
+        "references/config-dns-network.md",
+        "references/config-evaluation.md",
+        "references/config-formats.md",
+        "references/config-host-activity.md",
+        "references/config-personas.md",
+        "references/config-validation.md",
+    ),
+    "evaluate": (
+        "references/evidence-formats.md",
+        "references/scenario-reference.md",
+    ),
+    "generate": (
+        "references/evidence-formats.md",
+        "references/scenario-reference.md",
+    ),
+    "scenario": (
+        "references/evidence-formats.md",
+        "references/scenario-reference.md",
+    ),
+    "validate": ("references/scenario-reference.md",),
+}
+
+_CODEX_REFERENCE_REWRITES = {
+    "/eforge:references:scenario-reference": "`references/scenario-reference.md`",
+    "/eforge:references:evidence-formats": "`references/evidence-formats.md`",
+}
+
+_CODEX_COMMAND_REWRITES = {
+    "/eforge scenario": "the `eforge-scenario` skill",
+    "/eforge generate": "the `eforge-generate` skill",
+    "/eforge validate": "the `eforge-validate` skill",
+    "/eforge evaluate": "the `eforge-evaluate` skill",
+    "/eforge config": "the `eforge-config` skill",
+}
 
 
 def _get_data_root() -> Path:
@@ -100,6 +141,34 @@ def _collect_source_files(data_root: Path) -> dict[str, Path]:
     return manifest
 
 
+def _collect_command_files(manifest: dict[str, Path]) -> dict[str, Path]:
+    """Return top-level command skill files keyed by command name."""
+    command_files: dict[str, Path] = {}
+    for name in CODEX_SKILL_NAMES:
+        rel_path = f"{name}.md"
+        if rel_path not in manifest:
+            raise FileNotFoundError(f"Required skill file not found: {rel_path}")
+        command_files[name] = manifest[rel_path]
+    return command_files
+
+
+def _collect_reference_files(manifest: dict[str, Path]) -> dict[str, Path]:
+    """Return reference files to bundle inside each Codex skill."""
+    return {rel: source for rel, source in manifest.items() if rel.startswith("references/")}
+
+
+def _references_for_codex_skill(
+    skill_name: str, reference_files: dict[str, Path]
+) -> dict[str, Path]:
+    """Return the reference files needed by a single Codex skill."""
+    refs: dict[str, Path] = {}
+    for rel_path in _CODEX_REFERENCES_BY_SKILL[skill_name]:
+        if rel_path not in reference_files:
+            raise FileNotFoundError(f"Required reference file not found: {rel_path}")
+        refs[rel_path] = reference_files[rel_path]
+    return refs
+
+
 def _remove_stale_files(eforge_dir: Path, manifest: dict[str, Path]) -> list[str]:
     """Remove files in the target eforge/ directory that aren't in the manifest.
 
@@ -125,6 +194,100 @@ def _remove_stale_files(eforge_dir: Path, manifest: dict[str, Path]) -> list[str
             path.rmdir()
 
     return removed
+
+
+def _is_evidenceforge_codex_skill(path: Path) -> bool:
+    """Return True if path appears to be an EvidenceForge-owned Codex skill."""
+    skill_file = path / "SKILL.md"
+    if not skill_file.is_file():
+        return False
+
+    try:
+        content = skill_file.read_text(encoding="utf-8")
+    except OSError:
+        return False
+
+    return "EvidenceForge" in content and "name: eforge-" in content
+
+
+def _split_frontmatter(content: str, source: Path) -> tuple[list[str], str]:
+    """Split a Markdown skill file into YAML frontmatter lines and body text."""
+    if not content.startswith("---\n"):
+        raise ValueError(f"Skill file is missing YAML frontmatter: {source}")
+
+    try:
+        frontmatter_text, body = content[4:].split("\n---\n", 1)
+    except ValueError as exc:
+        raise ValueError(f"Skill file has unterminated YAML frontmatter: {source}") from exc
+
+    return frontmatter_text.splitlines(), body
+
+
+def _extract_frontmatter_value(lines: list[str], key: str, source: Path) -> str:
+    """Extract a top-level scalar frontmatter value from a Claude command file."""
+    prefix = f"{key}:"
+    for line in lines:
+        if line.startswith(prefix):
+            value = line.removeprefix(prefix).strip()
+            if not value:
+                break
+            return value
+    raise ValueError(f"Skill file is missing required frontmatter field '{key}': {source}")
+
+
+def _extract_frontmatter_block(lines: list[str], key: str, source: Path) -> list[str]:
+    """Extract a block-style frontmatter value from a Claude command file."""
+    prefix = f"{key}:"
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+
+        marker = line.removeprefix(prefix).strip()
+        if marker not in {">", "|", ">-", "|-", ">+", "|+"}:
+            value = marker
+            if value:
+                return [f"  {value}"]
+            break
+
+        block_lines: list[str] = []
+        for block_line in lines[index + 1 :]:
+            if block_line and not block_line.startswith((" ", "\t")) and ":" in block_line:
+                break
+            block_lines.append(block_line)
+
+        if block_lines:
+            return block_lines
+        break
+
+    raise ValueError(f"Skill file is missing required frontmatter field '{key}': {source}")
+
+
+def _codex_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str:
+    """Build Codex-compatible SKILL.md frontmatter from Claude command metadata."""
+    name = _extract_frontmatter_value(frontmatter_lines, "name", source)
+    description_lines = _extract_frontmatter_block(frontmatter_lines, "description", source)
+
+    return (
+        "---\n"
+        + "\n".join(
+            [
+                f"name: {name}",
+                "description: >",
+                *description_lines,
+            ]
+        )
+        + "\n---\n"
+    )
+
+
+def _rewrite_codex_skill_body(body: str) -> str:
+    """Adapt Claude-specific references in a skill body for Codex."""
+    content = body
+    for old, new in _CODEX_REFERENCE_REWRITES.items():
+        content = content.replace(old, new)
+    for old, new in _CODEX_COMMAND_REWRITES.items():
+        content = content.replace(old, new)
+    return content
 
 
 def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
@@ -154,10 +317,37 @@ def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
     return eforge_dir
 
 
-def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
-    """Install EvidenceForge skills to the target directory.
+def _ensure_safe_codex_skill_directory(target_dir: Path, skill_name: str) -> Path:
+    """Create or validate a safe Codex skill directory."""
+    from evidenceforge.utils.paths import reject_symlink
 
-    Creates {target_dir}/eforge/ with skills, references, and personas.
+    skill_dir = target_dir / skill_name
+    reject_symlink(skill_dir)
+
+    ensure_directory(target_dir)
+    skill_dir.mkdir(parents=True, exist_ok=True)
+
+    reject_symlink(skill_dir)
+
+    target_real = target_dir.resolve()
+    skill_real = skill_dir.resolve()
+    if os.path.commonpath([str(skill_real), str(target_real)]) != str(target_real):
+        raise PermissionError(f"Refusing to install skills outside target directory: {skill_dir}")
+
+    return skill_dir
+
+
+def _codex_skill_text(source: Path) -> str:
+    """Read a command file and convert it to a valid Codex SKILL.md file."""
+    content = source.read_text(encoding="utf-8")
+    frontmatter_lines, body = _split_frontmatter(content, source)
+    return _codex_frontmatter_text(source, frontmatter_lines) + _rewrite_codex_skill_body(body)
+
+
+def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
+    """Install EvidenceForge Claude skills to the target directory.
+
+    Creates {target_dir}/eforge/ with skills and references.
     Overwrites existing files and removes stale files from previous installs.
 
     Args:
@@ -184,5 +374,53 @@ def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
 
     # Remove stale files
     removed = _remove_stale_files(eforge_dir, manifest)
+
+    return installed, removed
+
+
+def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
+    """Install EvidenceForge skills to a Codex skills directory.
+
+    Creates one Codex skill directory per EvidenceForge command, each with a
+    SKILL.md file and bundled references. Existing EvidenceForge-owned skill
+    directories are updated and stale EvidenceForge-owned skill directories are
+    removed.
+
+    Args:
+        target_dir: Codex skills directory, e.g. ~/.codex/skills/.
+
+    Returns:
+        Tuple of (installed_files, removed_files) as relative path lists.
+    """
+    data_root = _get_data_root()
+    manifest = _collect_source_files(data_root)
+    command_files = _collect_command_files(manifest)
+    reference_files = _collect_reference_files(manifest)
+
+    if not command_files:
+        raise FileNotFoundError("No skill files found to install.")
+
+    installed: list[str] = []
+    removed: list[str] = []
+    for name, source in sorted(command_files.items()):
+        skill_name = f"eforge-{name}"
+        skill_dir = _ensure_safe_codex_skill_directory(target_dir, skill_name)
+        skill_reference_files = _references_for_codex_skill(name, reference_files)
+
+        skill_manifest: dict[str, Path] = {"SKILL.md": source}
+        skill_manifest.update(skill_reference_files)
+
+        skill_file = skill_dir / "SKILL.md"
+        skill_file.write_text(_codex_skill_text(source), encoding="utf-8")
+        installed.append(f"{skill_name}/SKILL.md")
+
+        for rel_path, ref_source in sorted(skill_reference_files.items()):
+            dest = skill_dir / rel_path
+            ensure_directory(dest.parent)
+            shutil.copy2(ref_source, dest)
+            installed.append(f"{skill_name}/{rel_path}")
+
+        for stale in _remove_stale_files(skill_dir, skill_manifest):
+            removed.append(f"{skill_name}/{stale}")
 
     return installed, removed

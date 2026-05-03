@@ -228,13 +228,12 @@ class TestInboundStaticNat:
 
         asa_lines = _read_asa_lines(tmp_path)
 
-        # Static NAT should produce 305011 records
-        nat_records = [line for line in asa_lines if "305011" in line]
-        assert len(nat_records) >= 1, "Expected static NAT translation records"
-        assert "static" in nat_records[0].lower()
+        # Static mappings are long-lived config state, not per-flow xlate churn.
+        nat_records = [line for line in asa_lines if "305011" in line or "305012" in line]
+        assert nat_records == []
 
         # Outbound connections from DMZ server should show the mapped public IP
-        # via static NAT in either Built records or NAT translation records
+        # via static NAT in Built/Teardown connection records.
         dmz_traffic = [line for line in asa_lines if "172.16.0.5" in line]
         assert any("203.0.113.5" in line for line in dmz_traffic), (
             "DMZ server traffic should reference mapped IP 203.0.113.5 via static NAT"

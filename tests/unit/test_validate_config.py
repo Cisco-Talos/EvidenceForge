@@ -216,6 +216,35 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_edr_side_effect_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import edr_pools
+
+        real_loader = edr_pools.load_edr_pools
+
+        def load_invalid_edr_pools():
+            data = real_loader()
+            return {
+                **data,
+                "file_side_effect_profiles": [
+                    {
+                        "name": "bad",
+                        "actions": ["modify"],
+                        "paths_windows": [r"C:\Temp\x.tmp"],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(edr_pools, "load_edr_pools", load_invalid_edr_pools)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_side_effect_profiles)"
+            and "profile must define executables" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_windows_collision_spacing(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
@@ -254,6 +283,28 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "timing_profiles.yaml"
             and "large_gap_max_ms must be >= large_gap_min_ms" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_dns_tunnel_response_template(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_response_templates": ["ack-sequence"],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_response_templates)"
             for issue in result.issues
         )
 

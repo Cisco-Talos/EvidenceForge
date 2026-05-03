@@ -38,3 +38,13 @@ def test_parameterize_command_replaces_linux_query_placeholders() -> None:
     assert "{mysql_db}" not in mysql_cmd
     assert "{psql_db}" not in psql_cmd
     assert "{redis_cmd}" not in redis_cmd
+
+
+def test_parameterize_command_uses_c_source_for_gcc() -> None:
+    """GCC templates should not compile Python or JavaScript placeholders."""
+    rng = Random(42)
+
+    cmd = _parameterize_command(rng, "gcc -o output {c_source_file}")
+
+    assert "{c_source_file}" not in cmd
+    assert cmd.endswith(".c")

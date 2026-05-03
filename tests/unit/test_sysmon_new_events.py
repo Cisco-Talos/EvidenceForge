@@ -532,6 +532,36 @@ class TestRenderEvent7:
         assert "Unavailable" in content
         assert '<Data Name="Signed">false</Data>' in content
 
+    def test_unsigned_event7_overrides_valid_signature_status(self, emitter):
+        """Unsigned image loads should not render a contradictory Valid signature status."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\App\unsigned.dll",
+                signed=False,
+                signature="-",
+                signature_status="Valid",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="Signed">false</Data>' in content
+        assert '<Data Name="Signature">-</Data>' in content
+        assert '<Data Name="SignatureStatus">Unavailable</Data>' in content
+        assert '<Data Name="SignatureStatus">Valid</Data>' not in content
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""
@@ -614,7 +644,7 @@ class TestRenderEventRegistry:
         output_path = list(emitter._host_writers.values())[0].output_path
         content = output_path.read_text()
         assert "<EventID>12</EventID>" in content
-        assert "DeleteValue" in content
+        assert "DeleteKey" in content
 
 
 class TestRenderEvent22:

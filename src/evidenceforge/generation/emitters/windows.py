@@ -64,9 +64,26 @@ def _normalize_windows_time_created(
     *,
     jitter_existing_microseconds: bool = False,
 ) -> None:
-    """Apply deterministic jitter while preserving per-computer chronological order."""
+    """Apply deterministic jitter while preserving per-computer chronological order.
+
+    Storyline-origin events (_storyline_origin=True) are exempt from both the
+    monotonic-clock clamp and the last_by_computer update so that baseline events
+    in subsequent flush batches are not pushed forward past the storyline time.
+    """
     ts = event.get("TimeCreated")
     if not isinstance(ts, datetime):
+        return
+
+    # Storyline events have a fixed authoritative timestamp; skip normalization
+    # to avoid the per-host clock inheriting a far-future value that would shift
+    # all later baseline events on the same host.
+    if event.get("_storyline_origin"):
+        computer = str(event.get("Computer", ""))
+        original = ensure_utc(ts)
+        if original.microsecond == 0:
+            seed = f"{seed_prefix}_{computer}_{sequence}_{event.get('EventID', '')}_storyline"
+            rng = random.Random(_stable_seed(seed))
+            event["TimeCreated"] = original.replace(microsecond=rng.randint(100_000, 999_999))
         return
 
     computer = str(event.get("Computer", ""))
@@ -113,6 +130,49 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     if username.upper() in _NT_AUTHORITY_ACCOUNTS:
         return "NT AUTHORITY"
     return netbios_domain
+
+
+def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
+    """Normalize SubjectDomainName for well-known Windows subject identities."""
+    subject_name = getattr(auth, "subject_username", "") or getattr(auth, "username", "")
+    subject_sid = getattr(auth, "subject_sid", "") or getattr(auth, "user_sid", "")
+    if subject_sid == "S-1-5-18" or subject_name.upper() in _NT_AUTHORITY_ACCOUNTS:
+        return "NT AUTHORITY"
+    return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
+
+
+def _special_privilege_fallback(username: str) -> str:
+    """Return a realistic 4672 privilege set when AuthContext omits one."""
+    normalized = username.upper()
+    if normalized in {"LOCAL SERVICE", "NETWORK SERVICE"}:
+        return (
+            "SeAssignPrimaryTokenPrivilege\n\t\t\t"
+            "SeAuditPrivilege\n\t\t\t"
+            "SeImpersonatePrivilege\n\t\t\t"
+            "SeChangeNotifyPrivilege"
+        )
+    if normalized == "SYSTEM" or normalized.endswith("$"):
+        return (
+            "SeTcbPrivilege\n\t\t\t"
+            "SeSecurityPrivilege\n\t\t\t"
+            "SeTakeOwnershipPrivilege\n\t\t\t"
+            "SeLoadDriverPrivilege\n\t\t\t"
+            "SeBackupPrivilege\n\t\t\t"
+            "SeRestorePrivilege\n\t\t\t"
+            "SeDebugPrivilege\n\t\t\t"
+            "SeAuditPrivilege\n\t\t\t"
+            "SeSystemEnvironmentPrivilege\n\t\t\t"
+            "SeImpersonatePrivilege\n\t\t\t"
+            "SeDelegateSessionUserImpersonatePrivilege"
+        )
+    return (
+        "SeSecurityPrivilege\n\t\t\t"
+        "SeBackupPrivilege\n\t\t\t"
+        "SeRestorePrivilege\n\t\t\t"
+        "SeTakeOwnershipPrivilege\n\t\t\t"
+        "SeDebugPrivilege\n\t\t\t"
+        "SeImpersonatePrivilege"
+    )
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -218,6 +278,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         """Dispatch to per-type render method."""
+        self._current_storyline_origin = event.storyline_origin
         renderer = {
             "logon": self._render_logon,
             "logoff": self._render_logoff,
@@ -258,7 +319,10 @@ class WindowsEventEmitter(LogEmitter):
             raise NotImplementedError(
                 f"WindowsEventEmitter: no render method for {event.event_type}"
             )
-        renderer(event)
+        try:
+            renderer(event)
+        finally:
+            self._current_storyline_origin = False
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
@@ -281,7 +345,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -305,7 +369,7 @@ class WindowsEventEmitter(LogEmitter):
 
         # 4672 special privileges (when auth.elevated is True)
         if auth.elevated:
-            privs = auth.privilege_list or "SeChangeNotifyPrivilege"
+            privs = auth.privilege_list or _special_privilege_fallback(auth.username)
             priv_data = {
                 "EventID": 4672,
                 "TimeCreated": event.timestamp,
@@ -333,7 +397,7 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
 
-        privs = auth.privilege_list or "SeChangeNotifyPrivilege"
+        privs = auth.privilege_list or _special_privilege_fallback(auth.username)
 
         priv_data = {
             "EventID": 4672,
@@ -415,6 +479,8 @@ class WindowsEventEmitter(LogEmitter):
             "TargetLogonId": auth.logon_id,
             "LogonType": auth.logon_type,
         }
+        if event.storyline_origin:
+            event_data["_storyline_origin"] = True
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
@@ -434,7 +500,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -531,7 +597,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "NewProcessId": f"0x{proc.pid:x}",
             "NewProcessName": proc.image,
@@ -565,7 +631,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 500),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TargetUserSid": auth.user_sid,
             "TargetUserName": auth.username,
@@ -743,18 +809,19 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "LogonGuid": auth.logon_guid or "{00000000-0000-0000-0000-000000000000}",
             "TargetUserName": auth.username,
-            "TargetDomainName": _subject_domain(auth.username, host.netbios_domain),
+            "TargetDomainName": auth.target_domain
+            or _subject_domain(auth.username, host.netbios_domain),
             "TargetLogonGuid": "{00000000-0000-0000-0000-000000000000}",
             "TargetServerName": auth.target_server or "localhost",
             "TargetInfo": auth.target_server or "localhost",
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or r"C:\Windows\System32\svchost.exe",
-            "IpAddress": auth.source_ip or "-",
-            "IpPort": auth.source_port or 0,
+            "NetworkAddress": auth.source_ip or "-",
+            "NetworkPort": auth.source_port or 0,
         }
         self.emit_event(event_data)
 
@@ -767,6 +834,10 @@ class WindowsEventEmitter(LogEmitter):
         is_outbound = net.src_ip == host.ip
         pid = net.initiating_pid if net.initiating_pid > 0 else 4
         image = proc.image if proc else ""
+        if is_outbound and net.protocol.lower() == "udp" and net.dst_port == 53:
+            sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+            pid = sys_pids.get("svchost_local_svc", sys_pids.get("svchost_netsvcs", pid))
+            image = r"C:\Windows\System32\svchost.exe"
         if not image and pid > 0:
             sm = getattr(self, "_state_manager", None)
             if sm is not None:
@@ -876,7 +947,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
         }
         self.emit_event(event_data)
@@ -900,7 +971,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "ServiceName": svc.service_name,
             "ServiceFileName": svc.service_file_name,
@@ -936,7 +1007,7 @@ class WindowsEventEmitter(LogEmitter):
             "ExecutionThreadID": rng.randint(100, 9999),
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "TaskName": task.task_name,
             "TaskContent": task.task_content,
@@ -976,7 +1047,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetSid": grp.group_sid,
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "PrivilegeList": "-",
         }
@@ -1012,7 +1083,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetSid": acct.target_sid,
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
             "SamAccountName": acct.sam_account_name or acct.target_username,
             "OldUacValue": acct.old_uac_value,
@@ -1057,7 +1128,7 @@ class WindowsEventEmitter(LogEmitter):
             "TargetSid": acct.target_sid,
             "SubjectUserSid": auth.subject_sid,
             "SubjectUserName": auth.subject_username,
-            "SubjectDomainName": auth.subject_domain,
+            "SubjectDomainName": _auth_subject_domain(auth, host.netbios_domain),
             "SubjectLogonId": auth.subject_logon_id,
         }
         if include_privs:
@@ -1085,6 +1156,7 @@ class WindowsEventEmitter(LogEmitter):
         self._record_id_counters: dict[str, int] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
+        self._current_storyline_origin: bool = False
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -1115,17 +1187,20 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
+        if getattr(self, "_current_storyline_origin", False):
+            event_data["_storyline_origin"] = True
         if self.threaded:
             self._emit_threaded(event_data)
         else:
             with self._file_lock:
                 self._event_dicts.append(event_data)
-                if len(self._event_dicts) >= self.buffer_size:
-                    self._flush_unlocked()
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Windows Event dict to XML format."""
         from xml.sax.saxutils import escape as xml_escape
+
+        # Strip internal metadata keys before rendering
+        event_data.pop("_storyline_origin", None)
 
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
@@ -1146,15 +1221,11 @@ class WindowsEventEmitter(LogEmitter):
                 event_data = self._event_queue.get(timeout=0.1)
                 with self._file_lock:
                     self._event_dicts.append(event_data)
-                    if len(self._event_dicts) >= self.buffer_size:
-                        self._flush_unlocked()
                 self._event_queue.task_done()
             except Empty:
                 if self._flush_barrier.is_set():
-                    self.flush()
                     self._flush_barrier.clear()
 
-        self.flush()
         win_logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
     def _flush_unlocked(self) -> None:
@@ -1162,6 +1233,7 @@ class WindowsEventEmitter(LogEmitter):
         if not self._event_dicts:
             return
 
+        self._shift_process_terminations_after_dependents()
         self._shift_logoffs_after_dependents()
 
         def _sort_key(event: dict) -> Any:
@@ -1220,8 +1292,8 @@ class WindowsEventEmitter(LogEmitter):
         """Prevent visible 4634 records from preceding same-session dependents.
 
         Sysmon and EDR sources render small source-native collection offsets after
-        canonical process creation. A visible Security logoff needs to clear that
-        offset window, not just the Security 4688 timestamp.
+        canonical process lifecycle events. A visible Security logoff needs to clear
+        that offset window, not just the Security 4688 timestamp.
         """
         latest_dependent: dict[tuple[str, str], datetime] = {}
         logoffs: list[tuple[tuple[str, str], dict[str, Any]]] = []
@@ -1233,10 +1305,10 @@ class WindowsEventEmitter(LogEmitter):
             computer = str(event.get("Computer", ""))
             if event_id == 4634:
                 logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
-                if logon_id:
+                if logon_id and not event.get("_storyline_origin"):
                     logoffs.append(((computer, logon_id), event))
                 continue
-            if event_id not in {4688, 4801}:
+            if event_id not in {4688, 4689, 4801}:
                 continue
             logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
             if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
@@ -1253,10 +1325,46 @@ class WindowsEventEmitter(LogEmitter):
                     seed_parts=(key[0], key[1], latest),
                 )
 
-    def flush(self) -> None:
-        """Flush dict buffer then all host writers."""
-        with self._file_lock:
-            self._flush_unlocked()
+    def _shift_process_terminations_after_dependents(self) -> None:
+        """Keep Security 4689 aligned with visible child-process lifecycle.
+
+        Sysmon Event 5 already moves after visible same-process follow-on
+        telemetry. Security 4689 needs the same source-native lifecycle truth
+        for parent processes that visibly spawn children later in the buffer.
+        """
+        latest_child_create: dict[tuple[str, str], datetime] = {}
+        terminations: list[tuple[tuple[str, str], dict[str, Any]]] = []
+
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            event_id = event.get("EventID")
+            if event_id == 4688:
+                parent_pid = str(event.get("ProcessId") or "")
+                if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                    key = (computer, parent_pid.lower())
+                    latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+            elif event_id == 4689:
+                process_pid = str(event.get("ProcessId") or "")
+                if process_pid:
+                    terminations.append(((computer, process_pid.lower()), event))
+
+        for key, event in terminations:
+            ts = event.get("TimeCreated")
+            latest = latest_child_create.get(key)
+            if isinstance(ts, datetime) and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + sample_timing_delta(
+                    "windows.process_exit_after_visible_child",
+                    seed_parts=(key[0], key[1], latest),
+                )
+
+    def flush(self, *, force: bool = False) -> None:
+        """Flush host writers, deferring Windows event rendering until final close."""
+        if force:
+            with self._file_lock:
+                self._flush_unlocked()
         with self._host_writers_lock:
             for writer in self._host_writers.values():
                 writer.flush()
@@ -1266,7 +1374,9 @@ class WindowsEventEmitter(LogEmitter):
         if self.threaded:
             self.stop_thread()
         else:
-            self.flush()
+            self.flush(force=True)
+        if self.threaded:
+            self.flush(force=True)
         # Write XML footer for each host file that has events
         footer = self.format_def.output.footer_template or ""
         for writer in self._host_writers.values():

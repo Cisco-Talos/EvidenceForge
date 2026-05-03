@@ -24,7 +24,7 @@
 
 import re
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import LogParser, ParsedRecord, register_parser
@@ -46,6 +46,62 @@ SYSLOG_ISO_PATTERN = re.compile(
     r"(.*)$"  # message
 )
 
+# BSD timestamps that are ≥6 months *earlier* than last_ts are treated as a
+# year wrap (Dec → Jan crossing), not as a true backwards-time event.
+_WRAP_THRESHOLD_SECONDS = 180 * 24 * 3600  # ~6 months
+
+
+def _infer_seed_year(path: Path, scenario: object | None = None) -> int:
+    """Return the best-guess year for BSD syslog records in *path*.
+
+    Preference order:
+    1. scenario.time_window.start year — the canonical date the scenario targets.
+    2. File modification time — fallback for use outside the evaluation engine.
+    3. Current year — last resort.
+    """
+    if scenario is not None:
+        try:
+            tw = getattr(scenario, "time_window", None)
+            start = getattr(tw, "start", None) if tw is not None else None
+            if start is not None:
+                if isinstance(start, datetime):
+                    return start.year
+                # String ISO timestamp: "2024-03-18T12:00:00Z"
+                return int(str(start)[:4])
+        except Exception:
+            pass
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).year
+    except OSError:
+        return datetime.now(UTC).year
+
+
+def _resolve_bsd_year(ts_str: str, seed_year: int, last_ts: datetime | None) -> datetime | None:
+    """Parse a year-less BSD timestamp, resolving the year robustly.
+
+    If *last_ts* is set and the naive candidate timestamp is more than
+    _WRAP_THRESHOLD_SECONDS before it AND the candidate month is January while
+    last_ts is December, we increment the year (year-boundary wrap).
+    """
+    try:
+        naive = datetime.strptime(f"{seed_year} {ts_str}", "%Y %b %d %H:%M:%S")
+    except ValueError:
+        return None
+
+    if last_ts is None:
+        return naive
+
+    # Normalise last_ts to naive for comparison
+    last_naive = last_ts.replace(tzinfo=None) if last_ts.tzinfo else last_ts
+    diff = (last_naive - naive).total_seconds()
+    if diff > _WRAP_THRESHOLD_SECONDS and naive.month == 1 and last_naive.month == 12:
+        # Year boundary: the new record is in the next year
+        try:
+            naive = datetime.strptime(f"{seed_year + 1} {ts_str}", "%Y %b %d %H:%M:%S")
+        except ValueError:
+            pass
+    return naive
+
 
 @register_parser
 class SyslogParser(LogParser):
@@ -55,17 +111,32 @@ class SyslogParser(LogParser):
         return path.name == "syslog.log"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        seed_year = _infer_seed_year(path, getattr(self, "scenario", None))
+        last_ts: datetime | None = None
+
         with path.open(encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                yield self._parse_line(line, line_num)
+                record = self._parse_line(line, line_num, seed_year=seed_year, last_ts=last_ts)
+                if record.timestamp is not None:
+                    last_ts = record.timestamp
+                yield record
 
-    def _parse_line(self, raw: str, line_num: int) -> ParsedRecord:
+    def _parse_line(
+        self,
+        raw: str,
+        line_num: int,
+        seed_year: int | None = None,
+        last_ts: datetime | None = None,
+    ) -> ParsedRecord:
         fields: dict = {}
         errors: list[str] = []
         timestamp = None
+
+        if seed_year is None:
+            seed_year = datetime.now(UTC).year
 
         # Try ISO format first, then BSD
         match = SYSLOG_ISO_PATTERN.match(raw)
@@ -79,12 +150,8 @@ class SyslogParser(LogParser):
             match = SYSLOG_PATTERN.match(raw)
             if match:
                 ts_str, hostname, app_name, pid_str, message = match.groups()
-                # BSD timestamps lack year — best-effort parse
-                try:
-                    # Use current year as fallback
-                    ts_with_year = f"{datetime.now().year} {ts_str}"
-                    timestamp = datetime.strptime(ts_with_year, "%Y %b %d %H:%M:%S")
-                except ValueError:
+                timestamp = _resolve_bsd_year(ts_str, seed_year, last_ts)
+                if timestamp is None:
                     errors.append(f"Invalid BSD timestamp: {ts_str}")
             else:
                 errors.append("Line does not match syslog format")

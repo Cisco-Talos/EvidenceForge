@@ -1,0 +1,63 @@
+# timing_bounds.yaml — Attack chain timing bounds for evaluation
+#
+# Purpose: Defines min/max elapsed-time bounds between consecutive storyline
+#   events. The attack_chain_timing sub-score checks that transitions fall
+#   within these bounds.
+#
+# Depends on: scenario storyline activity field values
+# Depended on by: evaluation engine (eforge eval), TemporalRealismScorer
+#
+# Schema:
+#   defaults:
+#     min_seconds: minimum seconds between consecutive events (default 5)
+#     max_seconds: maximum seconds between consecutive events (default 7200)
+#   action_overrides:
+#     <activity_keyword>:
+#       min_seconds: ...
+#       max_seconds: ...
+#
+# Activity matching: case-insensitive substring match on StorylineEvent.activity.
+# First matching override wins; falls back to defaults if no match.
+#
+# Full schema: see commands/eforge/references/config-evaluation.md
+
+defaults:
+  min_seconds: 5
+  max_seconds: 7200   # 2 hours — generous default for any step transition
+
+action_overrides:
+  lateral_movement:
+    min_seconds: 30
+    max_seconds: 3600
+
+  exfiltration:
+    min_seconds: 60
+    max_seconds: 86400   # 24 hours (slow exfil is realistic)
+
+  recon:
+    min_seconds: 1
+    max_seconds: 1800
+
+  credential:
+    min_seconds: 5
+    max_seconds: 1800
+
+  persistence:
+    min_seconds: 10
+    max_seconds: 3600
+
+  c2:
+    min_seconds: 30
+    max_seconds: 86400
+
+  beacon:
+    min_seconds: 30
+    max_seconds: 86400
+
+  deploy:
+    min_seconds: 10
+    max_seconds: 7200
+
+  escalat:
+    min_seconds: 5
+    max_seconds: 1800

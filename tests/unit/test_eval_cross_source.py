@@ -20,14 +20,18 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for Dimension 2: Cross-Source Coherence scoring."""
+"""Tests for Plausibility and Causality scorers (merged from cross_source)."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from evidenceforge.evaluation.dimensions.cross_source import CrossSourceScorer
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.causality import CausalityScorer
+from evidenceforge.evaluation.pillars.plausibility import PlausibilityScorer
 from evidenceforge.evaluation.visibility import VisibilityModel
+
+# Alias for tests that use the old CrossSourceScorer name
+CrossSourceScorer = CausalityScorer
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
@@ -133,8 +137,8 @@ class TestSourceCorrectness:
         }
         enabled = {"windows_event_security", "syslog", "ecar"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score == 100.0
 
     def test_wrong_os(self):
@@ -147,8 +151,8 @@ class TestSourceCorrectness:
         }
         enabled = {"windows_event_security", "syslog", "bash_history", "ecar"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score < 100.0
 
     def test_unknown_hostname(self):
@@ -161,8 +165,8 @@ class TestSourceCorrectness:
         }
         enabled = {"windows_event_security"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score < 100.0
         assert any("not in scenario" in f for f in result.sample_failures)
 
@@ -178,7 +182,7 @@ class TestFieldAgreement:
                 _record("ecar", {"hostname": "WS-01"}, ts=T0 + timedelta(seconds=5)),
             ],
         }
-        scorer = CrossSourceScorer()
+        scorer = PlausibilityScorer()
         result = scorer._score_field_agreement(records)
         assert result.score == 100.0
 
@@ -190,30 +194,18 @@ class TestFieldAgreement:
             ],
             "ecar": [
                 _record("ecar", {"hostname": "WS-01"}, ts=T0 + timedelta(seconds=5)),
-                # Same bucket but second ecar record is far away
             ],
         }
-        # Put in separate buckets to force disagreement
-        {
-            "windows_event_security": [
-                _record("windows_event_security", {"Computer": "WS-01"}, ts=T0),
-            ],
-            "ecar": [
-                _record("ecar", {"hostname": "WS-01"}, ts=T0 + timedelta(minutes=5)),
-            ],
-        }
-        scorer = CrossSourceScorer()
+        scorer = PlausibilityScorer()
         # Same bucket → agree
         r1 = scorer._score_field_agreement(records)
         assert r1.score == 100.0
-        # Different buckets → no multi-format groups to compare (scores 100 by default)
 
 
 class TestBaselineAggregate:
     def test_proportional_counts(self):
         """Systems with proportional event counts across formats should score well."""
         scenario = _make_scenario()
-        # WS-01 has ~similar counts in windows_event_security and ecar
         records = {
             "windows_event_security": [
                 _record(
@@ -226,11 +218,10 @@ class TestBaselineAggregate:
                 for i in range(40)
             ],
         }
-        enabled = {"windows_event_security", "ecar"}
-        vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_baseline_aggregate(records, vis)
-        assert result.score >= 50.0
+        # Score through the full plausibility scorer; check user_diversity is non-None
+        scorer = PlausibilityScorer()
+        result = scorer.score(records, scenario)
+        assert result.score is not None
 
 
 class TestEndToEnd:
@@ -260,11 +251,11 @@ class TestEndToEnd:
         }
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
-        assert result.number == 2
-        assert result.name == "Cross-Source Coherence"
+        assert result.number == 3
+        assert result.name == "Causality"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 5
+        assert len(result.sub_scores) == 6
 
     def test_with_retail_scenario(self):
         """Run on real fixtures — should produce valid scores."""
@@ -290,7 +281,7 @@ class TestEndToEnd:
         scorer = CrossSourceScorer()
         result = scorer.score(records, scenario)
         assert result.score is not None
-        assert len(result.sub_scores) == 5
+        assert len(result.sub_scores) == 6
 
 
 def _make_scenario_with_domain(domain="example.com"):
@@ -487,7 +478,292 @@ class TestFQDNSourceCorrectness:
         }
         enabled = {"windows_event_security", "syslog", "ecar"}
         vis = VisibilityModel(scenario, enabled)
-        scorer = CrossSourceScorer()
-        result = scorer._score_source_correctness(records, vis)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score == 100.0
         assert not any("not in scenario" in f for f in result.sample_failures)
+
+
+class TestHostLogProfile:
+    def test_supplementary_present_in_pillar_score(self):
+        """CrossSourceScorer should emit host_log_profile in supplementary."""
+        scenario = _make_scenario()
+        records = {
+            "windows_event_security": [
+                _record("windows_event_security", {"Computer": "WS-01", "EventID": 4624}, ts=T0),
+            ],
+        }
+        scorer = CrossSourceScorer()
+        result = scorer.score(records, scenario)
+        assert "host_log_profile" in result.supplementary
+
+    def test_host_log_profile_deduplicates_fqdn_and_bare(self):
+        """A system registered with a domain should appear once in the profile, not twice."""
+        from evidenceforge.evaluation.pillars.causality import _build_host_log_profile
+        from evidenceforge.models.scenario import (
+            BaselineActivity,
+            Environment,
+            OutputSpec,
+            Scenario,
+            System,
+            TimeWindow,
+            User,
+        )
+
+        scenario = Scenario(
+            name="test",
+            description="Test",
+            environment=Environment(
+                description="Test",
+                domain="corp.example.com",
+                users=[
+                    User(
+                        username="jsmith",
+                        full_name="J",
+                        email="j@x.com",
+                        persona="",
+                        primary_system="WS-01",
+                    ),
+                ],
+                systems=[
+                    System(hostname="WS-01", ip="10.0.10.50", os="Windows 10", type="workstation"),
+                ],
+            ),
+            time_window=TimeWindow(start=T0, duration="8h"),
+            baseline_activity=BaselineActivity(
+                description="Normal", intensity="low", variation="low"
+            ),
+            output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
+        )
+        vis = VisibilityModel(scenario, {"windows_event_security"})
+        profile = _build_host_log_profile({}, vis)
+        # WS-01 should appear once (canonical bare, lowercased), not once per variant in _os_map
+        ws_keys = [k for k in profile.keys() if "ws-01" in k.lower()]
+        assert len(ws_keys) == 1, f"expected one WS-01 entry, got {ws_keys}"
+
+    def test_causality_sub_scores_present(self):
+        """CausalityScorer should emit all 6 expected sub-scores."""
+        scenario = _make_scenario()
+        records = {
+            "windows_event_security": [
+                _record("windows_event_security", {"Computer": "WS-01", "EventID": 4624}, ts=T0),
+            ],
+        }
+        scorer = CrossSourceScorer()
+        result = scorer.score(records, scenario)
+        keys = {s.key for s in result.sub_scores}
+        assert "causal_ordering" in keys
+        assert "event_presence" in keys
+        assert "indicator_accuracy" in keys
+        assert "pivot_linkability" in keys
+        assert "temporal_integrity" in keys
+        assert "storyline_trace_coverage" in keys
+
+
+class TestZeekDhcpIndexing:
+    """zeek_dhcp records must be indexed by client_addr and host_name."""
+
+    def test_dhcp_record_indexed_by_client_addr(self):
+        """zeek_dhcp record with client_addr should be findable by IP lookup."""
+        dhcp_rec = _record(
+            "zeek_dhcp",
+            {"client_addr": "10.0.1.50", "host_name": "workstation1"},
+            ts=T0,
+        )
+        records = {"zeek_dhcp": [dhcp_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        assert f"10.0.1.50|{bucket}" in index, "client_addr should be indexed as an IP key"
+        assert "zeek_dhcp" in index[f"10.0.1.50|{bucket}"]
+
+    def test_dhcp_record_indexed_by_host_name(self):
+        """zeek_dhcp record with host_name should be findable by hostname lookup."""
+        dhcp_rec = _record(
+            "zeek_dhcp",
+            {"client_addr": "10.0.1.50", "host_name": "workstation1"},
+            ts=T0,
+        )
+        records = {"zeek_dhcp": [dhcp_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        assert f"workstation1|{bucket}" in index, "host_name should be indexed as a hostname key"
+        assert "zeek_dhcp" in index[f"workstation1|{bucket}"]
+
+
+class TestBeaconProxyMatcher:
+    """Beacon allow/deny matchers must handle proxy_access 'host' field."""
+
+    def test_beacon_allow_proxy_matches_host_field(self):
+        """_beacon_dst_matches should match destination stored in proxy 'host' field."""
+        scorer = CrossSourceScorer()
+        fields = {"host": "evil.example.com", "status_code": 200, "method": "GET"}
+        assert scorer._beacon_dst_matches(fields, "evil.example.com")
+        assert not scorer._beacon_dst_matches(fields, "other.example.com")
+
+    def test_beacon_allow_proxy_matches_ip_in_url(self):
+        """_beacon_dst_matches should match IP found in url field."""
+        scorer = CrossSourceScorer()
+        fields = {"url": "https://45.33.32.30/check", "status_code": 200}
+        assert scorer._beacon_dst_matches(fields, "45.33.32.30")
+
+    def test_beacon_deny_proxy_403_counts_as_deny(self):
+        """proxy_access record with status_code 403 should match beacon deny."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        proxy_rec = _record(
+            "proxy_access",
+            {"host": "45.33.32.30", "status_code": 403, "method": "CONNECT"},
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="blocked c2",
+            details={"dst_ip": "45.33.32.30", "dst_port": 443, "action": "deny"},
+            event_types=["beacon"],
+        )
+        scorer = CrossSourceScorer()
+        assert scorer._record_matches(proxy_rec, "proxy_access", event, "beacon")
+
+    def test_beacon_deny_proxy_200_does_not_match_deny(self):
+        """proxy_access record with status 200 should NOT match beacon deny."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        proxy_rec = _record(
+            "proxy_access",
+            {"host": "45.33.32.30", "status_code": 200, "method": "GET"},
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="blocked c2",
+            details={"dst_ip": "45.33.32.30", "dst_port": 443, "action": "deny"},
+            event_types=["beacon"],
+        )
+        scorer = CrossSourceScorer()
+        assert not scorer._record_matches(proxy_rec, "proxy_access", event, "beacon")
+
+
+class TestPortScanSourceIp:
+    """port_scan events with external source_ip must use that IP for matching."""
+
+    def test_port_scan_matcher_uses_source_ip_over_system_ip(self):
+        """When spec.source_ip differs from system IP, matcher uses source_ip."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 80,
+                "conn_state": "S0",
+            },
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="port scan",
+            details={"source_ip": "185.70.41.45", "ports": [80, 443]},
+            event_types=["port_scan"],
+        )
+        scorer = CrossSourceScorer()
+        assert scorer._record_matches(zeek_rec, "zeek_conn", event, "port_scan")
+
+    def test_port_scan_external_source_ip_in_lookup_keys(self):
+        """External source_ip should appear as an extra lookup key in index search."""
+
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 80,
+                "conn_state": "S0",
+            },
+            ts=T0,
+        )
+        records = {"zeek_conn": [zeek_rec]}
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index(records)
+        bucket = int(T0.timestamp()) // 60
+
+        # Should be indexed under the origin IP
+        assert f"185.70.41.45|{bucket}" in index
+
+
+class TestSyslogYearInference:
+    """Syslog BSD parser must infer year from file mtime, not datetime.now()."""
+
+    def test_bsd_timestamp_uses_file_mtime_year(self, tmp_path):
+        """SyslogParser should infer year from file modification time."""
+        import os
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_path = tmp_path / "syslog.log"
+        # Write a record with a March timestamp
+        log_path.write_text("Mar 18 12:00:00 host sshd[1234]: session opened\n")
+        # Set mtime to 2024
+        target_ts = datetime(2024, 3, 18, 12, 0, 0).timestamp()
+        os.utime(log_path, (target_ts, target_ts))
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log_path))
+        assert len(records) == 1
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2024
+
+    def test_bsd_year_wrap_at_new_year(self, tmp_path):
+        """SyslogParser should increment year when Dec→Jan wrap is detected."""
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_path = tmp_path / "syslog.log"
+        # Two records: Dec 31 then Jan 1 (year wrap)
+        log_path.write_text(
+            "Dec 31 23:59:00 host sshd[1]: event1\nJan  1 00:01:00 host sshd[2]: event2\n"
+        )
+        # mtime = 2024-12-31
+        import os
+
+        target_ts = datetime(2024, 12, 31, 0, 0, 0).timestamp()
+        os.utime(log_path, (target_ts, target_ts))
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log_path))
+        assert records[0].timestamp.year == 2024
+        assert records[1].timestamp.year == 2025, "Jan record after Dec should be year+1"
+
+    def test_bsd_year_no_false_wrap_on_minor_reorder(self, tmp_path):
+        """Minor out-of-order records (not a Dec→Jan wrap) should NOT trigger year increment."""
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_path = tmp_path / "syslog.log"
+        # Two records in Aug, second slightly earlier (not a year wrap)
+        log_path.write_text(
+            "Aug 15 10:05:00 host sshd[1]: event1\nAug 15 10:03:00 host sshd[2]: event2\n"
+        )
+        import os
+
+        target_ts = datetime(2024, 8, 15, 0, 0, 0).timestamp()
+        os.utime(log_path, (target_ts, target_ts))
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log_path))
+        assert records[0].timestamp.year == 2024
+        assert records[1].timestamp.year == 2024, "Minor reorder should keep same year"

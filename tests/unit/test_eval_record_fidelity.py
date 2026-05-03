@@ -20,15 +20,20 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for Dimension 1: Record-Level Fidelity scoring."""
+"""Tests for Parseability and distribution scoring (merged from record_fidelity)."""
 
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from evidenceforge.evaluation.dimensions.record_fidelity import RecordFidelityScorer
+from evidenceforge.evaluation._shared import _jensen_shannon_divergence
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.parseability import ParseabilityScorer
+from evidenceforge.evaluation.pillars.plausibility import PlausibilityScorer
+
+# Alias for tests that use the old RecordFidelityScorer name
+RecordFidelityScorer = ParseabilityScorer
 
 GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
 
@@ -52,7 +57,7 @@ class TestTierA:
         assert len(records) > 0
 
         scorer = RecordFidelityScorer()
-        tier_a = scorer._score_tier_a({"zeek_conn": records})
+        tier_a = scorer._score_spec_conformance({"zeek_conn": records})
         # Well-formed Zeek records should all pass
         assert tier_a.score == 100.0
 
@@ -63,7 +68,7 @@ class TestTierA:
             _make_record("zeek_conn", {}, errors=["JSON parse error"]),
         ]
         scorer = RecordFidelityScorer()
-        tier_a = scorer._score_tier_a({"zeek_conn": records})
+        tier_a = scorer._score_spec_conformance({"zeek_conn": records})
         assert tier_a.score == 0.0
 
     def test_mixed_good_and_bad(self):
@@ -78,7 +83,7 @@ class TestTierA:
         all_records = good_records + bad_records
 
         scorer = RecordFidelityScorer()
-        tier_a = scorer._score_tier_a({"zeek_conn": all_records})
+        tier_a = scorer._score_spec_conformance({"zeek_conn": all_records})
         # 3 good out of 4 total = 75%
         assert tier_a.score == 75.0
 
@@ -92,7 +97,7 @@ class TestTierB:
         records = list(parser.parse_file(GOOD_FIXTURES / "zeek_conn.json"))
 
         scorer = RecordFidelityScorer()
-        tier_b = scorer._score_tier_b({"zeek_conn": records})
+        tier_b = scorer._score_format_constraints({"zeek_conn": records})
         assert tier_b.score >= 80.0
 
     def test_missing_field_fails_rule(self):
@@ -108,7 +113,7 @@ class TestTierB:
             ),
         ]
         scorer = RecordFidelityScorer()
-        tier_b = scorer._score_tier_b({"zeek_conn": records})
+        tier_b = scorer._score_format_constraints({"zeek_conn": records})
         # Should fail the SF rules requiring duration and byte counts
         assert tier_b.score < 100.0
 
@@ -122,16 +127,16 @@ class TestTierC:
             + [_make_record("zeek_conn", {"proto": "udp"})] * 18
             + [_make_record("zeek_conn", {"proto": "icmp"})] * 2
         )
-        scorer = RecordFidelityScorer()
-        tier_c = scorer._score_tier_c({"zeek_conn": records})
+        scorer = PlausibilityScorer()
+        tier_c = scorer._score_distribution_fit({"zeek_conn": records})
         assert tier_c.score >= 90.0
 
     def test_skewed_distribution_scores_lower(self):
         """Records with heavily skewed distribution should score lower."""
         # All records are tcp — no diversity
         records = [_make_record("zeek_conn", {"proto": "tcp"})] * 100
-        scorer = RecordFidelityScorer()
-        tier_c = scorer._score_tier_c({"zeek_conn": records})
+        scorer = PlausibilityScorer()
+        tier_c = scorer._score_distribution_fit({"zeek_conn": records})
         # Should still be positive but lower than the matching distribution
         assert tier_c.score < 90.0
 
@@ -149,10 +154,10 @@ class TestOverallDimension:
         result = scorer.score(records, scenario)
 
         assert result.number == 1
-        assert result.name == "Record-Level Fidelity"
-        assert result.weight == 0.15
+        assert result.name == "Parseability"
+        assert result.weight == 0.30
         assert result.score is not None
-        assert len(result.sub_scores) == 3
+        assert len(result.sub_scores) == 2
 
     def test_empty_records_score_perfect(self):
         """No records means nothing to fail — default to 100."""
@@ -162,17 +167,38 @@ class TestOverallDimension:
         assert result.score == 100.0
 
 
+class TestWindowsVariantMapCoverage:
+    """Every entry in WINDOWS_VARIANT_MAP must resolve to a real variant in the format YAML."""
+
+    def test_all_mapped_variants_exist(self):
+        from evidenceforge.evaluation.pillars.parseability import WINDOWS_VARIANT_MAP
+        from evidenceforge.formats import load_format
+
+        fmt = load_format("windows_event_security")
+        variant_names = {v.name for v in (fmt.variants or [])}
+        for event_id, variant_name in WINDOWS_VARIANT_MAP.items():
+            assert variant_name in variant_names, (
+                f"WINDOWS_VARIANT_MAP[{event_id}] = {variant_name!r} "
+                "but no such variant exists in windows_event_security.yaml"
+            )
+
+    def test_lock_unlock_variants_mapped(self):
+        """EventIDs 4800/4801 must be in the variant map so validation sees variant fields."""
+        from evidenceforge.evaluation.pillars.parseability import WINDOWS_VARIANT_MAP
+
+        assert WINDOWS_VARIANT_MAP[4800] == "workstation_locked"
+        assert WINDOWS_VARIANT_MAP[4801] == "workstation_unlocked"
+
+
 class TestJensenShannonDivergence:
     def test_identical_distributions(self):
-        scorer = RecordFidelityScorer()
         p = {"a": 0.5, "b": 0.5}
         q = {"a": 0.5, "b": 0.5}
-        assert scorer._jensen_shannon_divergence(p, q) == pytest.approx(0.0, abs=1e-10)
+        assert _jensen_shannon_divergence(p, q) == pytest.approx(0.0, abs=1e-10)
 
     def test_completely_different_distributions(self):
-        scorer = RecordFidelityScorer()
         p = {"a": 1.0}
         q = {"b": 1.0}
-        jsd = scorer._jensen_shannon_divergence(p, q)
+        jsd = _jensen_shannon_divergence(p, q)
         # JSD should be ln(2) ≈ 0.693
         assert jsd == pytest.approx(0.693, abs=0.01)

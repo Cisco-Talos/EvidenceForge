@@ -56,11 +56,21 @@ relationships:
     position: after
     min_ms: 40
     max_ms: 300
+  source.ecar_remote_thread:
+    class: source_latency
+    position: after
+    min_ms: 35
+    max_ms: 250
   source.zeek_conn_start:
     class: same_observation
     position: after
     min_ms: 0
     max_ms: 850
+  source.zeek_http_request:
+    class: same_observation
+    position: after
+    min_ms: 1
+    max_ms: 35
   source.zeek_ssl_analyzer:
     class: same_observation
     position: after

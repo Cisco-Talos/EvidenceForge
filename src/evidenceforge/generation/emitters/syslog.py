@@ -64,6 +64,21 @@ def _ssh_lifecycle_priority(line: str) -> int:
     return 50
 
 
+def _systemd_lifecycle_priority(line: str) -> int:
+    """Order same-second systemd unit lifecycle messages after second-precision render."""
+    if " systemd[" not in line or ".service" not in line:
+        return 50
+    if ": Starting " in line:
+        return 10
+    if ": Started " in line:
+        return 20
+    if ": Stopping " in line:
+        return 30
+    if ": Stopped " in line or ": Finished " in line:
+        return 40
+    return 50
+
+
 def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
     """Sort traditional syslog lines by their rendered month/day/time prefix."""
     match = _SYSLOG_TS_RE.match(line)
@@ -73,7 +88,7 @@ def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
         _SYSLOG_MONTHS.get(match.group("mon"), 13),
         int(match.group("day")),
         match.group("hms"),
-        _ssh_lifecycle_priority(line),
+        min(_ssh_lifecycle_priority(line), _systemd_lifecycle_priority(line)),
         line,
     )
 
@@ -101,6 +116,13 @@ class SyslogEmitter(HostMultiplexEmitter):
     @staticmethod
     def _linux_host(event: SecurityEvent) -> "HostContext | None":
         """Return whichever host has os_category == 'linux'."""
+        if (
+            event.syslog is not None
+            and event.syslog.app_name == "sshd"
+            and event.dst_host
+            and event.dst_host.os_category == "linux"
+        ):
+            return event.dst_host
         if event.src_host and event.src_host.os_category == "linux":
             return event.src_host
         if event.dst_host and event.dst_host.os_category == "linux":

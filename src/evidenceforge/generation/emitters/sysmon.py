@@ -89,6 +89,11 @@ _DNS_STATUS_MAP: dict[str, str] = {
 }
 
 
+def _format_sysmon_utc_time(timestamp: datetime) -> str:
+    """Return Sysmon EventData UtcTime from the rendered source timestamp."""
+    return ensure_utc(timestamp).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
 class SysmonEventEmitter(LogEmitter):
     """Emitter for Windows Sysmon Event Log format (XML).
 
@@ -611,12 +616,14 @@ class SysmonEventEmitter(LogEmitter):
             unix_ts ^= int(boot_time.timestamp())
         hex_ts = f"{unix_ts:08x}"
 
-        # Third segment: PID-based sequence for uniqueness
-        seq = f"{pid & 0xFFFF:04x}"
-
-        # Remaining segments: deterministic filler for uniqueness
         seed = f"{hostname}:{pid}:{unix_ts}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
+        # Third segment: source-native-looking deterministic sequence. Avoid
+        # directly exposing the PID in the GUID shape while preserving stable
+        # per-process correlation across Sysmon event types.
+        seq = h[:4]
+
+        # Remaining segments: deterministic filler for uniqueness
         return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
     @staticmethod
@@ -634,6 +641,16 @@ class SysmonEventEmitter(LogEmitter):
         imphash = hashlib.md5(f"imp:{seed}".encode(), usedforsecurity=False).hexdigest().upper()
         return f"SHA1={sha1},MD5={md5},SHA256={sha256},IMPHASH={imphash}"
 
+    @staticmethod
+    def _generate_logon_guid(hostname: str, logon_id: str) -> str:
+        """Generate one stable Sysmon LogonGuid per host/logon session."""
+        normalized = logon_id or "0x0"
+        digest = hashlib.md5(
+            f"sysmon_logon_guid:{hostname}:{normalized}".encode(),
+            usedforsecurity=False,
+        ).hexdigest()
+        return f"{{{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}}}"
+
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
         random.Random()
@@ -649,7 +666,7 @@ class SysmonEventEmitter(LogEmitter):
             maximum_ms=85,
         )
 
-        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        utc_time = _format_sysmon_utc_time(render_time)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -695,14 +712,9 @@ class SysmonEventEmitter(LogEmitter):
             "Image": proc.image,
             "CommandLine": proc.command_line,
             "User": user,
-            "LogonGuid": self._generate_process_guid(
-                host.hostname,
-                int(logon_id, 16)
-                if logon_id.startswith("0x")
-                else _stable_seed(f"sysmon_logon_{logon_id}") & 0xFFFFFFFF,
-                event.timestamp,
-            ),
+            "LogonGuid": self._generate_logon_guid(host.hostname, logon_id),
             "LogonId": logon_id,
+            "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,
             "Hashes": self._generate_hashes(proc.image, host.hostname),
             "ParentProcessGuid": parent_guid,
@@ -745,7 +757,7 @@ class SysmonEventEmitter(LogEmitter):
         auth = event.auth
         host = event.src_host
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        utc_time = _format_sysmon_utc_time(event.timestamp)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -786,6 +798,18 @@ class SysmonEventEmitter(LogEmitter):
 
             return resolve_image_path(image, "windows", username=username)
         return image
+
+    @staticmethod
+    def _terminal_session_id(auth, logon_id: str) -> int:
+        """Return a source-native TerminalSessionId for Sysmon process creates."""
+        if auth is None:
+            return 0
+        username = (auth.username or "").upper()
+        if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
+            return 0
+        if auth.logon_type in {2, 7, 10, 11}:
+            return 1 + (_stable_seed(f"sysmon_terminal_session:{logon_id or username}") % 8)
+        return 0
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 8 (CreateRemoteThread)."""
@@ -1172,6 +1196,7 @@ class SysmonEventEmitter(LogEmitter):
         # PE metadata for the loaded DLL
         fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
         hashes = self._generate_hashes(il.image_loaded, host.hostname)
+        signature_status = il.signature_status if il.signed else "Unavailable"
 
         event_data = {
             "EventID": 7,
@@ -1194,7 +1219,7 @@ class SysmonEventEmitter(LogEmitter):
             "Hashes": hashes,
             "Signed": "true" if il.signed else "false",
             "Signature": il.signature if il.signed else "-",
-            "SignatureStatus": il.signature_status,
+            "SignatureStatus": signature_status,
         }
         self.emit_event(event_data)
 
@@ -1261,7 +1286,7 @@ class SysmonEventEmitter(LogEmitter):
             event_type = "SetValue"
         elif action == "delete":
             event_id = 12
-            event_type = "DeleteValue"
+            event_type = "DeleteKey"
         elif action == "create":
             event_id = 12
             event_type = "CreateKey"
@@ -1418,6 +1443,8 @@ class SysmonEventEmitter(LogEmitter):
         if "TimeCreated" in event_data:
             ts = event_data["TimeCreated"]
             if isinstance(ts, datetime):
+                if "UtcTime" in event_data:
+                    event_data["UtcTime"] = _format_sysmon_utc_time(ts)
                 event_data["TimeCreated"] = format_windows_system_time(ts, event_data)
         for key, val in event_data.items():
             if isinstance(val, str) and key != "TimeCreated":
@@ -1551,6 +1578,10 @@ class SysmonEventEmitter(LogEmitter):
                 terminations.append((key, event))
                 continue
             if event.get("EventID") == 1:
+                parent_guid = event.get("ParentProcessGuid")
+                if parent_guid:
+                    parent_key = (str(event.get("Computer", "")), str(parent_guid))
+                    latest_followon[parent_key] = max(ts, latest_followon.get(parent_key, ts))
                 continue
             latest_followon[key] = max(ts, latest_followon.get(key, ts))
 

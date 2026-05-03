@@ -9,6 +9,70 @@
 #
 # Template variables: {user} = process owner username, {rand} = 5-digit random
 
+# Process-aware file side effects for ambient eCAR/Sysmon FILE telemetry.
+# Only processes matching one of these profiles emit probabilistic file events;
+# read-only recon tools intentionally have no profile, so they cannot create
+# impossible side effects such as dsquery.exe writing installers or browsers
+# deleting Security.evtx.
+file_side_effect_profiles:
+  - name: chrome_cache
+    executables: ["chrome.exe", "chrome"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\Cache\\Cache_Data\\f_{hex}"
+    paths_linux:
+      - "/home/{user}/.cache/google-chrome/Default/Cache/Cache_Data/f_{hex}"
+
+  - name: edge_cache
+    executables: ["msedge.exe"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\Cache\\Cache_Data\\f_{hex}"
+
+  - name: firefox_cache
+    executables: ["firefox.exe", "firefox"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Mozilla\\Firefox\\Profiles\\default-release\\cache2\\entries\\{hex}"
+    paths_linux:
+      - "/home/{user}/.cache/mozilla/firefox/default-release/cache2/entries/{hex}"
+
+  - name: shell_temp
+    executables: ["cmd.exe", "powershell.exe", "pwsh.exe", "bash", "sh"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp"
+      - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\PowerShell\\PSReadLine\\ConsoleHost_history.txt"
+    paths_linux:
+      - "/home/{user}/.cache/{hex}.tmp"
+      - "/home/{user}/.bash_history"
+
+  - name: package_manager
+    executables: ["apt", "apt-get", "dnf", "yum", "dpkg", "rpm"]
+    actions: ["modify"]
+    paths_linux:
+      - "/var/log/apt/history.log"
+      - "/var/lib/dpkg/status"
+      - "/var/lib/dnf/history.sqlite"
+
+  - name: installer_update
+    executables: ["msiexec.exe", "tiworker.exe", "usoclient.exe"]
+    executable_contains: ["install", "setup", "update", "patch"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Windows\\Temp\\MSI{rand}.tmp"
+      - "C:\\Windows\\SoftwareDistribution\\Download\\{rand}\\update.cab"
+    paths_linux:
+      - "/var/tmp/pkg-{rand}.tmp"
+
+  - name: archive_and_runtime_artifacts
+    executables: ["mysqldump", "gzip", "tar", "zip", "python", "python3", "node", "java"]
+    actions: ["create", "modify"]
+    paths_windows:
+      - "C:\\Users\\{user}\\AppData\\Local\\Temp\\tmp{rand}.tmp"
+    paths_linux:
+      - "/tmp/.tmp-{rand}"
+
 file_paths_windows:
   # User documents
   - "C:\\Users\\{user}\\Documents\\report.docx"
@@ -80,7 +144,7 @@ registry_keys_hkcu:
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\\Count", "HRZR_PGYFRFFVBA", "00 00 00 00 0E 00 00 00"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\*", "0", "hex(2):43,00,3a,00"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Common\\General", "ShownFirstRunOptin", "DWORD (0x00000001)"]
-  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1", "Datetime", "2024-11-12T13:00:00"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document 1", "Datetime", "2024-03-18T13:00:00"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager", "SubscribedContent-338389Enabled", "DWORD (0x00000001)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Search", "SearchboxTaskbarMode", "DWORD (0x00000002)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent", "AccentPalette", "hex:9B,9A,99,00"]
@@ -88,7 +152,7 @@ registry_keys_hkcu:
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU", "{mru}", "hex(2):43,00,3a,00"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\docx", "{mru}", "hex(2):43,00,3a,00"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU\\pdf", "{mru}", "hex(2):43,00,3a,00"]
-  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document {doc}", "Datetime", "2024-11-12T13:{mru}:00"]
+  - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Word\\Reading Locations\\Document {doc}", "Datetime", "2024-03-18T13:{minute}:00"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\Excel\\File MRU", "Item {mru}", "[F00000000][T01D9]C:\\Users\\{user}\\Documents\\budget-{doc}.xlsx"]
   - ["HKCU\\Software\\Microsoft\\Office\\16.0\\PowerPoint\\File MRU", "Item {mru}", "[F00000000][T01D9]C:\\Users\\{user}\\Documents\\briefing-{doc}.pptx"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.docx", "{mru}", "hex:7b,{hex}"]
@@ -105,7 +169,7 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU", "NoAutoUpdate", "DWORD (0x00000000)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management", "ClearPageFileAtShutdown", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "EnableLUA", "DWORD (0x00000001)"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "DWORD (0x00000001)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", "DhcpNameServer", "10.10.2.10"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\Config", "MaxPollInterval", "DWORD (0x0000000f)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanWorkstation\\Parameters", "EnableSecuritySignature", "DWORD (0x00000001)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\PackagesPending", "TrustedInstaller", "DWORD (0x00000001)"]
@@ -114,13 +178,16 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring", "DWORD (0x00000000)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest", "UseLogonCredential", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters", "ListenAddresses", "DWORD (0x00000001)"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters", "ListenAddresses", "10.10.2.10"]
   - ["HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging", "DWORD (0x00000002)"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\{package}~31bf3856ad364e35~amd64~~10.0.{rand}", "CurrentState", "DWORD (0x00000070)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\{package}~31bf3856ad364e35~amd64~~10.0.19041.{small}", "CurrentState", "DWORD (0x00000070)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{hex}\\InstallProperties", "DisplayVersion", "{version}"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{guid}}}", "DisplayName", "Microsoft Update Health Tools"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\app-{doc}.exe", "Path", "C:\\Program Files\\Common Files\\Vendor\\app-{doc}.exe"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "DWORD (0x00000001)"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe", "Path", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe", "Path", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Acrobat.exe", "Path", "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\WinSCP.exe", "Path", "C:\\Program Files (x86)\\WinSCP\\WinSCP.exe"]
+  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "{host_ip}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "DynamicSiteName", "Default-First-Site-Name"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", "C:\\ProgramData\\Vendor\\Cache\\{doc}", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{guid}}}", "EndTimeHi", "DWORD (0x00000000)"]

@@ -22,7 +22,7 @@
 
 """Evaluation engine orchestrator.
 
-Runs all available dimension scorers, computes overall score,
+Runs all available pillar scorers, computes overall score,
 checks acceptance criteria, and assembles the QualityReport.
 """
 
@@ -31,61 +31,109 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
-from evidenceforge.evaluation.dimensions.cross_source import CrossSourceScorer
-from evidenceforge.evaluation.dimensions.noise_realism import NoiseRealismScorer
-from evidenceforge.evaluation.dimensions.record_fidelity import RecordFidelityScorer
-from evidenceforge.evaluation.dimensions.signal_integrity import SignalIntegrityScorer
-from evidenceforge.evaluation.dimensions.temporal import TemporalRealismScorer
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
-    DimensionScore,
+    PillarScore,
     QualityReport,
 )
 from evidenceforge.evaluation.parsers import ParsedRecord, discover_log_files, get_parser
+from evidenceforge.evaluation.pillars import (
+    CausalityScorer,
+    ParseabilityScorer,
+    PlausibilityScorer,
+    TimingScorer,
+)
+from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.models.scenario import Scenario
 
 logger = logging.getLogger(__name__)
 
-# Registered dimension scorers (add new dimensions here as they're implemented)
+# Registered pillar scorers.
 DIMENSION_SCORERS: list[DimensionScorer] = [
-    RecordFidelityScorer(),
-    CrossSourceScorer(),
-    NoiseRealismScorer(),
-    TemporalRealismScorer(),
-    SignalIntegrityScorer(),
+    ParseabilityScorer(),
+    PlausibilityScorer(),
+    CausalityScorer(),
+    TimingScorer(),
 ]
 
-# Acceptance criteria definitions
-ACCEPTANCE_CRITERIA: list[AcceptanceCriterion] = [
-    AcceptanceCriterion(
-        name="Parsability",
-        dimension=1,
-        sub_score_key="parsability",
-        threshold=98.0,
-        level="hard",
-    ),
-    AcceptanceCriterion(
-        name="Source Correctness",
-        dimension=2,
-        sub_score_key="source_correctness",
-        threshold=95.0,
-        level="hard",
-    ),
-    AcceptanceCriterion(
-        name="Causal Ordering",
-        dimension=4,
-        sub_score_key="causal_ordering",
-        threshold=99.0,
-        level="hard",
-    ),
-    AcceptanceCriterion(
-        name="Event Presence",
-        dimension=5,
-        sub_score_key="event_presence",
-        threshold=90.0,
-        level="hard",
-    ),
-]
+
+def _build_pillar_maps(
+    pillars: list[PillarScore],
+) -> tuple[dict[str, PillarScore], dict[int, PillarScore]]:
+    by_name: dict[str, PillarScore] = {}
+    for p in pillars:
+        clean = p.name.lower().replace(" ", "_").replace("-", "_")
+        by_name[clean] = p
+    by_number: dict[int, PillarScore] = {p.number: p for p in pillars}
+    return by_name, by_number
+
+
+def _find_sub_score_for_key(
+    key: str,
+    by_name: dict[str, PillarScore],
+    by_number: dict[int, PillarScore],
+):
+    """Find a sub-score by key across all pillars."""
+    for p in by_name.values():
+        sub = next((s for s in p.sub_scores if s.key == key), None)
+        if sub is not None:
+            return sub
+    return None
+
+
+def _build_acceptance_criteria(
+    thresholds: EvalThresholds,
+    pillars: list[PillarScore],
+) -> list[AcceptanceCriterion]:
+    """Build acceptance criteria from threshold config and actual pillar scores."""
+    results: list[AcceptanceCriterion] = []
+    by_name, by_number = _build_pillar_maps(pillars)
+
+    for pillar_name, pillar_thresh in thresholds.pillars.items():
+        for key, ss_thresh in pillar_thresh.sub_scores.items():
+            if not ss_thresh.hard_gate:
+                continue
+
+            crit = AcceptanceCriterion(
+                name=f"{pillar_name}.{key}",
+                pillar=pillar_name,
+                sub_score_key=key,
+                threshold=ss_thresh.minimum,
+                aspirational=ss_thresh.aspirational,
+                level="hard",
+            )
+
+            sub = _find_sub_score_for_key(key, by_name, by_number)
+            if sub is not None and sub.score is not None:
+                crit.actual = sub.score
+                crit.passed = sub.score >= ss_thresh.minimum
+                if ss_thresh.aspirational is not None:
+                    crit.meets_aspirational = sub.score >= ss_thresh.aspirational
+
+            results.append(crit)
+
+    return results
+
+
+def _count_aspirational(
+    thresholds: EvalThresholds,
+    pillars: list[PillarScore],
+) -> tuple[int, int]:
+    """Return (met, total) aspirational targets across all sub-scores."""
+    met = 0
+    total = 0
+    by_name, by_number = _build_pillar_maps(pillars)
+
+    for pillar_thresh in thresholds.pillars.values():
+        for key, ss_thresh in pillar_thresh.sub_scores.items():
+            sub = _find_sub_score_for_key(key, by_name, by_number)
+            if sub is None or sub.score is None:
+                continue
+            total += 1
+            if sub.score >= ss_thresh.aspirational:
+                met += 1
+
+    return met, total
 
 
 class EvaluationEngine:
@@ -102,6 +150,7 @@ class EvaluationEngine:
         self.scenario = scenario
         self.verbose = verbose
         self._progress = progress_callback
+        self._thresholds = load_thresholds()
 
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
@@ -120,10 +169,10 @@ class EvaluationEngine:
 
         logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
 
-        # 2. Run each available dimension scorer
-        total_dims = len(DIMENSION_SCORERS)
-        self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_dims})
-        dimensions: list[DimensionScore] = []
+        # 2. Run each available pillar scorer
+        total_pillars = len(DIMENSION_SCORERS)
+        self._progress("phase_start", {"phase": "scoring", "total_dimensions": total_pillars})
+        pillars: list[PillarScore] = []
         for i, scorer in enumerate(DIMENSION_SCORERS, 1):
             self._progress(
                 "dimension_start",
@@ -131,45 +180,51 @@ class EvaluationEngine:
                     "number": scorer.number,
                     "name": scorer.name,
                     "step": i,
-                    "total": total_dims,
+                    "total": total_pillars,
                 },
             )
-            logger.info(f"Scoring Dimension {scorer.number}: {scorer.name}")
+            logger.info(f"Scoring Pillar {scorer.number}: {scorer.name}")
+            pillar_score: PillarScore
             try:
-                dim_score = scorer.score(records, self.scenario, progress=self._progress)
-                dimensions.append(dim_score)
+                pillar_score = scorer.score(records, self.scenario, progress=self._progress)
+                pillars.append(pillar_score)
             except Exception:
-                logger.exception(f"Dimension {scorer.number} scoring failed")
-                dimensions.append(
-                    DimensionScore(
-                        number=scorer.number,
-                        name=scorer.name,
-                        weight=scorer.weight,
-                        score=None,
-                    )
+                logger.exception(f"Pillar {scorer.number} scoring failed")
+                pillar_score = PillarScore(
+                    number=scorer.number,
+                    name=scorer.name,
+                    weight=scorer.weight,
+                    score=None,
                 )
+                pillars.append(pillar_score)
             self._progress(
                 "dimension_done",
                 {
                     "number": scorer.number,
                     "name": scorer.name,
-                    "score": dim_score.score
-                    if dimensions and dimensions[-1].score is not None
-                    else None,
+                    "score": pillar_score.score,
                 },
             )
 
-        # 3. Compute overall score (weighted average of available dimensions)
-        overall = self._compute_overall(dimensions)
+        # 3. Compute overall score (weighted average of available pillars)
+        overall = self._compute_overall(pillars)
 
-        # 4. Check acceptance criteria
-        acceptance_criteria = self._check_acceptance(dimensions)
+        # 4. Check acceptance criteria from thresholds.yaml
+        acceptance_criteria = _build_acceptance_criteria(self._thresholds, pillars)
         all_hard_pass = all(
             c.passed for c in acceptance_criteria if c.level == "hard" and c.passed is not None
         )
 
-        # 5. Build flags
-        flags = self._build_flags(dimensions, acceptance_criteria)
+        # 5. Count aspirational targets met
+        asp_met, asp_total = _count_aspirational(self._thresholds, pillars)
+
+        # 6. Build flags
+        flags = self._build_flags(pillars, acceptance_criteria)
+
+        # 7. Merge pillar-level supplementary data into report supplementary
+        supplementary: dict = {}
+        for pillar in pillars:
+            supplementary.update(pillar.supplementary)
 
         return QualityReport(
             scenario_name=self.scenario.name,
@@ -177,12 +232,15 @@ class EvaluationEngine:
             total_records=total_records,
             source_counts=source_counts,
             overall_score=overall,
-            dimensions=dimensions,
+            pillars=pillars,
             acceptance_passed=all_hard_pass
             if any(c.passed is not None for c in acceptance_criteria if c.level == "hard")
             else None,
             acceptance_criteria=acceptance_criteria,
+            aspirational_met=asp_met if asp_total > 0 else None,
+            aspirational_total=asp_total if asp_total > 0 else None,
             flags=flags,
+            supplementary=supplementary,
         )
 
     def _parse_all_logs(self) -> tuple[dict[str, list[ParsedRecord]], dict[str, int]]:
@@ -202,6 +260,7 @@ class EvaluationEngine:
                 },
             )
             parser = get_parser(format_name)
+            parser.scenario = self.scenario
             format_records: list[ParsedRecord] = []
             for path in paths:
                 logger.info(f"Parsing {format_name}: {path.name}")
@@ -212,9 +271,9 @@ class EvaluationEngine:
         return records, source_counts
 
     @staticmethod
-    def _compute_overall(dimensions: list[DimensionScore]) -> float | None:
-        """Compute weighted overall score from available dimensions."""
-        scored = [(d.weight, d.score) for d in dimensions if d.score is not None]
+    def _compute_overall(pillars: list[PillarScore]) -> float | None:
+        """Compute weighted overall score from available pillars."""
+        scored = [(p.weight, p.score) for p in pillars if p.score is not None]
         if not scored:
             return None
 
@@ -225,45 +284,16 @@ class EvaluationEngine:
         return sum(w * s for w, s in scored) / total_weight
 
     @staticmethod
-    def _check_acceptance(
-        dimensions: list[DimensionScore],
-    ) -> list[AcceptanceCriterion]:
-        """Evaluate acceptance criteria against dimension scores."""
-        results: list[AcceptanceCriterion] = []
-
-        for criterion in ACCEPTANCE_CRITERIA:
-            result = criterion.model_copy()
-
-            # Find the matching dimension
-            dim = next((d for d in dimensions if d.number == criterion.dimension), None)
-            if dim is None or dim.score is None:
-                # Dimension not yet implemented — criterion is indeterminate
-                results.append(result)
-                continue
-
-            # Find the matching sub-score
-            sub = next((s for s in dim.sub_scores if s.key == criterion.sub_score_key), None)
-            if sub is None or sub.score is None:
-                results.append(result)
-                continue
-
-            result.actual = sub.score
-            result.passed = sub.score >= criterion.threshold
-            results.append(result)
-
-        return results
-
-    @staticmethod
     def _build_flags(
-        dimensions: list[DimensionScore],
+        pillars: list[PillarScore],
         criteria: list[AcceptanceCriterion],
     ) -> list[str]:
         """Build human-readable flag messages."""
         flags: list[str] = []
 
         # Flag any sub-score below 50
-        for dim in dimensions:
-            for sub in dim.sub_scores:
+        for pillar in pillars:
+            for sub in pillar.sub_scores:
                 if sub.score is not None and sub.score < 50:
                     flags.append(f"{sub.name}: {sub.score:.0f}/100 ({sub.details})")
 

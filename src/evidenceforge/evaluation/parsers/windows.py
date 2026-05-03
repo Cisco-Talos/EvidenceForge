@@ -136,6 +136,7 @@ class WindowsEventParser(LogParser):
                             "KeyLength",
                             "PreAuthType",
                             "NetworkPort",
+                            "SessionId",
                             "SourcePort",
                             "DestPort",
                             "Protocol",

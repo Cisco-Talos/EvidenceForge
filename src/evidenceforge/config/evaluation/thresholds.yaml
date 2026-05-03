@@ -1,0 +1,133 @@
+# EvidenceForge evaluation thresholds
+#
+# Each pillar has a weight (0–1, must sum to 1.0) and each sub-score has:
+#   minimum:     hard gate — dataset FAILS if the sub-score falls below this
+#   aspirational: informational target — shown as a % of aspirational scores met
+#
+# Rationale for initial values is documented in docs/design/data-quality-prd.md.
+# Adjust these values after running a calibration pass against known-good datasets.
+
+overall:
+  minimum: 70
+  aspirational: 85
+
+pillars:
+  # Pillar 1 — Parseability
+  # Goal: generated records parse cleanly under the same rules as real downstream parsers.
+  parseability:
+    weight: 0.30
+    sub_scores:
+      spec_conformance:
+        minimum: 95
+        aspirational: 99
+        hard_gate: true
+        # Real SIEMs tolerate ~5% parse failures; 98 was aspirational, not achievable.
+      format_constraints:
+        minimum: 90
+        aspirational: 98
+        hard_gate: false
+        # Constraint violations are authoring errors; more forgiving floor.
+
+  # Pillar 2 — Plausibility
+  # Goal: no impossible or highly-improbable field values, combinations, or
+  #       population characteristics.
+  plausibility:
+    weight: 0.25
+    sub_scores:
+      value_plausibility:
+        minimum: 95
+        aspirational: 99
+        hard_gate: true
+        # OS cross-contamination and impossible field combos should be near zero.
+      co_occurrence:
+        minimum: 85
+        aspirational: 95
+        hard_gate: false
+        # Rules are incomplete; tighten as co_occurrence.yaml coverage grows.
+      distribution_fit:
+        minimum: 70
+        aspirational: 85
+        hard_gate: false
+        # JSD is noisy; per-field tolerance already built in.
+      field_agreement:
+        minimum: 85
+        aspirational: 97
+        hard_gate: false
+        # Conservative floor for the new pivot-key join implementation.
+      user_diversity:
+        minimum: 60
+        aspirational: 85
+        hard_gate: false
+        # Small user pools make cosine similarity noisy.
+      anomaly_rate:
+        minimum: 70
+        aspirational: 95
+        hard_gate: false
+        # 1–5 % goldilocks band; validate bands against calibration data.
+
+  # Pillar 3 — Causality
+  # Goal: before/after relationships are correct in background noise and
+  #       along the storyline.
+  causality:
+    weight: 0.25
+    sub_scores:
+      causal_ordering:
+        minimum: 90
+        aspirational: 99
+        hard_gate: true
+        # 99 was too tight due to grace-period edge cases; 90 is realistic.
+      event_presence:
+        minimum: 85
+        aspirational: 95
+        hard_gate: true
+        # Lowered from 90 to accommodate visibility-gap scenarios.
+      indicator_accuracy:
+        minimum: 85
+        aspirational: 95
+        hard_gate: false
+      pivot_linkability:
+        minimum: 80
+        aspirational: 95
+        hard_gate: false
+      temporal_integrity:
+        minimum: 85
+        aspirational: 95
+        hard_gate: false
+      storyline_trace_coverage:
+        minimum: 80
+        aspirational: 95
+        hard_gate: false
+
+  # Pillar 4 — Timing
+  # Goal: both per-actor inter-event cadence and macro time-of-day / day-of-week
+  #       patterns are plausible.
+  timing:
+    weight: 0.20
+    sub_scores:
+      attack_chain_timing:
+        minimum: 85
+        aspirational: 95
+        hard_gate: false
+        # Conservative floor for new check.
+      burstiness:
+        minimum: 60
+        aspirational: 85
+        hard_gate: false
+        # CV is highly variable with small N.
+      system_regularity:
+        minimum: 60
+        aspirational: 85
+        hard_gate: false
+      diurnal_pattern:
+        minimum: 70
+        aspirational: 90
+        hard_gate: false
+      volume_adequacy:
+        minimum: 70
+        aspirational: 90
+        hard_gate: false
+      rate_plausibility:
+        minimum: 95
+        aspirational: 100
+        hard_gate: false
+        # Impossible rates indicate a generator bug; should be near-perfect.

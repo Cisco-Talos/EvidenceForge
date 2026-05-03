@@ -302,7 +302,7 @@ _BENIGN_SUSPICIOUS_DNS_HOSTS = [
     "status-monitor.app",
     "internal-metrics.cloud",
     # Long subdomains (look like encoding/tunneling)
-    "session-f8a2b4c6d8e0-tracking.analytics.example.com",
+    "session-f8a2b4c6d8e0-tracking.analytics.customeriq.net",
     "pixel-7f3a9b2e1d4c.marketing-cdn.com",
     "telemetry-x9k2m4.windows.com",
 ]

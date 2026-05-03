@@ -31,6 +31,7 @@ Per-sensor directory routing: each firewall sensor gets its own cisco_asa.log.
 
 import hashlib
 import ipaddress
+import re
 from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -85,9 +86,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         sensor_hostnames: list[str] | None = None,
     ):
         super().__init__(format_def, output_path, buffer_size, threaded, sensor_hostnames)
-        # Per-sensor, per-second connection ID sequence. IDs are compact and
-        # timestamp-ordered, but deliberately not epoch-shaped.
-        self._conn_id_sequences: dict[tuple[str, int], int] = {}
+        # Per-sensor temporary connection ID counters. Final visible IDs are
+        # normalized after sorted flush so they follow log order without
+        # exposing timestamp buckets.
+        self._conn_id_sequences: dict[str, int] = {}
         # Network segment config for interface resolution (set by emitter_setup)
         self._segment_config: list[dict[str, str]] = []
         # Per-sensor interface mappings (set by emitter_setup)
@@ -106,22 +108,66 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
     def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
-        """Get a deterministic connection ID that sorts with event time."""
-        if isinstance(ts, datetime):
-            ts_bucket = int(ts.timestamp())
-            seconds_of_day = ts.hour * 3600 + ts.minute * 60 + ts.second
-        else:
-            ts_bucket = 0
-            seconds_of_day = 0
-        sequence_key = (sensor_hostname, ts_bucket)
-        sequence = self._conn_id_sequences.get(sequence_key, 0)
-        self._conn_id_sequences[sequence_key] = sequence + 1
+        """Get a deterministic temporary ASA connection ID."""
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
-        sensor_offset = seed % 50_000
-        # Keep adjacent timestamp buckets disjoint during high-volume bursts.
-        # A small multiplier can collide when second N emits enough flows to
-        # overlap second N+1's base ID while both flows are still active.
-        return 1_000_000 + sensor_offset + seconds_of_day * 10_007 + sequence
+        current = self._conn_id_sequences.get(sensor_hostname)
+        if current is None:
+            current = 1_000_000 + seed % 500_000
+        gap = 1 + int(hashlib.md5(f"{sensor_hostname}:{current}".encode()).hexdigest()[:2], 16) % 5
+        next_id = current + gap
+        self._conn_id_sequences[sensor_hostname] = next_id
+        return next_id
+
+    def flush(self) -> None:
+        """Flush all sensor writers and normalize visible connection IDs."""
+        super().flush()
+        self._normalize_visible_connection_ids()
+
+    def close(self) -> None:
+        """Close all writers and normalize visible connection IDs."""
+        super().close()
+        self._normalize_visible_connection_ids()
+
+    def _normalize_visible_connection_ids(self) -> None:
+        """Rewrite rendered ASA connection IDs in visible chronological order."""
+        with self._writers_lock:
+            writers = list(self._writers.items())
+        for sensor_hostname, writer in writers:
+            self._normalize_connection_ids_in_file(writer.output_path, sensor_hostname)
+
+    @staticmethod
+    def _normalize_connection_ids_in_file(path: Path, sensor_hostname: str) -> None:
+        if not path.exists():
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if not lines:
+            return
+
+        seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
+        current = 1_000_000 + seed % 500_000
+        mapping: dict[str, int] = {}
+        changed = False
+        normalized: list[str] = []
+        pattern = re.compile(r"(connection )(\d+)( for)")
+        for line in lines:
+            match = pattern.search(line)
+            if match is None:
+                normalized.append(line)
+                continue
+            old_id = match.group(2)
+            if int(old_id) < 1_000_000:
+                normalized.append(line)
+                continue
+            if old_id not in mapping:
+                gap_seed = f"{sensor_hostname}:{current}:{len(mapping)}"
+                gap = 1 + int(hashlib.md5(gap_seed.encode()).hexdigest()[:2], 16) % 5
+                current += gap
+                mapping[old_id] = current
+            new_id = str(mapping[old_id])
+            normalized.append(pattern.sub(rf"\g<1>{new_id}\g<3>", line, count=1))
+            changed = changed or new_id != old_id
+        if changed:
+            path.write_text("\n".join(normalized) + "\n", encoding="utf-8")
 
     @staticmethod
     def _teardown_reason(net: Any, protocol: str, conn_id: int) -> str:
@@ -233,8 +279,14 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:
+                if self._should_suppress_outside_private_deny(
+                    net, src_iface, dst_iface, sensor_hostname
+                ):
+                    continue
                 self._emit_deny(event, net, fw, src_iface, dst_iface, sensor_hostname, fw_hostname)
             else:
+                if src_iface == dst_iface and event.nat is None:
+                    continue
                 self._emit_built(
                     event,
                     net,
@@ -245,7 +297,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                 )
-                if event.nat:
+                if event.nat and event.nat.nat_type != "static":
                     self._emit_nat_built(
                         event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
                     )
@@ -259,7 +311,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     sensor_hostname,
                     fw_hostname,
                 )
-                if event.nat:
+                if event.nat and event.nat.nat_type != "static":
                     self._emit_nat_teardown(
                         event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
                     )
@@ -432,6 +484,24 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._dispatch(event_data)
         # Check threat detection thresholds after each deny
         self._check_threat_detection(net.src_ip, event.timestamp, sensor_hostname, fw_hostname)
+
+    def _should_suppress_outside_private_deny(
+        self,
+        net: Any,
+        src_iface: str,
+        dst_iface: str,
+        sensor_hostname: str,
+    ) -> bool:
+        """Suppress impossible outside denies to unmapped private post-NAT hosts."""
+        if src_iface != "outside" or dst_iface != "dmz":
+            return False
+        try:
+            dst_addr = ipaddress.ip_address(net.dst_ip)
+        except ValueError:
+            return False
+        if not dst_addr.is_private:
+            return False
+        return net.dst_ip not in set(self._vip_to_real_ip.values())
 
     def _emit_nat_built(
         self,

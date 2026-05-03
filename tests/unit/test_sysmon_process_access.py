@@ -73,21 +73,51 @@ def test_user():
     return User(username="compromised.user", full_name="Compromised User", email="c@corp.com")
 
 
+def _create_test_processes(
+    state_manager: StateManager,
+    windows_system: System,
+    test_user: User,
+    source_image: str,
+    target_image: str = r"C:\Windows\System32\lsass.exe",
+) -> tuple[int, int]:
+    source_pid = state_manager.create_process(
+        windows_system.hostname,
+        parent_pid=4,
+        image=source_image,
+        command_line=source_image,
+        username=test_user.username,
+        integrity_level="High",
+    )
+    target_pid = state_manager.create_process(
+        windows_system.hostname,
+        parent_pid=4,
+        image=target_image,
+        command_line=target_image,
+        username="SYSTEM",
+        integrity_level="System",
+    )
+    return source_pid, target_pid
+
+
 class TestSysmonProcessAccess:
     """Sysmon Event 10 (ProcessAccess) for LSASS credential dumping."""
 
     def test_process_access_emits_event(
-        self, activity_gen, mock_emitters, windows_system, test_user
+        self, state_manager, activity_gen, mock_emitters, windows_system, test_user
     ):
         """generate_process_access should dispatch a process_access event."""
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        source_image = r"C:\Users\compromised.user\AppData\Local\Temp\mimikatz.exe"
+        source_pid, target_pid = _create_test_processes(
+            state_manager, windows_system, test_user, source_image
+        )
         activity_gen.generate_process_access(
             user=test_user,
             system=windows_system,
             time=ts,
-            source_pid=5432,
-            source_image=r"C:\Users\compromised.user\AppData\Local\Temp\mimikatz.exe",
-            target_pid=636,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
             target_image=r"C:\Windows\System32\lsass.exe",
             granted_access="0x1010",
         )
@@ -96,41 +126,49 @@ class TestSysmonProcessAccess:
         assert emitter.emit.call_count == 1
         event = emitter.emit.call_args[0][0]
         assert event.event_type == "process_access"
-        assert event.process.pid == 5432
+        assert event.process.pid == source_pid
         assert "mimikatz" in event.process.image
         assert event.process_access is not None
         assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
         assert event.process_access.granted_access == "0x1010"
 
     def test_process_access_default_target_is_lsass(
-        self, activity_gen, mock_emitters, windows_system, test_user
+        self, state_manager, activity_gen, mock_emitters, windows_system, test_user
     ):
         """Default target_image should be lsass.exe."""
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        source_image = r"C:\Windows\Temp\procdump.exe"
+        source_pid, target_pid = _create_test_processes(
+            state_manager, windows_system, test_user, source_image
+        )
         activity_gen.generate_process_access(
             user=test_user,
             system=windows_system,
             time=ts,
-            source_pid=1234,
-            source_image=r"C:\Windows\Temp\procdump.exe",
-            target_pid=636,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
         )
 
         event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
         assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
 
     def test_process_access_custom_access_mask(
-        self, activity_gen, mock_emitters, windows_system, test_user
+        self, state_manager, activity_gen, mock_emitters, windows_system, test_user
     ):
         """Custom granted_access mask should be preserved."""
         ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        source_image = r"C:\Windows\Temp\tool.exe"
+        source_pid, target_pid = _create_test_processes(
+            state_manager, windows_system, test_user, source_image
+        )
         activity_gen.generate_process_access(
             user=test_user,
             system=windows_system,
             time=ts,
-            source_pid=1234,
-            source_image=r"C:\Windows\Temp\tool.exe",
-            target_pid=636,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
             granted_access="0x1FFFFF",  # PROCESS_ALL_ACCESS
         )
 

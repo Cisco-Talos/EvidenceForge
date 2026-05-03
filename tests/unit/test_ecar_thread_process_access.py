@@ -100,7 +100,7 @@ class TestCreateRemoteThread:
         assert record["action"] == "REMOTE_CREATE"
 
     def test_source_target_pids_in_properties(self, emitter, ts, windows_host, tmp_path):
-        """Properties should include src_pid and tgt_pid as strings."""
+        """Properties should include src_pid and target_pid as strings."""
         event = SecurityEvent(
             timestamp=ts,
             event_type="create_remote_thread",
@@ -125,8 +125,8 @@ class TestCreateRemoteThread:
         record = json.loads(output_file.read_text().strip().split("\n")[0])
         props = record["properties"]
         assert props["src_pid"] == "2120"
-        assert props["tgt_pid"] == "4"
-        assert "tgt_pid_uuid" in props
+        assert props["target_pid"] == "4"
+        assert "target_process_uuid" in props
         assert "start_address" in props
 
     def test_top_level_pid_is_source(self, emitter, ts, windows_host, tmp_path):
@@ -292,6 +292,34 @@ class TestProcessAccess:
         assert props["command_line"] == r"MsMpEng.exe -Scan"
         assert props["target_pid"] == "672"
         assert props["target_image_path"] == r"C:\Windows\System32\lsass.exe"
+
+    def test_process_open_parent_image_uses_source_parent(
+        self, emitter, ts, windows_host, tmp_path
+    ):
+        """PROCESS/OPEN parent_image_path should preserve the source process parent."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="process_access",
+            src_host=windows_host,
+            process=ProcessContext(
+                pid=6220,
+                parent_pid=5216,
+                image=r"C:\Windows\System32\ms-index-service.exe",
+                command_line=r"ms-index-service.exe -Embedding",
+                username="SYSTEM",
+                parent_image=r"C:\Windows\explorer.exe",
+            ),
+            auth=AuthContext(username="SYSTEM"),
+            process_access=self._access_context(),
+        )
+        emitter.emit(event)
+        emitter.close()
+
+        output_file = tmp_path / "WKS-01.corp.local" / "ecar.json"
+        record = json.loads(output_file.read_text().strip().split("\n")[0])
+        props = record["properties"]
+        assert props["parent_image_path"] == r"C:\Windows\explorer.exe"
+        assert props["image_path"] == r"C:\Windows\System32\ms-index-service.exe"
 
     def test_source_image_in_properties(self, emitter, ts, windows_host, tmp_path):
         """image_path in properties should be the source process image."""

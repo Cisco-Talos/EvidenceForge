@@ -20,15 +20,20 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for Dimension 3: Background Noise Realism scoring."""
+"""Tests for Plausibility and Timing sub-scores (merged from noise_realism)."""
 
 from datetime import UTC, datetime, timedelta
 
-from evidenceforge.evaluation.dimensions.noise_realism import (
-    NoiseRealismScorer,
+from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.plausibility import (
+    PlausibilityScorer,
     _extract_event_type,
 )
-from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.timing import TimingScorer
+from evidenceforge.evaluation.visibility import VisibilityModel
+
+# Alias for tests that use the old NoiseRealismScorer name
+NoiseRealismScorer = PlausibilityScorer
 
 T0 = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
 
@@ -112,7 +117,7 @@ class TestVolumeAdequacy:
                 for i in range(20000)
             ]
         }
-        scorer = NoiseRealismScorer()
+        scorer = TimingScorer()
         result = scorer._score_volume_adequacy(records, scenario)
         assert result.score >= 90.0
 
@@ -126,7 +131,7 @@ class TestVolumeAdequacy:
                 for i in range(50)
             ]
         }
-        scorer = NoiseRealismScorer()
+        scorer = TimingScorer()
         result = scorer._score_volume_adequacy(records, scenario)
         assert result.score < 10.0
 
@@ -135,7 +140,7 @@ class TestVolumeAdequacy:
         records = {
             "windows_event_security": [_record("windows_event_security", {"EventID": 4624}, ts=T0)]
         }
-        scorer = NoiseRealismScorer()
+        scorer = TimingScorer()
         result = scorer._score_volume_adequacy(records, scenario)
         assert result.score == 100.0
 
@@ -163,7 +168,7 @@ class TestUserDiversity:
                 for i in range(20)
             ],
         }
-        scorer = NoiseRealismScorer()
+        scorer = PlausibilityScorer()
         result = scorer._score_user_diversity(records)
         # Different event types → low similarity → good score
         assert result.score >= 50.0
@@ -188,7 +193,7 @@ class TestUserDiversity:
                 for i in range(20)
             ],
         }
-        scorer = NoiseRealismScorer()
+        scorer = PlausibilityScorer()
         result = scorer._score_user_diversity(records)
         # Same event types → high similarity → low score
         assert result.score < 50.0
@@ -211,8 +216,10 @@ class TestActivityPlausibility:
                 ),
             ],
         }
-        scorer = NoiseRealismScorer()
-        result = scorer._score_activity_plausibility(records, scenario)
+        enabled = {"windows_event_security", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score == 100.0
 
     def test_wrong_os_paths(self):
@@ -231,8 +238,10 @@ class TestActivityPlausibility:
                 ),
             ],
         }
-        scorer = NoiseRealismScorer()
-        result = scorer._score_activity_plausibility(records, scenario)
+        enabled = {"windows_event_security", "ecar"}
+        vis = VisibilityModel(scenario, enabled)
+        scorer = PlausibilityScorer()
+        result = scorer._score_value_plausibility(records, vis)
         assert result.score < 100.0
 
 
@@ -253,7 +262,7 @@ class TestAnomalyRate:
                 ]
             ),
         }
-        scorer = NoiseRealismScorer()
+        scorer = PlausibilityScorer()
         result = scorer._score_anomaly_rate(records, scenario)
         # Rate should be near 3% → in target range
         assert result.score >= 80.0
@@ -267,8 +276,30 @@ class TestAnomalyRate:
                 for i in range(100)
             ],
         }
-        scorer = NoiseRealismScorer()
+        scorer = PlausibilityScorer()
         result = scorer._score_anomaly_rate(records, scenario)
+        assert result.score == 0.0
+
+    def test_red_herrings_not_counted(self):
+        """Red herring events should not inflate the organic anomaly rate."""
+        from unittest.mock import MagicMock
+
+        # Scenario with red herrings declared
+        scenario = _make_scenario()
+        rh = MagicMock()
+        rh.events = [{"type": "process", "process_name": "nc.exe"}] * 10
+        scenario.red_herrings = [rh]
+
+        # All 100 background records are 200 OK — organically zero anomalies
+        records = {
+            "web_access": [
+                _record("web_access", {"status_code": 200}, ts=T0 + timedelta(seconds=i))
+                for i in range(100)
+            ],
+        }
+        scorer = PlausibilityScorer()
+        result = scorer._score_anomaly_rate(records, scenario)
+        # Should score 0 — organic anomaly rate is 0%, not inflated by red herrings
         assert result.score == 0.0
 
 
@@ -321,10 +352,10 @@ class TestEndToEnd:
                 for i in range(20)
             ],
         }
-        scorer = NoiseRealismScorer()
+        scorer = PlausibilityScorer()
         result = scorer.score(records, scenario)
-        assert result.number == 3
-        assert result.name == "Background Noise Realism"
+        assert result.number == 2
+        assert result.name == "Plausibility"
         assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 4
+        assert len(result.sub_scores) == 6

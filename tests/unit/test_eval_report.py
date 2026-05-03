@@ -1,27 +1,9 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
 # SPDX-License-Identifier: MIT
 
 """Tests for evaluation report formatting."""
 
+import json
 from datetime import UTC, datetime
 from io import StringIO
 
@@ -29,7 +11,7 @@ from rich.console import Console
 
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
-    DimensionScore,
+    PillarScore,
     QualityReport,
     SubScore,
 )
@@ -53,8 +35,8 @@ def _make_report(**overrides) -> QualityReport:
         total_records=500,
         source_counts={"windows_event_security": 300, "zeek_conn": 200},
         overall_score=85.0,
-        dimensions=[
-            DimensionScore(
+        pillars=[
+            PillarScore(
                 number=1,
                 name="Record Fidelity",
                 weight=0.3,
@@ -70,7 +52,7 @@ def _make_report(**overrides) -> QualityReport:
                     ),
                 ],
             ),
-            DimensionScore(
+            PillarScore(
                 number=2,
                 name="Temporal Consistency",
                 weight=0.3,
@@ -83,12 +65,14 @@ def _make_report(**overrides) -> QualityReport:
         acceptance_passed=True,
         acceptance_criteria=[
             AcceptanceCriterion(
-                name="field_accuracy >= 80",
-                dimension=1,
+                name="test.field_accuracy",
+                pillar="test",
                 sub_score_key="field_accuracy",
                 threshold=80.0,
+                aspirational=95.0,
                 actual=95.0,
                 passed=True,
+                meets_aspirational=True,
                 level="hard",
             ),
         ],
@@ -177,7 +161,7 @@ class TestFormatTextReport:
         format_text_report(report, console)
         # Just verifying no exception
 
-    def test_unscored_dimension_shows_not_implemented(self):
+    def test_unscored_pillar_shows_not_implemented(self):
         console, buf = _make_console()
         report = _make_report()
         format_text_report(report, console)
@@ -193,14 +177,24 @@ class TestFormatTextReport:
 
         assert "N/A" in output
 
-    def test_acceptance_criteria_tag_in_output(self):
+    def test_acceptance_criteria_tag_shows_min_gate(self):
         console, buf = _make_console()
         report = _make_report()
         format_text_report(report, console)
         output = buf.getvalue()
 
+        # New format: "[min:80 PASS]"
         assert "PASS" in output
-        assert ">=80" in output
+        assert "min:80" in output
+
+    def test_acceptance_criteria_tag_shows_aspirational(self):
+        console, buf = _make_console()
+        report = _make_report()
+        format_text_report(report, console)
+        output = buf.getvalue()
+
+        # Should show "[asp:95 met]"
+        assert "asp:95" in output
 
     def test_failure_summary_displayed(self):
         sub = SubScore(
@@ -210,8 +204,8 @@ class TestFormatTextReport:
             score=70.0,
             failure_summary={"windows_event_security": {"parse_error": 3, "missing_field": 1}},
         )
-        dim = DimensionScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
-        report = _make_report(dimensions=[dim])
+        pillar = PillarScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
+        report = _make_report(pillars=[pillar])
         console, buf = _make_console()
         format_text_report(report, console)
         output = buf.getvalue()
@@ -227,8 +221,8 @@ class TestFormatTextReport:
             score=70.0,
             sample_failures=["bad record 1", "bad [record] 2"],
         )
-        dim = DimensionScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
-        report = _make_report(dimensions=[dim])
+        pillar = PillarScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
+        report = _make_report(pillars=[pillar])
         console, buf = _make_console()
         format_text_report(report, console, verbose=True)
         output = buf.getvalue()
@@ -244,19 +238,42 @@ class TestFormatTextReport:
             score=70.0,
             sample_failures=[f"failure {i}" for i in range(30)],
         )
-        dim = DimensionScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
-        report = _make_report(dimensions=[dim])
+        pillar = PillarScore(number=1, name="Fidelity", weight=1.0, score=70.0, sub_scores=[sub])
+        report = _make_report(pillars=[pillar])
         console, buf = _make_console()
         format_text_report(report, console, verbose=True)
         output = buf.getvalue()
 
         assert "... and 10 more" in output
 
+    def test_aspirational_summary_shown_when_available(self):
+        console, buf = _make_console()
+        report = _make_report(aspirational_met=4, aspirational_total=6)
+        format_text_report(report, console)
+        output = buf.getvalue()
+
+        assert "Aspirational targets" in output
+        assert "4/6" in output
+
+    def test_host_log_profile_shown_when_missing_formats(self):
+        console, buf = _make_console()
+        report = _make_report(
+            supplementary={
+                "host_log_profile": {
+                    "workstation-01": {"missing_formats": ["zeek_conn"]},
+                    "server-01": {"missing_formats": []},
+                }
+            }
+        )
+        format_text_report(report, console)
+        output = buf.getvalue()
+
+        assert "workstation-01" in output
+        assert "zeek_conn" in output
+
 
 class TestFormatJsonReport:
     def test_valid_json_output(self):
-        import json
-
         report = _make_report()
         result = format_json_report(report)
         data = json.loads(result)
@@ -264,3 +281,15 @@ class TestFormatJsonReport:
         assert data["scenario_name"] == "test-scenario"
         assert data["total_records"] == 500
         assert data["overall_score"] == 85.0
+        assert "pillars" in data
+
+    def test_json_includes_acceptance_criteria(self):
+        report = _make_report()
+        result = format_json_report(report)
+        data = json.loads(result)
+
+        assert len(data["acceptance_criteria"]) == 1
+        c = data["acceptance_criteria"][0]
+        assert c["pillar"] == "test"
+        assert c["threshold"] == 80.0
+        assert c["aspirational"] == 95.0

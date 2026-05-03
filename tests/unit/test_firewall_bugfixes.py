@@ -87,8 +87,8 @@ class TestEvalScorerFirewallEvents:
         )
 
     def test_port_scan_matches_cisco_asa_deny(self):
-        from evidenceforge.evaluation.dimensions.signal_integrity import (
-            SignalIntegrityScorer,
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
@@ -101,8 +101,8 @@ class TestEvalScorerFirewallEvents:
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
 
     def test_port_scan_matches_733100_threat_detection(self):
-        from evidenceforge.evaluation.dimensions.signal_integrity import (
-            SignalIntegrityScorer,
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
@@ -120,8 +120,8 @@ class TestEvalScorerFirewallEvents:
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
 
     def test_port_scan_matches_zeek_rej(self):
-        from evidenceforge.evaluation.dimensions.signal_integrity import (
-            SignalIntegrityScorer,
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
@@ -134,8 +134,8 @@ class TestEvalScorerFirewallEvents:
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is True
 
     def test_port_scan_no_match_wrong_ip(self):
-        from evidenceforge.evaluation.dimensions.signal_integrity import (
-            SignalIntegrityScorer,
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
@@ -148,8 +148,8 @@ class TestEvalScorerFirewallEvents:
         assert scorer._record_matches(record, record.source_format, event, "port_scan") is False
 
     def test_beacon_deny_matches_cisco_asa(self):
-        from evidenceforge.evaluation.dimensions.signal_integrity import (
-            SignalIntegrityScorer,
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()
@@ -164,8 +164,8 @@ class TestEvalScorerFirewallEvents:
         assert scorer._record_matches(record, record.source_format, event, "beacon") is True
 
     def test_beacon_deny_no_match_wrong_port(self):
-        from evidenceforge.evaluation.dimensions.signal_integrity import (
-            SignalIntegrityScorer,
+        from evidenceforge.evaluation.pillars.causality import (
+            CausalityScorer as SignalIntegrityScorer,
         )
 
         scorer = SignalIntegrityScorer()

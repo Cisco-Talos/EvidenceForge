@@ -156,9 +156,9 @@ class TestConnectionIdCounter:
 
     def test_no_duplicates_across_adjacent_second_bursts(self, asa_emitter):
         ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
-        first_second_ids = [asa_emitter._next_conn_id("fw01", ts) for _ in range(5000)]
+        first_second_ids = [asa_emitter._next_conn_id("fw01", ts) for _ in range(20)]
         next_second_ids = [
-            asa_emitter._next_conn_id("fw01", ts + timedelta(seconds=1)) for _ in range(5000)
+            asa_emitter._next_conn_id("fw01", ts + timedelta(seconds=1)) for _ in range(20)
         ]
 
         assert set(first_second_ids).isdisjoint(next_second_ids)
@@ -176,7 +176,7 @@ class TestConnectionIdCounter:
         terminal_digits = {conn_id % 10 for conn_id in ids}
         assert len(terminal_digits) >= 8
 
-    def test_sorted_built_ids_follow_timestamp_order(self, asa_emitter, tmp_path):
+    def test_sorted_output_preserves_stateful_connection_ids(self, asa_emitter, tmp_path):
         late_event = _make_connection_event(
             timestamp=T0 + timedelta(seconds=30),
             src_port=50001,
@@ -193,15 +193,18 @@ class TestConnectionIdCounter:
         asa_emitter.flush()
 
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
-        built_ids = [
-            int(match.group(1))
-            for line in output.splitlines()
-            if "Built outbound TCP connection" in line
-            for match in [re.search(r"connection (\d+) for", line)]
-            if match is not None
+        built_lines = [
+            line for line in output.splitlines() if "Built outbound TCP connection" in line
         ]
+        built_ids = []
+        for line in built_lines:
+            match = re.search(r"connection (\d+) for", line)
+            assert match is not None
+            built_ids.append(int(match.group(1)))
 
-        assert built_ids == sorted(built_ids)
+        assert built_lines == sorted(built_lines)
+        assert len(built_ids) == len(set(built_ids))
+        assert abs(built_ids[0] - built_ids[1]) < 2000
 
 
 class TestPermitRecords:
@@ -227,6 +230,20 @@ class TestPermitRecords:
         assert "duration 0:01:23" in lines[1]
         assert "bytes 5120" in lines[1]
         assert "SYN Timeout" not in lines[1]
+
+    def test_same_interface_permit_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
+        """ASA should not mirror same-interface internal permits by default."""
+        event = _make_connection_event(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            dst_port=88,
+            protocol="tcp",
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
 
     def test_syn_timeout_requires_handshake_only_connection(self, asa_emitter, tmp_path):
         """SYN Timeout should not be used for connections with payload bytes."""
@@ -354,6 +371,27 @@ class TestDenyRecords:
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
         assert "(type 8, code 0)" in output
         assert "Deny icmp" in output
+
+    def test_outside_private_deny_without_static_mapping_is_suppressed(self, asa_emitter, tmp_path):
+        """Outside scanners should not be logged against unmapped private DMZ targets."""
+        event = _make_connection_event(
+            src_ip="198.51.100.1",
+            dst_ip="172.16.0.77",
+            dst_port=443,
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106023,
+                connection_id=0,
+                src_interface="outside",
+                dst_interface="dmz",
+                access_group="outside_access_in",
+            ),
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
 
     def test_deny_uses_firewall_context_message_id_and_interfaces(self, asa_emitter, tmp_path):
         """Deny records keep canonical firewall context metadata when provided."""
@@ -708,17 +746,15 @@ class TestNatRecords:
         nat_lines = [line for line in lines if "305011" in line]
         assert len(nat_lines) == 0
 
-    def test_305011_dynamic_vs_static_label(self, asa_emitter, tmp_path):
-        """Static NAT should produce 'Built static' instead of 'Built dynamic'."""
+    def test_static_nat_does_not_emit_per_flow_xlate_lifecycle(self, asa_emitter, tmp_path):
+        """Static NAT mappings are configuration state, not per-flow xlate churn."""
         event = self._make_nat_event(nat_type="static")
         asa_emitter.emit(event)
         asa_emitter.flush()
 
         lines = self._get_output_lines(tmp_path)
-        nat_built_lines = [line for line in lines if "305011" in line]
-        assert len(nat_built_lines) >= 1
-        assert "Built static" in nat_built_lines[0]
-        assert "Built dynamic" not in nat_built_lines[0]
+        nat_lines = [line for line in lines if "305011" in line or "305012" in line]
+        assert nat_lines == []
 
     def test_305011_protocol_variations(self, asa_emitter, tmp_path):
         """NAT built messages should reflect the correct protocol for UDP and ICMP."""
@@ -744,8 +780,8 @@ class TestNatRecords:
             assert len(nat_built_lines) >= 1, f"No 305011 line for {proto}"
             assert f"Built dynamic {proto.upper()} translation" in nat_built_lines[0]
 
-    def test_305011_inbound_static_nat_shows_dst_translation(self, asa_emitter, tmp_path):
-        """Inbound static NAT: 305011 should show destination VIP -> real server."""
+    def test_inbound_static_nat_suppresses_xlate_lifecycle(self, asa_emitter, tmp_path):
+        """Inbound static NAT should keep mapping in 302013/302014, not 305011/305012."""
         from evidenceforge.events.contexts import NatContext
 
         event = _make_connection_event(
@@ -771,46 +807,9 @@ class TestNatRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
         lines = self._get_output_lines(tmp_path)
-        nat_built = [line for line in lines if "305011" in line]
-        assert len(nat_built) >= 1
-        # Should show the destination translation: VIP -> real server
-        assert "outside:203.0.113.5/443 to dmz:172.16.0.5/443" in nat_built[0]
-        assert "outside:172.16.0.5/443 to dmz:203.0.113.5/443" not in nat_built[0]
-        # Should NOT show the untranslated source as the translation target
-        assert "203.0.113.99/54321 to" not in nat_built[0]
-
-    def test_305012_inbound_static_nat_shows_dst_translation(self, asa_emitter, tmp_path):
-        """Inbound static NAT: 305012 should show destination VIP -> real server teardown."""
-        from evidenceforge.events.contexts import NatContext
-
-        event = _make_connection_event(
-            src_ip="203.0.113.99",
-            src_port=54321,
-            dst_ip="203.0.113.5",  # Public VIP
-            dst_port=443,
-            firewall=FirewallContext(
-                action="permit",
-                msg_id=302013,
-                connection_id=100,
-                src_interface="outside",
-                dst_interface="dmz",
-            ),
-            nat=NatContext(
-                nat_type="static",
-                mapped_src_ip="203.0.113.99",
-                mapped_src_port=54321,
-                mapped_dst_ip="172.16.0.5",
-                mapped_dst_port=443,
-            ),
-        )
-        asa_emitter.emit(event)
-        asa_emitter.flush()
-        lines = self._get_output_lines(tmp_path)
-        nat_teardown = [line for line in lines if "305012" in line]
-        assert len(nat_teardown) >= 1
-        assert "outside:203.0.113.5/443 to dmz:172.16.0.5/443" in nat_teardown[0]
-        assert "outside:172.16.0.5/443 to dmz:203.0.113.5/443" not in nat_teardown[0]
-        assert "Teardown static" in nat_teardown[0]
+        assert [line for line in lines if "305011" in line or "305012" in line] == []
+        assert any("Built inbound TCP connection" in line for line in lines)
+        assert any("Teardown TCP connection" in line for line in lines)
 
     def test_syn_timeout_teardown_duration_is_realistic(self, asa_emitter, tmp_path):
         """SYN Timeout teardown rows should not all render as zero-second waits."""

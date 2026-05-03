@@ -44,6 +44,15 @@ class ZeekEmitter(SensorMultiplexEmitter):
         """Zeek conn emitter handles connection and session events with network context."""
         return event.event_type in self._supported_types and event.network is not None
 
+    @staticmethod
+    def _normalize_history_for_state(conn_state: str, history: str) -> str:
+        """Keep generated Zeek history direction consistent with conn_state semantics."""
+        if conn_state == "RSTR" and history:
+            return history[:-1] + "r" if history.endswith("R") else history
+        if conn_state == "RSTO" and history:
+            return history[:-1] + "R" if history.endswith("r") else history
+        return history
+
     def emit(self, event: SecurityEvent) -> None:
         """Render SecurityEvent to Zeek conn.log format."""
         net = event.network
@@ -74,13 +83,15 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "proto": net.protocol,
             "service": net.service or None,
             "duration": duration,
+            "_min_duration": event.dns.rtt if event.dns is not None else None,
+            "_lock_duration": event.dns is not None,
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
             "conn_state": net.conn_state,
             "local_orig": net.local_orig,
             "local_resp": net.local_resp,
             "missed_bytes": net.missed_bytes,
-            "history": net.history,
+            "history": self._normalize_history_for_state(net.conn_state, net.history),
             "orig_pkts": net.orig_pkts,
             "orig_ip_bytes": net.orig_ip_bytes,
             "resp_pkts": net.resp_pkts,

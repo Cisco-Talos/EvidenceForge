@@ -116,6 +116,13 @@ _GENERAL_PARAMS = {
         "deploy.sh",
         "requirements.txt",
     ],
+    "c_source_file": [
+        "main.c",
+        "server.c",
+        "worker.c",
+        "src/healthcheck.c",
+        "src/agent.c",
+    ],
     "git_branch": ["main", "develop", "feature/auth-refactor", "fix/memory-leak", "release/v2.4"],
     "k8s_namespace": ["production", "staging", "monitoring", "kube-system", "default", "logging"],
     "k8s_pod": [
@@ -168,14 +175,14 @@ _QUERY_PARAMS = {
     "ps_command": [
         "Get-EventLog -LogName Security -Newest 100",
         "Get-Process | Sort-Object CPU -Descending | Select-Object -First 20",
-        'Get-Service | Where-Object {{$_.Status -eq \\"Running\\"}}',
+        'Get-Service | Where-Object {$_.Status -eq \\"Running\\"}',
         "Get-ADUser -Filter * -Properties LastLogonDate | Sort LastLogonDate",
-        'Get-WinEvent -FilterHashtable @{{LogName=\\"System\\";Level=2}} -MaxEvents 50',
+        'Get-WinEvent -FilterHashtable @{LogName=\\"System\\";Level=2} -MaxEvents 50',
         "Test-NetConnection -ComputerName DC-01 -Port 389",
         "Get-ChildItem -Path C:\\Shares -Recurse | Measure-Object -Property Length -Sum",
         "Get-DnsServerZone | Format-Table -AutoSize",
-        "Invoke-Command -ComputerName FILE-SRV-01 -ScriptBlock {{Get-Disk}}",
-        'Get-ScheduledTask | Where-Object {{$_.State -ne \\"Disabled\\"}}',
+        "Invoke-Command -ComputerName FILE-SRV-01 -ScriptBlock {Get-Disk}",
+        'Get-ScheduledTask | Where-Object {$_.State -ne \\"Disabled\\"}',
     ],
     "ps_script": [
         "C:\\Scripts\\backup-check.ps1",

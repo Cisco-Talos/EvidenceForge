@@ -86,6 +86,8 @@ class StateManager:
 
         # Entity lifecycle: per-system boot times for temporal validation
         self._system_boot_times: dict[str, datetime] = {}
+        self._ended_sessions: dict[str, tuple[ActiveSession, datetime]] = {}
+        self._process_object_ids: dict[tuple[str, int], str] = {}
 
     # ========================================
     # Session Management
@@ -150,6 +152,7 @@ class StateManager:
             )
 
             self.state.active_sessions[logon_id] = session
+            self._ended_sessions.pop(logon_id, None)
             logger.debug(f"Created session {logon_id} for {username}@{system}")
             return logon_id
 
@@ -225,6 +228,7 @@ class StateManager:
                 ecar_object_id=str(uuid.uuid4()),
             )
             self.state.active_sessions[logon_id] = session
+            self._ended_sessions.pop(logon_id, None)
             logger.debug("Registered external session %s for %s@%s", logon_id, username, system)
             return session
 
@@ -232,6 +236,7 @@ class StateManager:
         self,
         logon_id: str,
         *,
+        start_time: datetime | None = None,
         source_port: int | None = None,
         session_kind: str | None = None,
         transport_pid: int | None = None,
@@ -242,6 +247,8 @@ class StateManager:
             session = self.state.active_sessions.get(logon_id)
             if session is None:
                 return False
+            if start_time is not None:
+                session.start_time = ensure_utc(start_time)
             if source_port is not None:
                 session.source_port = source_port
             if session_kind is not None:
@@ -252,21 +259,41 @@ class StateManager:
                 session.network_close_time = ensure_utc(network_close_time)
             return True
 
-    def end_session(self, logon_id: str) -> bool:
+    def end_session(self, logon_id: str, end_time: datetime | None = None) -> bool:
         """End an active session.
 
         Args:
             logon_id: LogonID of session to end
+            end_time: Timestamp of the visible logoff/logout event
 
         Returns:
             True if session was found and removed, False if not found
         """
         with self._lock:
-            if logon_id in self.state.active_sessions:
-                del self.state.active_sessions[logon_id]
+            session = self.state.active_sessions.pop(logon_id, None)
+            if session is not None:
+                if end_time is None:
+                    end_time = self.state.current_time
+                if end_time is not None:
+                    self._ended_sessions[logon_id] = (session, ensure_utc(end_time))
                 logger.debug(f"Ended session {logon_id}")
                 return True
             return False
+
+    def get_session_logon_type(self, logon_id: str) -> int | None:
+        """Return the original logon type for an active or recently ended session."""
+        with self._lock:
+            session = self.state.active_sessions.get(logon_id)
+            if session is not None:
+                return session.logon_type
+            ended = self._ended_sessions.get(logon_id)
+            return ended[0].logon_type if ended is not None else None
+
+    def get_session_end_time(self, logon_id: str) -> datetime | None:
+        """Return the visible end time for a recently ended session."""
+        with self._lock:
+            ended = self._ended_sessions.get(logon_id)
+            return ended[1] if ended is not None else None
 
     def list_active_sessions(self) -> list[ActiveSession]:
         """Get all active sessions.
@@ -415,6 +442,7 @@ class StateManager:
                         self._pid_counters[system] += 1
 
             # Create process
+            ecar_object_id = str(uuid.uuid4())
             process = RunningProcess(
                 pid=pid,
                 parent_pid=parent_pid,
@@ -425,11 +453,12 @@ class StateManager:
                 start_time=self.state.current_time,
                 integrity_level=integrity_level,
                 logon_id=logon_id,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=ecar_object_id,
             )
 
             key = (system, pid)
             self.state.running_processes[key] = process
+            self._process_object_ids[key] = ecar_object_id
             logger.debug(f"Created process {pid} on {system}: {image}")
             return pid
 
@@ -454,10 +483,15 @@ class StateManager:
             return session.ecar_object_id if session else ""
 
     def get_process_object_id(self, system: str, pid: int) -> str:
-        """Get the eCAR objectID for a running process."""
+        """Get the eCAR objectID for a running or recently ended process."""
         with self._lock:
-            proc = self.state.running_processes.get((system, pid))
-            return proc.ecar_object_id if proc else ""
+            key = (system, pid)
+            proc = self.state.running_processes.get(key)
+            if proc:
+                return proc.ecar_object_id
+            if key not in self._process_object_ids:
+                self._process_object_ids[key] = str(uuid.uuid4())
+            return self._process_object_ids[key]
 
     def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for a running process."""
@@ -876,8 +910,17 @@ class StateManager:
         process termination) and updates (connection bytes).
         """
         with self._lock:
+            if event.event_type != "process_terminate" and event.process and event.src_host:
+                proc = self.state.running_processes.get(
+                    (event.src_host.hostname, event.process.pid)
+                )
+                if proc is not None:
+                    activity_time = ensure_utc(event.timestamp)
+                    if proc.last_activity_time is None or activity_time > proc.last_activity_time:
+                        proc.last_activity_time = activity_time
+
             if event.event_type == "logoff" and event.auth:
-                self.end_session(event.auth.logon_id)
+                self.end_session(event.auth.logon_id, event.timestamp)
             elif event.event_type == "process_terminate" and event.process and event.src_host:
                 self.end_process(event.src_host.hostname, event.process.pid)
             elif event.event_type == "connection" and event.network:

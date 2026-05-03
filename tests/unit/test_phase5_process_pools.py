@@ -32,6 +32,7 @@ from evidenceforge.generation.activity import (
     PROCESS_TEMPLATES_LINUX,
     ActivityGenerator,
 )
+from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -75,6 +76,21 @@ class TestProcessPoolSize:
         system_paths = [p for p, _ in PROCESS_TEMPLATES_LINUX["process_system"]]
         assert any("systemd" in p for p in system_paths)
         assert any("cron" in p for p in system_paths)
+
+    def test_windows_search_helpers_are_parented_to_search_indexer(self):
+        """Search helper processes should render under SearchIndexer, not svchost."""
+        data = load_system_processes()
+        workstation_services = data["system_services"]["workstation"]
+        search_helpers = {
+            entry["image"].rsplit("\\", 1)[-1]: entry["parent"]
+            for entry in workstation_services
+            if entry["image"].endswith(("SearchProtocolHost.exe", "SearchFilterHost.exe"))
+        }
+
+        assert search_helpers == {
+            "SearchProtocolHost.exe": "search_indexer",
+            "SearchFilterHost.exe": "search_indexer",
+        }
 
 
 class TestBaselinePatterns:

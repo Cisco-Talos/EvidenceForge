@@ -297,29 +297,37 @@ Each format YAML defines fields (name, type, constraints), event variants (for m
 
 ### Evaluation Engine
 
-The evaluation system (`src/evidenceforge/evaluation/`) scores generated data across 5 dimensions:
+The evaluation system (`src/evidenceforge/evaluation/`) scores generated data across 4 pillars:
 
 ```
 EvaluationEngine
-├── Parsers (17 format parsers)
+├── Parsers (18 format parsers)
 │   ├── WindowsEventParser (XML)
 │   ├── ZeekBaseParser + 13 protocol-specific
 │   ├── EcarParser (NDJSON)
 │   ├── SyslogParser (regex)
-│   └── ... (bash history, snort, web, proxy)
+│   └── ... (bash history, snort, web, proxy, cisco_asa)
 │
-├── Dimensions (5 scoring modules)
-│   ├── RecordFidelity     (15%) — parsability, co-occurrence, population stats
-│   ├── CrossSource        (25%) — source correctness, trace coverage, agreement
-│   ├── NoiseRealism       (25%) — volume, diversity, plausibility, anomalies
-│   ├── TemporalRealism    (15%) — work hours, burstiness, causal ordering
-│   └── SignalIntegrity    (20%) — event presence, accuracy, linkability
+├── Pillars (4 scoring modules — currently still 5 legacy scorers during transition)
+│   ├── Parseability    (30%) — spec conformance, format constraints
+│   ├── Plausibility    (25%) — OS/value correctness, co-occurrence, distributions,
+│   │                           user diversity, benign anomaly rate
+│   ├── Causality       (25%) — causal ordering, event presence, indicator accuracy,
+│   │                           pivot linkability, storyline temporal integrity
+│   └── Timing          (20%) — attack-chain timing, burstiness, diurnal patterns,
+│                               volume adequacy, rate plausibility
+│
+├── Thresholds (config/evaluation/thresholds.yaml)
+│   ├── minimum: hard gate — dataset fails if missed
+│   └── aspirational: informational stretch target
 │
 └── QualityReport
     ├── overall_score: 0-100
-    ├── dimension_scores: list[DimensionScore]
-    ├── acceptance_criteria: pass/fail
-    └── flags: list[str]
+    ├── pillars: list[PillarScore]
+    ├── acceptance_criteria: pass/fail (hard gates only)
+    ├── aspirational_met / aspirational_total
+    ├── flags: list[str]
+    └── supplementary: dict  ← includes host_log_profile diagnostic
 ```
 
 Causal ordering rules are defined in `evaluation/rules/causal_pairs.yaml`. Rules support several evaluation features:

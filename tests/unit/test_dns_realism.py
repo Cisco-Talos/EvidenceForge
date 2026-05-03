@@ -13,6 +13,7 @@ These tests verify that:
 - Multi-IP domains return full answer sets in DNS
 """
 
+import json
 import random
 from collections import Counter
 from datetime import UTC, datetime, timedelta
@@ -20,9 +21,12 @@ from unittest.mock import Mock
 
 import pytest
 
-from evidenceforge.events.contexts import DnsContext, FirewallContext
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import DnsContext, FirewallContext, NetworkContext
+from evidenceforge.formats import load_format
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.suspicious_benign import generate_unusual_outbound
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -496,6 +500,270 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.duration == 0.35
+
+    def test_explicit_dns_response_state_keeps_responder_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS rows with response metadata must not render as one-way UDP."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            conn_state="SF",
+            orig_bytes=0,
+            resp_bytes=0,
+            dns=DnsContext(
+                query="missing.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="NXDOMAIN",
+                rcode_num=3,
+                rtt=0.08,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_bytes > 0
+        assert event.network.duration == 0.08
+
+    def test_servfail_dns_response_keeps_responder_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """SERVFAIL is still a DNS response and should carry responder packets."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.02,
+            orig_bytes=60,
+            resp_bytes=0,
+            dns=DnsContext(
+                query="flaky.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="SERVFAIL",
+                rcode_num=2,
+            ),
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_bytes > 0
+
+    def test_inferred_servfail_dns_row_keeps_responder_accounting(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Fallback DNS synthesis should not pair SERVFAIL with a one-way conn row."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            hostname="flaky.example.com",
+            orig_bytes=60,
+            resp_bytes=0,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns.rcode == "SERVFAIL"
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_bytes > 0
+
+    def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Caller-provided short durations should still cover dns.log RTT."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.01,
+            dns=DnsContext(
+                query="www.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                rtt=0.08,
+            ),
+            resp_bytes=120,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.duration == 0.08
+
+    def test_dns_a_query_accounting_is_clamped_to_dns_transaction(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """A single A lookup should not inherit kilobyte-scale generic UDP bytes."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=4.5,
+            dns=DnsContext(
+                query="metrics-b0hov01h.top",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["203.0.113.45"],
+                rtt=0.019,
+            ),
+            orig_bytes=1933,
+            resp_bytes=900,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_bytes <= 260
+        assert event.network.resp_bytes <= 512
+        assert event.network.duration == 0.019
+
+    def test_dns_authoritative_flag_is_consistent_for_internal_names(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Internal names should not flip AA on otherwise equivalent rows."""
+        state_manager.set_current_time(timestamp)
+        activity_gen._ad_domain = "example.org"
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="DC-01.example.org",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["10.0.0.10"],
+                AA=False,
+                rtt=0.004,
+            ),
+            orig_bytes=80,
+            resp_bytes=140,
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args[0][0]
+        assert event.dns.AA is True
+
+    def test_sensor_duration_jitter_respects_dns_rtt(self, timestamp, tmp_path):
+        fmt = load_format("zeek_conn")
+        emitter = ZeekEmitter(
+            format_def=fmt,
+            output_path=tmp_path,
+            sensor_hostnames=["zeek-a", "zeek-b"],
+        )
+        event = SecurityEvent(
+            timestamp=timestamp,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.50",
+                src_port=53000,
+                dst_ip="10.0.0.1",
+                dst_port=53,
+                protocol="udp",
+                service="dns",
+                duration=0.002,
+                orig_bytes=64,
+                resp_bytes=128,
+                conn_state="SF",
+                zeek_uid="CtestDnsDuration1",
+            ),
+            dns=DnsContext(query="example.com", query_type="A", rtt=0.002),
+        )
+        event._sensor_hostnames_by_format = {"zeek_conn": ["zeek-a", "zeek-b"]}
+
+        emitter.emit(event)
+        emitter.flush()
+
+        for path in tmp_path.glob("zeek-*/conn.json"):
+            for line in path.read_text().splitlines():
+                row = json.loads(line)
+                assert row["duration"] == event.dns.rtt
+
+    def test_generic_dns_service_accounting_is_clamped(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS-like IDS/background rows without dns.log context still use DNS-sized packets."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=4.5,
+            orig_bytes=1800,
+            resp_bytes=22000,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_bytes <= 260
+        assert event.network.resp_bytes <= 512
+        assert event.network.duration <= 0.08
+
+    def test_udp_dns_with_explicit_conn_state_uses_udp_history(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Caller-forced successful DNS rows must not inherit TCP handshake history."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            duration=0.02,
+            orig_bytes=54,
+            resp_bytes=140,
+            conn_state="SF",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.protocol == "udp"
+        assert event.network.conn_state == "SF"
+        assert event.network.history in {"Dd", "D"}
+        assert not set(event.network.history) & set("SshAaFfRr")
 
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters

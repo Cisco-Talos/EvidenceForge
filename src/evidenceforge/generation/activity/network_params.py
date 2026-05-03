@@ -26,6 +26,11 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         )
     if "dns_tunnel_rtt" in overlay:
         result["dns_tunnel_rtt"] = dict(overlay["dns_tunnel_rtt"])
+    if "dns_tunnel_response_templates" in overlay:
+        result["dns_tunnel_response_templates"] = extend_list(
+            default.get("dns_tunnel_response_templates", []),
+            overlay["dns_tunnel_response_templates"],
+        )
     return result
 
 
@@ -69,3 +74,11 @@ def dns_tunnel_rtt_range() -> tuple[float, float]:
     if not isinstance(rtt, dict):
         return (0.04, 1.5)
     return (float(rtt.get("min_seconds", 0.04)), float(rtt.get("max_seconds", 1.5)))
+
+
+def dns_tunnel_response_templates() -> list[str]:
+    """Return configured DNS tunnel response token templates."""
+    templates = load_network_params().get("dns_tunnel_response_templates", [])
+    if not isinstance(templates, list):
+        return []
+    return [str(template) for template in templates if isinstance(template, str) and template]

@@ -31,7 +31,7 @@ Verifies that:
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -127,8 +127,13 @@ class TestStateManagerObjectIds:
     def test_missing_session_returns_empty(self, state_manager):
         assert state_manager.get_session_object_id("nonexistent") == ""
 
-    def test_missing_process_returns_empty(self, state_manager):
-        assert state_manager.get_process_object_id("WKS-01", 99999) == ""
+    def test_missing_process_allocates_stable_id(self, state_manager):
+        first = state_manager.get_process_object_id("WKS-01", 99999)
+        second = state_manager.get_process_object_id("WKS-01", 99999)
+
+        assert first == second
+        assert first != ""
+        uuid.UUID(first)
 
 
 # ---- Lifecycle Persistence ----
@@ -179,6 +184,36 @@ class TestObjectIdLifecycle:
         activity_gen.generate_process_termination(
             test_user, win_system, timestamp, pid, "C:\\Windows\\System32\\cmd.exe", logon_id
         )
+        terminate_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
+        assert terminate_event.event_type == "process_terminate"
+        assert terminate_event.edr.object_id == create_obj_id
+
+    def test_late_termination_reuses_remembered_process_object_id(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """A process objectID remains available after the process has left active state."""
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
+        pid = activity_gen.generate_process(
+            test_user,
+            win_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe",
+        )
+        create_obj_id = state_manager.get_process_object_id(win_system.hostname, pid)
+        state_manager.end_process(win_system.hostname, pid)
+
+        activity_gen.generate_process_termination(
+            test_user,
+            win_system,
+            timestamp + timedelta(seconds=5),
+            pid,
+            r"C:\Windows\System32\cmd.exe",
+            logon_id,
+        )
+
         terminate_event = mock_emitters["ecar"].emit.call_args_list[-1][0][0]
         assert terminate_event.event_type == "process_terminate"
         assert terminate_event.edr.object_id == create_obj_id

@@ -25,19 +25,19 @@ fields:
       pattern: "^F[A-Za-z0-9]{16,18}$"
 
   - name: tx_hosts
-    type: string
+    type: list
     required: true
-    description: "Hosts that transmitted the file, rendered as a JSON array"
+    description: "Hosts that transmitted the file (JSON array of IP strings)"
 
   - name: rx_hosts
-    type: string
+    type: list
     required: true
-    description: "Hosts that received the file, rendered as a JSON array"
+    description: "Hosts that received the file (JSON array of IP strings)"
 
   - name: conn_uids
-    type: string
+    type: list
     required: true
-    description: "Connection UIDs that carried the file, rendered as a JSON array"
+    description: "Connection UIDs that carried the file (JSON array of C-prefix UID strings)"
 
   - name: source
     type: string
@@ -55,9 +55,9 @@ fields:
     description: "Filename or share path observed for protocols that expose it, such as SMB"
 
   - name: analyzers
-    type: string
+    type: list
     required: false
-    description: "Analyzers array (rendered as JSON array)"
+    description: "Analyzers that ran on this file (JSON array of strings)"
 
   - name: mime_type
     type: string

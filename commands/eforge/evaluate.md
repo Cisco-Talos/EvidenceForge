@@ -11,7 +11,7 @@ description: >
 
 # EvidenceForge Data Quality Evaluator
 
-You are helping the user evaluate the quality of generated synthetic security log datasets using EvidenceForge's evaluation framework. The eval command scores datasets across 5 dimensions with 23 sub-scores, all deterministic and statistical. Your job is to run the eval, interpret the results, review sample records for realism, and provide actionable improvement suggestions.
+You are helping the user evaluate the quality of generated synthetic security log datasets using EvidenceForge's evaluation framework. The eval command scores datasets across **4 pillars** with 20 sub-scores, all deterministic and statistical. Your job is to run the eval, interpret the results, review sample records for realism, and provide actionable improvement suggestions.
 
 ## Quick Start
 
@@ -61,35 +61,43 @@ eforge eval scenarios/<name>/data/ --scenario scenarios/<name>/scenario.yaml --f
 
 ### Step 3: Interpret Results
 
-Present a clear summary of the evaluation results. For each dimension, explain what the score means in practical terms:
+Present a clear summary of the evaluation results. The report shows two tiers for each acceptance criterion:
+- **Minimum** (hard gate): must pass or the dataset fails overall
+- **Aspirational** (informational): a stretch target; failure here is noted but does not fail the dataset
 
-**Dimension 1: Record-Level Fidelity (weight 0.15)**
-- Tier A (Parsability): Can every record be parsed? Missing fields? Type errors?
-- Tier B (Co-occurrence): Do field combinations make sense? (e.g., network logons have IP addresses)
-- Tier C (Distributions): Are event type distributions realistic?
+For each pillar, explain what the score means in practical terms:
 
-**Dimension 2: Cross-Source Coherence (weight 0.25)**
-- Source Correctness: Are records in the right log sources for the system's OS?
-- Trace Coverage: Do storyline events leave traces in all expected formats?
-- Field Agreement: Do timestamps and identifiers match across sources?
+**Pillar 1: Parseability (weight 0.30)**
+- Spec Conformance: Does every record parse cleanly under strict-mode rules? Missing required fields? Type violations? RFC5424 strict for syslog; typed columns for Zeek; schema-strict for eCAR; XML-schema for Windows EventLog.
+- Format Constraints: Do records satisfy `FormatDefinition` constraints (field ranges, enum values, structural rules)?
 
-**Dimension 3: Background Noise Realism (weight 0.25)**
+**Pillar 2: Plausibility (weight 0.25)**
+- Value & OS Plausibility: Are field values and OS/platform combinations realistic? (bash_history from a Windows host, Linux paths in Windows process events, IPs outside expected subnets — all failures here.)
+- Co-occurrence Rules: Do field combinations make sense? (Network logons have IP addresses; TLS version matches cipher suite; no body in CONNECT tunnels.)
+- Distribution Fit: Are event-type proportions realistic for each format?
+- Cross-Source Field Agreement: When the same event appears in multiple log sources, do shared fields agree? Uses pivot-key joins defined in `cross_source_pairs.yaml` — pairs include Windows 4688 ↔ eCAR PROCESS/CREATE (same PID+host → same process name), zeek_conn ↔ Cisco ASA (same 4-tuple), web_access/proxy ↔ zeek_http (same client+URI+10s bucket → same status/method), zeek_ssl ↔ zeek_x509 (cert chain fuids → server_name ∈ SAN). A score below 100 means real field disagreements were found.
+- User Behavioral Diversity: Do different users behave differently, or are they cookie-cutter clones?
+- Benign Anomaly Rate: Is there a realistic 1–5% rate of anomalous-but-benign events? Zero anomalies is as implausible as 50%.
+
+**Pillar 3: Causality (weight 0.25)**
+- Causal Ordering: Are logon→process→logoff sequences correctly ordered? DNS before TCP? Kerberos TGT/TGS before domain logons?
+- Storyline Event Presence: Are all storyline events visible in at least one log source?
+- Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames from the scenario?
+- Pivot Linkability: Can a hunter pivot between consecutive attack steps using shared field values?
+- Storyline Temporal Integrity: Are attack events in the right relative order at the right times?
+- Storyline Trace Coverage: For each expected log format on each involved host, does the storyline leave a trace?
+
+**Pillar 4: Timing (weight 0.20)**
+- Attack-Chain Timing: Do elapsed times between consecutive storyline steps fall within plausible bounds? Bounds come from `timing_bounds.yaml` — default 5s–2h, with per-action-type overrides (e.g., lateral movement: 30s–1h, exfiltration: 60s–24h). First matching keyword in the step activity wins.
+- Human Inter-arrival (Burstiness): Are inter-event times bursty (realistic) or metronomic (robotic)?
+- System Regularity: Do automated/system processes show appropriate inter-event regularity?
+- Diurnal Pattern: Do user events cluster within persona-defined work hours and day-of-week patterns? Scored via Jensen-Shannon divergence between a 2D (weekday × hour) observed histogram and the persona's reference profile. Penalizes both off-hours concentration AND artificially uniform distributions (which indicate robotic, non-human timing).
 - Volume Adequacy: Is there enough background noise relative to the attack signal?
-- User Diversity: Do different users behave differently, or are they cookie-cutter? (Command pool diversification gives each user unique project paths and document names.)
-- Activity Plausibility: Are activities appropriate for the system/OS/persona? Includes 26 lateral movement patterns (backup, monitoring, AD replication, app→DB, etc.) auto-generated from environment topology.
-- Anomaly Rate: Is there a realistic 1-5% rate of anomalous-but-benign events?
+- Rate Plausibility: No impossible rates (≤20 events/5-sec per user; ≤10 Gbps Zeek transfers)?
 
-**Dimension 4: Temporal Realism (weight 0.15)**
-- Work Hours: Do user events cluster in persona-defined work hours? Day-of-week variation is now modeled (Monday login storms, Friday departures, weekend near-zero).
-- Burstiness: Are inter-event times bursty (realistic) or metronomic (robotic)? The Hawkes self-exciting temporal model produces natural burst-and-idle patterns; scores should be 80+ with the current engine.
-- Causal Ordering: Are logon→process→logoff sequences correctly ordered? Are DNS queries before TCP connections? Are Kerberos TGT/TGS before domain logons? (Expanded by the causal expansion engine — these should score near 100% when the engine is active.)
-- Timing Plausibility: No impossible timing (50 commands in 3 seconds)?
+**Supplementary: Host Log Profile**
 
-**Dimension 5: Signal Integrity (weight 0.20)**
-- Event Presence: Are all storyline events visible in the logs?
-- Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames?
-- Pivot Linkability: Can a hunter pivot between consecutive attack steps?
-- Temporal Integrity: Are attack events in the right order at the right times?
+The report also shows a diagnostic "Host Log Profile" section (not scored). For each host, it lists which log formats were expected (based on the host's OS and scenario configuration) and which were actually present. Use this section to diagnose missing coverage, not as a scored gate.
 
 ### Step 4: Qualitative Record Review
 
@@ -117,31 +125,35 @@ For any sub-score below 70, provide specific, actionable suggestions:
 
 | Common Issue | Suggestion |
 |-------------|-----------|
-| Low parsability | Check for empty required fields in the generator (e.g., empty SIDs) |
+| Low spec conformance | Check for empty required fields, type mismatches, or invalid enum values in the generator |
+| Low value/OS plausibility | Look for cross-OS contamination (Linux paths in Windows logs, Windows events on Linux hosts) |
 | Low volume adequacy | Increase `baseline_activity.intensity` or add more users/systems |
 | Low user diversity | Add more persona types with different work patterns and activities |
-| Low burstiness | Known generator limitation — events are near-uniformly distributed |
-| Low work hour distribution | Check persona work_hours definitions; may need off-hours event generation |
-| Low anomaly rate | Generator may need more variation in baseline (failed logons, errors) |
+| Low burstiness | Known generator limitation — events are near-uniformly distributed with some Hawkes process noise |
+| Low diurnal pattern | Check persona work_hours definitions; may need off-hours event tuning. If the sub-score shows N/A, the scenario span is <24 h or covers only one weekday — too short to measure; this is expected and not a failure. |
+| Low benign anomaly rate | Generator may need more variation in baseline (failed logons, errors, access denials) |
+| Low cross-source agreement | Real field mismatches between paired formats (e.g., proxy status ≠ zeek_http status). Sample failures show the specific disagreeing field+value pairs. If proxy and Zeek disagree on status codes, the generator may use different status assignment logic per format. |
+| Low attack-chain timing | Consecutive storyline events too fast (< min_seconds) or too slow (> max_seconds). Check `timing_bounds.yaml` overrides; adjust storyline timing or add intermediate steps. |
 
 If multiple issues trace back to the same root cause (e.g., generator limitations), group them and explain the root cause once.
 
 ### Step 6: Acceptance Criteria
 
 Report whether hard acceptance criteria pass or fail:
-- Parsability ≥ 98%
-- Source Correctness ≥ 95%
-- Causal Ordering ≥ 99%
-- Event Presence ≥ 90%
+- Spec Conformance ≥ 95% (hard gate)
+- Value & OS Plausibility ≥ 95% (hard gate)
+- Causal Ordering ≥ 90% (hard gate)
+- Storyline Event Presence ≥ 85% (hard gate)
 
-If any hard criterion fails, explain what would need to change to pass.
+If any hard criterion fails, explain what would need to change to pass. Report aspirational targets as a summary line: how many were met out of total.
 
 ## Command Reference
 
 ```
-eforge eval <output_dir> --scenario <scenario.yaml> [--format json|text] [--verbose]
+eforge eval <output_dir> --scenario <scenario.yaml> [--format json|text] [--verbose] [--real-parsers]
 ```
 
 - `--format text` (default): Rich terminal output with colored scores
 - `--format json`: Machine-readable JSON (status messages go to stderr)
 - `--verbose`: Show sample failures and detailed sub-score information
+- `--real-parsers`: Reserved flag — real parser backend not yet implemented (no-op, exits cleanly)

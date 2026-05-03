@@ -111,6 +111,82 @@ class TestSslContextPopulation:
             assert event.x509_chain[0] is event.x509
             assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
+    def test_explicit_successful_tls_does_not_fail_handshake(self, activity_gen):
+        """A caller-pinned SF TLS connection should not be downgraded by SSL failure noise."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="45.33.32.30",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=8443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=620,
+            resp_bytes=1840,
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.network.conn_state == "SF"
+        assert event.network.orig_bytes >= 620
+        assert event.network.resp_bytes >= 1840
+        assert event.ssl is not None
+        assert event.ssl.established is True
+
+    def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
+        """Proxy egress should preserve canonical POST body size for exfil-style uploads."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        body_bytes = 268_435_700
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="45.33.32.30",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=4.0,
+            orig_bytes=body_bytes,
+            resp_bytes=1711,
+            conn_state="SF",
+            source_system=source,
+            hostname="cdn-assets-update.com",
+            http=HttpContext(
+                method="POST",
+                host="cdn-assets-update.com",
+                uri="/upload/telemetry/7f3a2b19",
+                user_agent="Mozilla/5.0",
+                request_body_len=body_bytes,
+                response_body_len=1711,
+                resp_mime_types=["application/json"],
+            ),
+        )
+
+        egress_events = [
+            event
+            for event in events
+            if event.network
+            and event.network.src_ip == proxy.ip
+            and event.network.dst_ip == "45.33.32.30"
+        ]
+        assert egress_events
+        egress = egress_events[-1]
+        assert egress.network.conn_state == "SF"
+        assert egress.network.orig_bytes >= body_bytes
+
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""
         gen, events = activity_gen
@@ -711,6 +787,9 @@ class TestSslContextPopulation:
             )
             assert event.ocsp.this_update <= event.timestamp.timestamp()
             assert event.ocsp.next_update > event.timestamp.timestamp()
+            assert event.ocsp.hash_algorithm == "sha1"
+            assert len(event.ocsp.issuer_name_hash) == 40
+            assert len(event.ocsp.issuer_key_hash) == 40
             assert event.network.service == "http"
             assert event.http is not None
             assert event.http.resp_fuids == [event.ocsp.id]
@@ -721,6 +800,40 @@ class TestSslContextPopulation:
 
         assert all(len(statuses) == 1 for statuses in statuses_by_serial.values())
         assert all(len(windows) <= 2 for windows in windows_by_serial.values())
+
+    def test_linux_proxy_originated_ocsp_uses_linux_agent(self, activity_gen):
+        """Proxy-side OCSP fetches should not inherit Windows CryptoAPI identity."""
+        gen, events = activity_gen
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {proxy.ip: proxy}
+
+        for offset in range(120):
+            gen.generate_connection(
+                src_ip=proxy.ip,
+                dst_ip="91.189.91.81",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(minutes=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="changelogs.ubuntu.com",
+                conn_state="SF",
+                source_system=proxy,
+            )
+            gen._tls_seen_server_names.clear()
+
+        ocsp_events = [event for event in events if event.ocsp is not None]
+        assert ocsp_events
+        assert all(event.http is not None for event in ocsp_events)
+        assert all(event.http.user_agent != "Microsoft-CryptoAPI/10.0" for event in ocsp_events)
 
     def test_same_certificate_identity_has_stable_validity_window(self, activity_gen):
         gen, events = activity_gen

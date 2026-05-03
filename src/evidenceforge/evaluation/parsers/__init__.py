@@ -53,6 +53,9 @@ class LogParser(ABC):
     """Base class for format-specific log parsers."""
 
     format_name: str = ""
+    # Optional: set by the evaluation engine before parse_file is called so
+    # parsers that need scenario metadata (e.g. time_window year) can read it.
+    scenario: Any = None
 
     @abstractmethod
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:

@@ -154,7 +154,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | Object Type | Actions | Notes |
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) — includes granted_access, target_pid, target_image_path, and target_process_uuid in properties. |
-| THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, tgt_pid, tgt_pid_uuid, start_address, and stack addresses matching OpTC eCAR format. Thread ID, target PID, and start address are generated once in `RemoteThreadContext` and rendered consistently across Sysmon and eCAR. |
+| THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, target_pid, target_process_uuid, start_address, and stack addresses matching OpTC eCAR format. Thread ID, target PID, and start address are generated once in `RemoteThreadContext` and rendered consistently across Sysmon and eCAR. |
 | FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity and baseline SMB file-server access. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |

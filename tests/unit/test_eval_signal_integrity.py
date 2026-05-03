@@ -20,17 +20,19 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Tests for Dimension 5: Signal Integrity scoring."""
+"""Tests for Causality scoring (merged from signal_integrity)."""
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from evidenceforge.evaluation.dimensions.signal_integrity import (
-    SignalIntegrityScorer,
-)
 from evidenceforge.evaluation.parsers import ParsedRecord
+from evidenceforge.evaluation.pillars.causality import CausalityScorer
+from evidenceforge.evaluation.storyline import _match_activity, resolve_storyline
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.files import load_yaml
+
+# Alias for tests that use the old SignalIntegrityScorer name
+SignalIntegrityScorer = CausalityScorer
 
 GOOD_FIXTURES = Path(__file__).parent.parent / "fixtures" / "eval" / "good"
 SCENARIOS_DIR = Path(__file__).parent.parent / "fixtures" / "scenarios"
@@ -110,8 +112,7 @@ class TestStorylineResolution:
                 }
             ]
         )
-        scorer = SignalIntegrityScorer()
-        resolved = scorer._resolve_storyline(scenario.storyline, scenario)
+        resolved = resolve_storyline(scenario.storyline, scenario)
         assert len(resolved) == 1
         assert resolved[0].time == datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC)
 
@@ -128,8 +129,7 @@ class TestStorylineResolution:
                 }
             ]
         )
-        scorer = SignalIntegrityScorer()
-        resolved = scorer._resolve_storyline(scenario.storyline, scenario)
+        resolved = resolve_storyline(scenario.storyline, scenario)
         assert resolved[0].time == T0 + timedelta(hours=2)
 
     def test_relative_seconds(self):
@@ -145,16 +145,14 @@ class TestStorylineResolution:
                 }
             ]
         )
-        scorer = SignalIntegrityScorer()
-        resolved = scorer._resolve_storyline(scenario.storyline, scenario)
+        resolved = resolve_storyline(scenario.storyline, scenario)
         assert resolved[0].time == T0 + timedelta(seconds=3600)
 
     def test_activity_keyword_matching(self):
-        scorer = SignalIntegrityScorer()
-        assert "logon" in scorer._match_activity("User login to workstation")
-        assert "process" in scorer._match_activity("Execute powershell command")
-        assert "connection" in scorer._match_activity("Download payload from C2 server")
-        assert "process" in scorer._match_activity("Something unknown happens")  # default
+        assert "logon" in _match_activity("User login to workstation")
+        assert "process" in _match_activity("Execute powershell command")
+        assert "connection" in _match_activity("Download payload from C2 server")
+        assert "process" in _match_activity("Something unknown happens")  # default
 
     def test_system_ip_resolved(self):
         scenario = _scenario_with_storyline(
@@ -169,8 +167,7 @@ class TestStorylineResolution:
                 }
             ]
         )
-        scorer = SignalIntegrityScorer()
-        resolved = scorer._resolve_storyline(scenario.storyline, scenario)
+        resolved = resolve_storyline(scenario.storyline, scenario)
         assert resolved[0].system_ip == "10.0.10.50"
 
 
@@ -650,11 +647,11 @@ class TestEndToEnd:
         }
         scorer = SignalIntegrityScorer()
         result = scorer.score(records, scenario)
-        assert result.number == 5
-        assert result.name == "Signal Integrity"
-        assert result.weight == 0.20
+        assert result.number == 3
+        assert result.name == "Causality"
+        assert result.weight == 0.25
         assert result.score is not None
-        assert len(result.sub_scores) == 4
+        assert len(result.sub_scores) == 6
 
     def test_with_retail_scenario(self):
         """Run scorer on existing good fixtures with real scenario."""
@@ -677,4 +674,4 @@ class TestEndToEnd:
         result = scorer.score(records, scenario)
         # Should produce a score (may be low since fixtures don't match storyline)
         assert result.score is not None
-        assert len(result.sub_scores) == 4
+        assert len(result.sub_scores) == 6

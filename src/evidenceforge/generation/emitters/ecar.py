@@ -33,8 +33,8 @@ from evidenceforge.generation.activity.timing_profiles import sample_timing_delt
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 
 _ECAR_SORT_PRIORITY = {
-    ("PROCESS", "CREATE"): 0,
-    ("USER_SESSION", "LOGIN"): 1,
+    ("USER_SESSION", "LOGIN"): 0,
+    ("PROCESS", "CREATE"): 1,
     ("MODULE", "LOAD"): 2,
     ("REGISTRY", "MODIFY"): 3,
     ("FILE", "CREATE"): 4,
@@ -157,11 +157,12 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
+        action = "OPEN" if event.auth.logon_type == 7 else "LOGIN"
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
-            "action": "LOGIN",
+            "action": action,
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "success",
@@ -207,14 +208,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
         host = event.src_host
         proc = event.process
-        event_ts = event.timestamp + self._source_offset(
-            "process_create",
-            host.hostname,
-            proc.pid,
-            event.timestamp,
-            minimum_ms=12,
-            maximum_ms=250,
-        )
+        event_ts = self._process_create_timestamp(event, proc)
         event_data = {
             "timestamp": event_ts,
             "hostname": self._host_name(host),
@@ -252,6 +246,7 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_file_event(self, event: SecurityEvent) -> None:
         """Render eCAR FILE event from canonical FileContext (logged on src_host)."""
         host = event.src_host
+        proc = event.process
         action_map = {
             "file_read": "READ",
             "file_create": "CREATE",
@@ -259,7 +254,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "file_delete": "DELETE",
         }
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "FILE",
             "action": action_map.get(event.event_type, "CREATE"),
@@ -274,8 +269,9 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_registry_event(self, event: SecurityEvent) -> None:
         """Render eCAR REGISTRY event from canonical RegistryContext (logged on src_host)."""
         host = event.src_host
+        proc = event.process
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "REGISTRY",
             "action": "MODIFY",
@@ -298,7 +294,7 @@ class EcarEmitter(HostMultiplexEmitter):
         elif event.file is not None:
             module_path = event.file.path
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "MODULE",
             "action": "LOAD",
@@ -336,6 +332,8 @@ class EcarEmitter(HostMultiplexEmitter):
                     event.timestamp,
                 ),
             )
+            if event.process is not None:
+                event_ts = max(event_ts, self._after_process_create_timestamp(event, event.process))
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.src_host.hostname,
@@ -396,7 +394,7 @@ class EcarEmitter(HostMultiplexEmitter):
         Source process creates a thread in a different target process.
 
         OpTC field structure: objectID = new thread UUID, actorID = source
-        process UUID, tgt_pid_uuid = target process UUID in properties.
+        process UUID, target_process_uuid = target process UUID in properties.
         """
         host = event.src_host
         proc = event.process
@@ -409,8 +407,18 @@ class EcarEmitter(HostMultiplexEmitter):
             if auth and auth.source_port
             else -1
         )
+        event_ts = self._after_process_create_timestamp(event, proc) + sample_timing_delta(
+            "source.ecar_remote_thread",
+            seed_parts=(
+                host.hostname,
+                proc.pid,
+                target_pid,
+                remote_thread.new_thread_id if remote_thread else 0,
+                event.timestamp,
+            ),
+        )
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": event_ts,
             "hostname": self._host_name(host),
             "object": "THREAD",
             "action": "REMOTE_CREATE",
@@ -421,8 +429,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "image_path": proc.image,
             "src_pid": str(proc.pid),
             "src_tid": str(remote_thread.source_thread_id if remote_thread else 0),
-            "tgt_pid": str(target_pid),
-            "tgt_pid_uuid": remote_thread.target_process_object_id
+            "target_pid": str(target_pid),
+            "target_process_uuid": remote_thread.target_process_object_id
             if remote_thread
             else str(uuid.uuid4()),
             "tgt_tid": str(remote_thread.new_thread_id if remote_thread else 0),
@@ -453,7 +461,7 @@ class EcarEmitter(HostMultiplexEmitter):
         target_pid = access.target_pid if access else -1
         granted_access = access.granted_access if access else "0x0"
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._after_process_create_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "OPEN",
@@ -465,7 +473,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": proc.username if proc.username else "NT AUTHORITY\\SYSTEM",
             "image_path": proc.image,
             "command_line": proc.command_line,
-            "parent_image_path": proc.parent_image or proc.image,
+            "parent_image_path": proc.parent_image or "",
             "target_pid": target_pid,
             "target_image_path": target_image,
             "target_process_uuid": access.target_process_object_id if access else "",
@@ -493,6 +501,46 @@ class EcarEmitter(HostMultiplexEmitter):
         )
         return timedelta(milliseconds=offset)
 
+    def _process_create_timestamp(
+        self,
+        event: SecurityEvent,
+        proc: Any,
+    ) -> datetime:
+        """Return the eCAR render timestamp for a process-create observation."""
+        if proc is None:
+            return event.timestamp
+        host = event.src_host
+        hostname = host.hostname if host is not None else ""
+        start_time = proc.start_time or event.timestamp
+        return start_time + self._source_offset(
+            "process_create",
+            hostname,
+            proc.pid,
+            start_time,
+            minimum_ms=12,
+            maximum_ms=250,
+        )
+
+    def _after_process_create_timestamp(
+        self,
+        event: SecurityEvent,
+        proc: Any,
+    ) -> datetime:
+        """Clamp dependent eCAR observations after their PROCESS/CREATE record."""
+        if proc is None or proc.start_time is None:
+            return event.timestamp
+        process_create_ts = self._process_create_timestamp(event, proc)
+        if event.timestamp > process_create_ts:
+            return event.timestamp
+        return process_create_ts + self._source_offset(
+            "dependent_after_process_create",
+            self._host_name(event.src_host),
+            proc.pid,
+            event.timestamp,
+            minimum_ms=1,
+            maximum_ms=35,
+        )
+
     def _render_service_installed(self, event: SecurityEvent) -> None:
         """Render eCAR SERVICE/CREATE event (logged on src_host)."""
         host = event.src_host
@@ -519,6 +567,74 @@ class EcarEmitter(HostMultiplexEmitter):
         host_fqdn = event_data.pop("_host_fqdn", "")
         self.emit_to_host(rendered, host_fqdn)
 
+    @staticmethod
+    def _referenced_process_ids(record: dict[str, Any]) -> set[str]:
+        """Return process object IDs referenced by an eCAR record."""
+        refs = set()
+        object_id = record.get("objectID")
+        if object_id and not (
+            record.get("object") == "PROCESS" and record.get("action") == "TERMINATE"
+        ):
+            refs.add(str(object_id))
+        actor_id = record.get("actorID")
+        if actor_id:
+            refs.add(str(actor_id))
+        props = record.get("properties") or {}
+        for key in (
+            "target_process_uuid",
+            "target_process_object_id",
+            "source_process_object_id",
+        ):
+            value = props.get(key)
+            if value:
+                refs.add(str(value))
+        return refs
+
+    @classmethod
+    def _normalize_process_termination_order(cls, lines: list[str]) -> list[str]:
+        """Move PROCESS/TERMINATE rows after later same-process references."""
+        records: list[dict[str, Any] | None] = []
+        latest_reference_ms: dict[str, int] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            timestamp_ms = int(record.get("timestamp_ms", 0))
+            for process_id in cls._referenced_process_ids(record):
+                latest_reference_ms[process_id] = max(
+                    latest_reference_ms.get(process_id, 0),
+                    timestamp_ms,
+                )
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS" and record.get("action") == "TERMINATE":
+                process_id = str(record.get("objectID", ""))
+                latest_ms = latest_reference_ms.get(process_id)
+                timestamp_ms = int(record.get("timestamp_ms", 0))
+                if latest_ms is not None and latest_ms >= timestamp_ms:
+                    stable_delay_ms = 100 + (sum(ord(ch) for ch in process_id) % 1900)
+                    record["timestamp_ms"] = latest_ms + stable_delay_ms
+                    line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
+    def flush(self, force: bool = False) -> None:
+        """Flush per-host eCAR records after final lifecycle normalization."""
+        if force:
+            with self._writers_lock:
+                writers = list(self._writers.values())
+            for writer in writers:
+                with writer._lock:
+                    writer.buffer = self._normalize_process_termination_order(writer.buffer)
+        super().flush(force=force)
+
     # Property keys that belong in the eCAR properties map.
     _PROPERTY_KEYS = (
         "command_line",
@@ -541,9 +657,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "sub_status",
         "src_pid",
         "src_tid",
-        "tgt_pid",
         "tgt_tid",
-        "tgt_pid_uuid",
         "start_address",
         "stack_base",
         "stack_limit",

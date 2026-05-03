@@ -1,23 +1,4 @@
 # Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-# SOFTWARE.
-#
 # SPDX-License-Identifier: MIT
 
 """Tests for evaluation data models."""
@@ -28,6 +9,7 @@ from datetime import UTC, datetime
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
     DimensionScore,
+    PillarScore,
     QualityReport,
     SubScore,
 )
@@ -44,20 +26,56 @@ class TestSubScore:
         assert s.score is None
 
 
-class TestDimensionScore:
+class TestPillarScore:
     def test_basic_creation(self):
-        d = DimensionScore(
+        p = PillarScore(
             number=1,
-            name="Record-Level Fidelity",
-            weight=0.15,
+            name="Parseability",
+            weight=0.30,
             score=92.0,
             sub_scores=[
-                SubScore(name="Parsability", key="parsability", weight=0.4, score=100.0),
-                SubScore(name="Co-occurrence", key="co_occurrence", weight=0.35, score=88.0),
+                SubScore(name="Spec Conformance", key="spec_conformance", weight=0.5, score=100.0),
+                SubScore(
+                    name="Format Constraints", key="format_constraints", weight=0.5, score=88.0
+                ),
             ],
         )
-        assert d.number == 1
-        assert len(d.sub_scores) == 2
+        assert p.number == 1
+        assert len(p.sub_scores) == 2
+
+    def test_dimension_score_alias(self):
+        # DimensionScore is a backward-compat alias for PillarScore
+        assert DimensionScore is PillarScore
+        d = DimensionScore(number=1, name="Record-Level Fidelity", weight=0.15, score=92.0)
+        assert isinstance(d, PillarScore)
+
+
+class TestAcceptanceCriterion:
+    def test_basic_creation(self):
+        c = AcceptanceCriterion(
+            name="parseability.spec_conformance",
+            pillar="parseability",
+            sub_score_key="spec_conformance",
+            threshold=95.0,
+            aspirational=99.0,
+            actual=97.0,
+            passed=True,
+            meets_aspirational=False,
+            level="hard",
+        )
+        assert c.passed is True
+        assert c.meets_aspirational is False
+
+    def test_indeterminate_state(self):
+        c = AcceptanceCriterion(
+            name="parseability.spec_conformance",
+            pillar="parseability",
+            sub_score_key="spec_conformance",
+            threshold=95.0,
+            level="hard",
+        )
+        assert c.passed is None
+        assert c.actual is None
 
 
 class TestQualityReport:
@@ -68,33 +86,48 @@ class TestQualityReport:
             total_records=1000,
             source_counts={"windows_event_security": 500, "zeek_conn": 500},
             overall_score=78.0,
-            dimensions=[
-                DimensionScore(
+            pillars=[
+                PillarScore(
                     number=1,
-                    name="Record-Level Fidelity",
-                    weight=0.15,
+                    name="Parseability",
+                    weight=0.30,
                     score=92.0,
                 ),
             ],
             acceptance_passed=True,
             acceptance_criteria=[
                 AcceptanceCriterion(
-                    name="Parsability",
-                    dimension=1,
-                    sub_score_key="parsability",
-                    threshold=98.0,
+                    name="parseability.spec_conformance",
+                    pillar="parseability",
+                    sub_score_key="spec_conformance",
+                    threshold=95.0,
+                    aspirational=99.0,
                     actual=100.0,
                     passed=True,
                     level="hard",
                 ),
             ],
+            aspirational_met=1,
+            aspirational_total=6,
         )
         json_str = report.model_dump_json()
         data = json.loads(json_str)
         assert data["scenario_name"] == "test-scenario"
         assert data["overall_score"] == 78.0
-        assert len(data["dimensions"]) == 1
+        assert len(data["pillars"]) == 1
         assert data["acceptance_passed"] is True
+        assert data["aspirational_met"] == 1
+        assert data["aspirational_total"] == 6
+
+    def test_dimensions_property(self):
+        """dimensions property is a backward-compat alias for pillars."""
+        p = PillarScore(number=1, name="Parseability", weight=0.30, score=92.0)
+        report = QualityReport(
+            scenario_name="test",
+            evaluated_at=datetime.now(UTC),
+            pillars=[p],
+        )
+        assert report.dimensions is report.pillars
 
     def test_empty_report(self):
         report = QualityReport(
@@ -104,3 +137,4 @@ class TestQualityReport:
         assert report.total_records == 0
         assert report.overall_score is None
         assert report.acceptance_passed is None
+        assert report.aspirational_met is None

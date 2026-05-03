@@ -1,3 +1,7 @@
+---
+description: "Scenario Schema Reference"
+---
+
 # Scenario Schema Reference
 
 This document describes the EvidenceForge scenario file schema, including Phase 2.4 enhanced fields.
@@ -36,9 +40,20 @@ environment:
   users: [...]
   systems: [...]
   service_accounts: [...]      # Optional: extra account names valid as storyline actors
-  stale_accounts: [...]        # Optional: inactive accounts that generate failed logon noise
+  stale_accounts:              # Optional: inactive accounts that generate background noise
+    - username: former.employee
+      last_active: "2023-11-15"
+      reason: "Transferred to another office"
+    - username: svc_old_crm
+      last_active: "2024-01-02"
+      reason: "CRM system decommissioned"
   groups: [...]               # Optional
 ```
+
+Stale accounts generate multiple types of background evidence: failed network logons (~15%/hour), Kerberos pre-auth failures (4771, status 0x12) on DCs (~5%/hour), scheduled task failures (batch logon type 4, ~3%/hour), and service startup failures (type 5, first hour only). Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic. Each field:
+- `username`: Account name (must not collide with active users or service_accounts)
+- `last_active`: ISO date when the account was last active (context only, not used by engine)
+- `reason`: Why the account is stale (context only, for ground truth documentation)
 
 ### Timezone Configuration
 
@@ -61,8 +76,10 @@ users:
     groups: ["developers"]     # Optional
     enabled: true              # Optional (default: true)
     persona: developer         # Optional: reference to persona name
-    primary_system: WS-01      # Optional: reference to system hostname
+    primary_system: WS-01      # Required: reference to system hostname
 ```
+
+`primary_system` is operationally important, not just descriptive. The compiled world model uses it to place the user's interactive activity, choose realistic remote-admin source hosts, and decide when server activity should be modeled as SSH/RDP/network access instead of a local console session.
 
 ### Systems
 
@@ -77,14 +94,7 @@ systems:
     roles: [web_server]        # Optional: forward_proxy, web_server, dns_server, mail_server
 ```
 
-### System Roles
-
-The `roles` field declares a system's function in the network. The engine uses roles for traffic routing decisions:
-
-- `web_server` — generates web access logs for HTTP requests to this system
-- `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
-- `dns_server` — DNS resolution target
-- `mail_server` — mail relay/server
+`roles` and `services` materially affect realism. They feed the compiled world model that drives infrastructure discovery, proxy routing, legitimate lateral-movement patterns, and whether remote access should look like SSH, RDP, or generic network activity.
 
 ### Proxy Deployment
 
@@ -94,41 +104,172 @@ proxy:
   listener_port: 8080            # Optional: explicit-mode proxy listener (default: 8080)
 ```
 
-Use `transparent` when Zeek/IDS should look like clients connected directly to origins while proxy logs are present. Use `explicit` for PAC/browser-configured proxies; the generator emits client-to-proxy and proxy-to-origin network legs, and each Zeek/IDS/firewall sensor sees only the leg its placement can observe. Denied proxy requests stop at the proxy and do not emit proxy-to-origin evidence. HTTP/S storyline beacons from proxied hosts use the same explicit proxy path, including proxy-denied evidence for `action: deny`.
+`environment.proxy` controls how systems with `roles: [forward_proxy]` appear in network evidence:
+
+- `transparent` preserves direct-looking client-to-origin Zeek/IDS traffic while still generating proxy access logs.
+- `explicit` models PAC/browser-configured proxy behavior by replacing the logical client-to-origin connection with two concrete legs: client-to-proxy on `listener_port`, then proxy-to-origin on the destination port. Sensor placement determines which leg each Zeek/IDS/firewall source sees. Denied proxy requests stop at the proxy and do not emit a proxy-to-origin leg.
+
+If `proxy_access` is requested and `environment.proxy` is omitted, validation warns and defaults to `transparent`. If `mode: explicit` is set without `listener_port`, validation warns and defaults to `8080`.
+
+### System Roles
+
+The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
+
+- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users
+- `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
+- `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
+- `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations. File-server roles also increase baseline SMB target selection beyond normal DC SYSVOL/GPO traffic.
+- `domain_controller` — outbound: inter-DC replication; inbound: Kerberos/LDAP/DNS from all hosts
+- `forward_proxy` — routes outbound HTTP/HTTPS traffic through this system; generates proxy access logs with CONNECT entries for HTTPS, cache hit/miss status, and full destination URLs
+- `dns_server` — DNS resolution target
+
+Inbound traffic is constrained by network topology: DMZ hosts receive substantial external traffic, while internal servers only receive connections from other internal systems. The firewall policy determines what gets permitted vs denied — denied connection attempts still produce firewall deny records and source-side sensor visibility.
+
+For server and infrastructure hosts, pair `roles` with realistic `services` whenever possible. `roles` tell the engine what the host is for; `services` help the world model infer concrete protocols and destinations (for example, PostgreSQL vs MSSQL, web stack vs proxy stack, SSH-capable Linux admin targets, and so on).
 
 ### Network Segment Exposure
 
-**`exposure` is required on every segment** — there is no default. Choose the right value for each segment's role:
+Segments can declare their internet exposure via the `exposure` field:
 
 ```yaml
 network:
   segments:
     - name: workstations
       cidr: "10.0.1.0/24"
-      exposure: internal        # Only internal clients; no external traffic
-    - name: servers
-      cidr: "10.0.2.0/24"
-      exposure: internal        # Internal-only server segment
+      exposure: internal        # Only internal clients (default)
     - name: dmz
-      cidr: "10.0.3.0/24"
-      exposure: external        # Internet-facing; all traffic from external IPs
-    - name: public-web
-      cidr: "10.0.4.0/24"
-      exposure: both            # Mix: ~60% external, ~40% internal (default ratio)
-    - name: mostly-external
-      cidr: "10.0.5.0/24"
-      exposure: both
-      external_ratio: 0.85      # 85% external visitors, 15% internal monitoring
+      cidr: "10.0.2.0/24"
+      exposure: both            # Internal + external clients
 ```
 
-Values:
-- `internal` — all client traffic from other scenario systems (no external IPs)
-- `external` — all client traffic from external (internet) IPs via Zipf-weighted pool
-- `both` — mix of external and internal traffic; ratio defaults to 0.6 (60% external)
+Values: `internal` (default), `external`, `both`. Affects web server client IP generation — `both` and `external` segments produce a mix of internal and external client IPs in web access logs.
 
-`external_ratio` (optional float, `both` only) — overrides the default 60/40 split. Range 0.0–1.0, where 1.0 = all external and 0.0 = all internal. Setting `external_ratio` on an `internal` or `external` segment is a validation error.
+### Network Sensors
 
-Affects web server client IP generation and inbound connection routing. A web server on an `internal` segment will only see traffic from other scenario hosts — make it `external` or `both` for realistic internet-facing web server logs.
+Sensors define monitoring infrastructure. Each sensor type produces different log formats:
+
+```yaml
+network:
+  sensors:
+    - type: network             # network | ids | firewall
+      name: core-tap
+      hostname: zeek01          # Output directory name (falls back to name)
+      monitoring_segments: [corporate_lan, server_vlan]
+      direction: bidirectional  # bidirectional | inbound | outbound
+      placement: span           # span mirrors segment traffic | tap observes uplink/boundary traffic
+      log_formats: [zeek]       # Format groups or individual formats
+```
+
+`span` sensors can see traffic where either endpoint belongs to a monitored segment, including same-segment traffic. `tap` sensors do not see same-segment traffic. When a TAP monitors multiple internal segments, internal cross-segment traffic is visible only if both endpoint segments are monitored; external/boundary traffic remains visible when either side is monitored.
+
+#### Firewall Sensors
+
+Firewall sensors produce Cisco ASA syslog records for permitted and denied connections. They require explicit policy rules to determine what traffic is allowed vs denied.
+
+```yaml
+    - type: firewall
+      name: fw01
+      hostname: fw01
+      monitoring_segments: [workstations, servers, dmz]
+      placement: tap
+      direction: bidirectional
+      log_formats: [cisco_asa]
+      interfaces:               # Map segment names to ASA interface names
+        workstations: inside
+        servers: inside
+        dmz: dmz
+      default_action: deny      # deny (default) | permit
+      deny_ratio: 5.0           # Deny events per allow event in baseline (default: 5.0)
+      threat_detection_rate: 10 # Deny rate (drops/sec) triggering 733100 alerts (0=disabled)
+      nat_rules:
+        - type: dynamic_pat
+          src: [workstations, servers]
+          mapped_ip: 45.83.220.1
+        - type: static
+          real_ip: 172.16.0.5
+          mapped_ip: 45.83.220.5
+      policy:                   # Ordered rules — first match wins
+        - {src: external, dst: dmz, ports: [80, 443]}
+        - {src: workstations, dst: any}
+        - {src: servers, dst: external, ports: [80, 443, 53]}
+        - {src: servers, dst: servers}
+```
+
+**Policy rules** (`FirewallRule`):
+- `src` / `dst`: segment name, `"external"` (IPs not in any segment), specific IP, CIDR notation, or `"any"`
+- `ports`: list of port numbers, or empty list / `"any"` for all ports
+- `action`: `"permit"` (default) or `"deny"`
+
+#### Public Address Space
+
+The `public_cidrs` field on `NetworkConfig` declares the org's public IP address blocks. External scan/probe traffic targets these ranges instead of internal IPs, and legitimate inbound connections use VIPs (static NAT `mapped_ip` values) as the wire-level destination.
+
+```yaml
+network:
+  public_cidrs: ["45.83.220.0/28"]  # Optional — auto-derived from VIPs if omitted
+  segments: [...]
+  sensors: [...]
+```
+
+**Auto-derivation:** When `public_cidrs` is empty, VIPs from static NAT rules are grouped by /24 prefix to create scan target ranges. For example, VIPs `45.83.220.10` and `45.83.220.14` produce `["45.83.220.0/24"]`.
+
+**Inbound traffic flow:** External clients connect to VIPs (public IPs). The NAT engine translates to real (internal) IPs per sensor — outside Zeek sees VIPs, inside Zeek sees real IPs, ASA shows both in Built/Teardown records.
+- Rules are evaluated in order; first match wins (like real ACLs)
+- Traffic not matching any rule is subject to `default_action`
+
+**Interfaces**: Map segment names to ASA interface names (e.g., `inside`, `outside`, `dmz`). IPs not in any mapped segment resolve to `"outside"`.
+
+**Threat detection**: The ASA emitter automatically tracks per-source-IP deny rates and fires 733100 alerts when both burst (default 10 drops/sec over 20s) and average (default 5 drops/sec over 60s) thresholds are exceeded. Set `threat_detection_rate: 0` to disable.
+
+**NAT rules**: Define Network Address Translation behavior for the firewall. Each rule in the `nat_rules` list supports:
+- `type`: `dynamic_pat` (many:1 with port translation) or `static` (1:1 IP mapping)
+- `src`: segment name(s), IP, or CIDR. Accepts a string or list.
+- `mapped_ip`: the post-NAT IP address
+- `real_ip`: for static NAT, the specific internal IP being mapped
+
+Dynamic PAT: all traffic from matching segments shares one external IP with port translation. Static NAT: bidirectional 1:1 mapping, enables inbound connections to DMZ servers via public IP. NAT only applies to permitted connections that cross segment boundaries; denied connections are not NATted.
+
+### Database Service Routing
+
+When a system has the `database` role, the engine determines the DB protocol from `services`:
+
+- `services: [postgresql]` → PostgreSQL on port 5432
+- `services: [mysql]` or `services: [mariadb]` → MySQL on port 3306
+- `services: [mssql]` or `services: [sqlserver]` → MSSQL on port 1433
+
+When `services` is empty, the engine infers from OS: **Linux → PostgreSQL**, **Windows → MSSQL**. Traffic generation only routes database connections to hosts running the matching DB engine — a PostgreSQL host never receives MSSQL traffic, even in mixed-DB environments.
+
+### External Inbound Requirements
+
+External inbound traffic requires the target host to be reachable from the internet:
+
+- **Hosts with static NAT VIP** → External clients connect to the VIP; NAT translates per sensor
+- **Hosts with a public IP** (non-RFC1918, e.g., cloud) → External clients connect directly
+- **RFC1918 hosts without a VIP** → External inbound is silently skipped (unreachable)
+
+If a system needs external inbound traffic, either configure a static NAT rule with `mapped_ip` or assign it a public IP address.
+
+### Session Management
+
+The engine manages user sessions with exact transport-type matching. When a storyline or baseline requests a session on a host, the engine:
+
+1. Checks for an existing session with the **exact** `session_kind` (interactive, network, ssh, rdp)
+2. If no match, creates a new session with the appropriate transport evidence (SSH syslog, RDP 4624 type 10, etc.)
+
+Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
+
+Sessions marked as `storyline_protected` (by storyline events that depend on them) are immune to baseline logoff, even if logoff was already planned for the same hour.
+
+### Baseline Failed Logon Noise
+
+The engine automatically generates realistic failed logon patterns without scenario configuration:
+
+- **Password typos** (~5% of interactive logons): 1-2 failed attempts (4625) immediately before a successful logon (4624) for the same user. Simulates mistyped complex passwords.
+- **Remote failed auth**: network 4625 events use data-driven Windows auth realism profiles for LogonProcessName/auth package, DC-side 4771/4776 validation-path selection, and matching sensor-visible connection evidence. Auth-bearing connections are established or reset after payload; SYN-only probes are reserved for scans/unreachable services without host auth evidence.
+- **Stale scheduled tasks**: Periodic failed batch logons (type 4) from plausible service accounts on deterministic hosts. Fires every 1-2 hours, representing forgotten tasks with expired credentials.
+- **Management software sweeps**: 1-2 times per business day, a management tool tries a disabled credential across 5-15 servers in quick succession. All fail with "account disabled."
+
+These patterns augment the explicit `stale_accounts` feature, which generates additional failures from accounts you define. Together they produce a realistic ratio of failed-to-successful authentication events.
 
 ## Personas
 
@@ -226,62 +367,30 @@ time_window:
   start: "2024-01-15T10:00:00Z"  # Required: ISO 8601 UTC
   end: "2024-01-15T18:00:00Z"    # Either end OR duration required
   duration: "8h"                   # Supports: "10h", "3d", "2h30m", "5m30s", "500ms"
+  warmup: "8h"                     # Optional (default "8h"). Minimum 1 hour.
 ```
+
+The `warmup` field controls a pre-generation phase that runs *before* `start` to pre-populate
+internal state (DNS cache, process trees, active sessions, Kerberos tickets, Hawkes timing kernels).
+Events generated during warm-up update state but are **not** written to output files. This makes
+the first minutes of output look like a running system rather than a cold start. Minimum 1 hour;
+default 8 hours covers a full day/night transition for maximum realism.
+
+All `storyline` and `red_herrings` times should fall inside the configured `time_window`. For
+example, if the final storyline step is scheduled at `+36h`, set `duration` longer than 36 hours
+so baseline logs, proxy/firewall evidence, and attack traces cover the same collection horizon.
+`eforge validate` warns when a storyline step falls outside the window.
 
 ## Baseline Activity
 
 ```yaml
 baseline_activity:
   description: "Normal office activity"
-  intensity: medium              # low|medium|high — scales ALL background traffic
+  intensity: medium              # low|medium|high (events/user/hour)
   variation: low                 # low|medium|high (timing variation)
-  suspicious_noise: high         # Optional: low|medium|high|ludicrous (default: high)
-  traffic_rates:                 # Optional: per-traffic-type overrides
-    web: [5000, 12000]           # explicit range (requests/web_server/hour)
-    kerberos: low                # use low-level rates despite global intensity
-    ldap: 50                     # fixed rate
 ```
 
-The `intensity` field scales ALL background traffic types via configurable rate tables (see `traffic_rates.yaml`). Default rates by intensity level:
-
-| Traffic Type | Low | Medium | High | Unit |
-|---|---|---|---|---|
-| user_activity | 5 | 15 | 40 | events/user/hr |
-| web | 10-30 | 800-1500 | 3000-8000 | requests/web_server/hr |
-| dns_interval | 600-1800 | 300-900 | 120-600 | seconds between queries |
-| ntp | 1 | 1 | 1 | syncs/host/hr |
-| smb_interval | 1200-3000 | 600-1500 | 300-900 | seconds between SMB ops |
-| kerberos | 1-3 | 2-5 | 4-8 | tickets/host/hr |
-| ldap | 2-5 | 4-10 | 8-20 | queries/host/hr |
-| persona_connections | 3-10 | 5-15 | 8-20 | connections/user_session/hr |
-
-### traffic_rates overrides
-
-The optional `traffic_rates` field accepts per-type overrides in three forms:
-- **Integer**: `web: 500` — fixed rate (500 requests/hr)
-- **Range**: `web: [5000, 12000]` — random in range each hour
-- **Preset name**: `web: low` — use that intensity level's default for this type only
-
-This allows mixing intensities: e.g., `intensity: high` with `traffic_rates: {web: low}` gives high endpoint activity but quiet web servers.
-
-Suspicious noise mapping: low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr. Generates suspicious-but-benign ambient events (after-hours admin logins, PowerShell from non-attackers, failed logon bursts, service account anomalies).
-
-### Stale Accounts
-
-Optional list of inactive accounts that generate background failed logon noise during baseline generation. Simulates automated systems trying cached credentials that no longer work.
-
-```yaml
-environment:
-  stale_accounts:
-    - username: svc_bkup_2019     # Must not collide with active users or service_accounts
-      last_active: "2024-06-15"   # ISO date (context only, not used by engine)
-      reason: "Deprecated backup service — replaced by Veeam"
-    - username: jdoe_old
-      last_active: "2023-11-01"
-      reason: "Former contractor, account disabled but not deleted"
-```
-
-Each stale account has ~15% chance per hour of generating a failed logon (4625) on a server or DC. Remote Windows failed-auth attempts use data-driven auth realism profiles for 4625 field shape, DC-side 4771/4776 validation-path selection, and matching established/reset-after-payload network evidence when sensors can see the traffic.
+Intensity mapping: low=5, medium=15, high=40 events/user/hour.
 
 ## Storyline
 
@@ -315,7 +424,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `logon` | 4624, target-host 4672 for elevated sessions, eCAR LOGIN | | `logon_type` (default 3), `source_ip` |
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
-| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
+| `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
 | `ssh_session` | Zeek conn + syslog sshd + eCAR | | `source_ip` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
@@ -324,16 +433,108 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `service_installed` | 4697, eCAR SERVICE/CREATE | `service_name`, `service_file_name` | `service_account` |
 | `scheduled_task_created` | 4698 | `task_name` | `task_content` |
 | `log_cleared` | 1102 | | |
-| `create_remote_thread` | Sysmon 8 | `target_process` | |
+| `create_remote_thread` | Sysmon 8, eCAR THREAD/REMOTE_CREATE | `target_process` | |
 | `dhcp_lease` | Zeek dhcp.log | | `mac_address`, `requested_ip` |
-| `web_scan` | web_access + Zeek HTTP + Zeek conn | `dst_ip`, `rate`, one of `duration`/`end_time`/`count` | `preset`, `paths`, `hostname`, `user_agent`, `jitter` |
+| `port_scan` | ASA 106023 (bulk denies) | `target_ips` or `target_segment` | `source_ip`, `target_count`, `ports`, `protocol`, `scan_rate` |
+| `beacon` | Zeek conn/proxy/ASA (periodic connections) | `dst_ip`, `interval`, one of `end_time`/`duration`/`count` | `action` (allow/deny), `hostname`, `service`, `protocol`, `source_ip`, `method`, `uri`, `user_agent`, `referrer`, `status_code`, `orig_bytes`, `resp_bytes`, `jitter` (default: 0.15) |
+| `dns_query` | Zeek dns.log + conn.log, Sysmon 22 | `query` | `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR), `source_ip` |
+| `web_scan` | web_access + Zeek HTTP (bulk HTTP requests) | `dst_ip`, `rate`, one of `end_time`/`duration`/`count` | `preset` (nikto/dirb/gobuster/sqlmap/nmap_http), `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4) |
+| `credential_spray` | Windows 4625/4776 or syslog auth | `target_accounts`, `interval`, one of `end_time`/`duration`/`count` | `pattern` (spray/brute_force/stuffing), `source_ip`, `logon_type`, `success`, `jitter` (default: 0.5) |
+| `dga_queries` | Zeek dns.log + conn.log (bulk DGA) | `interval`, one of `end_time`/`duration`/`count` | `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`, `source_ip`, `jitter` (default: 0.3) |
+| `dns_tunnel` | Zeek dns.log + conn.log (encoded exfil) | `base_domain`, `interval`, one of `end_time`/`duration`/`count` | `encoding` (base32/base64/hex), `qtype` (TXT/NULL/CNAME), `label_length`, `payload`, `payload_size`, `source_ip`, `jitter` (default: 0.25) |
+| `explicit_credentials` | Windows 4648 (explicit credential usage) | `target_username` | `target_server`, `process_name`, `source_ip` |
+| `workstation_lock` | Windows 4800 (workstation locked) | | |
+| `workstation_unlock` | Windows 4801 + 4624 type 7 (unlock + re-auth) | | |
 | `raw` | Any single format | `target_format`, `fields` | |
 
 For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event.
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
-For `web_scan`, `rate` is average requests/second. Duration/end-time scans apply deterministic per-campaign throughput drift; explicit `count` remains exact.
+### Red Herrings
+
+Red herrings are suspicious-but-benign events that create false leads for analysts. They use the same event types as the storyline but are documented in a separate "Red Herrings" section of `GROUND_TRUTH.md` with their benign explanations.
+
+```yaml
+red_herrings:
+  - id: rh-afterhours-admin
+    time: "+3h"
+    actor: sarah.oconnell        # Must be in users list
+    system: DC-01
+    activity: "After-hours server maintenance"
+    explanation: "Routine sysadmin maintenance performed outside business hours to avoid user impact"
+    events:
+      - type: logon
+        logon_type: 10
+        source_ip: "10.10.1.15"
+      - type: process
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -Command Get-EventLog -LogName System -Newest 50"
+```
+
+Each red herring requires:
+- `id`: Unique event identifier (must not collide with storyline IDs)
+- `time`: Same format as storyline (ISO 8601, relative offset, or seconds)
+- `actor`: Username (must be in users list, service_accounts, or a builtin account)
+- `system`: Target system hostname
+- `activity`: Human-readable description (appears in Red Herrings section of GROUND_TRUTH.md)
+- `explanation`: Why this activity is benign (instructor-only context in GROUND_TRUTH.md)
+- `events`: Same typed event list as storyline (all event types supported)
+
+Red herrings are separate from `baseline_activity.suspicious_noise`, which auto-generates ambient suspicious patterns (after-hours logins, suspicious CLI, failed logon bursts, etc.) without explicit scenario configuration.
+
+### Causal Expansion
+
+The generation engine automatically emits prerequisite events for certain event types. You do **not** need to manually specify these — they are generated with realistic timing offsets from `config/activity/timing_profiles.yaml`:
+
+| Trigger Event | Auto-Generated Prerequisites | Timing |
+|---|---|---|
+| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | `network.dns_before_tcp` profile before |
+| `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | `auth.kerberos_before_logon` profile before. Elevated-session 4672 is emitted with the target-host 4624. |
+| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
+| `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
+| `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | `windows.audit_from_admin_command` profile after |
+| `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | `process.remote_thread_lsass_access` profile after |
+
+**When to manually specify these events:** Only when they are part of the attack narrative itself (e.g., DNS tunneling exfiltration, Kerberos golden ticket forging, explicit credential dumping via process access). The validator will warn if it detects potentially redundant manual specifications.
+
+### Baseline Realism Features
+
+The generation engine automatically provides several layers of realism in baseline activity:
+
+**Hawkes temporal model:** User baseline events use a self-exciting Hawkes process — activity naturally clusters into bursts that taper off, producing realistic human work patterns. Parameters are derived from persona `risk_profile` (high = intense bursts, low = gentle clusters). System/service traffic uses periodic intervals with small jitter instead.
+
+**Storyline typing cadence:** Events within a multi-event storyline step are spaced with human typing rhythm (~1.5s between actions, occasional 3-12s thinking pauses) instead of sharing a single timestamp.
+
+**Day-of-week variation:** Scenarios spanning multiple days show weekly rhythm — Monday login storms, Friday early departures, near-zero weekend activity (only sysadmin/security_analyst/help_desk personas active on Saturday/Sunday).
+
+**Stale account evidence:** Stale accounts defined in `environment.stale_accounts` generate not just failed logons but also Kerberos pre-auth failures (4771, status 0x12) on DCs, scheduled task failures (batch logon type 4), and service startup failures (service logon type 5, first hour only).
+
+**Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
+
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned.
+
+**Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
+
+**Entity lifecycle validation:** The engine validates that process injection events target existing PIDs and that event timestamps don't precede system boot times. Warnings are logged for impossible sequences.
+
+**Process→network correlation:** Baseline processes that normally generate network traffic (browsers, Office, dev tools, DB clients) automatically emit corresponding connections (HTTPS, SQL, SSH) 50-500ms after process creation, with the process PID carried for cross-source correlation.
+
+**Storyline process+connection pairing:** When a storyline process command line references a domain (e.g., `Invoke-WebRequest -Uri 'https://cdn-assets-update.com/...'`), pair it with a `connection` event that sets `hostname` to ensure the domain appears in DNS, SSL, HTTP, and proxy logs. The `hostname` field on `connection` and `beacon` events should be the client-facing DNS name the endpoint actually resolved and sent in HTTP Host, TLS SNI, or proxy CONNECT metadata. Avoid reverse-DNS/PTR artifacts or provider-generated infrastructure names unless the scenario intentionally models the client using that name. Omit `hostname` for raw-IP C2 (no DNS lookup expected). For realism-bound generated datasets, avoid using reserved documentation domains (`example.com`, `example.net`, `example.org`) as live public infrastructure; use a scenario-owned lab domain or realistic non-reserved domain when public resolver answers and certificates should appear. The validator will warn about unmatched domains.
+
+**NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
+
+**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records have a deterministic propagation delay (100-500 microseconds) based on the sensor's position. Sensors farther from the packet source see events slightly later. Byte and packet counts are identical across sensors (both see the same packets on the wire), but timestamps and durations differ.
+
+**Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
+
+**Command diversification:** Baseline process commands are parameterized with varied project paths, document names, build configurations, and per-user file references instead of fixed strings.
+
+**Realistic process trees:** Parent-child relationships are driven by `spawn_rules.yaml`, which defines valid parent processes for each child executable. CLI tools (dotnet.exe, git.exe, npm.exe, etc.) are parented from shells (cmd.exe, powershell.exe), GUI apps from explorer.exe, and system services from services.exe/svchost.exe. When a valid parent doesn't exist in the user's process history, the engine auto-creates the intermediate chain with realistic timing. Linux processes follow sshd→bash→command chains. Sysmon Event 1 `ParentCommandLine` is populated from the parent process's actual command line (no longer always "-").
+
+**PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
+
+**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving.
 
 ### DHCP Lease Events
 
@@ -351,7 +552,234 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC from the system IP and uses the system's configured IP if omitted. DHCP broadcast is link-local: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
+
+### Port Scan Events
+
+Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-like propagation. Generates many firewall deny records (ASA 106023) from a single storyline step.
+
+```yaml
+- time: "+1h"
+  actor: attacker
+  system: WEB-EXT-01
+  activity: "Port scan of server VLAN from compromised DMZ host"
+  events:
+    - type: port_scan
+      target_segment: server_vlan     # Or target_ips: ["10.0.20.1", "10.0.20.2"]
+      target_count: 20                # Sample 20 IPs from the segment
+      ports: [22, 80, 443, 445, 3389]
+      protocol: tcp
+      scan_rate: 50                   # 50 connections/second
+      technique: "T1046 - Network Service Discovery"
+```
+
+Fields: `source_ip` (override scan source; default: uses storyline system IP — useful for external attacker scans). `target_ips` (explicit list) or `target_segment` + `target_count` (sample from CIDR). `ports` (default: [22, 80, 443, 445, 3389]). `protocol` (tcp/udp/icmp). `scan_rate` (connections/second, default: 100).
+
+Denied connections are only visible to sensors on the source side of the firewall. The firewall's `drop_mode` controls whether Zeek sees `S0` (silent drop) or `REJ` (RST response).
+
+### Beacon Events
+
+Use `beacon` for periodic connections — allowed (C2 callbacks through proxy) or denied (firewall-blocked beaconing). Replaces the former `blocked_c2` type.
+
+```yaml
+# Allowed beacon through proxy
+- time: "+3h"
+  actor: attacker
+  system: workstation01
+  activity: "C2 beacon to attacker infrastructure"
+  events:
+    - type: beacon
+      dst_ip: "45.83.221.30"
+      dst_port: 443
+      hostname: "cdn-analytics.example.com"
+      interval: "5m"
+      duration: "7d"
+      jitter: 0.2
+      action: allow
+      technique: "T1071.001 - Web Protocols"
+
+# Denied beacon (equivalent to former blocked_c2)
+- time: "+5h"
+  actor: attacker
+  system: DC-01
+  activity: "Blocked C2 beaconing — firewall denies outbound from DC"
+  events:
+    - type: beacon
+      dst_ip: "45.83.221.30"
+      dst_port: 443
+      interval: "30m"
+      duration: "12h"
+      jitter: 0.2
+      action: deny
+      technique: "T1071.001 - Web Protocols"
+```
+
+Timing fields: `start_time` (optional, defaults to parent event time), `interval` (required), one of `end_time`/`duration`/`count` (required), `jitter` (0.0-1.0, default: **0.15** — beacons are deliberately tight). Connection fields: all `connection` fields (dst_ip, dst_port, hostname, service, protocol, method, uri, user_agent, `referrer`, etc.). For `hostname`, use the client-facing DNS name used by the beacon, not a reverse-DNS/PTR artifact, unless that is intentionally part of the scenario. `action`: `allow` (default) or `deny`. Set `referrer` to pin the HTTP Referer header for a specific beacon URL (e.g., a phishing page that launched the download). In explicit proxy mode, HTTP/S beacons from hosts routed through a `forward_proxy` traverse the proxy; denied proxyable beacons stop at the proxy and emit proxy-denied CONNECT/GET evidence rather than direct client-to-origin network evidence.
+
+### DNS Query Events
+
+Use `dns_query` for standalone DNS lookups with full control over query parameters. Unlike the automatic DNS expansion on `connection` events, this type lets you specify exact query type, response code, TTL, and answer. Useful for DNS-based reconnaissance, cache poisoning indicators, or any scenario where the DNS query itself is the story.
+
+```yaml
+- time: "+1h"
+  actor: marcus.chen
+  system: WS-DEV-01
+  activity: "DNS reconnaissance — query for mail server"
+  events:
+    - type: dns_query
+      query: "mail.example.com"
+      qtype: MX
+      rcode: NOERROR
+      answer: "10 smtp.example.com"
+      technique: "T1018 - Remote System Discovery"
+```
+
+Fields:
+- `query` (required): Domain name to query
+- `qtype` (default: `A`): Query type — `A`, `AAAA`, `TXT`, `CNAME`, `MX`, `NULL`, `SRV`, `PTR`
+- `rcode` (default: `NOERROR`): Response code — `NOERROR`, `NXDOMAIN`, `SERVFAIL`, `REFUSED`
+- `ttl` (optional): Response TTL (auto-generated if omitted)
+- `answer` (required when `rcode=NOERROR`): Response value(s) — string or list of strings
+- `source_ip` (optional): Querying host IP (default: storyline system IP)
+
+### Web Scan Events
+
+Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, SQLMap, Nmap HTTP). Generates high-volume HTTP requests with scanner-realistic patterns, user agents, and status code distributions. Each request produces correlated web_access + Zeek HTTP + Zeek conn records.
+
+```yaml
+- time: "+3h"
+  actor: SYSTEM
+  system: WEB-01
+  activity: "Nikto scan against web server from external attacker"
+  events:
+    - type: web_scan
+      dst_ip: "10.10.20.10"
+      dst_port: 80
+      hostname: "portal.example.com"
+      source_ip: "104.248.71.33"
+      preset: nikto
+      rate: 10                        # 10 requests/second
+      duration: "15m"
+      technique: "T1595.002 - Active Scanning: Vulnerability Scanning"
+```
+
+Fields:
+- `dst_ip` (required): Target web server IP
+- `dst_port` (default: 80): Target port
+- `hostname` (optional): Target domain name
+- `source_ip` (optional): Override scanner source IP
+- `preset` (optional): Scanner preset — `nikto`, `dirb`, `gobuster`, `sqlmap`, `nmap_http`
+- `paths` (optional): Custom URI path list — `[{uri: "/admin", method: "GET", status: 403}]`
+- `user_agent` (optional): Override the preset's default user agent
+- `status_codes` (optional): Override status code distribution (e.g., `{"404": 0.7, "200": 0.2, "403": 0.1}`)
+- `rate` (required): Average requests per second. With `duration`/`end_time`, the engine applies deterministic per-campaign throughput drift so repeated scans with the same nominal rate do not produce identical request totals. With explicit `count`, the count remains exact.
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: **0.4**): Timing variation — wide variance reflects real-world latency jitter from target server response times
+
+Either `preset` or `paths` (or both) must be specified.
+
+### Credential Spray Events
+
+Use `credential_spray` for bulk authentication attacks — password spraying, brute force, or credential stuffing. Generates realistic sequences of failed logon events (Windows 4625/4776 or Linux syslog auth failures) with an optional final successful logon.
+
+```yaml
+- time: "+2h"
+  actor: SYSTEM
+  system: DC-01
+  activity: "Password spray against domain accounts"
+  events:
+    - type: credential_spray
+      source_ip: "185.220.101.34"
+      pattern: spray
+      target_accounts: ["marcus.chen", "priya.patel", "sarah.oconnell", "diego.ramirez"]
+      logon_type: 3
+      interval: "2s"
+      duration: "10m"
+      success:
+        account: "priya.patel"
+        after: 8                      # Succeed after 8 failures
+      technique: "T1110.003 - Brute Force: Password Spraying"
+```
+
+Fields:
+- `target_accounts` (required): List of target usernames
+- `source_ip` (optional): Attacker source IP
+- `pattern` (default: `spray`): Attack pattern — `spray` (one password per account), `brute_force` (many passwords per account), `stuffing` (one-to-one credential pairs)
+- `logon_type` (default: 3): Windows logon type for the attempts
+- `success` (optional): Final successful logon — `{account: "username", after: N}` where `N` is number of failures before success
+- `interval` (required): Time between attempts
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: **0.5**): Timing variation — high default reflects self-pacing behavior to evade lockout policies
+
+### DGA Query Events
+
+Use `dga_queries` for domain generation algorithm (DGA) traffic — algorithmically generated DNS lookups that mostly return NXDOMAIN. Used for botnet/DGA detection training.
+
+```yaml
+- time: "+4h"
+  actor: SYSTEM
+  system: WS-DEV-01
+  activity: "DGA beaconing from infected workstation"
+  events:
+    - type: dga_queries
+      interval: "500ms"
+      duration: "2h"
+      jitter: 0.3
+      tld: ".com"
+      length_range: [10, 15]
+      seed: 42
+      rcode_distribution:
+        NXDOMAIN: 0.95
+        NOERROR: 0.05
+      answer_ip: "45.83.221.99"
+      technique: "T1568.002 - Dynamic Resolution: Domain Generation Algorithms"
+```
+
+Fields:
+- `length_range` (default: `[8, 15]`): Min/max domain label length (1-63)
+- `charset` (default: lowercase alphanumeric): Character set for domain generation
+- `tld` (default: `.com`): Top-level domain suffix
+- `seed` (optional): Deterministic seed for reproducible domain sequences
+- `rcode_distribution` (optional): Response code probabilities (must sum to ~1.0) — e.g., `{"NXDOMAIN": 0.95, "NOERROR": 0.05}`
+- `answer_ip` (required when NOERROR > 0): IP address for successful resolutions
+- `source_ip` (optional): Override querying host IP
+- `interval` (required): Time between queries
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: **0.3**): Timing variation
+
+### DNS Tunnel Events
+
+Use `dns_tunnel` for data exfiltration via encoded DNS subdomain labels. Generates DNS queries with encoded payload chunks as subdomains (e.g., `aGVsbG8gd29ybGQ.tunnel.evil.com`). Useful for DNS exfiltration detection training.
+
+```yaml
+- time: "+6h"
+  actor: marcus.chen
+  system: WS-DEV-01
+  activity: "DNS tunneling exfiltration of stolen credentials"
+  events:
+    - type: dns_tunnel
+      base_domain: "ns1.cdn-analytics.net"
+      encoding: base64
+      qtype: TXT
+      label_length: 30
+      payload_size: 512
+      interval: "2s"
+      duration: "30m"
+      jitter: 0.1
+      technique: "T1048.003 - Exfiltration Over Unencrypted Non-C2 Protocol"
+```
+
+Fields:
+- `base_domain` (required): Tunnel endpoint domain — encoded chunks become subdomains of this
+- `encoding` (default: `hex`): Encoding scheme — `base32`, `base64`, `hex`
+- `qtype` (default: `TXT`): DNS query type — `TXT`, `NULL`, `CNAME`
+- `label_length` (default: 30): Max length of each encoded subdomain label (1-63)
+- `payload` (optional): Fixed payload string to encode and exfiltrate
+- `payload_size` (default: 256): Random payload size in bytes if no `payload` specified
+- `source_ip` (optional): Override querying host IP
+- `interval` (required): Time between queries
+- `duration` / `count` / `end_time`: Termination condition (exactly one required)
+- `jitter` (default: **0.25**): Timing variation
 
 ### HTTP Connection Events
 
@@ -367,14 +795,16 @@ For web-based attack steps (SQL injection, web shell access, etc.), use `connect
       dst_ip: "10.10.20.10"
       dst_port: 80
       service: http
-      source_ip: "185.220.101.34"
+      source_ip: "104.248.71.33"
       method: "GET"
       uri: "/ehr/login.php?id=1%27%20OR%201=1--"
       status_code: 200
       user_agent: "Mozilla/5.0 (compatible; Googlebot/2.1)"
 ```
 
-HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent.
+HTTP optional fields on `connection` events: `method` (GET/POST/etc.), `uri`, `status_code`, `user_agent`, `referrer`. When these are provided with `service: http`, the engine generates correlated web_access, zeek_http, and zeek_conn records from a single SecurityEvent. The `referrer` field defaults to `null` (auto-generated from the traffic context — search engine, same-origin, social, or blank); set it explicitly for phishing click scenarios or specific referrer chain modeling (e.g., `referrer: "https://evil.example.com/page"`). The same `referrer` field is available on `beacon` events.
+
+**Byte and connection state overrides:** `orig_bytes` (originator payload bytes), `resp_bytes` (responder payload bytes), `conn_state` (Zeek connection outcome: SF, S0, REJ, etc.). When omitted, the engine auto-sizes bytes based on the event's `technique` and `description` fields (exfiltration -> large `orig_bytes`; C2 -> small bidirectional; download -> large `resp_bytes`), and defaults `conn_state` to SF. Set `conn_state` explicitly to model failed connections (e.g., `S0` for a dead C2 channel, `REJ` for a blocked exfil attempt).
 
 ### Raw Events
 
@@ -498,29 +928,6 @@ This safety net catches common cases, but should not be relied upon as the prima
       source_ip: "10.20.10.13"
 ```
 
-## Red Herrings
-
-Optional list of suspicious-but-benign events that look like attack activity but are completely legitimate. Red herrings use the same event types as storyline events but include an `explanation` field and are documented separately in GROUND_TRUTH.md.
-
-```yaml
-red_herrings:
-  - id: rh-admin-maintenance       # Required: unique ID (must not collide with storyline IDs)
-    time: "+26h"                    # Same time format as storyline
-    actor: admin.jones              # Must exist in users, service_accounts, or built-in accounts
-    system: SRV-DB-01              # Must exist in systems
-    activity: "Admin runs PowerShell remoting for scheduled maintenance"
-    explanation: "Weekly database maintenance — admin.jones has a recurring calendar event"
-    events:                         # Same typed event declarations as storyline
-      - type: process
-        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-        command_line: "powershell.exe -Command Invoke-Command -ComputerName SRV-DB-01 -ScriptBlock {Get-Service SQL*}"
-```
-
-Red herring events are generated identically to storyline events but:
-- Excluded from the attack narrative in GROUND_TRUTH.md
-- Documented in a separate "Red Herrings" section with their explanations
-- Interleaved chronologically with baseline and storyline events
-
 ## Output
 
 ```yaml
@@ -535,7 +942,13 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
-`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, set `environment.proxy.mode` explicitly; omitted config defaults to `transparent` with a warning. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
+`proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
+
+#### Format Filtering
+
+The `output.logs` list can be scoped to only needed formats for faster generation with long time windows. For example, a 30-day baseline exercise that only needs Zeek conn.log can declare just `format: zeek_conn` instead of the full `zeek` group.
+
+The `--formats` CLI flag provides runtime filtering without modifying the scenario YAML. It intersects with `output.logs` — only formats present in both are generated. Group names (`zeek`, `windows`) are expanded before intersection.
 
 ## Backward Compatibility
 

@@ -93,9 +93,9 @@ fields:
     description: "Has debug data?"
 
   - name: section_names
-    type: string
+    type: list
     required: false
-    description: "Section names (rendered as JSON array)"
+    description: "PE section names (JSON array of strings)"
 
 output:
   format: json

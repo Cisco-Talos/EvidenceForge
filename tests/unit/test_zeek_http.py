@@ -217,3 +217,33 @@ class TestHttpCanHandle:
             ),
         )
         assert emitter.can_handle(event) is False
+
+
+class TestHttpRenderTiming:
+    """Verify http.log uses analyzer/request timing, not cloned conn start time."""
+
+    def test_emit_offsets_http_timestamp_from_connection_timestamp(self, tmp_path):
+        fmt = load_format("zeek_http")
+        output = tmp_path / "http.json"
+        emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=base_ts,
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="93.184.216.34",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="ChttpTiming1234",
+            ),
+            http=HttpContext(method="GET", host="example.com", uri="/"),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        data = json.loads(output.read_text().splitlines()[0])
+        assert data["ts"] > base_ts.timestamp()
