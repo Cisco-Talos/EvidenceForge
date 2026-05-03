@@ -26,6 +26,7 @@ from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
 
+from evidenceforge import __version__
 from evidenceforge.cli.commands import (
     EXIT_ABORTED,
     EXIT_GENERATION_ERROR,
@@ -36,6 +37,17 @@ from evidenceforge.cli.commands import (
 )
 
 runner = CliRunner()
+
+
+class TestVersionCommand:
+    """Tests for 'eforge version' command."""
+
+    def test_version_uses_package_version(self):
+        """Version command should report the package version."""
+        result = runner.invoke(app, ["version"])
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert f"EvidenceForge v{__version__}" in result.stdout
 
 
 class TestGenerateCommand:

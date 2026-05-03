@@ -47,6 +47,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from evidenceforge import __version__
 from evidenceforge.generation import GenerationEngine
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils import load_yaml
@@ -1018,7 +1019,7 @@ def validate_config_cmd(
 @app.command()
 def version() -> None:
     """Show version information."""
-    console.print("EvidenceForge v0.1.0")
+    console.print(f"EvidenceForge v{__version__}")
     console.print("Synthetic security log generator for threat hunting training")
 
 

@@ -4,6 +4,35 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.6.0 (2026-05-03)
+
+This release packages the dev branch since `main` into a pre-MVP quality and Codex workflow release. Because the branch includes feature commits, the version moves from `0.5.0` to `0.6.0` under the pre-1.0 semver policy.
+
+**Codex skill installation and assessment workflow**
+
+- Added `eforge install-skills --agent codex` support alongside the existing Claude Code install path, with valid Codex `SKILL.md` frontmatter, conservative stale cleanup, and preservation of user-managed `eforge-*` skills such as `eforge-assess` (`9974b20`, `e63e6cb`).
+- Imported and refined the independent `eforge-assess` Codex skill workflow for validate/generate/evaluate/blind-review loops, including bounded-window reviewer guidance, commit-before-next-loop discipline, and pytest-before-commit guidance (`aea8428`, `9df7349`).
+
+**Evaluation and scenario guidance**
+
+- Migrated evaluation to the four-pillar scoring model and fixed targeted evaluator issues around event presence, parseability, cross-source agreement, timing bounds, and short-scenario handling (`1a62403`, `5b138d7`, `891d9ba`).
+- Tightened scenario and skill reference guidance so generated scenarios use source-native fields and current schema expectations without duplicating large reference content in command prompts (`124881c`, `f92d087`, `8a10345`).
+
+**Endpoint, auth, and process causality**
+
+- Fixed high-severity lifecycle and ordering defects across Windows Security, Sysmon, eCAR, Linux syslog, and storyline-derived process activity, including post-termination telemetry, process follow-on timing, singleton/system process handling, and log clear subject/token context (`cc00d6a`, `4d42461`, `3405c4d`, `b7fa175`, `5057517`, `605ebc5`, `6125e6d`, `bbb128a`, `37ffaef`, `0b5a676`, `946719c`, `101755c`).
+- Improved endpoint identity realism for explicit credentials, SYSTEM/NT AUTHORITY rendering, LogonID/PID provenance, DNS Client process attribution, and cross-host eCAR actor ownership (`a1dc4e9`, `afcc63a`, `cfd16d7`, `028cca6`, `cc5eed2`).
+
+**Network, proxy, TLS, and firewall realism**
+
+- Preserved network timing invariants and source-native visibility across Zeek, Cisco ASA, proxy, web access, and storyline flows, including HTTP lifetime bounds, ASA connection IDs, DNS transaction accounting, denied CONNECT accounting, explicit proxy byte accounting, and NAT/source rendering (`442f41e`, `f13982d`, `7e2b829`, `3a382a0`, `5c995ba`, `fa1a7bd`, `a42ff57`, `e2714c5`).
+- Improved TLS/certificate realism and scanner/DNS behavior by avoiding public-CA chains for raw IP TLS, keeping TLS success/failure state coherent across sources, reducing repeated certificate/hash artifacts, and diversifying DNS tunnel labels and web scan cadence (`36b0aa0`, `5aa3a7b`, `6b3a299`, `a5a8af2`).
+
+**Validation**
+
+- Fixed the CLI `eforge version` command to report the package `__version__` instead of the stale hardcoded `0.1.0`, and added unit coverage for the command.
+- Full slow-inclusive suite passed before release prep: `uv run pytest -v --include-slow` with 2669 passed, 23 skipped, and 80.54% coverage.
+
 ## v0.5.3 (2026-04-30)
 
 Five pre-existing evaluation false-positives eliminated. No generator behavior changes.
