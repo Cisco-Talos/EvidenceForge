@@ -429,3 +429,81 @@ class TestDualSessionParentSelection:
         assert "explorer.exe" in parent_proc.image.lower(), (
             f"Interactive logon process should parent from explorer, got {parent_proc.image}"
         )
+
+
+class TestLinuxParentSelection:
+    """Linux process parents should preserve session and service ownership."""
+
+    def test_ssh_user_process_prefers_matching_session_shell(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        event_time = datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            session_kind="ssh",
+        )
+        session_sshd = state_manager.create_process(
+            linux_system.hostname,
+            pids["sshd"],
+            "/usr/sbin/sshd",
+            f"sshd: {user.username} [priv]",
+            "root",
+            "System",
+            logon_id=logon_id,
+        )
+        bash_pid = state_manager.create_process(
+            linux_system.hostname,
+            session_sshd,
+            "/bin/bash",
+            "-bash",
+            user.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.session_shell_pid = bash_pid
+
+        parent_pid = ag._resolve_parent(
+            linux_system,
+            user,
+            event_time,
+            logon_id,
+            "/usr/bin/scp",
+        )
+
+        assert parent_pid == bash_pid
+
+    def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
+        web_system = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        web_user = User(
+            username="apache",
+            full_name="Apache Service",
+            email="apache@example.com",
+            enabled=True,
+            persona="service",
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, web_system)
+
+        parent_pid = ag._resolve_parent(
+            web_system,
+            web_user,
+            datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC),
+            "",
+            "/bin/bash",
+        )
+        parent_proc = state_manager.get_process(web_system.hostname, parent_pid)
+
+        assert parent_proc is not None
+        assert parent_pid == pids["apache2"]
+        assert parent_proc.image == "/usr/sbin/apache2"

@@ -210,24 +210,84 @@ def _is_evidenceforge_codex_skill(path: Path) -> bool:
     return "EvidenceForge" in content and "name: eforge-" in content
 
 
-def _remove_stale_codex_skill_dirs(target_dir: Path, expected_dirs: set[str]) -> list[str]:
-    """Remove obsolete EvidenceForge-owned Codex skill directories.
+def _split_frontmatter(content: str, source: Path) -> tuple[list[str], str]:
+    """Split a Markdown skill file into YAML frontmatter lines and body text."""
+    if not content.startswith("---\n"):
+        raise ValueError(f"Skill file is missing YAML frontmatter: {source}")
 
-    Only directories that look like EvidenceForge skills are removed. This avoids
-    deleting unrelated user skills that happen to share the eforge-* prefix.
-    """
-    removed: list[str] = []
-    if not target_dir.exists():
-        return removed
+    try:
+        frontmatter_text, body = content[4:].split("\n---\n", 1)
+    except ValueError as exc:
+        raise ValueError(f"Skill file has unterminated YAML frontmatter: {source}") from exc
 
-    for path in sorted(target_dir.glob("eforge-*")):
-        if path.name in expected_dirs or not path.is_dir() or path.is_symlink():
+    return frontmatter_text.splitlines(), body
+
+
+def _extract_frontmatter_value(lines: list[str], key: str, source: Path) -> str:
+    """Extract a top-level scalar frontmatter value from a Claude command file."""
+    prefix = f"{key}:"
+    for line in lines:
+        if line.startswith(prefix):
+            value = line.removeprefix(prefix).strip()
+            if not value:
+                break
+            return value
+    raise ValueError(f"Skill file is missing required frontmatter field '{key}': {source}")
+
+
+def _extract_frontmatter_block(lines: list[str], key: str, source: Path) -> list[str]:
+    """Extract a block-style frontmatter value from a Claude command file."""
+    prefix = f"{key}:"
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
             continue
-        if _is_evidenceforge_codex_skill(path):
-            shutil.rmtree(path)
-            removed.append(path.name)
 
-    return removed
+        marker = line.removeprefix(prefix).strip()
+        if marker not in {">", "|", ">-", "|-", ">+", "|+"}:
+            value = marker
+            if value:
+                return [f"  {value}"]
+            break
+
+        block_lines: list[str] = []
+        for block_line in lines[index + 1 :]:
+            if block_line and not block_line.startswith((" ", "\t")) and ":" in block_line:
+                break
+            block_lines.append(block_line)
+
+        if block_lines:
+            return block_lines
+        break
+
+    raise ValueError(f"Skill file is missing required frontmatter field '{key}': {source}")
+
+
+def _codex_frontmatter_text(source: Path, frontmatter_lines: list[str]) -> str:
+    """Build Codex-compatible SKILL.md frontmatter from Claude command metadata."""
+    name = _extract_frontmatter_value(frontmatter_lines, "name", source)
+    description_lines = _extract_frontmatter_block(frontmatter_lines, "description", source)
+
+    return (
+        "---\n"
+        + "\n".join(
+            [
+                f"name: {name}",
+                "description: >",
+                *description_lines,
+            ]
+        )
+        + "\n---\n"
+    )
+
+
+def _rewrite_codex_skill_body(body: str) -> str:
+    """Adapt Claude-specific references in a skill body for Codex."""
+    content = body
+    for old, new in _CODEX_REFERENCE_REWRITES.items():
+        content = content.replace(old, new)
+    for old, new in _CODEX_COMMAND_REWRITES.items():
+        content = content.replace(old, new)
+    return content
 
 
 def _ensure_safe_eforge_directory(target_dir: Path) -> Path:
@@ -278,13 +338,10 @@ def _ensure_safe_codex_skill_directory(target_dir: Path, skill_name: str) -> Pat
 
 
 def _codex_skill_text(source: Path) -> str:
-    """Read a command file and adapt Claude-specific references for Codex."""
+    """Read a command file and convert it to a valid Codex SKILL.md file."""
     content = source.read_text(encoding="utf-8")
-    for old, new in _CODEX_REFERENCE_REWRITES.items():
-        content = content.replace(old, new)
-    for old, new in _CODEX_COMMAND_REWRITES.items():
-        content = content.replace(old, new)
-    return content
+    frontmatter_lines, body = _split_frontmatter(content, source)
+    return _codex_frontmatter_text(source, frontmatter_lines) + _rewrite_codex_skill_body(body)
 
 
 def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
@@ -345,8 +402,6 @@ def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
 
     installed: list[str] = []
     removed: list[str] = []
-    expected_dirs = {f"eforge-{name}" for name in command_files}
-
     for name, source in sorted(command_files.items()):
         skill_name = f"eforge-{name}"
         skill_dir = _ensure_safe_codex_skill_directory(target_dir, skill_name)
@@ -367,8 +422,5 @@ def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
 
         for stale in _remove_stale_files(skill_dir, skill_manifest):
             removed.append(f"{skill_name}/{stale}")
-
-    for stale_dir in _remove_stale_codex_skill_dirs(target_dir, expected_dirs):
-        removed.append(stale_dir)
 
     return installed, removed

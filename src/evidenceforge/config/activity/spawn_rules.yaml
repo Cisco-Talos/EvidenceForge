@@ -243,6 +243,28 @@ linux:
       - zsh
       - sftp-server
 
+  apache2:
+    command_templates:
+      - "/usr/sbin/apache2 -DFOREGROUND"
+    lifetime: long
+    children:
+      - bash
+      - sh
+      - python3
+      - curl
+      - wget
+
+  httpd:
+    command_templates:
+      - "/usr/sbin/httpd -DFOREGROUND"
+    lifetime: long
+    children:
+      - bash
+      - sh
+      - python3
+      - curl
+      - wget
+
   bash:
     command_templates:
       - "-bash"

@@ -26,6 +26,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HostContext, ProcessContext
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -307,6 +309,39 @@ class TestProcessManagement:
 
         assert proc is not None
         assert proc.last_activity_time == start + timedelta(minutes=5)
+
+    def test_apply_tracks_process_dependent_activity_time(self):
+        """Any process-owned event should extend the process lifecycle marker."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        activity_time = start + timedelta(minutes=3)
+        sm.set_current_time(start)
+        pid = sm.create_process("WS-01", 0, "proc.exe", "proc.exe", "jdoe", "Medium")
+
+        sm.apply(
+            SecurityEvent(
+                timestamp=activity_time,
+                event_type="process_access",
+                src_host=HostContext(
+                    hostname="WS-01",
+                    ip="10.0.0.10",
+                    os="Windows 11",
+                    os_category="windows",
+                    system_type="workstation",
+                ),
+                process=ProcessContext(
+                    pid=pid,
+                    parent_pid=0,
+                    image="proc.exe",
+                    command_line="proc.exe",
+                    username="jdoe",
+                ),
+            )
+        )
+
+        proc = sm.get_process("WS-01", pid)
+        assert proc is not None
+        assert proc.last_activity_time == activity_time
 
     def test_list_running_processes(self):
         """Test listing all running processes."""

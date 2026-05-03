@@ -184,7 +184,7 @@ def test_random_activity_external_ip_excludes_rfc5737():
 
 
 def test_asa_conn_id_not_round():
-    """ASA connection IDs should use timestamp-based monotonic values."""
+    """ASA connection IDs should be monotonic without clock-shaped jumps."""
     from datetime import datetime
 
     fmt = load_format("cisco_asa")
@@ -200,6 +200,7 @@ def test_asa_conn_id_not_round():
 
     second_id = emitter._next_conn_id("fw01", ts2)
     assert second_id > first_id, "Later timestamps should produce higher IDs"
+    assert second_id - first_id < 100, "Connection IDs should not encode timestamp buckets"
 
     # Different sensor should get a different starting ID
     other_id = emitter._next_conn_id("fw02")

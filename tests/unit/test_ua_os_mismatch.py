@@ -164,7 +164,8 @@ class TestProxyUriOsFiltering:
             hostname="update.googleapis.com",
         )
 
-        assert update_ua == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+        assert "Google" in update_ua
+        assert "Windows-Update-Agent" not in update_ua
 
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
         """Domain-specific proxy UA rules should override inherited browser session UAs."""

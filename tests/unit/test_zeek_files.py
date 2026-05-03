@@ -31,7 +31,7 @@ from pathlib import Path
 import yaml
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import FileTransferContext, NetworkContext
+from evidenceforge.events.contexts import FileTransferContext, NetworkContext, X509Context
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 
@@ -196,6 +196,42 @@ class TestFilesUidCorrelation:
             assert data["fuid"] == "FFileUID12345678"
             assert "uid" not in data
             assert "id.orig_h" not in data
+
+    def test_same_certificate_fingerprint_keeps_file_hashes(self):
+        """Repeated observations of the same cert bytes should keep all hashes stable."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            for idx, fuid in enumerate(("Fcert11111111111", "Fcert22222222222")):
+                event = SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 0, idx, tzinfo=UTC),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        zeek_uid=f"CConnUID{idx}",
+                    ),
+                    x509=X509Context(
+                        fuid=fuid,
+                        fingerprint="a" * 64,
+                        certificate_serial="01",
+                        certificate_subject="CN=example.com",
+                        certificate_issuer="CN=Example CA",
+                    ),
+                )
+                emitter.emit(event)
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+
+        assert len(rows) == 2
+        assert rows[0]["sha256"] == rows[1]["sha256"] == "a" * 64
+        assert rows[0]["md5"] == rows[1]["md5"]
+        assert rows[0]["sha1"] == rows[1]["sha1"]
 
     def test_hash_fields_render_when_analyzers_run(self):
         """files.log should include hash fields that correspond to analyzer names."""

@@ -52,7 +52,7 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
             "uids": dhcp.uids,
             "client_addr": dhcp.client_addr,
             "server_addr": dhcp.server_addr,
-            "mac": dhcp.mac,
+            "mac": dhcp.mac.lower() if dhcp.mac else dhcp.mac,
             "host_name": dhcp.host_name,
             "domain": dhcp.domain or None,
             "assigned_addr": dhcp.assigned_addr,

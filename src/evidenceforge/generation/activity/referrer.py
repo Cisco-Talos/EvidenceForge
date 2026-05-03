@@ -29,6 +29,21 @@ _SOCIAL_REFERERS = [
 ]
 
 
+def _allows_search_referrer(hostname: str) -> bool:
+    """Return whether a public search referrer is plausible for this host."""
+    normalized = hostname.strip().lower()
+    if "." not in normalized:
+        return False
+    if normalized.endswith((".local", ".lan", ".internal", ".corp")):
+        return False
+    if any(
+        part.startswith(("ws-", "dc-", "app-", "db-", "file-", "mail-"))
+        for part in normalized.split(".")
+    ):
+        return False
+    return True
+
+
 def _make_url(hostname: str, path: str, port: int = 443) -> str:
     scheme = "https" if port == 443 else "http"
     return f"{scheme}://{hostname}{path}"
@@ -74,7 +89,7 @@ def pick_referrer(
     roll = rng.random()
     if roll < 0.55:
         return ""
-    elif roll < 0.75:
+    elif roll < 0.75 and _allows_search_referrer(hostname):
         # 20% search engine
         engine = rng.choice(_SEARCH_ENGINES)
         return engine + hostname.replace(".", "+")

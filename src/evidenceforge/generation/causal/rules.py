@@ -403,6 +403,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                     kwargs={
                         "user": ctx.actor,
                         "system": ctx.target_system,
+                        "subject_logon_id": ctx.logon_id,
                     },
                     timing=timing,
                     description="1102 log cleared from wevtutil cl",

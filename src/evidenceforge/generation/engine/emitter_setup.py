@@ -288,7 +288,12 @@ class EmitterSetupMixin:
 
         # Track lease state for periodic renewals
         self._dhcp_lease_state: dict[str, dict] = {}
-
+        storyline_dhcp_hosts = {
+            entry.system
+            for entry in getattr(self.scenario, "storyline", [])
+            for event in getattr(entry, "events", [])
+            if getattr(event, "type", None) == "dhcp_lease"
+        }
         # Stagger across first 5 minutes using per-host deterministic offsets
         base_time = getattr(self, "warmup_start_time", self.start_time)
 
@@ -305,7 +310,12 @@ class EmitterSetupMixin:
             oui = oui_rng.choices(_oui_values, weights=_oui_weights, k=1)[0]
             mac = f"{oui}:{(ip_seed >> 16) & 0xFF:02x}:{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}"
             offset = (_stable_seed(f"dhcp_offset_{system.hostname}") % 300) + rng.uniform(0, 5)
-            ts = base_time + timedelta(seconds=offset)
+            if system.hostname in storyline_dhcp_hosts:
+                ts = self.start_time + timedelta(seconds=offset)
+                msg_types = ["REQUEST", "ACK"]
+            else:
+                ts = base_time + timedelta(seconds=offset)
+                msg_types = None
             uid = generate_zeek_uid("C")
             lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
             self.state_manager.set_current_time(ts)
@@ -315,6 +325,7 @@ class EmitterSetupMixin:
                 mac=mac,
                 lease_time=lease_time,
                 uid=uid,
+                msg_types=msg_types,
             )
             # Store state for renewals
             self._dhcp_lease_state[system.hostname] = {
@@ -708,6 +719,26 @@ class EmitterSetupMixin:
         pids["logind"] = _c(pids["systemd"], logind_path, logind_path, "root")
 
         pids["sshd"] = _c(pids["systemd"], "/usr/sbin/sshd", "/usr/sbin/sshd -D [listener]", "root")
+
+        roles = {role.lower() for role in (system.roles or [])}
+        service_defaults = getattr(self, "_system_service_defaults", {})
+        services = {svc.lower() for svc in service_defaults.get(system.hostname, [])}
+        web_markers = {"web_server", "forward_proxy", "apache", "apache2", "httpd", "nginx"}
+        if roles & web_markers or services & web_markers or "web" in system.hostname.lower():
+            if is_rhel:
+                pids["httpd"] = _c(
+                    pids["systemd"],
+                    "/usr/sbin/httpd",
+                    "/usr/sbin/httpd -DFOREGROUND",
+                    "apache",
+                )
+            else:
+                pids["apache2"] = _c(
+                    pids["systemd"],
+                    "/usr/sbin/apache2",
+                    "/usr/sbin/apache2 -DFOREGROUND",
+                    "www-data",
+                )
 
         cron_name = "/usr/sbin/crond" if is_rhel else "/usr/sbin/cron"
         cron_cmd = "/usr/sbin/crond -n" if is_rhel else "/usr/sbin/cron -f"

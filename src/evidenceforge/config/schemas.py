@@ -869,6 +869,35 @@ class ProcessAccessPatternEntry(BaseModel, extra="forbid"):
         return v
 
 
+# --- EDR Pools ---
+
+
+class EdrFileSideEffectProfile(BaseModel, extra="forbid"):
+    """A process-aware ambient FILE telemetry profile in edr_pools.yaml."""
+
+    name: str
+    executables: list[str] = Field(default_factory=list)
+    executable_contains: list[str] = Field(default_factory=list)
+    command_contains: list[str] = Field(default_factory=list)
+    actions: list[Literal["create", "modify", "delete"]]
+    paths_windows: list[str] = Field(default_factory=list)
+    paths_linux: list[str] = Field(default_factory=list)
+    probability: float = 1.0
+
+    @model_validator(mode="after")
+    def has_matchers_and_paths(self) -> Self:
+        """Ensure profiles are actionable and cannot emit impossible empty paths."""
+        if not (self.executables or self.executable_contains or self.command_contains):
+            raise ValueError(
+                "profile must define executables, executable_contains, or command_contains"
+            )
+        if not self.paths_windows and not self.paths_linux:
+            raise ValueError("profile must define paths_windows or paths_linux")
+        if not 0 <= self.probability <= 1:
+            raise ValueError("probability must be between 0 and 1")
+        return self
+
+
 # --- CreateRemoteThread Patterns ---
 
 

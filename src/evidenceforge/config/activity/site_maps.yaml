@@ -440,7 +440,7 @@ domains:
           - {host: "static.dash.cloudflare.com", path: "/js/domains.{hex16}.js", type: "application/javascript"}
           - {path: "/api/v4/zones?page=1&per_page=20", type: "application/json"}
 
-  www.example.com:
+  www.healthcareitnews.com:
     cdn_domains: []
     pages:
       - path: "/"

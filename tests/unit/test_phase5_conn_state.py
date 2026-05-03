@@ -123,6 +123,13 @@ class TestConnStateDistribution:
                     f"History '{history}' not valid for state '{state}'"
                 )
 
+    def test_udp_distribution_uses_only_datagram_history(self):
+        """UDP connection templates must not contain TCP-only history flags."""
+        from evidenceforge.generation.activity import UDP_CONN_STATE_DISTRIBUTION
+
+        for _state, _weight, history in UDP_CONN_STATE_DISTRIBUTION:
+            assert not set(history) & set("SshAaFfRr")
+
 
 class TestConnStateRebalance:
     """Verify conn_state distribution targets realistic enterprise ratios."""

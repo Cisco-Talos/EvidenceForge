@@ -303,6 +303,69 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
+    def test_ecar_weak_login_rule_skips_later_matching_login(self):
+        """A later weak-key login match is not enough to prove process inversion."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "ecar": [
+                _record(
+                    "ecar",
+                    {
+                        "object": "PROCESS",
+                        "action": "CREATE",
+                        "principal": "jsmith",
+                        "hostname": "WS-01",
+                    },
+                    ts=base,
+                ),
+                _record(
+                    "ecar",
+                    {
+                        "object": "USER_SESSION",
+                        "action": "LOGIN",
+                        "principal": "jsmith",
+                        "hostname": "WS-01",
+                    },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ]
+        }
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
+    def test_dns_weak_rule_skips_later_matching_answer(self):
+        """A later DNS answer may be cache/static-IP behavior, not a TCP inversion."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "zeek_conn": [
+                _record(
+                    "zeek_conn",
+                    {
+                        "proto": "tcp",
+                        "id.resp_h": "93.184.216.34",
+                        "id.resp_p": 443,
+                    },
+                    ts=base,
+                ),
+            ],
+            "zeek_dns": [
+                _record(
+                    "zeek_dns",
+                    {
+                        "rcode_name": "NOERROR",
+                        "answers": ["93.184.216.34"],
+                    },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ],
+        }
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
     def test_non_string_principal_does_not_raise(self):
         """Malformed principal values should not crash exclusion checks."""
         base = T0 + self._AFTER_GRACE

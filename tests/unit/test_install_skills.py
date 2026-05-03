@@ -25,6 +25,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 from typer.testing import CliRunner
 
 from evidenceforge.cli.commands import EXIT_SUCCESS, app
@@ -92,6 +93,13 @@ class TestInstallSkills:
         scenario = (tmp_path / "eforge" / "scenario.md").read_text()
         assert "/eforge:references:scenario-reference" in scenario
         assert "references/scenario-reference.md" not in scenario
+
+    def test_claude_install_preserves_source_frontmatter(self, tmp_path):
+        """Claude command installs preserve Claude-only source frontmatter."""
+        install_skills(tmp_path)
+
+        scenario = (tmp_path / "eforge" / "scenario.md").read_text()
+        assert "\nlicense: Copyright (c) 2026 Cisco Systems, Inc. and its affiliates;" in scenario
 
     def test_idempotent(self, tmp_path):
         """Running install twice succeeds without error."""
@@ -162,13 +170,28 @@ class TestInstallCodexSkills:
             assert (tmp_path / f"eforge-{command_name}" / "SKILL.md").is_file()
 
     def test_codex_frontmatter_remains_valid(self, tmp_path):
-        """Installed Codex SKILL.md keeps required frontmatter fields."""
+        """Installed Codex SKILL.md frontmatter is valid and Codex-only."""
         install_codex_skills(tmp_path)
 
-        skill = (tmp_path / "eforge-scenario" / "SKILL.md").read_text()
-        assert skill.startswith("---\n")
-        assert "\nname: eforge-scenario\n" in skill
-        assert "\ndescription: >\n" in skill
+        for skill_file in EXPECTED_SKILL_FILES:
+            command_name = skill_file.removesuffix(".md")
+            skill = (tmp_path / f"eforge-{command_name}" / "SKILL.md").read_text()
+            assert skill.startswith("---\n")
+            frontmatter = skill.split("---\n", 2)[1]
+            parsed = yaml.safe_load(frontmatter)
+            assert set(parsed) == {"name", "description"}
+            assert parsed["name"] == f"eforge-{command_name}"
+            assert parsed["description"]
+
+    def test_codex_frontmatter_removes_claude_license(self, tmp_path):
+        """Codex SKILL.md files drop Claude-only license frontmatter fields."""
+        install_codex_skills(tmp_path)
+
+        for skill_file in EXPECTED_SKILL_FILES:
+            command_name = skill_file.removesuffix(".md")
+            skill = (tmp_path / f"eforge-{command_name}" / "SKILL.md").read_text()
+            frontmatter = skill.split("---\n", 2)[1]
+            assert "license:" not in frontmatter
 
     def test_codex_references_are_bundled(self, tmp_path):
         """Reference docs are copied beside each Codex skill."""
@@ -206,24 +229,21 @@ class TestInstallCodexSkills:
         assert "/eforge:references:scenario-reference" not in skill
         assert "`references/scenario-reference.md`" in skill
 
-    def test_codex_removes_stale_evidenceforge_skill_only(self, tmp_path):
-        """Stale cleanup removes EvidenceForge-owned skills and preserves unrelated skills."""
-        stale_dir = tmp_path / "eforge-old"
-        stale_dir.mkdir()
-        (stale_dir / "SKILL.md").write_text(
-            "---\nname: eforge-old\ndescription: EvidenceForge old skill\n---\n"
-        )
-        unrelated_dir = tmp_path / "eforge-custom"
-        unrelated_dir.mkdir()
-        (unrelated_dir / "SKILL.md").write_text(
-            "---\nname: eforge-custom\ndescription: Personal helper\n---\n"
+    def test_codex_preserves_user_managed_eforge_skills(self, tmp_path):
+        """Codex install does not remove sibling eforge-* skills it does not own."""
+        assess_dir = tmp_path / "eforge-assess"
+        assess_dir.mkdir()
+        sentinel = assess_dir / "sentinel.txt"
+        sentinel.write_text("keep me")
+        (assess_dir / "SKILL.md").write_text(
+            "---\nname: eforge-assess\ndescription: User managed skill\n---\n"
         )
 
         _, removed = install_codex_skills(tmp_path)
 
-        assert "eforge-old" in removed
-        assert not stale_dir.exists()
-        assert unrelated_dir.exists()
+        assert "eforge-assess" not in removed
+        assert sentinel.read_text() == "keep me"
+        assert (assess_dir / "SKILL.md").is_file()
 
     def test_codex_rejects_symlinked_skill_directory(self, tmp_path):
         """install_codex_skills rejects a symlinked target skill directory."""

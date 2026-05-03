@@ -58,7 +58,7 @@ _ROLE_ALIASES = {
 _SERVICE_ROLE_HINTS: tuple[tuple[tuple[str, ...], str], ...] = (
     (("mysql", "postgres", "postgresql", "mariadb", "sql server", "mssql"), "database"),
     (("apache", "nginx", "httpd", "iis", "tomcat"), "web_server"),
-    (("dns", "bind", "named"), "dns_server"),
+    (("bind", "named"), "dns_server"),
     (("exchange", "postfix", "smtp", "dovecot"), "mail_server"),
     (("splunk", "elasticsearch", "logstash", "syslog"), "log_server"),
     (("nfs",), "nfs_server"),
@@ -81,6 +81,16 @@ _ROLE_PERSONAS: dict[str, set[str]] = {
     "database": {"developer", "data_analyst", "analyst"},
     "log_server": {"security_analyst"},
     "web_server": {"developer"},
+}
+
+_DNS_SERVER_SERVICES = {
+    "dns",
+    "dns-server",
+    "dns_server",
+    "bind",
+    "bind9",
+    "named",
+    "ad-ds",
 }
 
 _ADMIN_PERSONAS = {"sysadmin", "help_desk"}
@@ -201,6 +211,11 @@ class WorldModel:
         # Service/hostname heuristics are always additive — they supplement
         # explicit roles, not override them. Mixed-use hosts (e.g.,
         # roles=[web_server] + services=[postgresql]) get both capabilities.
+        normalized_services = {
+            service.lower().replace(" ", "-").replace("_", "-") for service in service_values
+        }
+        if normalized_services.intersection(_DNS_SERVER_SERVICES):
+            roles.add("dns_server")
         for hints, role_name in _SERVICE_ROLE_HINTS:
             if any(hint in service_blob for hint in hints):
                 roles.add(role_name)
@@ -1059,7 +1074,7 @@ class WorldPlanner:
                 user=user,
                 source_system=plan.source_system,
                 target_system=plan.target_system,
-                time=logon_time - timedelta(milliseconds=rng.randint(50, 300)),
+                time=logon_time - timedelta(milliseconds=rng.randint(1800, 3200)),
                 rng=rng,
             )
         logon_id = self.state_manager.create_session(

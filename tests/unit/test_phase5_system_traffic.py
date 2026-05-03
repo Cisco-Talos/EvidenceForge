@@ -28,6 +28,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.engine.baseline import _registry_writer_candidates
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -71,6 +72,25 @@ def timestamp():
 
 class TestWindowsProcessTreeSeeding:
     """Test that Windows system process tree is seeded correctly."""
+
+    def test_hkcu_registry_writers_require_desktop_user(self):
+        """HKCU noise should not be attributed to SYSTEM-owned background helpers."""
+        sys_pids = {"explorer": 2000, "runtime_broker": 2100, "search_indexer": 2200}
+
+        no_desktop_candidates = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer",
+            sys_pids,
+            desktop_user=None,
+        )
+        desktop_candidates = _registry_writer_candidates(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer",
+            sys_pids,
+            desktop_user="alice",
+        )
+
+        assert no_desktop_candidates == []
+        assert desktop_candidates
+        assert {candidate[2] for candidate in desktop_candidates} == {"alice"}
 
     def test_windows_tree_has_correct_hierarchy(self, state_manager, win_system):
         """After seeding, services.exe children include svchost instances."""

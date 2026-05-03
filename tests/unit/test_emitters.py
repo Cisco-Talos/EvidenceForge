@@ -34,7 +34,11 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.emitters.host_base import sanitize_host_routing_key
-from evidenceforge.generation.emitters.windows import _normalize_windows_time_created
+from evidenceforge.generation.emitters.windows import (
+    _auth_subject_domain,
+    _normalize_windows_time_created,
+    _special_privilege_fallback,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
 
@@ -320,7 +324,7 @@ class TestWindowsEventEmitter:
                 "TargetLogonId": "0xabc123",
             },
             {
-                "EventID": 4688,
+                "EventID": 4689,
                 "TimeCreated": process_time,
                 "Computer": "WIN-TEST-01.corp.local",
                 "SubjectLogonId": "0xabc123",
@@ -334,6 +338,36 @@ class TestWindowsEventEmitter:
             seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
         )
         assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
+
+    def test_process_termination_shifted_after_visible_child_create(self, format_def, temp_output):
+        """Security 4689 should not visibly terminate a parent before later child 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        child_time = terminate_time + timedelta(seconds=15)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x116c",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x116c",
+                "NewProcessId": "0x2200",
+            },
+        ]
+
+        emitter._shift_process_terminations_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_child",
+            seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
 
     def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
         """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
@@ -361,8 +395,8 @@ class TestWindowsEventEmitter:
         assert max(gaps[:24]) < timedelta(milliseconds=1)
         assert min(gaps[25:]) >= timedelta(seconds=1)
 
-    def test_buffering(self, format_def, temp_output):
-        """Test that events are buffered before flushing."""
+    def test_windows_events_defer_rendering_until_close(self, format_def, temp_output):
+        """Windows events should render in one final chronological RecordID pass."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=3)
 
         # Emit 2 events (below buffer size)
@@ -411,8 +445,11 @@ class TestWindowsEventEmitter:
         }
         emitter.emit_event(event_data)
 
-        # File should now exist (buffer flushed)
-        assert temp_output.exists()
+        # Intermediate flushes should not materialize partial Windows logs.
+        emitter.flush()
+        assert not temp_output.exists()
+
+        emitter.close()
 
         # Verify all 3 events are in the file
         content = temp_output.read_text()
@@ -420,6 +457,53 @@ class TestWindowsEventEmitter:
         assert "user0" in content
         assert "user1" in content
         assert "user2" in content
+
+    def test_windows_record_ids_follow_global_chronology_across_flushes(
+        self, format_def, temp_output
+    ):
+        """A late-discovered earlier event should not get a higher RecordID."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        base = {
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x123",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "10.0.0.10",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+        later = {
+            **base,
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+        }
+        earlier = {
+            **base,
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            "TargetUserName": "adoe",
+        }
+
+        emitter.emit_event(later)
+        emitter.flush()
+        emitter.emit_event(earlier)
+        emitter.close()
+
+        content = temp_output.read_text()
+        records = [
+            int(match.group(1))
+            for match in re.finditer(r"<EventRecordID>(\d+)</EventRecordID>", content)
+        ]
+        users = re.findall(r'<Data Name="TargetUserName">([^<]+)</Data>', content)
+        assert users == ["adoe", "jsmith"]
+        assert records == sorted(records)
 
     def test_close_preserves_chronological_order_for_same_second_events(
         self, format_def, temp_output
@@ -549,6 +633,14 @@ class TestWindowsEventEmitter:
         backup_pos = content.index("SeBackupPrivilege")
         assert sec_pos < backup_pos
 
+    def test_network_service_privilege_fallback_is_not_single_low_privilege(self):
+        """4672 fallback for NETWORK SERVICE includes real special privileges."""
+        privs = _special_privilege_fallback("NETWORK SERVICE")
+
+        assert "SeImpersonatePrivilege" in privs
+        assert "SeAssignPrimaryTokenPrivilege" in privs
+        assert privs != "SeChangeNotifyPrivilege"
+
     def test_emit_explicit_credentials_event(self, format_def, temp_output):
         """Test emitting 4648 (explicit credentials)."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -573,8 +665,8 @@ class TestWindowsEventEmitter:
             "TargetInfo": "fileserver01",
             "ProcessId": "0x704",
             "ProcessName": r"C:\Windows\System32\winlogon.exe",
-            "IpAddress": "10.0.0.50",
-            "IpPort": 0,
+            "NetworkAddress": "10.0.0.50",
+            "NetworkPort": 50123,
         }
 
         emitter.emit_event(event_data)
@@ -587,6 +679,8 @@ class TestWindowsEventEmitter:
         assert '<Data Name="TargetServerName">fileserver01</Data>' in content
         assert '<Data Name="TargetInfo">fileserver01</Data>' in content
         assert '<Data Name="TargetUserName">admin01</Data>' in content
+        assert '<Data Name="NetworkAddress">10.0.0.50</Data>' in content
+        assert '<Data Name="NetworkPort">50123</Data>' in content
 
     def test_emit_wfp_outbound_connection(self, format_def, temp_output):
         """Test emitting 5156 (WFP outbound connection)."""
@@ -742,6 +836,42 @@ class TestWindowsEventEmitter:
         assert '<Data Name="Application">System</Data>' in content
         assert "svchost.exe" not in content
 
+    def test_wfp_dns_connection_uses_dns_client_svchost_pid(self, format_def, temp_output):
+        """DNS-client WFP rows should align with Sysmon Event 22's svchost identity."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        emitter._system_pids = {"WKS-01": {"svchost_local_svc": 1184}}
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC),
+            event_type="wfp_connection",
+            src_host=HostContext(
+                hostname="WKS-01",
+                ip="10.0.0.50",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="WKS-01.corp.local",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49263,
+                dst_ip="10.0.0.10",
+                dst_port=53,
+                protocol="udp",
+                initiating_pid=4321,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="ProcessID">1184</Data>' in content
+        assert (
+            '<Data Name="Application">\\device\\harddiskvolume1\\windows\\system32\\'
+            "svchost.exe</Data>"
+        ) in content
+
     def test_wfp_connection_skips_unresolved_non_system_pid(self, format_def, temp_output):
         """WFP 5156 should not invent an Application value for unknown non-system PIDs."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -771,6 +901,17 @@ class TestWindowsEventEmitter:
         emitter.close()
 
         assert not temp_output.exists() or temp_output.read_text() == ""
+
+    def test_system_subject_domain_normalizes_to_nt_authority(self):
+        """S-1-5-18/SYSTEM subjects should not inherit the AD domain."""
+        auth = AuthContext(
+            username="svc_sqlreader",
+            subject_sid="S-1-5-18",
+            subject_username="SYSTEM",
+            subject_domain="MERIDIANHCS",
+        )
+
+        assert _auth_subject_domain(auth, "MERIDIANHCS") == "NT AUTHORITY"
 
     def test_device_path_conversion(self):
         """Test _to_device_path helper converts Windows paths correctly."""
@@ -1525,6 +1666,11 @@ class TestZeekEmitter:
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
         print(f"{'=' * 80}\n")
+
+    def test_rstr_history_uses_responder_reset_direction(self):
+        """Zeek RSTR histories should end with responder-side lowercase r."""
+        assert ZeekEmitter._normalize_history_for_state("RSTR", "ShADadR") == "ShADadr"
+        assert ZeekEmitter._normalize_history_for_state("RSTO", "ShADadr") == "ShADadR"
 
     def test_multiple_connections(self, format_def, temp_output):
         """Test emitting multiple connections (one per line JSON)."""

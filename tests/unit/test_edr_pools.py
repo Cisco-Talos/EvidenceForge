@@ -3,6 +3,8 @@
 
 """Unit tests for EDR pools YAML loader."""
 
+import random
+
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
     get_dll_pool,
@@ -11,6 +13,8 @@ from evidenceforge.generation.activity.edr_pools import (
     get_registry_keys_hklm,
     load_edr_pools,
     materialize_edr_template,
+    materialize_edr_template_group,
+    select_file_side_effect,
 )
 
 
@@ -33,8 +37,73 @@ class TestLoadEdrPools:
             "registry_keys_hkcu",
             "registry_keys_hklm",
             "dll_pool",
+            "file_side_effect_profiles",
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
+
+    def test_read_only_recon_tool_has_no_file_side_effect(self):
+        import random
+
+        effect = select_file_side_effect(
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line='dsquery.exe group -name "Domain Admins"',
+            os_category="windows",
+            rng=random.Random(5),
+            user="alice",
+        )
+
+        assert effect is None
+
+    def test_browser_side_effect_uses_browser_cache_profile(self):
+        import random
+
+        effect = select_file_side_effect(
+            process_name=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line="chrome.exe --type=renderer",
+            os_category="windows",
+            rng=random.Random(5),
+            user="alice",
+        )
+
+        assert effect is not None
+        action, path = effect
+        assert action in {"create", "modify"}
+        assert "cache" in path.lower()
+        assert "Security.evtx" not in path
+
+    def test_browser_side_effect_matches_executable_family(self):
+        import random
+
+        cases = [
+            (
+                r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                "chrome.exe --type=renderer",
+                r"google\chrome",
+            ),
+            (
+                r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                "msedge.exe --type=renderer",
+                r"microsoft\edge",
+            ),
+            (
+                r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                "firefox.exe -contentproc",
+                r"mozilla\firefox",
+            ),
+        ]
+
+        for process_name, command_line, expected_path_fragment in cases:
+            effect = select_file_side_effect(
+                process_name=process_name,
+                command_line=command_line,
+                os_category="windows",
+                rng=random.Random(5),
+                user="alice",
+            )
+
+            assert effect is not None
+            _action, path = effect
+            assert expected_path_fragment in path.lower()
 
 
 class TestFilePaths:
@@ -130,6 +199,58 @@ class TestTemplateMaterialization:
         assert "}}" not in value
         assert value.startswith(r"Interfaces\{")
         assert value.endswith(r"}\DhcpIPAddress")
+
+    def test_materializes_host_ip_context(self):
+        import random
+
+        value = materialize_edr_template("{host_ip}", random.Random(9), host_ip="10.10.2.20")
+
+        assert value == "10.10.2.20"
+
+    def test_materializes_related_templates_with_shared_placeholders(self):
+        import random
+
+        key, details = materialize_edr_template_group(
+            (
+                r"HKLM\Software\Microsoft\Windows\CurrentVersion\App Paths\app-{doc}.exe",
+                r"C:\Program Files\Common Files\Vendor\app-{doc}.exe",
+            ),
+            random.Random(11),
+        )
+
+        key_doc = key.rsplit("app-", 1)[1].split(".exe", 1)[0]
+        details_doc = details.rsplit("app-", 1)[1].split(".exe", 1)[0]
+        assert key_doc == details_doc
+
+
+class TestFileSideEffectRealism:
+    def test_default_side_effect_pools_do_not_leak_generator_names(self):
+        data = load_edr_pools()
+        haystack = str(data)
+        assert "eforge-" not in haystack
+        assert "artifact-" not in haystack
+
+    def test_gzip_side_effect_uses_compressed_operand_path(self):
+        effect = select_file_side_effect(
+            "gzip",
+            "gzip -9 /tmp/patient_claims.sql",
+            "linux",
+            random.Random(7),
+            user="root",
+        )
+
+        assert effect == ("create", "/tmp/patient_claims.sql.gz")
+
+    def test_mysqldump_side_effect_uses_redirect_path(self):
+        effect = select_file_side_effect(
+            "mysqldump",
+            "mysqldump ehr patients > /tmp/patient_claims.sql",
+            "linux",
+            random.Random(7),
+            user="root",
+        )
+
+        assert effect == ("create", "/tmp/patient_claims.sql")
 
 
 class TestOverlayValidation:

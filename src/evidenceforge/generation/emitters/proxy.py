@@ -33,7 +33,7 @@ from evidenceforge.utils.rng import _stable_seed
 # CONNECT tunnel inactivity timeout (seconds).  A new CONNECT is emitted
 # only when no tunnel exists for this (proxy_fqdn, client_ip, host, port)
 # tuple, or the existing tunnel has been idle longer than this threshold.
-_CONNECT_TUNNEL_TIMEOUT_S = 300  # 5 minutes
+_CONNECT_TUNNEL_TIMEOUT_S = 240  # about 4 minutes
 
 
 def _w3c_extended_field(value: Any) -> str:

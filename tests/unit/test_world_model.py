@@ -80,6 +80,7 @@ def _make_scenario() -> Scenario:
                     os="Windows 11",
                     type="workstation",
                     assigned_user="dev.user",
+                    services=["dns-client", "systemd-resolved"],
                 ),
                 System(
                     hostname="APP-01",
@@ -139,6 +140,14 @@ def users(scenario: Scenario) -> dict[str, User]:
 def world_model(scenario: Scenario) -> WorldModel:
     """Compiled world model for the scenario."""
     return WorldModel(scenario, "corp.local")
+
+
+def test_dns_client_services_do_not_make_workstations_dns_servers(world_model: WorldModel):
+    """Resolver/client services should not be treated as DNS server roles."""
+    dns_hostnames = {system.hostname for system in world_model.dns_servers}
+
+    assert "DC-01" in dns_hostnames
+    assert "WKS-02" not in dns_hostnames
 
 
 @pytest.fixture

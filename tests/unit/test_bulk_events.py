@@ -9,7 +9,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from pydantic import ValidationError
 
-from evidenceforge.generation.engine.storyline import _effective_rate_interval, _iter_periodic_ticks
+from evidenceforge.generation.engine.storyline import (
+    _effective_rate_interval,
+    _iter_dns_tunnel_ticks,
+    _iter_periodic_ticks,
+    _web_scan_connection_profile,
+    _web_scan_path_allows_referrer,
+)
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
     CredentialSprayEventSpec,
@@ -274,6 +280,19 @@ class TestIterPeriodicTicks:
         assert len(ticks) == 1
         assert ticks[0] == start
 
+    def test_dns_tunnel_ticks_include_natural_gaps(self):
+        rng = random.Random(42)
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        ticks = list(_iter_dns_tunnel_ticks(start, 2.0, 900.0, None, 0.25, rng))
+        intervals = [
+            (later - earlier).total_seconds()
+            for earlier, later in zip(ticks, ticks[1:], strict=False)
+        ]
+
+        assert len(ticks) < 451
+        assert max(intervals) > 8.0
+        assert len({round(interval, 1) for interval in intervals}) > 20
+
     def test_duration_shorter_than_interval(self):
         rng = random.Random(42)
         start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
@@ -300,6 +319,31 @@ class TestEffectiveRateInterval:
             _effective_rate_interval(10.0, None, random.Random(seed)) for seed in range(10)
         }
         assert len(intervals) > 1
+
+
+class TestWebScanConnectionProfile:
+    def test_profile_includes_failed_connection_outcomes(self):
+        rng = random.Random(42)
+        states = {_web_scan_connection_profile(rng)[0] for _ in range(200)}
+        assert "SF" in states
+        assert states & {"S0", "RSTO", "RSTR"}
+
+    def test_s0_profile_has_no_response_bytes(self):
+        class S0Rng(random.Random):
+            def choices(self, population, weights=None, k=1):
+                return ["S0"]
+
+        state, _duration, _orig_bytes, resp_bytes = _web_scan_connection_profile(S0Rng(42))
+        assert state == "S0"
+        assert resp_bytes == 0
+
+    def test_referrer_only_allowed_for_crawl_like_successes(self):
+        assert _web_scan_path_allows_referrer({"uri": "/", "status": 200})
+        assert not _web_scan_path_allows_referrer({"uri": "/.git/HEAD", "status": 404})
+        assert not _web_scan_path_allows_referrer({"uri": "/wp-admin/", "status": 404})
+        assert not _web_scan_path_allows_referrer(
+            {"uri": "/robots.txt", "status": 200, "ids": {"sid": 1}}
+        )
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────
@@ -458,6 +502,15 @@ class TestWebScanPresets:
         assert len(nikto["paths"]) > 10
         assert "user_agent" in nikto
         assert "default_rate" in nikto
+        assert "max_effective_rate" in nikto
+
+    def test_presets_have_positive_effective_rate_cap(self):
+        from evidenceforge.config.web_scan_presets import get_preset, list_preset_names
+
+        for name in list_preset_names():
+            preset = get_preset(name)
+            assert preset is not None
+            assert 0 < preset["max_effective_rate"] <= preset["default_rate"]
 
     def test_get_unknown_preset(self):
         from evidenceforge.config.web_scan_presets import get_preset

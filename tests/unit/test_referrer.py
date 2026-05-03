@@ -91,3 +91,10 @@ class TestPickReferrerGeneral:
         ]
         same_origin = [r for r in results if "shop.example.com" in r]
         assert all(("/products" in r or "/about" in r) for r in same_origin)
+
+    def test_internal_hosts_do_not_get_search_engine_referrers(self):
+        rng = _rng(seed=42)
+        hosts = ["WEB-EXT-01", "WS-AJOHNSON-01.meridianhcs.local"]
+        for host in hosts:
+            results = [pick_referrer(rng, host, context="general") for _ in range(500)]
+            assert not any("google.com/search" in r or "bing.com/search" in r for r in results)

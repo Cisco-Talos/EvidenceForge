@@ -95,6 +95,7 @@ class EventDispatcher:
         self.emitters = emitters
         self.visibility_engine = visibility_engine
         self.output_start_time = output_start_time
+        self.storyline_cluster_id: str | None = None
 
     def _is_suppressed(self, timestamp: datetime) -> bool:
         """Return True if the event falls before the output window (warm-up period)."""
@@ -115,6 +116,8 @@ class EventDispatcher:
         State is always updated (even during warm-up). Emission to log files
         is suppressed for events before output_start_time.
         """
+        if self.storyline_cluster_id and event.storyline_cluster_id is None:
+            event.storyline_cluster_id = self.storyline_cluster_id
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
             return

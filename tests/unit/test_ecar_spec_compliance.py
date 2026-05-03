@@ -91,6 +91,30 @@ class TestPidAlwaysPresent:
         record = json.loads(rendered)
         assert record["pid"] == -1
 
+    def test_unlock_reauth_renders_session_open_not_duplicate_login(self, emitter, ts):
+        """Type 7 unlock reauth should not look like a new session login."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="logon",
+            dst_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            auth=AuthContext(username="alice", logon_id="0x123", logon_type=7),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        assert row["object"] == "USER_SESSION"
+        assert row["action"] == "OPEN"
+        assert row["objectID"] == "session-1"
+
     def test_pid_none_becomes_negative_one(self, emitter, ts):
         """Explicit pid=None should become -1."""
         rendered = emitter._render_event(
@@ -130,6 +154,49 @@ class TestFileEventActions:
 
         actions = [call.args[0]["action"] for call in emitter.emit_event.call_args_list]
         assert actions == ["READ", "WRITE"]
+
+    def test_file_event_renders_after_process_create_offset(self, emitter, ts):
+        """Dependent eCAR records should not render before PROCESS/CREATE."""
+        host = HostContext(
+            hostname="FS-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            fqdn="fs-01.example.com",
+        )
+        proc = ProcessContext(
+            pid=4321,
+            parent_pid=4,
+            image=r"C:\Temp\tool.exe",
+            command_line=r"C:\Temp\tool.exe",
+            username="jdoe",
+            start_time=ts,
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=proc,
+            )
+        )
+        emitter._render_file_event(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="file_create",
+                src_host=host,
+                auth=AuthContext(username="jdoe"),
+                process=proc,
+                file=FileContext(path=r"C:\Temp\tool.exe", action="create", pid=4321),
+            )
+        )
+
+        process_create, file_create = [call.args[0] for call in emitter.emit_event.call_args_list]
+        assert file_create["timestamp"] > process_create["timestamp"]
 
 
 class TestRemoteThreadRendering:
@@ -177,6 +244,11 @@ class TestRemoteThreadRendering:
         emitter._render_create_remote_thread(event)
 
         rendered = emitter.emit_event.call_args[0][0]
+        expected_delta = sample_timing_delta(
+            "source.ecar_remote_thread",
+            seed_parts=("WS-01", 4321, 688, 840, ts),
+        )
+        assert rendered["timestamp"] == ts + expected_delta
         assert rendered["target_pid"] == "688"
         assert rendered["tgt_tid"] == "840"
         assert rendered["target_process_uuid"] == "target-process-id"
@@ -245,6 +317,64 @@ class TestChronologicalOutput:
         ]
         assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
 
+    def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
+        """eCAR output should not terminate a process before later same-process telemetry."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "MODULE",
+                "action": "LOAD",
+                "actorID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        module_ts = next(row["timestamp_ms"] for row in rows if row["object"] == "MODULE")
+        terminate_ts = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+        )
+        assert terminate_ts > module_ts
+
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
@@ -285,6 +415,45 @@ class TestChronologicalOutput:
             ),
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
+
+    def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
+        """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=1234,
+            parent_pid=4,
+            image=r"C:\Windows\System32\dsquery.exe",
+            command_line='dsquery.exe group -name "Domain Admins"',
+            username="alice",
+            start_time=ts,
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=389,
+                protocol="tcp",
+                initiating_pid=1234,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id="process-1"),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
 
     def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
         """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""

@@ -298,11 +298,11 @@ def _registry_writer_candidates(
 
     candidates: list[tuple[int, str, str] | None]
     if key.startswith("HKCU\\"):
-        user = desktop_user or "SYSTEM"
+        if desktop_user is None:
+            return []
         candidates = [
-            _candidate("explorer", r"C:\Windows\explorer.exe", user),
-            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", user),
-            _candidate("search_indexer", r"C:\Windows\System32\SearchIndexer.exe", "SYSTEM"),
+            _candidate("explorer", r"C:\Windows\explorer.exe", desktop_user),
+            _candidate("runtime_broker", r"C:\Windows\System32\RuntimeBroker.exe", desktop_user),
         ]
     elif "windows defender" in key_lower:
         candidates = [
@@ -1020,22 +1020,33 @@ class BaselineMixin:
         )
         n_sched_hosts = min(2, len(servers))
         _sched_hosts = _sched_rng.sample(servers, n_sched_hosts)
-        # Fires every 1-2 hours (check if this hour is a firing hour)
-        _sched_interval = _sched_rng.choice([1, 2])
         hour_idx = int((current_hour - self.start_time).total_seconds() / 3600)
-        if hour_idx % _sched_interval == 0:
-            for host in _sched_hosts:
-                sched_time = current_hour + timedelta(
-                    seconds=_sched_rng.randint(0, 300)  # first 5 minutes of hour
+        for host in _sched_hosts:
+            profile_rng = random.Random(
+                _stable_seed(
+                    f"sched_fail_profile:{self.scenario.name}:{_sched_acct}:{host.hostname}"
                 )
-                self.state_manager.set_current_time(sched_time)
-                self.activity_generator.generate_failed_logon(
-                    user=_sched_user,
-                    system=host,
-                    time=sched_time,
-                    logon_type=4,  # batch (scheduled task)
-                    source_ip=host.ip,
+            )
+            sched_interval = profile_rng.choices([1, 2, 3], weights=[35, 45, 20], k=1)[0]
+            sched_phase = profile_rng.randint(0, sched_interval - 1)
+            if (hour_idx + sched_phase) % sched_interval != 0:
+                continue
+            hour_rng = random.Random(
+                _stable_seed(
+                    f"sched_fail_time:{self.scenario.name}:{_sched_acct}:{host.hostname}:{hour_idx}"
                 )
+            )
+            nominal_second = profile_rng.randint(0, 900)
+            sched_second = max(0, min(3599, nominal_second + hour_rng.randint(-180, 540)))
+            sched_time = current_hour + timedelta(seconds=sched_second)
+            self.state_manager.set_current_time(sched_time)
+            self.activity_generator.generate_failed_logon(
+                user=_sched_user,
+                system=host,
+                time=sched_time,
+                logon_type=4,  # batch (scheduled task)
+                source_ip=host.ip,
+            )
 
         # Pattern 3: Management software sweep (1-2 per business day).
         # Use scenario-local time for business-hour gating.
@@ -1659,7 +1670,31 @@ class BaselineMixin:
             "bash",
             "agetty",
         )
-        short_lived = ("msbuild", "gcc", "npm", "make", "dotnet", "cargo", "node.exe")
+        short_lived = (
+            "msbuild",
+            "gcc",
+            "npm",
+            "make",
+            "dotnet",
+            "cargo",
+            "node.exe",
+            "whoami.exe",
+            "hostname.exe",
+            "ipconfig.exe",
+            "nltest.exe",
+            "klist.exe",
+            "qwinsta.exe",
+            "quser.exe",
+            "query.exe",
+            "cmdkey.exe",
+            "net.exe",
+            "net1.exe",
+            "dsquery.exe",
+            "dsget.exe",
+            "tasklist.exe",
+            "sc.exe",
+            "wevtutil.exe",
+        )
 
         # Collect all seeded system PIDs for this system as a safety net
         seeded_pids: dict[str, set[int]] = {}
@@ -1683,7 +1718,8 @@ class BaselineMixin:
                 if proc.story_created:
                     continue
 
-                if any(p in image_lower for p in short_lived):
+                is_short_lived = any(p in image_lower for p in short_lived)
+                if is_short_lived:
                     max_hours = rng.uniform(0.08, 0.5)
                 elif any(
                     p in image_lower
@@ -1711,8 +1747,17 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    term_offset = rng.uniform(0, 3599)
-                    term_time = current_hour + timedelta(seconds=term_offset)
+                    if is_short_lived:
+                        term_time = proc.start_time + timedelta(seconds=rng.uniform(2.0, 45.0))
+                        if term_time > current_hour + timedelta(seconds=3599):
+                            continue
+                    else:
+                        start_offset = (proc.start_time - current_hour).total_seconds()
+                        lower_bound = max(0.0, start_offset + 1.0)
+                        if lower_bound >= 3599.0:
+                            continue
+                        term_offset = rng.uniform(lower_bound, 3599)
+                        term_time = current_hour + timedelta(seconds=term_offset)
                     if proc.last_activity_time is not None and term_time <= proc.last_activity_time:
                         term_time = proc.last_activity_time + timedelta(seconds=rng.uniform(2, 30))
                     self.state_manager.set_current_time(term_time)
@@ -3877,7 +3922,12 @@ class BaselineMixin:
                     _template_user = system.assigned_user or "SYSTEM"
                     _key = materialize_edr_template(_key, rng, _template_user)
                     _vname = materialize_edr_template(_vname, rng, _template_user)
-                    _details = materialize_edr_template(_details, rng, _template_user)
+                    _details = materialize_edr_template(
+                        _details,
+                        rng,
+                        _template_user,
+                        host_ip=system.ip,
+                    )
                     writer_candidates = _registry_writer_candidates(
                         _key,
                         sys_pids,
@@ -3939,16 +3989,6 @@ class BaselineMixin:
                     parent_pid = sys_pids.get(
                         task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
-                    cred_ts = ts - timedelta(milliseconds=rng.randint(5, 50))
-                    self.activity_generator.generate_explicit_credentials(
-                        user=_SYSTEM_USER,
-                        system=system,
-                        time=cred_ts,
-                        target_username="SYSTEM",
-                        target_server=system.hostname,
-                        process_name=r"C:\Windows\System32\svchost.exe",
-                        process_pid=parent_pid,
-                    )
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=ts,
@@ -3988,17 +4028,17 @@ class BaselineMixin:
                         if s.type == "domain_controller"
                     ]
                     if dcs:
-                        dc = dcs[_stable_seed(f"gpo_dc_{system.hostname}") % len(dcs)]
                         gpo_ts = current_hour + timedelta(seconds=rng.uniform(60, 300))
                         self.state_manager.set_current_time(gpo_ts)
-                        self.activity_generator.generate_explicit_credentials(
-                            user=_SYSTEM_USER,
+                        # Group Policy refresh runs as SYSTEM but does not normally
+                        # create a 4648 explicit-credential audit for SYSTEM->SYSTEM.
+                        self.activity_generator.generate_system_process(
                             system=system,
                             time=gpo_ts,
-                            target_username="SYSTEM",
-                            target_server=dc.hostname,
-                            process_name=r"C:\Windows\System32\svchost.exe",
-                            process_pid=sys_pids.get("svchost_netsvcs", 0),
+                            process_name=r"C:\Windows\System32\gpupdate.exe",
+                            command_line=r"gpupdate.exe /target:computer /force",
+                            parent_pid=sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4)),
+                            username="SYSTEM",
                         )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
@@ -4912,6 +4952,14 @@ class BaselineMixin:
                     ]
                     if not _filtered:
                         _filtered = _pool
+                    _filtered = [
+                        s
+                        for s in _filtered
+                        if not (
+                            s.get("direction") == "in"
+                            and "response" in str(s.get("message", "")).lower()
+                        )
+                    ]
                     if not _filtered:
                         continue
                     sig = rng.choice(_filtered)
@@ -4971,10 +5019,13 @@ class BaselineMixin:
         # Web access logs
         if "web_access" in self.emitters:
             _WEB_UAS_BROWSER = [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
                 "curl/7.88.1",
                 "python-requests/2.31.0",
@@ -5050,7 +5101,8 @@ class BaselineMixin:
                     client_sys = ip_map.get(client_ip)
                     if client_sys and _get_os_category(client_sys.os) == "linux":
                         ua_pool = [
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                             "curl/7.88.1",
                             "python-requests/2.31.0",
                         ]
@@ -5058,14 +5110,18 @@ class BaselineMixin:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     from evidenceforge.generation.activity.http_content import (
                         response_size_for_mime,
+                        response_size_for_status,
                     )
 
                     resp_bytes = (
                         response_size_for_mime(rng, mime)
                         if status == 200
-                        else rng.randint(100, 500)
+                        else response_size_for_status(status, http_host, path)
                     )
-                    chosen_ua = rng.choice(ua_pool)
+                    ua_rng = random.Random(
+                        _stable_seed(f"web_client_ua:{client_ip}:{sys_obj.hostname}")
+                    )
+                    chosen_ua = ua_rng.choice(ua_pool)
                     _ua_is_bot = any(
                         bot in chosen_ua for bot in ("Googlebot", "bingbot", "AhrefsBot")
                     )

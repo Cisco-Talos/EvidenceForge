@@ -219,8 +219,8 @@ domains:
     tags: [cdn, windows]
 
   # === Other popular sites ===
-  - domain: www.example.com
-    ips: ["93.184.216.34"]
+  - domain: www.healthcareitnews.com
+    ips: ["104.18.26.89", "104.18.27.89"]
     tags: [web]
   - domain: www.facebook.com
     ips: ["31.13.65.36", "31.13.65.37"]
@@ -386,8 +386,8 @@ domains:
     tags: [cdn]
 
   # === Certificate infrastructure ===
-  - domain: ocsp.example.com
-    ips: ["10.0.0.15"]
+  - domain: ocsp.meridianhcs.local
+    ips: ["10.10.1.10"]
     tags: [background, internal]
   - domain: crl3.digicert.com
     ips: ["93.184.220.31", "93.184.221.31"]

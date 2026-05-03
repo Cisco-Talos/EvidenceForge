@@ -24,6 +24,7 @@ from evidenceforge.generation.activity.tls_issuers import (
 )
 from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
+    chain_template_for_issuer,
     multi_label_public_suffixes,
     ocsp_config,
     pick_ocsp_responder,
@@ -198,7 +199,7 @@ class TestTlsIssuers:
                 "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US",
                 random.Random(1),
             )
-            == "ocsp.example.com"
+            == "ocsp.meridianhcs.local"
         )
 
     def test_tls_realism_overlay_extends_lists_and_replaces_scalars(self, tmp_path, monkeypatch):
@@ -318,6 +319,23 @@ class TestTlsIssuers:
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
         assert "download.windowsupdate.com" not in linux_domains
 
+    def test_public_ca_chain_templates_keep_issuer_family(self):
+        """Public CA intermediates should not fall through to an unrelated root family."""
+        globalsign = chain_template_for_issuer(
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+        )
+        sectigo = chain_template_for_issuer(
+            "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, "
+            "L=Salford, ST=Greater Manchester, C=GB"
+        )
+
+        assert globalsign["name"] == "globalsign"
+        assert all("GlobalSign" in subject for subject in globalsign["intermediates"])
+        assert sectigo["name"] == "sectigo"
+        assert any(
+            "Sectigo" in subject or "USERTrust" in subject for subject in sectigo["intermediates"]
+        )
+
     def test_tls_destination_servers_avoid_human_saas_profiles(self):
         """Server-origin TLS background should not pick browser/SaaS-heavy destinations."""
         server_domains = {
@@ -398,6 +416,30 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_dns_tunnel_response_templates_are_loaded_from_network_params_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response token shapes should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_response_templates,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_response_templates": ["edge-{token}"]},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert "edge-{token}" in dns_tunnel_response_templates()
+        finally:
+            reset_network_params_cache()
+
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
         generator = ActivityGenerator(StateManager(), {})
@@ -433,7 +475,7 @@ class TestTlsIssuers:
 
         assert event.x509 is not None
         assert event.x509.certificate_subject == "CN=web01.example.com"
-        assert event.x509.certificate_issuer == "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+        assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
         assert event.x509.san_dns == ["web01.example.com", "web01"]
 
     def test_internal_tls_explicit_sni_controls_enterprise_sans(self):
@@ -473,8 +515,39 @@ class TestTlsIssuers:
         assert event.ssl.server_name == "srv-05.example.com"
         assert event.x509 is not None
         assert event.x509.certificate_subject == "CN=srv-05.example.com"
-        assert event.x509.certificate_issuer == "CN=Acme Enterprise Issuing CA, O=Acme Corp, C=US"
+        assert event.x509.certificate_issuer == "CN=Example Enterprise Issuing CA, O=Example, C=US"
         assert event.x509.san_dns == ["srv-05.example.com", "srv-05"]
+
+    def test_raw_ip_tls_certificate_avoids_public_ca_dnsless_identity(self):
+        """Raw-IP TLS should not render a public-CA CN-only certificate."""
+        generator = ActivityGenerator(StateManager(), {})
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip="45.33.32.30",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestRawIpTls",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname="",
+            dns=None,
+            dst_ip="45.33.32.30",
+            rng=random.Random(42),
+            allow_failure=False,
+        )
+
+        assert event.x509 is not None
+        assert event.x509.certificate_subject == "CN=45.33.32.30"
+        assert event.x509.certificate_issuer == "CN=45.33.32.30"
+        assert event.x509.san_dns == []
+        assert event.x509_chain == [event.x509]
 
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""

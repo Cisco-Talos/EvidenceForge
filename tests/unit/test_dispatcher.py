@@ -35,6 +35,7 @@ from evidenceforge.events import (
     RawLogEntry,
     SecurityEvent,
 )
+from evidenceforge.events.contexts import SyslogContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
 from evidenceforge.generation.state_manager import StateManager
 
@@ -92,6 +93,19 @@ class TestDispatchRouting:
 
         sm.apply.assert_called_once_with(event)
         emitter.emit.assert_not_called()
+
+    def test_dispatch_applies_storyline_cluster_provenance_only(self):
+        """storyline_cluster_id marks context provenance without changing origin flag."""
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("windows", handles=True)
+        dispatcher = EventDispatcher(state_manager=sm, emitters={"windows": emitter})
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        dispatcher.dispatch(event)
+
+        assert event.storyline_cluster_id == "story-001"
+        assert event.storyline_origin is False
 
 
 class TestNetworkVisibilityFiltering:
@@ -490,6 +504,34 @@ class TestCanHandleDefault:
         assert "Connection from" in lines[0]
         assert "Accepted password" in lines[1]
         assert "pam_unix(sshd:session): session opened" in lines[2]
+
+    def test_syslog_ssh_session_routes_to_target_host_when_both_hosts_are_linux(self):
+        """SSH auth syslog belongs to the server, not the Linux client host."""
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        src_host = HostContext(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        dst_host = HostContext(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="ssh_session",
+            src_host=src_host,
+            dst_host=dst_host,
+            syslog=SyslogContext(app_name="sshd", pid=1729, message="Accepted password"),
+        )
+
+        assert SyslogEmitter._linux_host(event) is dst_host
 
 
 class TestBuildHostContext:

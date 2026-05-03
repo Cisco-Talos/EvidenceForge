@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import random
 import re
+import shlex
 from typing import Any
 
 import yaml
@@ -91,6 +92,13 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
                 "Invalid EDR pool section %s in overlay-merged config; falling back to package defaults",
                 key,
             )
+    candidate_profiles = merged.get("file_side_effect_profiles")
+    if isinstance(candidate_profiles, list) and all(
+        isinstance(p, dict) for p in candidate_profiles
+    ):
+        sanitized["file_side_effect_profiles"] = candidate_profiles
+    elif "file_side_effect_profiles" in defaults:
+        sanitized["file_side_effect_profiles"] = defaults["file_side_effect_profiles"]
     return sanitized
 
 
@@ -119,11 +127,20 @@ def get_dll_pool() -> list[str]:
     return pools.get("dll_pool", [])
 
 
-def materialize_edr_template(template: str, rng: random.Random, user: str = "SYSTEM") -> str:
+def materialize_edr_template(
+    template: str,
+    rng: random.Random,
+    user: str = "SYSTEM",
+    *,
+    host_ip: str = "",
+) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     replacements = {
         "user": user,
+        "host_ip": host_ip,
         "rand": f"{rng.randint(10000, 99999)}",
+        "small": str(rng.randint(1, 80)),
+        "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "guid": (
             f"{rng.getrandbits(32):08X}-"
@@ -152,3 +169,121 @@ def materialize_edr_template(template: str, rng: random.Random, user: str = "SYS
 
     materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
     return materialized.replace("{{", "{").replace("}}", "}")
+
+
+def materialize_edr_template_group(
+    templates: tuple[str, ...],
+    rng: random.Random,
+    user: str = "SYSTEM",
+) -> tuple[str, ...]:
+    """Materialize related templates with one shared placeholder context."""
+    replacements = {
+        "user": user,
+        "rand": f"{rng.randint(10000, 99999)}",
+        "small": str(rng.randint(1, 80)),
+        "minute": f"{rng.randint(0, 59):02d}",
+        "hex": f"{rng.getrandbits(32):08X}",
+        "guid": (
+            f"{rng.getrandbits(32):08X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(48):012X}"
+        ),
+        "mru": str(rng.randint(0, 24)),
+        "doc": str(rng.randint(1, 80)),
+        "package": rng.choice(
+            [
+                "Package_for_RollupFix",
+                "Package_for_ServicingStack",
+                "Package_for_KB5034122",
+                "Package_for_DotNetRollup",
+                "Microsoft-Windows-Client-Features",
+            ]
+        ),
+        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+    }
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(1)
+        return str(replacements[token]) if token in replacements else match.group(0)
+
+    return tuple(
+        re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
+        .replace("{{", "{")
+        .replace("}}", "}")
+        for template in templates
+    )
+
+
+def select_file_side_effect(
+    process_name: str,
+    command_line: str,
+    os_category: str,
+    rng: random.Random,
+    user: str = "SYSTEM",
+) -> tuple[str, str] | None:
+    """Return a process-aware file side effect from data-driven EDR profiles."""
+    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    command_lower = command_line.lower()
+    semantic_effect = _select_command_semantic_file_effect(exe, command_line)
+    if semantic_effect is not None:
+        return semantic_effect
+
+    profiles = load_edr_pools().get("file_side_effect_profiles", [])
+    for profile in profiles:
+        exact = {str(item).lower() for item in profile.get("executables", [])}
+        contains = [str(item).lower() for item in profile.get("executable_contains", [])]
+        command_contains = [str(item).lower() for item in profile.get("command_contains", [])]
+        if exe not in exact and not any(marker in exe for marker in contains):
+            if not any(marker in command_lower for marker in command_contains):
+                continue
+
+        probability = float(profile.get("probability", 1.0))
+        if probability <= 0 or rng.random() > probability:
+            return None
+
+        paths_key = "paths_windows" if os_category == "windows" else "paths_linux"
+        paths = profile.get(paths_key, [])
+        actions = profile.get("actions", ["modify"])
+        if not paths or not actions:
+            return None
+        action = str(rng.choice(actions)).lower()
+        path = materialize_edr_template(str(rng.choice(paths)), rng, user=user)
+        if os_category == "linux" and user == "root":
+            path = path.replace("/home/root/", "/root/")
+        return action, path
+    return None
+
+
+def _select_command_semantic_file_effect(
+    exe: str,
+    command_line: str,
+) -> tuple[str, str] | None:
+    """Return command-owned file artifacts for common shell tools."""
+    if exe == "mysqldump":
+        match = re.search(r">\s*(?P<path>\S+)", command_line)
+        if match:
+            return "create", match.group("path")
+
+    if exe == "gzip":
+        try:
+            parts = shlex.split(command_line)
+        except ValueError:
+            parts = command_line.split()
+        operands = [part for part in parts[1:] if not part.startswith("-")]
+        if operands:
+            return "create", f"{operands[-1]}.gz"
+
+    if exe in {"tar", "zip"}:
+        try:
+            parts = shlex.split(command_line)
+        except ValueError:
+            parts = command_line.split()
+        for idx, part in enumerate(parts):
+            if part in {"-f", "--file"} and idx + 1 < len(parts):
+                return "create", parts[idx + 1]
+            if part.endswith((".tar", ".tar.gz", ".tgz", ".zip")):
+                return "create", part
+
+    return None

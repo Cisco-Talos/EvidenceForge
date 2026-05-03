@@ -27,7 +27,7 @@ ocsp:
   next_update_max_seconds: 604800
   responders:
     - issuer_patterns: ["*Acme Enterprise*", "*Enterprise*"]
-      domains: ["ocsp.example.com"]
+      domains: ["ocsp.meridianhcs.local"]
     - issuer_patterns: ["*Let's Encrypt*"]
       domains: ["r3.o.lencr.org", "ocsp.int-x3.letsencrypt.org"]
     - issuer_patterns: ["*DigiCert*"]
@@ -111,6 +111,16 @@ certificate_chains:
       issuer_patterns: ["*Cloudflare*"]
       intermediates:
         - "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US"
+    - name: globalsign
+      issuer_patterns: ["*GlobalSign*"]
+      intermediates:
+        - "CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE"
+        - "CN=GlobalSign Root R3, O=GlobalSign nv-sa, C=BE"
+    - name: sectigo
+      issuer_patterns: ["*Sectigo*"]
+      intermediates:
+        - "CN=Sectigo Public Server Authentication Root R46, O=Sectigo Limited, C=GB"
+        - "CN=USERTrust RSA Certification Authority, O=The USERTRUST Network, C=US"
     - name: apple
       issuer_patterns: ["*Apple*"]
       intermediates:
@@ -118,7 +128,7 @@ certificate_chains:
     - name: enterprise
       issuer_patterns: ["*Enterprise*"]
       intermediates:
-        - "CN=Acme Enterprise Root CA, O=Acme Corp, C=US"
+        - "CN=Enterprise Root CA, O=Enterprise IT, C=US"
     - name: default
       issuer_patterns: ["*"]
       intermediates:

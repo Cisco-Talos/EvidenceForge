@@ -50,10 +50,26 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
-        for x509 in certificates:
-            self._emit_certificate(event, x509)
+        base_delay_ms = int(
+            sample_timing_delta(
+                "source.zeek_x509_analyzer",
+                seed_parts=(
+                    event.network.zeek_uid if event.network is not None else "",
+                    event.timestamp,
+                ),
+            ).total_seconds()
+            * 1000
+        )
+        for position, x509 in enumerate(certificates):
+            self._emit_certificate(event, x509, analyzer_delay_ms=base_delay_ms + position * 8)
 
-    def _emit_certificate(self, event: SecurityEvent, x509: Any) -> None:
+    def _emit_certificate(
+        self,
+        event: SecurityEvent,
+        x509: Any,
+        *,
+        analyzer_delay_ms: int,
+    ) -> None:
         x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
             self.format_def.name if self.format_def else "zeek_x509", []
         )
@@ -61,14 +77,6 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
         targets = sensor_hostnames or self._sensor_hostnames
         new_targets = targets
-        analyzer_delay_ms = int(
-            sample_timing_delta(
-                "source.zeek_x509_analyzer",
-                seed_parts=(x509.fuid, event.timestamp),
-            ).total_seconds()
-            * 1000
-        )
-
         event_data: dict[str, Any] = {
             "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
             "id": x509.fuid,
