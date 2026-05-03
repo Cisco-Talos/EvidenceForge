@@ -4,6 +4,23 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.6.1 (2026-05-03)
+
+This patch release packages the dependency refresh PRs merged into `dev` after v0.6.0. The branch contains only `chore(deps)` commits, so the version moves from `0.6.0` to `0.6.1` under the pre-1.0 semver policy.
+
+**Dependency refresh**
+
+- Updated Rich to 15.0.0 for the CLI rendering stack (`16901a2`).
+- Updated pytest-cov to 7.1.0 for current coverage plugin behavior (`a9d7dae`).
+- Updated Pydantic to 2.13.3 and pydantic-core to 2.46.3 for schema validation (`b242b2f`).
+- Updated Ruff to 0.15.12 for linting and formatting (`86e6471`).
+- Updated pre-commit to 4.6.0 for local hook execution (`6d87d36`).
+
+**Validation**
+
+- Dependency sync, linting, formatting, config validation, CLI smoke tests, scenario validation, pre-commit hooks, and the full pytest suite all passed with the refreshed dependency stack.
+- Full suite with coverage passed before release prep: `uv run pytest --cov=evidenceforge --cov-report=term-missing` with 2656 passed, 37 skipped, and 78.00% coverage.
+
 ## v0.6.0 (2026-05-03)
 
 This release packages the dev branch since `main` into a pre-MVP quality and Codex workflow release. Because the branch includes feature commits, the version moves from `0.5.0` to `0.6.0` under the pre-1.0 semver policy.
