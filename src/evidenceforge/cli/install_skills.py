@@ -169,6 +169,77 @@ def _references_for_codex_skill(
     return refs
 
 
+def _validate_relative_install_path(rel_path: str) -> Path:
+    """Return a safe relative install path and reject traversal/absolute paths."""
+    path = Path(rel_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise PermissionError(
+            f"Refusing to install skill file outside target directory: {rel_path}"
+        )
+    return path
+
+
+def _ensure_descendant(root: Path, path: Path) -> None:
+    """Raise if path does not resolve inside root."""
+    root_real = root.resolve()
+    path_real = path.resolve()
+    if os.path.commonpath([str(path_real), str(root_real)]) != str(root_real):
+        raise PermissionError(f"Refusing to install skills outside target directory: {path}")
+
+
+def _ensure_safe_install_parent(root: Path, relative_parent: Path) -> Path:
+    """Create a destination parent directory without following nested symlinks."""
+    from evidenceforge.utils.paths import reject_symlink
+
+    current = root
+    _ensure_descendant(root, current)
+    for part in relative_parent.parts:
+        current = current / part
+        reject_symlink(current)
+        current.mkdir(exist_ok=True)
+        reject_symlink(current)
+        if not current.is_dir():
+            raise PermissionError(f"Refusing to install through non-directory path: {current}")
+        _ensure_descendant(root, current)
+    return current
+
+
+def _safe_install_destination(root: Path, rel_path: str) -> Path:
+    """Return a destination path after validating nested parents and existing files."""
+    from evidenceforge.utils.paths import reject_symlink
+
+    safe_rel_path = _validate_relative_install_path(rel_path)
+    _ensure_safe_install_parent(root, safe_rel_path.parent)
+    dest = root / safe_rel_path
+    reject_symlink(dest)
+    if dest.exists() and not dest.is_file():
+        raise PermissionError(f"Refusing to overwrite non-file install path: {dest}")
+    _ensure_descendant(root, dest.parent)
+    return dest
+
+
+def _write_text_no_follow(dest: Path, content: str) -> None:
+    """Write text to dest without following an existing destination symlink."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(dest, flags, 0o644)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(content)
+
+
+def _copy_file_no_follow(source: Path, dest: Path) -> None:
+    """Copy a file to dest without following an existing destination symlink."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    mode = source.stat().st_mode & 0o777
+    fd = os.open(dest, flags, mode)
+    with source.open("rb") as src, os.fdopen(fd, "wb") as dst:
+        shutil.copyfileobj(src, dst)
+    shutil.copystat(source, dest, follow_symlinks=False)
+
+
 def _remove_stale_files(eforge_dir: Path, manifest: dict[str, Path]) -> list[str]:
     """Remove files in the target eforge/ directory that aren't in the manifest.
 
@@ -367,9 +438,8 @@ def install_skills(target_dir: Path) -> tuple[list[str], list[str]]:
     # Copy all files from manifest
     installed = []
     for rel_path, source in sorted(manifest.items()):
-        dest = eforge_dir / rel_path
-        ensure_directory(dest.parent)
-        shutil.copy2(source, dest)
+        dest = _safe_install_destination(eforge_dir, rel_path)
+        _copy_file_no_follow(source, dest)
         installed.append(rel_path)
 
     # Remove stale files
@@ -410,14 +480,13 @@ def install_codex_skills(target_dir: Path) -> tuple[list[str], list[str]]:
         skill_manifest: dict[str, Path] = {"SKILL.md": source}
         skill_manifest.update(skill_reference_files)
 
-        skill_file = skill_dir / "SKILL.md"
-        skill_file.write_text(_codex_skill_text(source), encoding="utf-8")
+        skill_file = _safe_install_destination(skill_dir, "SKILL.md")
+        _write_text_no_follow(skill_file, _codex_skill_text(source))
         installed.append(f"{skill_name}/SKILL.md")
 
         for rel_path, ref_source in sorted(skill_reference_files.items()):
-            dest = skill_dir / rel_path
-            ensure_directory(dest.parent)
-            shutil.copy2(ref_source, dest)
+            dest = _safe_install_destination(skill_dir, rel_path)
+            _copy_file_no_follow(ref_source, dest)
             installed.append(f"{skill_name}/{rel_path}")
 
         for stale in _remove_stale_files(skill_dir, skill_manifest):
