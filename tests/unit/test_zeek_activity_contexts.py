@@ -30,6 +30,7 @@ import pytest
 from evidenceforge.events.contexts import HttpContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -180,7 +181,8 @@ class TestSslContextPopulation:
             for event in events
             if event.network
             and event.network.src_ip == proxy.ip
-            and event.network.dst_ip == "45.33.32.30"
+            and event.network.dst_ip
+            == resolve_domain_ip("cdn-assets-update.com", src_host=proxy.hostname)
         ]
         assert egress_events
         egress = egress_events[-1]

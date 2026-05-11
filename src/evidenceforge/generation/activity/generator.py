@@ -3922,6 +3922,16 @@ class ActivityGenerator:
                 )
                 client_http.response_body_len = 0
 
+            if (
+                proxy_context.host
+                and "." in proxy_context.host
+                and not proxy_context.host.endswith(f".{ad_domain}")
+                and not proxy_context.host.endswith(".local")
+            ):
+                from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+                dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
+
             client_orig_bytes = max(1, proxy_context.cs_bytes or orig_bytes or 1)
             client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
             will_emit_egress = (
