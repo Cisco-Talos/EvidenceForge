@@ -941,9 +941,15 @@ class StorylineMixin:
                     ),
                 )
 
+            output_file = self._extract_output_file(command_line, os_category)
             parent_pid = self.activity_generator._resolve_parent(
                 system, actor, time, logon_id, process_name
             )
+            exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            service_backed_process = "service_installed" in explicit_types and exe_name in {
+                "psexesvc.exe",
+                "healthmonitorsvc.exe",
+            }
             pid = self.activity_generator.generate_process(
                 user=actor,
                 system=system,
@@ -952,8 +958,9 @@ class StorylineMixin:
                 process_name=process_name,
                 command_line=command_line,
                 parent_pid=parent_pid,
-                ensure_file_event=True,
+                ensure_file_event=not service_backed_process,
                 from_storyline=True,
+                suppress_command_file_effect=output_file is not None,
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name)
@@ -961,7 +968,6 @@ class StorylineMixin:
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
 
-            output_file = self._extract_output_file(command_line, os_category)
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
                     home = "/root" if actor.username == "root" else f"/home/{actor.username}"

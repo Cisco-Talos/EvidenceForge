@@ -522,6 +522,45 @@ class BaselineMixin:
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
 
+    def _storyline_account_lifecycle(self) -> dict[str, tuple[datetime | None, datetime | None]]:
+        """Return storyline-created/deleted account lifecycle bounds by username."""
+        cached = getattr(self, "_storyline_account_lifecycle_cache", None)
+        if cached is not None:
+            return cached
+
+        created: dict[str, datetime] = {}
+        deleted: dict[str, datetime] = {}
+        for entry in getattr(self.scenario, "storyline", []):
+            event_time = self._parse_storyline_time(entry.time)
+            for spec in getattr(entry, "events", []):
+                event_type = getattr(spec, "type", "")
+                username = getattr(spec, "target_username", "")
+                if not username:
+                    continue
+                key = username.lower()
+                if event_type == "account_created":
+                    created[key] = min(created.get(key, event_time), event_time)
+                elif event_type == "account_deleted":
+                    deleted[key] = min(deleted.get(key, event_time), event_time)
+
+        lifecycle = {
+            key: (created.get(key), deleted.get(key)) for key in set(created) | set(deleted)
+        }
+        self._storyline_account_lifecycle_cache = lifecycle
+        return lifecycle
+
+    def _service_account_available_at(self, username: str, when: datetime) -> bool:
+        """Return whether baseline may use a service account at a given time."""
+        created, deleted = self._storyline_account_lifecycle().get(
+            username.lower(),
+            (None, None),
+        )
+        if created is not None and when < created:
+            return False
+        if deleted is not None and when >= deleted:
+            return False
+        return True
+
     def _schedule_foreground_process_termination(
         self,
         *,
@@ -4084,6 +4123,8 @@ class BaselineMixin:
                         target_sys = rng.choice(servers) if servers else None
                         if target_sys and target_sys.hostname != system.hostname:
                             svc_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                            if not self._service_account_available_at(svc_name, svc_ts):
+                                continue
                             self.state_manager.set_current_time(svc_ts)
                             self.activity_generator.generate_explicit_credentials(
                                 user=_SYSTEM_USER,
@@ -5032,6 +5073,7 @@ class BaselineMixin:
                     ]
                     if not _filtered:
                         _filtered = _pool
+                    _filtered = [s for s in _filtered if s.get("baseline_fp_allowed", True)]
                     _filtered = [
                         s
                         for s in _filtered

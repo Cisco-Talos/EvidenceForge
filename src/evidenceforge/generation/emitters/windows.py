@@ -1367,19 +1367,21 @@ class WindowsEventEmitter(LogEmitter):
                     self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
                 else:
                     self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
-            gap_rng = random.Random(
-                f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}"
-            )
-            if gap_rng.random() < 0.15:
-                self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
-            elif gap_rng.random() < 0.03:
-                self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
-            else:
-                self._record_id_counters[counter_key] += 1
-            event["EventRecordID"] = self._record_id_counters[counter_key]
             if event.get("EventID") == 1102:
-                reset_rng = random.Random(f"erid_reset_{counter_key}_{event['EventRecordID']}")
-                self._record_id_counters[counter_key] = reset_rng.randint(0, 5)
+                reset_rng = random.Random(f"erid_reset_{counter_key}_{sequence}")
+                self._record_id_counters[counter_key] = reset_rng.randint(0, 3) + 1
+                event["EventRecordID"] = self._record_id_counters[counter_key]
+            else:
+                gap_rng = random.Random(
+                    f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}"
+                )
+                if gap_rng.random() < 0.15:
+                    self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
+                elif gap_rng.random() < 0.03:
+                    self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
+                else:
+                    self._record_id_counters[counter_key] += 1
+                event["EventRecordID"] = self._record_id_counters[counter_key]
 
             rendered = self._render_event(event)
             host_fqdn = event.get("Computer", "")

@@ -2997,6 +2997,7 @@ class ActivityGenerator:
         parent_pid: int = 4,
         ensure_file_event: bool = False,
         from_storyline: bool = False,
+        suppress_command_file_effect: bool = False,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -3016,6 +3017,7 @@ class ActivityGenerator:
             process_name: Full path to executable
             command_line: Command line string
             parent_pid: Parent process PID (default 4 = System)
+            suppress_command_file_effect: Caller already owns command output file artifacts.
 
         Returns:
             PID of the new process
@@ -3267,7 +3269,7 @@ class ActivityGenerator:
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
         auth_ctx = AuthContext(username=process_username)
-        if rng.random() < 0.40:
+        if not suppress_command_file_effect and rng.random() < 0.40:
             from evidenceforge.generation.activity.edr_pools import select_file_side_effect
 
             side_effect = select_file_side_effect(

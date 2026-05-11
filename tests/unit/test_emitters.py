@@ -1177,9 +1177,10 @@ class TestWindowsEventEmitter:
             int(value) for value in re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content)
         ]
         assert len(record_ids) == 3
-        assert record_ids[0] < record_ids[1]
-        assert record_ids[2] < record_ids[1]
-        assert record_ids[2] <= 20
+        assert record_ids[1] < record_ids[0]
+        assert record_ids[1] <= 20
+        assert record_ids[2] > record_ids[1]
+        assert record_ids[2] <= 25
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):
         """Test emitting 4800 (workstation locked) with populated EventData fields."""

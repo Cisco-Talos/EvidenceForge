@@ -553,6 +553,14 @@ def validate_config() -> ValidationResult:
                     f"Signature {sid} has invalid proto {proto!r}",
                 )
             )
+        if "baseline_fp_allowed" in sig and not isinstance(sig["baseline_fp_allowed"], bool):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} baseline_fp_allowed must be a boolean",
+                )
+            )
         templates = sig.get("dns_query_templates")
         if templates is not None:
             if proto not in {"udp", "tcp"} or sig.get("dst_port") != 53:

@@ -77,6 +77,7 @@ class _FakeActivityGenerator:
         self.reserved_ports: list[int] = []
         self.connections: list[dict] = []
         self.explicit_credentials: list[dict] = []
+        self.processes: list[dict] = []
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -85,7 +86,11 @@ class _FakeActivityGenerator:
         return 1
 
     def generate_process(self, *args: Any, **kwargs: Any) -> int:
+        self.processes.append(kwargs)
         return 4242
+
+    def generate_logon(self, *args: Any, **kwargs: Any) -> str:
+        return "0xabc"
 
     def _record_user_process(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -199,3 +204,39 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.explicit_credentials == []
+
+    def test_service_backed_process_does_not_emit_second_payload_file_create(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\PSEXESVC.exe",
+            command_line="PSEXESVC.exe -accepteula",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="start service",
+            explicit_types={"process", "service_installed"},
+        )
+
+        assert engine.activity_generator.processes[0]["ensure_file_event"] is False
