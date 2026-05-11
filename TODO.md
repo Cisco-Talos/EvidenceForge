@@ -38,6 +38,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
+### Security Fixes
+
+- [x] Fix Cisco ASA connection ID normalization to avoid repeated full-file rewrites during emitter barrier flushes by deferring whole-file normalization to final close.
+
 ### Skill Installer Agent Support
 
 - [x] Add dual-agent `eforge install-skills` workflow — default to Claude project installs, add explicit `--agent claude|codex`, keep Claude project/global behavior, add Codex user-level `~/.codex/skills/` installs, reject invalid Codex/global combinations, and cover installer safety/stale-cleanup behavior with tests.

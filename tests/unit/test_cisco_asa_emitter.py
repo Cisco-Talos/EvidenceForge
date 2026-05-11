@@ -206,6 +206,40 @@ class TestConnectionIdCounter:
         assert len(built_ids) == len(set(built_ids))
         assert abs(built_ids[0] - built_ids[1]) < 2000
 
+    def test_barrier_flush_does_not_normalize_existing_file(self, asa_emitter, monkeypatch):
+        calls: list[str] = []
+
+        def record_normalization() -> None:
+            calls.append("normalized")
+
+        monkeypatch.setattr(
+            asa_emitter,
+            "_normalize_visible_connection_ids",
+            record_normalization,
+        )
+
+        asa_emitter.emit(_make_connection_event())
+        asa_emitter.flush()
+
+        assert calls == []
+
+    def test_close_normalizes_connection_ids_once(self, asa_emitter, monkeypatch):
+        calls: list[str] = []
+
+        def record_normalization() -> None:
+            calls.append("normalized")
+
+        monkeypatch.setattr(
+            asa_emitter,
+            "_normalize_visible_connection_ids",
+            record_normalization,
+        )
+
+        asa_emitter.emit(_make_connection_event())
+        asa_emitter.close()
+
+        assert calls == ["normalized"]
+
 
 class TestPermitRecords:
     def test_tcp_produces_built_and_teardown(self, asa_emitter, tmp_path):
