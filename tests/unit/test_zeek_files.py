@@ -229,7 +229,8 @@ class TestFilesUidCorrelation:
             rows = [json.loads(line) for line in output.read_text().splitlines()]
 
         assert len(rows) == 2
-        assert rows[0]["sha256"] == rows[1]["sha256"] == "a" * 64
+        assert rows[0]["sha256"] == rows[1]["sha256"]
+        assert rows[0]["sha256"] != "a" * 64
         assert rows[0]["md5"] == rows[1]["md5"]
         assert rows[0]["sha1"] == rows[1]["sha1"]
 

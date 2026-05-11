@@ -401,7 +401,7 @@ class X509Context:
     """X.509 certificate details for Zeek x509.log."""
 
     fuid: str = ""  # Zeek file UID referenced by ssl.cert_chain_fuids
-    fingerprint: str = ""  # SHA256 hex
+    fingerprint: str = ""  # SHA1 hex as rendered by Zeek x509.log
     certificate_version: int = 3
     certificate_serial: str = ""
     certificate_subject: str = ""

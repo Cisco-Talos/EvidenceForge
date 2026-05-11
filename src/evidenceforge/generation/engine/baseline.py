@@ -1497,7 +1497,13 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "suspicious_cli":
-                result = generate_suspicious_cli(rng, enabled_users, systems, current_hour)
+                result = generate_suspicious_cli(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.scenario.environment.domain or "corp.local",
+                )
                 if result:
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
@@ -1654,7 +1660,16 @@ class BaselineMixin:
                     if pattern_type == "temp_dir_execution"
                     else generate_unusual_powershell
                 )
-                result = gen_fn(rng, enabled_users, systems, current_hour)
+                if pattern_type == "unusual_powershell":
+                    result = gen_fn(
+                        rng,
+                        enabled_users,
+                        systems,
+                        current_hour,
+                        self.scenario.environment.domain or "corp.local",
+                    )
+                else:
+                    result = gen_fn(rng, enabled_users, systems, current_hour)
                 if result:
                     self.state_manager.set_current_time(result["time"])
                     logon_id = self._ensure_session_on_system(

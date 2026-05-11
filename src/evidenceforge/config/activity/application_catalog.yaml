@@ -918,6 +918,19 @@ applications:
     personas: [sysadmin, help_desk, security_analyst]
     system_types: [server, domain_controller, workstation]
 
+  - id: mmc
+    display_name: "Microsoft Management Console"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\mmc.exe'
+        pe_metadata: {description: "Microsoft Management Console", product: "Microsoft Windows Operating System", company: "Microsoft Corporation", original_filename: "mmc.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'mmc.exe'
+          - 'mmc.exe "%SystemRoot%\System32\dsa.msc"'
+    categories: [user_app]
+    personas: [sysadmin, help_desk, security_analyst]
+    system_types: [server, domain_controller, workstation]
+
   - id: perfmon
     display_name: "Performance Monitor"
     platforms:
@@ -929,4 +942,18 @@ applications:
           - 'perfmon.exe /res'
     categories: [user_app]
     personas: [sysadmin]
+    system_types: [server, domain_controller, workstation]
+
+  - id: wevtutil
+    display_name: "Windows Events Command Line Utility"
+    platforms:
+      windows:
+        image_path: 'C:\Windows\System32\wevtutil.exe'
+        pe_metadata: {description: "Eventing Command Line Utility", product: "Microsoft Windows Operating System", company: "Microsoft Corporation", original_filename: "wevtutil.exe", file_version: "10.0.20348.1"}
+        command_templates:
+          - 'wevtutil.exe qe Security /c:20 /f:text'
+          - 'wevtutil.exe el'
+          - 'wevtutil.exe gl Security'
+    categories: [query]
+    personas: [sysadmin, help_desk, security_analyst]
     system_types: [server, domain_controller, workstation]

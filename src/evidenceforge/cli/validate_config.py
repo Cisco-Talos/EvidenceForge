@@ -1674,6 +1674,16 @@ def validate_config() -> ValidationResult:
                 "proxy_user_agents.yaml (domain_overrides)",
             )
         )
+    for proxy_scope in ("workstation", "server"):
+        package_managers = proxy_ua_data.get(proxy_scope, {}).get("package_managers", {})
+        if isinstance(package_managers, dict):
+            _SCHEMA_CHECKS.append(
+                (
+                    list(package_managers.values()),
+                    ProxyUserAgentOverrideEntry,
+                    f"proxy_user_agents.yaml ({proxy_scope}.package_managers)",
+                )
+            )
 
     # Run all schema validations
     for entries, schema, file_name in _SCHEMA_CHECKS:

@@ -148,9 +148,9 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
 def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
     """Return independent file hashes for a certificate body.
 
-    ``x509.fingerprint`` is the certificate SHA256 fingerprint. Zeek files.log
+    ``x509.fingerprint`` is the certificate SHA1 fingerprint. Zeek files.log
     hashes represent the file-analysis bytes for the same certificate. Repeated
-    observations of the same fingerprint must therefore keep the same MD5/SHA1.
+    observations of the same fingerprint must therefore keep the same file hashes.
     """
     if not fingerprint:
         return {"md5": None, "sha1": None, "sha256": None}
@@ -158,7 +158,7 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
     return {
         "md5": hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest(),
         "sha1": hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest(),
-        "sha256": fingerprint,
+        "sha256": hashlib.sha256(seed.encode()).hexdigest(),
     }
 
 

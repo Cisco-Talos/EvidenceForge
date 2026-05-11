@@ -154,9 +154,10 @@ class TestProxyRealism:
 class TestProxyUaOsMatch:
     """Bug #19: Proxy UAs match source OS."""
 
-    def test_linux_ua_pool_has_package_managers(self):
+    def test_linux_ua_pool_is_generic_not_package_specific(self):
         linux_uas = " ".join(_proxy_ua_pool("workstation", "linux"))
-        assert "apt-http" in linux_uas
+        assert "apt-http" not in linux_uas
+        assert "Fedora" not in linux_uas
         assert "python-requests" in linux_uas
         assert "curl" in linux_uas
 

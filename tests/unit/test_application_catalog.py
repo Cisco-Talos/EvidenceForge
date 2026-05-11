@@ -126,6 +126,15 @@ class TestPeMetadataLookup:
         fv, desc, prod, company, orig = get_pe_metadata("outlook.exe")
         assert company == "Microsoft Corporation"
 
+    def test_windows_admin_binaries_have_metadata(self):
+        for exe in ("mmc.exe", "wevtutil.exe"):
+            fv, desc, prod, company, orig = get_pe_metadata(exe)
+            assert company == "Microsoft Corporation"
+            assert prod != "-"
+            assert fv != "-"
+            assert desc != "-"
+            assert orig.lower() == exe
+
     def test_unknown_returns_dashes(self):
         result = get_pe_metadata("totally_unknown.exe")
         assert result == ("-", "-", "-", "-", "-")

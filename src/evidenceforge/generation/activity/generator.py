@@ -73,6 +73,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
@@ -1683,10 +1684,10 @@ class ActivityGenerator:
 
         if resumed:
             return
-        cert_fuid_hash = hashlib.sha256(
-            f"cert_fuid_{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}".encode()
-        ).hexdigest()
-        cert_fuid = f"F{cert_fuid_hash[:16]}"
+        cert_fuid = generate_stable_zeek_uid(
+            "F",
+            f"cert_fuid:{cert_name}:{net.zeek_uid}:{event.timestamp.timestamp()}",
+        )
         # Support validity_days_min/max ranges; fall back to scalar validity_days
         _vd_fallback = issuer_cfg.get("validity_days", 397)
         _vd_min = issuer_cfg.get("validity_days_min", _vd_fallback)
@@ -1719,7 +1720,7 @@ class ActivityGenerator:
             ]
         )
         serial_number = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
-        cert_hash = hashlib.sha256(
+        cert_hash = hashlib.sha1(
             "|".join(
                 [
                     "cert",
@@ -1731,7 +1732,8 @@ class ActivityGenerator:
                     str(validity[0]),
                     str(validity[1]),
                 ]
-            ).encode()
+            ).encode(),
+            usedforsecurity=False,
         ).hexdigest()
         event.x509 = X509Context(
             fuid=cert_fuid,
@@ -1987,9 +1989,6 @@ class ActivityGenerator:
             )
             if idx == 0:
                 subject = issuer_name
-            fuid_hash = hashlib.sha256(
-                f"cert_chain_fuid:{subject}:{connection_uid}:{event_time.timestamp()}".encode()
-            ).hexdigest()
             resolved_issuer = certificate_issuer or parent_issuer
             profile_key = (subject, resolved_issuer)
             profile = self._tls_intermediate_profiles.get(profile_key)
@@ -2033,7 +2032,7 @@ class ActivityGenerator:
                     ]
                 )
                 serial = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
-                cert_hash = hashlib.sha256(
+                cert_hash = hashlib.sha1(
                     "|".join(
                         [
                             "cert_chain",
@@ -2045,7 +2044,8 @@ class ActivityGenerator:
                             str(validity[0]),
                             str(validity[1]),
                         ]
-                    ).encode()
+                    ).encode(),
+                    usedforsecurity=False,
                 ).hexdigest()
                 profile = {
                     "fingerprint": cert_hash,
@@ -2063,7 +2063,10 @@ class ActivityGenerator:
             is_ecdsa = key_type == "ecdsa"
             chain.append(
                 X509Context(
-                    fuid=f"F{fuid_hash[:16]}",
+                    fuid=generate_stable_zeek_uid(
+                        "F",
+                        f"cert_chain_fuid:{subject}:{connection_uid}:{event_time.timestamp()}",
+                    ),
                     fingerprint=str(profile["fingerprint"]),
                     certificate_version=3,
                     certificate_serial=str(profile["certificate_serial"]),
@@ -5576,9 +5579,17 @@ class ActivityGenerator:
         """Preserve foreground command dwell time for one user's shell history."""
         key = (system.hostname, user.username)
         scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
-        self._bash_history_next_time[key] = scheduled_time + timedelta(
-            seconds=_bash_command_dwell_seconds(command)
+        dwell_seconds = _bash_command_dwell_seconds(command)
+        jitter_rng = random.Random(
+            _stable_seed(
+                f"bash_dwell:{system.hostname}:{user.username}:{scheduled_time.timestamp()}:{command}"
+            )
         )
+        if dwell_seconds <= 2.0:
+            dwell_seconds += jitter_rng.uniform(0.4, 4.8)
+        else:
+            dwell_seconds *= jitter_rng.uniform(0.85, 1.25)
+        self._bash_history_next_time[key] = scheduled_time + timedelta(seconds=dwell_seconds)
         return scheduled_time
 
     def generate_bash_command_with_noise(

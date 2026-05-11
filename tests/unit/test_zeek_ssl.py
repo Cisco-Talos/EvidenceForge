@@ -278,7 +278,8 @@ class TestSslUidCorrelation:
             assert files_data["fuid"] == x509_data["id"]
             assert files_data["source"] == "SSL"
             assert files_data["analyzers"] == ["X509"]
-            assert files_data["sha256"] == x509_data["fingerprint"]
+            assert files_data["sha1"] != x509_data["fingerprint"]
+            assert files_data["sha256"] != x509_data["fingerprint"]
             assert files_data["md5"] != files_data["sha256"][:32]
             assert files_data["sha1"] != files_data["sha256"][:40]
             assert len(files_data["md5"]) == 32

@@ -165,6 +165,7 @@ class TestProxyUriOsFiltering:
         )
 
         assert "Google" in update_ua
+        assert "Darwin" not in update_ua
         assert "Windows-Update-Agent" not in update_ua
 
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):

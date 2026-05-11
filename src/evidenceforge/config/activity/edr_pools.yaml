@@ -176,7 +176,6 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational", "Enabled", "DWORD (0x00000001)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application", "MaxSize", "DWORD (0x01400000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring", "DWORD (0x00000000)"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest", "UseLogonCredential", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"]
   - ["HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging", "DWORD (0x00000002)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\{package}~31bf3856ad364e35~amd64~~10.0.19041.{small}", "CurrentState", "DWORD (0x00000070)"]

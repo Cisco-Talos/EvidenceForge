@@ -161,6 +161,7 @@ class TestRegistryKeys:
 
         assert not any(r"Services\DNS\Parameters\ListenAddresses" in key for key in rendered)
         assert not any(r"App Paths\WinSCP.exe" in key for key in rendered)
+        assert not any("WDigest" in key for key in rendered)
 
 
 class TestDllPool:

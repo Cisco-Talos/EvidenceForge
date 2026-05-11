@@ -36,7 +36,7 @@ def test_proxy_user_agent_selection_is_role_aware_for_servers():
 
     assert user_agents
     assert all("Mozilla/" not in ua for ua in user_agents)
-    assert any(token in ua for ua in user_agents for token in ("curl", "apt", "Wget", "requests"))
+    assert any(token in ua for ua in user_agents for token in ("curl", "Wget", "requests"))
 
 
 def test_server_proxy_package_user_agents_are_destination_aware():
@@ -108,6 +108,38 @@ def test_server_proxy_package_user_agents_match_os_family():
 
     assert fedora_user_agents == {"libdnf (Fedora Linux 39; server; Linux.x86_64)"}
     assert all("Fedora" not in user_agent for user_agent in ubuntu_user_agents)
+
+
+def test_workstation_package_user_agents_are_destination_aware():
+    from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+
+    ubuntu_workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    generic_user_agents = {
+        pick_proxy_user_agent(random.Random(seed), ubuntu_workstation, hostname="www.github.com")
+        for seed in range(40)
+    }
+    package_tokens = ("apt", "APT", "dnf", "Fedora")
+    assert all(
+        not any(token in user_agent for token in package_tokens)
+        for user_agent in generic_user_agents
+    )
+
+    package_user_agents = {
+        pick_proxy_user_agent(
+            random.Random(seed),
+            ubuntu_workstation,
+            hostname="archive.ubuntu.com",
+        )
+        for seed in range(20)
+    }
+    assert package_user_agents
+    assert all("apt" in user_agent.lower() for user_agent in package_user_agents)
 
 
 def test_proxy_user_agent_overlay_adds_package_family(tmp_path, monkeypatch):

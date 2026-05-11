@@ -681,7 +681,9 @@ class TestTlsIssuers:
 
         assert first.x509 is not None
         assert second.x509 is not None
+        assert len(first.x509.fingerprint) == 40
         assert first.x509.fingerprint == second.x509.fingerprint
+        assert {len(first.x509.fuid), len(second.x509.fuid)} <= {17, 18, 19}
         assert first.x509.certificate_issuer == second.x509.certificate_issuer
         assert first.x509.certificate_key_type == second.x509.certificate_key_type
         assert first.x509.certificate_key_length == second.x509.certificate_key_length
@@ -711,6 +713,7 @@ class TestTlsIssuers:
         second_intermediate = second_chain[1]
 
         assert first_intermediate.fuid != second_intermediate.fuid
+        assert {len(first_intermediate.fuid), len(second_intermediate.fuid)} <= {17, 18, 19}
         assert first_intermediate.certificate_subject == second_intermediate.certificate_subject
         assert first_intermediate.certificate_issuer == second_intermediate.certificate_issuer
         assert first_intermediate.certificate_serial == second_intermediate.certificate_serial

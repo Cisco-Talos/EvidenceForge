@@ -68,24 +68,37 @@ def _pick_package_manager_agent(
         return None
 
     os_name = source_system.os.lower()
-    managers = data.get("server", {}).get("package_managers", {})
-    if not isinstance(managers, dict):
+    role_keys = (
+        ("server", "workstation")
+        if _is_server_source(source_system, data)
+        else (
+            "workstation",
+            "server",
+        )
+    )
+    managers_by_scope: list[dict[str, Any]] = []
+    for role_key in role_keys:
+        role_managers = data.get(role_key, {}).get("package_managers", {})
+        if isinstance(role_managers, dict):
+            managers_by_scope.append(role_managers)
+    if not managers_by_scope:
         return None
 
-    for manager in managers.values():
-        if not isinstance(manager, dict):
-            continue
-        os_keywords = manager.get("os_keywords", [])
-        hosts = manager.get("hosts", [])
-        user_agents = manager.get("user_agents", [])
-        if not isinstance(os_keywords, list) or not isinstance(hosts, list):
-            continue
-        if not isinstance(user_agents, list) or not user_agents:
-            continue
-        if any(str(keyword).lower() in os_name for keyword in os_keywords) and host in {
-            str(package_host).lower() for package_host in hosts
-        }:
-            return rng.choice(user_agents)
+    for managers in managers_by_scope:
+        for manager in managers.values():
+            if not isinstance(manager, dict):
+                continue
+            os_keywords = manager.get("os_keywords", [])
+            hosts = manager.get("hosts", [])
+            user_agents = manager.get("user_agents", [])
+            if not isinstance(os_keywords, list) or not isinstance(hosts, list):
+                continue
+            if not isinstance(user_agents, list) or not user_agents:
+                continue
+            if any(str(keyword).lower() in os_name for keyword in os_keywords) and host in {
+                str(package_host).lower() for package_host in hosts
+            }:
+                return rng.choice(user_agents)
     return None
 
 
@@ -156,10 +169,11 @@ def pick_proxy_user_agent(
     if domain_agent:
         return domain_agent
 
+    package_agent = _pick_package_manager_agent(rng, source_system, hostname, data)
+    if package_agent:
+        return package_agent
+
     if _is_server_source(source_system, data):
-        package_agent = _pick_package_manager_agent(rng, source_system, hostname, data)
-        if package_agent:
-            return package_agent
         server_pool = _pool(data, "server", "generic")
         return rng.choice(server_pool)
 
