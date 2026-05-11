@@ -1762,7 +1762,7 @@ class StorylineMixin:
             story_pid, story_image = self._last_storyline_process_for_system(src_sys)
 
             attempt_count = 0
-            for tick_time in _iter_dns_tunnel_ticks(
+            for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)

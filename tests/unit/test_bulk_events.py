@@ -300,6 +300,58 @@ class TestIterPeriodicTicks:
         ticks = list(_iter_periodic_ticks(start, 60.0, 30.0, None, 0.0, rng))
         assert len(ticks) == 1
 
+    def test_beacon_count_contract_uses_exact_periodic_ticks(self, monkeypatch):
+        """Beacon handling must not inherit DNS-tunnel skip/pause pacing."""
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from evidenceforge.generation.engine import storyline
+        from evidenceforge.generation.engine.storyline import StorylineMixin
+        from evidenceforge.models.scenario import System, User
+
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        expected_ticks = [start + timedelta(seconds=60 * i) for i in range(5)]
+
+        engine = object.__new__(StorylineMixin)
+        system = System(hostname="TEST-01", ip="10.0.0.1", os="Windows 10", type="workstation")
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+        engine.state_manager = Mock()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {system.ip: system}
+        engine.activity_generator._proxy_routes = {}
+        engine.activity_generator._proxy_mode = "transparent"
+
+        periodic = Mock(return_value=iter(expected_ticks))
+        monkeypatch.setattr(storyline, "_iter_periodic_ticks", periodic)
+        monkeypatch.setattr(
+            storyline,
+            "_iter_dns_tunnel_ticks",
+            Mock(side_effect=AssertionError("generic beacons must not use DNS tunnel pacing")),
+        )
+
+        spec = BeaconEventSpec(
+            dst_ip="203.0.113.10",
+            interval="60s",
+            count=5,
+            action="allow",
+            jitter=0.0,
+        )
+
+        malicious_event = engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=start,
+            activity="C2 beacon",
+            explicit_types={"beacon"},
+        )
+
+        periodic.assert_called_once()
+        assert engine.activity_generator.generate_connection.call_count == 5
+        assert malicious_event["attempt_count"] == 5
+
 
 class TestEffectiveRateInterval:
     def test_count_based_rate_stays_exact(self):
