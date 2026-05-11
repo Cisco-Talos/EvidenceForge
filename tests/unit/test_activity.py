@@ -640,6 +640,22 @@ class TestActivityGenerator:
         assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445, 3306}
 
+    def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
+        """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
+        source = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        activity_gen._ip_to_system = {source.ip: source}
+
+        targets = activity_gen._resolve_nmap_targets("nmap -p 80 1.0.0.0/8", source)
+
+        assert len(targets) == 8
+        assert targets[0] == "1.0.0.1"
+        assert targets[-1] == "1.0.0.8"
+
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
