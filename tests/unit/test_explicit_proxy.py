@@ -751,6 +751,8 @@ class TestExplicitProxyVisibility:
         assert egress_events[0].ssl.established is True
 
     def test_https_subresources_reuse_active_connect_tunnel(self):
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -821,7 +823,8 @@ class TestExplicitProxyVisibility:
         assert reused_uid == first_uid
         assert _conn_pairs(emitters) == pairs_after_first
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs_after_first
-        assert ("10.0.3.10", "93.184.216.34", 443) in pairs_after_first
+        resolved_origin_ip = resolve_domain_ip("example.com", src_host="WKS-01")
+        assert ("10.0.3.10", resolved_origin_ip, 443) in pairs_after_first
         assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
 

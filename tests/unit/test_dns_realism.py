@@ -139,6 +139,32 @@ class TestHostnameConsistency:
         assert conn_event.ssl is not None
         assert conn_event.ssl.server_name == hostname
 
+    def test_unregistered_hostname_uses_dns_derived_destination(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Unregistered explicit hostnames should not connect to a different caller IP."""
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+        state_manager.set_current_time(timestamp)
+        hostname = "unlisted-cdn.example.test"
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="151.101.141.68",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        expected_ip = resolve_domain_ip(hostname, src_host="10.0.1.50")
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert conn_event.network.dst_ip == expected_ip
+        assert conn_event.ssl is not None
+        assert conn_event.ssl.server_name == hostname
+
     def test_dns_response_completes_before_dependent_connection(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

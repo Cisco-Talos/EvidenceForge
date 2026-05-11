@@ -591,6 +591,8 @@ class TestDhcpLease:
         assert len(dhcp_events) >= 1
         assert dhcp_events[0].dhcp is not None
         assert dhcp_events[0].dhcp.mac == "00:50:56:ab:cd:ef"
+        assert dhcp_events[0].dhcp.client_addr == "0.0.0.0"
+        assert dhcp_events[0].dhcp.assigned_addr == "10.0.10.2"
         assert dhcp_events[0].network.duration == dhcp_events[0].dhcp.duration
 
     def test_generate_dhcp_lease_uses_ad_domain_when_unspecified(

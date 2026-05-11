@@ -57,6 +57,13 @@ class ZeekEmitter(SensorMultiplexEmitter):
         """Render SecurityEvent to Zeek conn.log format."""
         net = event.network
         duration = net.duration
+        src_ip = net.src_ip
+        dst_ip = net.dst_ip
+        if event.event_type == "dhcp_lease" and event.dhcp is not None:
+            msg_types = set(event.dhcp.msg_types)
+            if "DISCOVER" in msg_types:
+                src_ip = "0.0.0.0"
+                dst_ip = "255.255.255.255"
         if (
             net.protocol == "tcp"
             and net.dst_port == 443
@@ -76,9 +83,9 @@ class ZeekEmitter(SensorMultiplexEmitter):
         event_data = {
             "ts": event.timestamp,
             "uid": net.zeek_uid,
-            "id.orig_h": net.src_ip,
+            "id.orig_h": src_ip,
             "id.orig_p": net.src_port,
-            "id.resp_h": net.dst_ip,
+            "id.resp_h": dst_ip,
             "id.resp_p": net.dst_port,
             "proto": net.protocol,
             "service": net.service or None,

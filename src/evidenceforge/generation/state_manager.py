@@ -334,21 +334,15 @@ class StateManager:
                         normalized_time,
                     )
                 elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
-                candidate = initial + elapsed_seconds
+                # systemd-logind IDs are monotonic counters, not wall-clock
+                # encodings. Use a coarse time bucket so out-of-order
+                # generation still sorts sensibly without leaking elapsed
+                # seconds into the rendered session number.
+                candidate = initial + (elapsed_seconds // 300) * 8
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
                 if candidate in used:
-                    # Search downward for an unused slot to preserve temporal ordering
-                    probe = candidate - 1
-                    while probe >= initial and probe in used:
-                        probe -= 1
-                    if probe >= initial:
-                        candidate = probe
-                    else:
-                        # All slots below are taken — bump upward instead
-                        last_id = self._linux_logind_session_last_ids.get(system, candidate)
-                        candidate = last_id + 1
-                        while candidate in used:
-                            candidate += 1
+                    while candidate in used:
+                        candidate += 1
                 used.add(candidate)
                 self._linux_logind_session_last_ids[system] = max(
                     candidate, self._linux_logind_session_last_ids.get(system, candidate)

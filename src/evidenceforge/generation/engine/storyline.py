@@ -1603,17 +1603,28 @@ class StorylineMixin:
                 malicious_event["target_process"] = target_image
 
         elif spec.type == "dhcp_lease":
-            ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")
-            mac = spec.mac_address or (
-                f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
-                f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
-            )
+            existing_lease = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
+            if spec.mac_address:
+                mac = spec.mac_address
+            elif existing_lease:
+                mac = existing_lease["mac"]
+            else:
+                ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")
+                mac = (
+                    f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
+                    f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
+                )
             from evidenceforge.utils.ids import generate_zeek_uid
 
             # Use DC as DHCP server (common in AD environments)
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
             dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
-            lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
+            lease_time = (
+                float(existing_lease["lease_time"])
+                if existing_lease
+                else float(rng.choice([3600, 7200, 14400, 86400]))
+            )
+            msg_types = ["REQUEST", "ACK"] if existing_lease else None
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=time,
@@ -1621,6 +1632,7 @@ class StorylineMixin:
                 server_addr=dhcp_server,
                 lease_time=lease_time,
                 uid=generate_zeek_uid("C"),
+                msg_types=msg_types,
             )
             if hasattr(self, "_dhcp_lease_state"):
                 self._dhcp_lease_state[system.hostname] = {

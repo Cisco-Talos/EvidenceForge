@@ -78,6 +78,7 @@ class _FakeActivityGenerator:
         self.connections: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
+        self.dhcp_leases: list[dict] = []
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -105,6 +106,9 @@ class _FakeActivityGenerator:
 
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
+
+    def generate_dhcp_lease(self, **kwargs: Any) -> None:
+        self.dhcp_leases.append(kwargs)
 
     def _expand_and_emit(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -240,3 +244,45 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.processes[0]["ensure_file_event"] is False
+
+    def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
+        source = System(
+            hostname="ROGUE-LAPTOP",
+            ip="10.10.1.99",
+            os="Kali Linux",
+            type="workstation",
+        )
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[source]))
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine._infra_ips = {"dc": ["10.10.2.10"]}
+        engine._dhcp_lease_state = {
+            "ROGUE-LAPTOP": {
+                "mac": "f0:1f:af:b7:35:b2",
+                "lease_time": 7200.0,
+                "last_renewal": 1710763200.0,
+                "system": source,
+            }
+        }
+        spec = SimpleNamespace(type="dhcp_lease", requested_ip=None, mac_address=None)
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="renew lease",
+            explicit_types={"dhcp_lease"},
+        )
+
+        lease = engine.activity_generator.dhcp_leases[0]
+        assert lease["mac"] == "f0:1f:af:b7:35:b2"
+        assert lease["lease_time"] == 7200.0
+        assert lease["msg_types"] == ["REQUEST", "ACK"]

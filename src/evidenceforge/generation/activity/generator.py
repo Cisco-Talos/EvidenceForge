@@ -3715,6 +3715,9 @@ class ActivityGenerator:
             if domain_ips and dst_ip not in domain_ips:
                 src_host = source_system.hostname if source_system else src_ip
                 dst_ip = resolve_domain_ip(hostname, src_host=src_host)
+            elif not domain_ips and emit_dns and not _is_private_ip(dst_ip):
+                src_host = source_system.hostname if source_system else src_ip
+                dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         hostname_is_external = (
@@ -8085,6 +8088,7 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import NetworkContext
 
+        is_initial_acquisition = "DISCOVER" in msg_types
         dhcp_duration = _get_rng().uniform(0.01, 0.5)
         event = SecurityEvent(
             timestamp=time,
@@ -8113,7 +8117,7 @@ class ActivityGenerator:
                 link_local=True,
             ),
             dhcp=DhcpContext(
-                client_addr=system.ip,
+                client_addr="0.0.0.0" if is_initial_acquisition else system.ip,
                 server_addr=server_addr,
                 mac=mac,
                 host_name=system.hostname,

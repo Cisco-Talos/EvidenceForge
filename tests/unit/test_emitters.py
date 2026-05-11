@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, HostContext, NetworkContext
+from evidenceforge.events.contexts import AuthContext, DhcpContext, HostContext, NetworkContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -1704,6 +1704,42 @@ class TestZeekEmitter:
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
         print(f"{'=' * 80}\n")
+
+    def test_dhcp_discover_renders_unassigned_client_tuple(self, format_def, temp_output):
+        """Initial DHCP acquisition should not render the assigned lease as originator."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="dhcp_lease",
+            network=NetworkContext(
+                src_ip="10.0.10.2",
+                src_port=68,
+                dst_ip="10.0.10.1",
+                dst_port=67,
+                protocol="udp",
+                service="dhcp",
+                zeek_uid="CTestDhcpDiscover",
+                conn_state="SF",
+                history="DdDd",
+                link_local=True,
+            ),
+            dhcp=DhcpContext(
+                client_addr="0.0.0.0",
+                server_addr="10.0.10.1",
+                assigned_addr="10.0.10.2",
+                mac="00:50:56:ab:cd:ef",
+                host_name="LNX-01",
+                msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["id.orig_h"] == "0.0.0.0"
+        assert conn["id.resp_h"] == "255.255.255.255"
+        assert conn["uid"] == "CTestDhcpDiscover"
 
     def test_emit_incomplete_connection(self, format_def, temp_output):
         """Test emitting an incomplete connection (no established state)."""
