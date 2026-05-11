@@ -10,7 +10,9 @@ import pytest
 from pydantic import ValidationError
 
 from evidenceforge.generation.engine.storyline import (
+    _dns_tunnel_payload_bytes_per_label,
     _effective_rate_interval,
+    _encode_dns_tunnel_label,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
     _web_scan_connection_profile,
@@ -628,6 +630,27 @@ class TestDgaQueriesEventSpec:
 
 
 # ── DnsTunnelEventSpec ────────────────────────────────────────────────────
+
+
+class TestDnsTunnelEncoding:
+    def test_payload_capacity_reserves_visible_nonce_bytes(self):
+        assert _dns_tunnel_payload_bytes_per_label("hex", 30) == 13
+
+    def test_hex_label_contains_entire_payload_chunk_after_nonce(self):
+        rng = random.Random(42)
+        chunk = b"ABCDEFGHIJKLM"
+
+        encoded = _encode_dns_tunnel_label(
+            chunk,
+            encoding="hex",
+            label_length=30,
+            sequence=b"seq0",
+            rng=rng,
+        )
+
+        decoded = bytes.fromhex(encoded)
+        assert len(encoded) == 30
+        assert decoded[2:] == chunk
 
 
 class TestDnsTunnelEventSpec:

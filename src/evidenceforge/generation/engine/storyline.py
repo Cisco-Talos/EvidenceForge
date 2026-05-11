@@ -172,6 +172,51 @@ def _iter_dns_tunnel_ticks(
         yield paced_time
 
 
+def _dns_tunnel_bytes_per_label(encoding: str, label_length: int) -> int:
+    """Return the maximum raw bytes that fit in one encoded DNS label."""
+    if encoding == "hex":
+        bytes_per_label = label_length // 2
+    elif encoding == "base32":
+        bytes_per_label = (label_length * 5) // 8
+    else:  # base64
+        bytes_per_label = (label_length * 3) // 4
+    return max(1, bytes_per_label)
+
+
+def _dns_tunnel_payload_bytes_per_label(encoding: str, label_length: int) -> int:
+    """Return payload bytes per label after reserving visible nonce space."""
+    bytes_per_label = _dns_tunnel_bytes_per_label(encoding, label_length)
+    nonce_len = min(2, max(0, bytes_per_label - 1))
+    return max(1, bytes_per_label - nonce_len)
+
+
+def _encode_dns_tunnel_label(
+    chunk: bytes,
+    *,
+    encoding: str,
+    label_length: int,
+    sequence: bytes,
+    rng,
+) -> str:
+    """Encode one DNS tunnel chunk without displacing payload bytes from the label."""
+    bytes_per_label = _dns_tunnel_bytes_per_label(encoding, label_length)
+    nonce_len = min(2, max(0, bytes_per_label - len(chunk)))
+    visible_nonce = rng.randbytes(nonce_len)
+    remaining_len = max(0, bytes_per_label - len(visible_nonce) - len(chunk))
+    visible_sequence = sequence[:remaining_len]
+    pad_len = max(0, remaining_len - len(visible_sequence))
+    padded_chunk = visible_nonce + chunk + visible_sequence + rng.randbytes(pad_len)
+
+    if encoding == "hex":
+        encoded = padded_chunk.hex()
+    elif encoding == "base32":
+        encoded = base64.b32encode(padded_chunk).decode("ascii").rstrip("=").lower()
+    else:  # base64
+        encoded = base64.urlsafe_b64encode(padded_chunk).decode("ascii").rstrip("=").lower()
+
+    return encoded[:label_length]
+
+
 def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     """Return interval for rate-based bulk events.
 
@@ -2313,8 +2358,6 @@ class StorylineMixin:
             malicious_event["tld"] = spec.tld
 
         elif spec.type == "dns_tunnel":
-            import base64 as _b64
-
             from evidenceforge.events.contexts import DnsContext
             from evidenceforge.generation.activity.network_params import (
                 dns_tunnel_response_templates,
@@ -2344,19 +2387,14 @@ class StorylineMixin:
             else:
                 payload_bytes = rng.randbytes(spec.payload_size)
 
-            # Calculate bytes per label based on encoding
-            if spec.encoding == "hex":
-                bytes_per_label = spec.label_length // 2
-            elif spec.encoding == "base32":
-                bytes_per_label = (spec.label_length * 5) // 8
-            else:  # base64
-                bytes_per_label = (spec.label_length * 3) // 4
-            bytes_per_label = max(1, bytes_per_label)
+            payload_bytes_per_label = _dns_tunnel_payload_bytes_per_label(
+                spec.encoding, spec.label_length
+            )
 
-            # Chunk payload
+            # Chunk payload by the payload capacity that remains after visible nonce bytes.
             chunks = []
-            for i in range(0, len(payload_bytes), bytes_per_label):
-                chunks.append(payload_bytes[i : i + bytes_per_label])
+            for i in range(0, len(payload_bytes), payload_bytes_per_label):
+                chunks.append(payload_bytes[i : i + payload_bytes_per_label])
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
@@ -2379,27 +2417,13 @@ class StorylineMixin:
                     )
                 ).getrandbits(32)
                 sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
-                visible_nonce = rng.randbytes(2)
-                visible_payload_len = max(1, bytes_per_label - len(visible_nonce))
-                visible_payload = chunk[:visible_payload_len]
-                pad_len = max(
-                    0,
-                    bytes_per_label - len(visible_nonce) - len(visible_payload) - len(sequence),
+                encoded = _encode_dns_tunnel_label(
+                    chunk,
+                    encoding=spec.encoding,
+                    label_length=spec.label_length,
+                    sequence=sequence,
+                    rng=rng,
                 )
-                padded_chunk = visible_nonce + visible_payload + rng.randbytes(pad_len) + sequence
-
-                # Encode chunk
-                if spec.encoding == "hex":
-                    encoded = padded_chunk.hex()
-                elif spec.encoding == "base32":
-                    encoded = _b64.b32encode(padded_chunk).decode("ascii").rstrip("=").lower()
-                else:  # base64
-                    encoded = (
-                        _b64.urlsafe_b64encode(padded_chunk).decode("ascii").rstrip("=").lower()
-                    )
-
-                # Truncate to label_length
-                encoded = encoded[: spec.label_length]
                 tunnel_query = f"{encoded}.{spec.base_domain}"
 
                 # TXT responses carry data back; CNAME/NULL are smaller
