@@ -4526,6 +4526,7 @@ class ActivityGenerator:
                 event.network.history = "Dd"
                 event.network.duration = rng.uniform(0.001, 0.03)
                 event.network.resp_bytes = rng.randint(80, 220)
+                overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
                 if proto == "udp":
                     event.network.orig_pkts = event.network.history.count("D")
                     event.network.resp_pkts = event.network.history.count("d")
