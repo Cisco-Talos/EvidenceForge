@@ -416,6 +416,48 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_dns_tunnel_rtt_invalid_overlay_shape_falls_back_to_default(
+        self, tmp_path, monkeypatch
+    ):
+        """Non-mapping dns_tunnel_rtt overlay values should not break config loading."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rtt_range,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump({"dns_tunnel_rtt": 0}, sort_keys=False)
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert dns_tunnel_rtt_range() == (0.04, 0.35)
+        finally:
+            reset_network_params_cache()
+
+    def test_dns_tunnel_rtt_non_finite_overlay_values_fall_back_to_default(
+        self, tmp_path, monkeypatch
+    ):
+        """Non-finite dns_tunnel_rtt overlay values should not propagate to generation."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rtt_range,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            "dns_tunnel_rtt:\n  min_seconds: .nan\n  max_seconds: 1.0\n",
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert dns_tunnel_rtt_range() == (0.04, 0.35)
+        finally:
+            reset_network_params_cache()
+
     def test_dns_tunnel_response_templates_are_loaded_from_network_params_overlay(
         self, tmp_path, monkeypatch
     ):

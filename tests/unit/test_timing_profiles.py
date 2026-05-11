@@ -5,6 +5,8 @@
 
 from datetime import timedelta
 
+import pytest
+
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     reset_timing_profiles_cache,
@@ -13,8 +15,14 @@ from evidenceforge.generation.activity.timing_profiles import (
 )
 
 
-def test_timing_profiles_load_default_relationship():
+@pytest.fixture(autouse=True)
+def _reset_cache():
     reset_timing_profiles_cache()
+    yield
+    reset_timing_profiles_cache()
+
+
+def test_timing_profiles_load_default_relationship():
 
     window = get_timing_window(
         "network.dns_before_tcp",
@@ -93,3 +101,41 @@ def test_sample_timing_delta_is_deterministic_and_bounded():
 
     assert first == second
     assert timedelta(milliseconds=20) <= first <= timedelta(milliseconds=1500)
+
+
+def test_timing_profiles_overlay_invalid_values_fall_back_safely(tmp_path, monkeypatch):
+    overlay = tmp_path / ".eforge" / "config" / "activity"
+    overlay.mkdir(parents=True)
+    (overlay / "timing_profiles.yaml").write_text(
+        """
+relationships:
+  network.dns_before_tcp:
+    min_ms: nope
+    max_ms: 999999999999
+windows_event_time:
+  collision_spacing:
+    near_zero_until: bad
+    near_gap_min_us: -1
+    near_gap_max_us: 2000000
+    large_gap_min_ms: bad
+    large_gap_max_ms: 999999999
+""".lstrip()
+    )
+    monkeypatch.chdir(tmp_path)
+    reset_timing_profiles_cache()
+
+    window = get_timing_window(
+        "network.dns_before_tcp",
+        default_min_ms=20,
+        default_max_ms=1500,
+        default_position="before",
+    )
+    spacing = windows_collision_spacing_config()
+
+    assert window.min_ms == 20
+    assert window.max_ms == 86_400_000
+    assert spacing["near_zero_until"] == 25
+    assert spacing["near_gap_min_us"] == 1
+    assert spacing["near_gap_max_us"] == 1_000_000
+    assert spacing["large_gap_min_ms"] == 1000
+    assert spacing["large_gap_max_ms"] == 60_000

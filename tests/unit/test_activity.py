@@ -44,15 +44,15 @@ from evidenceforge.models import System, User
 
 
 class TestStateObjectIds:
-    def test_missing_process_object_id_is_allocated_once(self):
-        """Unseen process IDs should still get stable eCAR object IDs."""
+    def test_missing_process_object_id_returns_empty(self):
+        """Unseen process IDs should not fabricate eCAR object IDs."""
         state = StateManager()
 
         first = state.get_process_object_id("WS-01", 4444)
         second = state.get_process_object_id("WS-01", 4444)
 
-        assert first
-        assert second == first
+        assert first == ""
+        assert second == ""
 
 
 class TestNetworkValidation:
@@ -489,7 +489,7 @@ class TestActivityGenerator:
     def test_generate_rdp_session_reuses_source_port_across_network_and_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """RDP network evidence and destination 4624 should share one source port."""
+        """RDP session should emit one connection and share source port with 4624."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -497,14 +497,16 @@ class TestActivityGenerator:
             user=test_user,
             target_system=test_system,
             time=timestamp,
-            source_ip="10.0.99.50",
+            source_ip="45.83.221.45",
         )
 
-        network_event = next(
+        rdp_connections = [
             call[0][0]
             for call in mock_emitters["zeek_conn"].emit.call_args_list
             if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
-        )
+        ]
+        assert len(rdp_connections) == 1
+        network_event = rdp_connections[0]
         logon_event = next(
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -589,6 +591,88 @@ class TestActivityGenerator:
         )
         assert logon_event.auth.username == "aisha.johnson"
 
+    def test_generate_rdp_session_updates_preallocated_session_identity(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """RDP user coercion must keep preallocated session identity aligned."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.99.50"
+        state_manager.set_current_time(timestamp)
+        domain_user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+        )
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        activity_gen.generate_logon(
+            domain_user,
+            test_system,
+            timestamp - timedelta(seconds=10),
+            logon_type=3,
+            source_ip=source_ip,
+        )
+        preallocated_logon_id = state_manager.create_session(
+            username=root_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip=source_ip,
+            session_kind="rdp",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_rdp_session(
+            user=root_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=source_ip,
+            logon_id=preallocated_logon_id,
+        )
+
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        session = state_manager.get_session(preallocated_logon_id)
+
+        assert logon_event.auth.username == "aisha.johnson"
+        assert logon_event.auth.logon_id == preallocated_logon_id
+        assert session is not None
+        assert session.username == logon_event.auth.username
+
+    def test_generate_rdp_session_fallback_user_tolerates_malformed_ad_domain(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Fallback RDP users should not crash when scenario AD domain is malformed."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.99.50"
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        activity_gen._ad_domain = "bad"
+        state_manager.set_current_time(timestamp)
+        state_manager.register_session(
+            logon_id="0xabc123",
+            username="orphan",
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip=source_ip,
+            start_time=timestamp - timedelta(seconds=10),
+            session_kind="network",
+        )
+
+        activity_gen.generate_rdp_session(
+            user=root_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=source_ip,
+        )
+
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        assert logon_event.auth.username == "orphan"
+
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -639,6 +723,22 @@ class TestActivityGenerator:
         assert scan_events
         assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445, 3306}
+
+    def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
+        """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
+        source = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        activity_gen._ip_to_system = {source.ip: source}
+
+        targets = activity_gen._resolve_nmap_targets("nmap -p 80 1.0.0.0/8", source)
+
+        assert len(targets) == 8
+        assert targets[0] == "1.0.0.1"
+        assert targets[-1] == "1.0.0.8"
 
     def test_generate_logon_network_allows_custom_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1365,6 +1465,50 @@ class TestActivityGenerator:
             if call[0][0].event_type == "process_create"
         ]
 
+    def test_windows_singleton_traversal_path_creates_process_event(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Traversal variants of singleton process paths should not reuse seeded PIDs."""
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(boot_time)
+        lsass_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"lsass": lsass_pid}}
+        mock_emitters["windows_event_security"].reset_mock()
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        returned_pid = activity_gen.generate_process(
+            system_user,
+            test_system,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\..\Temp\lsass.exe",
+            r"C:\Windows\System32\..\Temp\lsass.exe",
+        )
+
+        assert returned_pid != lsass_pid
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        assert process_events
+        assert process_events[-1].process.pid == returned_pid
+        assert process_events[-1].process.image == r"C:\Windows\System32\..\Temp\lsass.exe"
+
     def test_create_remote_thread_carries_shared_thread_context(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1414,6 +1558,39 @@ class TestActivityGenerator:
         assert event.edr.actor_id == source_obj_id
         assert event.remote_thread.start_address > 0
         assert event.remote_thread.start_module
+
+    def test_create_remote_thread_skips_missing_target_pid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Remote-thread generation should not reference missing target process objects."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Temp\inject.exe",
+            command_line=r"C:\Temp\inject.exe",
+            username=test_user.username,
+            integrity_level="High",
+            logon_id="0xabc",
+        )
+
+        activity_gen.generate_create_remote_thread(
+            test_user,
+            test_system,
+            timestamp,
+            source_pid=source_pid,
+            source_image=r"C:\Temp\inject.exe",
+            target_pid=99999,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+
+        assert not [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "create_remote_thread"
+        ]
+        assert state_manager.get_process_object_id(test_system.hostname, 99999) == ""
 
     def test_module_load_uses_process_aware_dll_profile(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

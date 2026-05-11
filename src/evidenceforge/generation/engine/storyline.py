@@ -32,6 +32,7 @@ Contains the StorylineMixin with methods for:
 
 import base64
 import logging
+import math
 import random
 import re
 import shlex
@@ -179,6 +180,8 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     rate as an average throughput and apply deterministic per-campaign drift so
     repeated scans with the same nominal rate do not produce identical counts.
     """
+    if not math.isfinite(rate) or rate <= 0.0:
+        raise ValueError(f"rate must be a positive finite number, got {rate!r}")
     effective_rate = rate
     if count is None:
         effective_rate *= rng.uniform(0.82, 1.18)
@@ -468,7 +471,7 @@ class StorylineMixin:
         return logon_id
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
-        """Return last storyline process only when it belongs to the same source host."""
+        """Return the last live storyline process for the same source host."""
         if system is None:
             return -1, None
         processes = getattr(self, "_last_storyline_process_by_system", {})
@@ -481,16 +484,24 @@ class StorylineMixin:
             return -1, None
         if os_category == "linux" and re.match(r"^[A-Za-z]:\\", image):
             return -1, None
+        if self.state_manager.get_process(system.hostname, pid) is None:
+            processes.pop(system.hostname, None)
+            if getattr(self, "_last_storyline_system", None) == system.hostname:
+                self._last_storyline_pid = -1
+                self._last_storyline_image = ""
+                self._last_storyline_system = ""
+            return -1, None
         return pid, image
 
     def _recent_storyline_process_logon_id(
         self,
+        actor: User,
         system: System,
         time: datetime,
         *,
         executable: str | None = None,
     ) -> str | None:
-        """Return the LogonID from a recent storyline process on the same host."""
+        """Return a recent storyline process LogonID for this actor and host."""
         pid, image = self._last_storyline_process_for_system(system)
         if pid <= 0 or not image:
             return None
@@ -499,9 +510,18 @@ class StorylineMixin:
             if image_name != executable.lower():
                 return None
         proc = self.state_manager.get_process(system.hostname, pid)
-        if proc is None or not proc.logon_id or proc.start_time is None:
+        if proc is None or proc.username != actor.username or not proc.logon_id:
             return None
-        if proc.start_time > time or time - proc.start_time > timedelta(minutes=5):
+        session = self.state_manager.get_session(proc.logon_id)
+        if (
+            session is None
+            or session.username != actor.username
+            or session.system != system.hostname
+        ):
+            return None
+        if proc.start_time is None or proc.start_time > time:
+            return None
+        if time - proc.start_time > timedelta(minutes=5):
             return None
         return proc.logon_id
 
@@ -982,17 +1002,14 @@ class StorylineMixin:
 
             http_url = self._extract_http_url(command_line)
             if http_url is not None:
-                from urllib.parse import urlparse
-
-                parsed_url = urlparse(http_url)
-                if parsed_url.hostname:
-                    hostname = parsed_url.hostname
+                parsed_target = self._parse_http_url_target(http_url)
+                if parsed_target is not None:
+                    hostname, dst_port = parsed_target
                     dst_ip = self._resolve_storyline_network_target(hostname)
                     if dst_ip is None:
                         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
                         dst_ip = resolve_domain_ip(hostname, src_host=system.hostname)
-                    dst_port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
                     service = "ssl" if dst_port == 443 else "http"
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
@@ -1019,6 +1036,13 @@ class StorylineMixin:
                 dst_ip = self._resolve_storyline_network_target(scp_target)
                 if dst_ip:
                     transfer_time = time + timedelta(milliseconds=rng.randint(250, 900))
+                    source_port = self.activity_generator.reserve_ssh_source_port(
+                        system.ip,
+                        dst_ip,
+                        None,
+                        rng,
+                        _get_os_category(system.os),
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=dst_ip,
@@ -1034,6 +1058,7 @@ class StorylineMixin:
                         source_system=system,
                         pid=pid,
                         process_image=process_name,
+                        src_port=source_port,
                     )
                     target_system = self._system_for_ip(dst_ip)
                     if (
@@ -1051,6 +1076,7 @@ class StorylineMixin:
                             target_user=scp_destination[2] or actor.username,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
+                            source_port=source_port,
                             rng=rng,
                         )
 
@@ -1312,6 +1338,8 @@ class StorylineMixin:
                     source_ip=source_ip,
                 )
                 result = SimpleNamespace(network_uid=uid)
+            if getattr(result, "session", None) is not None:
+                malicious_event["actor"] = result.session.username
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 3389
             result_source_ip = (
@@ -1442,6 +1470,7 @@ class StorylineMixin:
 
         elif spec.type == "log_cleared":
             subject_logon_id = self._recent_storyline_process_logon_id(
+                actor,
                 system,
                 time,
                 executable="wevtutil.exe",
@@ -1456,9 +1485,6 @@ class StorylineMixin:
 
         elif spec.type == "create_remote_thread":
             source_pid, source_image = self._last_storyline_process_for_system(system)
-            if source_pid <= 0:
-                source_pid = 0
-                source_image = "unknown"
             # Use a realistic target PID — look up the process name from
             # system PIDs or use a plausible default (not 4 = System kernel)
             target_image = _normalize_storyline_process_image(
@@ -1467,50 +1493,57 @@ class StorylineMixin:
                 username=actor.username,
             )
             target_name = target_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            target_pid = self.activity_generator._get_system_pid(
-                system.hostname,
-                target_name.replace(".exe", ""),
-                0x27C,  # 636 default
-            )
-            self.activity_generator.generate_create_remote_thread(
-                user=actor,
-                system=system,
-                time=time,
-                source_pid=source_pid,
-                source_image=source_image,
-                target_pid=target_pid,
-                target_image=target_image,
-            )
-            # Emit ProcessAccess via causal expansion engine (or legacy fallback)
-            # when targeting lsass.exe — primary credential-dumping detection signal
-            if "lsass" in target_name:
-                self.activity_generator._expand_and_emit(
-                    "create_remote_thread",
-                    time,
-                    actor=actor,
-                    target_system=system,
+            if source_pid <= 0:
+                # Without a live source process, there is no realistic Sysmon
+                # Event 8 relationship to render. Keep the storyline record,
+                # but mark it skipped instead of claiming generated evidence.
+                malicious_event["target_process"] = target_image
+                malicious_event["skipped_reason"] = "no_live_source_process"
+            else:
+                target_pid = self.activity_generator._get_system_pid(
+                    system.hostname,
+                    target_name.replace(".exe", ""),
+                    0x27C,  # 636 default
+                )
+                self.activity_generator.generate_create_remote_thread(
+                    user=actor,
+                    system=system,
+                    time=time,
                     source_pid=source_pid,
                     source_image=source_image,
                     target_pid=target_pid,
                     target_image=target_image,
                 )
-            malicious_event["target_process"] = target_image
+                # Emit ProcessAccess via causal expansion engine (or legacy fallback)
+                # when targeting lsass.exe — primary credential-dumping detection signal
+                if "lsass" in target_name:
+                    self.activity_generator._expand_and_emit(
+                        "create_remote_thread",
+                        time,
+                        actor=actor,
+                        target_system=system,
+                        source_pid=source_pid,
+                        source_image=source_image,
+                        target_pid=target_pid,
+                        target_image=target_image,
+                    )
+                malicious_event["target_process"] = target_image
 
         elif spec.type == "process_access":
             source_pid, source_image = self._last_storyline_process_for_system(system)
+            os_category = _get_os_category(system.os)
+            target_image = _normalize_storyline_process_image(
+                spec.target_process,
+                os_category,
+                username=actor.username,
+            )
             if source_pid <= 0:
-                # Without a source process, there is no realistic Sysmon Event
-                # 10 relationship to render. Keep the storyline record, but do
-                # not fabricate an unowned process-access event.
-                malicious_event["target_process"] = spec.target_process
-                malicious_event["skipped_reason"] = "no_source_process"
+                # Without a live source process, there is no realistic Sysmon
+                # Event 10 relationship to render. Keep the storyline record,
+                # but mark it skipped instead of claiming generated evidence.
+                malicious_event["target_process"] = target_image
+                malicious_event["skipped_reason"] = "no_live_source_process"
             else:
-                os_category = _get_os_category(system.os)
-                target_image = _normalize_storyline_process_image(
-                    spec.target_process,
-                    os_category,
-                    username=actor.username,
-                )
                 target_name = target_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
                 target_pid = self.activity_generator._get_system_pid(
                     system.hostname,
@@ -1746,7 +1779,7 @@ class StorylineMixin:
             story_pid, story_image = self._last_storyline_process_for_system(src_sys)
 
             attempt_count = 0
-            for tick_time in _iter_dns_tunnel_ticks(
+            for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
@@ -1916,7 +1949,10 @@ class StorylineMixin:
             malicious_event["rcode"] = spec.rcode
 
         elif spec.type == "web_scan":
-            from evidenceforge.config.web_scan_presets import get_preset
+            from evidenceforge.config.web_scan_presets import (
+                get_preset,
+                parse_positive_finite_rate,
+            )
             from evidenceforge.events.contexts import HttpContext
 
             # Load preset and merge with overrides
@@ -1980,7 +2016,15 @@ class StorylineMixin:
             if count is None and preset_data:
                 max_effective_rate = preset_data.get("max_effective_rate")
                 if max_effective_rate is not None:
-                    effective_rate = min(effective_rate, float(max_effective_rate))
+                    rate_cap = parse_positive_finite_rate(max_effective_rate)
+                    if rate_cap is None:
+                        logger.warning(
+                            "Ignoring invalid web_scan max_effective_rate for preset %s: %r",
+                            spec.preset,
+                            max_effective_rate,
+                        )
+                    else:
+                        effective_rate = min(effective_rate, rate_cap)
             interval_sec = _effective_rate_interval(effective_rate, count, rng)
             ua_fired = False
             last_rate_alert_ts = None
@@ -2344,7 +2388,7 @@ class StorylineMixin:
             else:
                 payload_bytes = rng.randbytes(spec.payload_size)
 
-            # Calculate bytes per label based on encoding
+            # Calculate raw bytes that can fit in the visible label for each encoding.
             if spec.encoding == "hex":
                 bytes_per_label = spec.label_length // 2
             elif spec.encoding == "base32":
@@ -2353,10 +2397,23 @@ class StorylineMixin:
                 bytes_per_label = (spec.label_length * 3) // 4
             bytes_per_label = max(1, bytes_per_label)
 
-            # Chunk payload
-            chunks = []
-            for i in range(0, len(payload_bytes), bytes_per_label):
-                chunks.append(payload_bytes[i : i + bytes_per_label])
+            # Reserve visible label capacity for tunnel metadata before chunking the payload.
+            # Otherwise full-sized chunks would be encoded with metadata and truncated, causing
+            # GROUND_TRUTH.md to count bytes that never appeared in the emitted DNS label.
+            visible_nonce_len = 2
+            sequence_len = 4
+            payload_bytes_per_label = max(0, bytes_per_label - visible_nonce_len - sequence_len)
+
+            # Chunk only the bytes that can actually be emitted in the label. Very small labels
+            # still generate DNS traffic but carry no visible payload, so ground truth reports 0.
+            chunks: list[bytes]
+            if payload_bytes_per_label > 0:
+                chunks = [
+                    payload_bytes[i : i + payload_bytes_per_label]
+                    for i in range(0, len(payload_bytes), payload_bytes_per_label)
+                ]
+            else:
+                chunks = [b""]
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
@@ -2379,9 +2436,8 @@ class StorylineMixin:
                     )
                 ).getrandbits(32)
                 sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
-                visible_nonce = rng.randbytes(2)
-                visible_payload_len = max(1, bytes_per_label - len(visible_nonce))
-                visible_payload = chunk[:visible_payload_len]
+                visible_nonce = rng.randbytes(visible_nonce_len)
+                visible_payload = chunk[:payload_bytes_per_label]
                 pad_len = max(
                     0,
                     bytes_per_label - len(visible_nonce) - len(visible_payload) - len(sequence),
@@ -2605,6 +2661,7 @@ class StorylineMixin:
         target_user: str,
         target_path: str,
         transfer_time: datetime,
+        source_port: int,
         rng: random.Random,
     ) -> None:
         """Emit target-side SSH and file evidence for a storyline scp transfer."""
@@ -2616,13 +2673,6 @@ class StorylineMixin:
             ProcessContext,
         )
 
-        source_port = 32768 + (
-            _stable_seed(
-                f"scp_receiver_port:{source_system.ip}:{target_system.ip}:"
-                f"{source_pid}:{transfer_time.isoformat()}"
-            )
-            % 28232
-        )
         self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
         parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
         sshd_pid = self.state_manager.create_process(
@@ -2696,6 +2746,24 @@ class StorylineMixin:
         if not match:
             return None
         return match.group(0).rstrip(".")
+
+    @staticmethod
+    def _parse_http_url_target(http_url: str) -> tuple[str, int] | None:
+        """Parse a storyline command URL into a safe hostname and destination port."""
+        from urllib.parse import urlparse
+
+        try:
+            parsed_url = urlparse(http_url)
+            hostname = parsed_url.hostname
+            port = parsed_url.port
+        except ValueError:
+            logger.debug("Ignoring malformed HTTP URL from storyline command: %s", http_url)
+            return None
+
+        if not hostname:
+            return None
+
+        return hostname, port or (443 if parsed_url.scheme.lower() == "https" else 80)
 
     def _resolve_storyline_network_target(self, target: str) -> str | None:
         """Resolve a storyline command target host/IP to an environment IP when possible."""

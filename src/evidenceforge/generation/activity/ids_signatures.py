@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import random
 import string
+from string import Formatter
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
@@ -14,6 +15,8 @@ from evidenceforge.config.overlay import extend_list, load_with_overlay
 
 _CONFIG_PATH = get_activity_directory() / "ids_signatures.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_MAX_DNS_TEMPLATE_LENGTH = 253
+_MAX_TOKEN_WIDTH = 64
 
 
 def _merge_ids_signatures(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -42,12 +45,47 @@ def reset_ids_signatures_cache() -> None:
     _CACHED_DATA = None
 
 
+def validate_dns_query_template(template: str) -> str | None:
+    """Validate IDS DNS template safety; return error message or None."""
+    if not template:
+        return "must be a non-empty string containing {token}"
+    if len(template) > _MAX_DNS_TEMPLATE_LENGTH:
+        return f"must be <= {_MAX_DNS_TEMPLATE_LENGTH} characters"
+    formatter = Formatter()
+    saw_token = False
+    try:
+        for _, field_name, format_spec, conversion in formatter.parse(template):
+            if field_name is None:
+                continue
+            if field_name != "token":
+                return "may only reference {token}"
+            saw_token = True
+            if conversion is not None:
+                return "must not use ! conversions"
+            if "{" in format_spec or "}" in format_spec:
+                return "must not use nested format specifiers"
+            if format_spec:
+                if not format_spec.isdigit():
+                    return "must use numeric width only"
+                if int(format_spec) > _MAX_TOKEN_WIDTH:
+                    return f"must use token width <= {_MAX_TOKEN_WIDTH}"
+    except ValueError:
+        return "contains invalid format syntax"
+    if not saw_token:
+        return "must contain {token}"
+    return None
+
+
 def render_dns_query_template(signature: dict[str, Any], rng: random.Random) -> str | None:
     """Render a DNS query template associated with an IDS DNS signature."""
     templates = signature.get("dns_query_templates") or []
     if not isinstance(templates, list) or not templates:
         return None
-    candidates = [template for template in templates if isinstance(template, str) and template]
+    candidates = [
+        template
+        for template in templates
+        if isinstance(template, str) and validate_dns_query_template(template) is None
+    ]
     if not candidates:
         return None
     token = "".join(rng.choice(string.ascii_lowercase + string.digits) for _ in range(8))

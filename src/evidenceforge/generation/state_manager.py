@@ -81,7 +81,8 @@ class StateManager:
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
-        self._linux_logind_session_used: dict[str, set[int]] = {}
+        self._linux_logind_session_last_ids: dict[str, int] = {}
+        self._linux_logind_session_used_ids: dict[str, set[int]] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
 
         # Entity lifecycle: per-system boot times for temporal validation
@@ -236,6 +237,7 @@ class StateManager:
         self,
         logon_id: str,
         *,
+        username: str | None = None,
         start_time: datetime | None = None,
         source_port: int | None = None,
         session_kind: str | None = None,
@@ -247,6 +249,8 @@ class StateManager:
             session = self.state.active_sessions.get(logon_id)
             if session is None:
                 return False
+            if username is not None:
+                session.username = username
             if start_time is not None:
                 session.start_time = ensure_utc(start_time)
             if source_port is not None:
@@ -331,10 +335,24 @@ class StateManager:
                     )
                 elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
                 candidate = initial + elapsed_seconds
-                used = self._linux_logind_session_used.setdefault(system, set())
-                while candidate in used:
-                    candidate += 1
+                used = self._linux_logind_session_used_ids.setdefault(system, set())
+                if candidate in used:
+                    # Search downward for an unused slot to preserve temporal ordering
+                    probe = candidate - 1
+                    while probe >= initial and probe in used:
+                        probe -= 1
+                    if probe >= initial:
+                        candidate = probe
+                    else:
+                        # All slots below are taken — bump upward instead
+                        last_id = self._linux_logind_session_last_ids.get(system, candidate)
+                        candidate = last_id + 1
+                        while candidate in used:
+                            candidate += 1
                 used.add(candidate)
+                self._linux_logind_session_last_ids[system] = max(
+                    candidate, self._linux_logind_session_last_ids.get(system, candidate)
+                )
                 return candidate
 
             if system not in self._linux_logind_session_counters:
@@ -489,9 +507,7 @@ class StateManager:
             proc = self.state.running_processes.get(key)
             if proc:
                 return proc.ecar_object_id
-            if key not in self._process_object_ids:
-                self._process_object_ids[key] = str(uuid.uuid4())
-            return self._process_object_ids[key]
+            return self._process_object_ids.get(key, "")
 
     def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for a running process."""

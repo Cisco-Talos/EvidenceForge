@@ -311,6 +311,45 @@ class TestScorePair:
         assert matched == 3
         assert agreeing == 3
 
+    def test_pivot_index_caps_colliding_buckets(self):
+        """High-collision B-side buckets retain only a bounded number of records."""
+        ecar_recs = [self._make_ecar(1234, f"proc-{i}.exe", "WS-01") for i in range(5)]
+
+        b_index = _build_pivot_index(ecar_recs, self._PIVOT, max_bucket_records=2)
+
+        assert len(b_index[("ws-01", 1234)]) == 2
+
+    def test_pivot_index_caps_colliding_buckets_b_fields(self):
+        """b_fields composite-key path is also subject to the bucket cap."""
+        pivot = {
+            "b_fields": ["pid", "hostname"],
+            "require_hostname_match": False,
+        }
+        ecar_recs = [self._make_ecar(1234, f"proc-{i}.exe", "WS-01") for i in range(5)]
+        b_index = _build_pivot_index(ecar_recs, pivot, max_bucket_records=2)
+        assert len(b_index[(1234, "WS-01")]) == 2
+
+    def test_score_pair_stops_at_global_match_cap(self):
+        """Colliding pivot keys cannot force exhaustive A×B comparisons."""
+        windows_recs = [
+            self._make_win(1234, r"C:\Windows\System32\cmd.exe", "WS-01") for _ in range(5)
+        ]
+        ecar_recs = [self._make_ecar(1234, "cmd.exe", "WS-01") for _ in range(5)]
+        b_index = _build_pivot_index(ecar_recs, self._PIVOT)
+
+        matched, agreeing, failures = _score_pair(
+            "4688↔eCAR",
+            windows_recs,
+            b_index,
+            self._PIVOT,
+            self._AGREE_ON,
+            max_matches=7,
+        )
+
+        assert matched == 7
+        assert agreeing == 7
+        assert failures == []
+
 
 # ---------------------------------------------------------------------------
 # CrossSourceScorer._score_field_agreement — empty records

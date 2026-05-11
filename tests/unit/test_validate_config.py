@@ -14,6 +14,34 @@ class TestValidateConfig:
             + "\n".join(f"  [{i.severity}] {i.file}: {i.message}" for i in result.issues)
         )
 
+    def test_validate_config_rejects_invalid_web_scan_rate_cap(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "max_effective_rate": 0,
+                        "paths": [{"uri": "/", "status": 200}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" max_effective_rate must be a positive finite number'
+            in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_warns_for_unknown_ocsp_responder(self, monkeypatch):
         from evidenceforge.generation.activity import dns_registry, tls_realism
 
@@ -329,6 +357,27 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_too_large_workstation_unlock_gap(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {"workstation_lock": {"min_unlock_gap_seconds": 1_000_000}}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "min_unlock_gap_seconds must be at most 86400" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_empty_failed_auth_validation_path(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 
@@ -481,5 +530,34 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "ids_signatures.yaml"
             and "defines dns_query_templates but is not a DNS signature" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_unsafe_dns_ids_template(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 999002,
+                        "rev": 1,
+                        "message": "ET TEST DNS",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "udp",
+                        "dst_port": 53,
+                        "direction": "out",
+                        "dns_query_templates": ["{token}{missing}.example"],
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+        result = validate_config()
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "may only reference {token}" in issue.message
             for issue in result.issues
         )

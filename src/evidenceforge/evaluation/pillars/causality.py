@@ -31,10 +31,12 @@ Sub-scores (weights sum to 1.0):
   storyline_trace_coverage (0.10): All expected format-groups have traces.
 """
 
+import ipaddress
 import logging
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 from evidenceforge.evaluation._shared import _condition_matches, _extract_hostname, _normalize_ts
 from evidenceforge.evaluation.dimensions import (
@@ -589,23 +591,75 @@ class CausalityScorer(DimensionScorer):
             or expected_lower.startswith(record_str + ".")
         )
 
-    @staticmethod
-    def _beacon_dst_matches(fields: dict, expected_dst: str) -> bool:
+    @classmethod
+    def _beacon_dst_matches(cls, fields: dict, expected_dst: str) -> bool:
         """Check whether a record references expected_dst as a beacon destination.
 
-        Handles proxy_access (stores destination as 'host' hostname),
-        zeek_http (id.resp_h / uri), and fallback IP fields.
+        Handles proxy_access (stores destination as 'host' hostname), zeek_http
+        (id.resp_h / host / uri), and fallback IP fields. URL/URI values are
+        parsed so only authority hostnames can satisfy the destination check.
         """
-        candidates = [
-            fields.get("id.resp_h"),
-            fields.get("dst_ip"),
-            fields.get("host"),
-        ]
-        # Also check hostname within full URL/URI
-        url = fields.get("url") or fields.get("uri")
-        if url:
-            candidates.append(url)
-        return any(expected_dst == c or (c and expected_dst in c) for c in candidates if c)
+        expected = cls._normalize_beacon_host(expected_dst)
+        if not expected:
+            return False
+
+        candidates: list[str] = []
+        for field_name in ("id.resp_h", "dst_ip", "host"):
+            candidate = cls._normalize_beacon_host(fields.get(field_name))
+            if candidate:
+                candidates.append(candidate)
+
+        for field_name in ("url", "uri"):
+            candidate = cls._extract_beacon_url_host(fields.get(field_name))
+            if candidate:
+                candidates.append(candidate)
+
+        return any(cls._beacon_host_matches(candidate, expected) for candidate in candidates)
+
+    @staticmethod
+    def _normalize_beacon_host(value: Any) -> str:
+        """Normalize a beacon destination host/IP for exact comparisons."""
+        if value is None:
+            return ""
+        host = str(value).strip().lower().strip("[]")
+        if not host:
+            return ""
+        if host.endswith("."):
+            host = host[:-1]
+        try:
+            return str(ipaddress.ip_address(host))
+        except ValueError:
+            return host
+
+    @classmethod
+    def _extract_beacon_url_host(cls, value: Any) -> str:
+        """Extract and normalize only the authority host from an absolute URL/URI."""
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text:
+            return ""
+        parsed = urlsplit(text)
+        if not parsed.hostname and text.startswith("//"):
+            parsed = urlsplit(f"http:{text}")
+        return cls._normalize_beacon_host(parsed.hostname)
+
+    @staticmethod
+    def _beacon_host_matches(candidate: str, expected: str) -> bool:
+        """Compare beacon hosts/IPs without unsafe substring matching."""
+        if candidate == expected:
+            return True
+        try:
+            ipaddress.ip_address(candidate)
+            return False
+        except ValueError:
+            pass
+        try:
+            ipaddress.ip_address(expected)
+            return False
+        except ValueError:
+            pass
+        return candidate.endswith(f".{expected}")
 
     # --- Sub-score 1: Causal Ordering ---
 
@@ -740,12 +794,13 @@ class CausalityScorer(DimensionScorer):
                         # after-record is inverted; it can be a continuing pre-window session,
                         # DNS cache hit, hosts-file lookup, or static infrastructure flow.
                         continue
-                    elif len(failures) < 10:
+                    else:
                         rule_total += 1
-                        failures.append(
-                            f"Rule '{rule['name']}': after event at line "
-                            f"{rec.line_number} precedes all matching before events"
-                        )
+                        if len(failures) < 10:
+                            failures.append(
+                                f"Rule '{rule['name']}': after event at line "
+                                f"{rec.line_number} precedes all matching before events"
+                            )
 
             if rule_total > 0 and tolerance > 0:
                 failure_rate = 1.0 - (rule_correct / rule_total)

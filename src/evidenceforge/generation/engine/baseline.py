@@ -126,7 +126,8 @@ def _dns_context_for_ids_signature(
     """Build canonical DNS payload for DNS IDS signatures."""
     dns_query = render_dns_query_template(signature, rng)
     if not dns_query:
-        return None
+        token = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(8))
+        dns_query = f"host-{token}.{ad_domain}"
 
     from evidenceforge.events.contexts import DnsContext
 

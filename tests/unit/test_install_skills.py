@@ -254,6 +254,32 @@ class TestInstallCodexSkills:
         with pytest.raises(PermissionError, match="symlinked path"):
             install_codex_skills(tmp_path)
 
+    def test_codex_rejects_symlinked_skill_file(self, tmp_path):
+        """install_codex_skills rejects a symlinked SKILL.md destination file."""
+        victim_file = tmp_path / "victim.txt"
+        victim_file.write_text("do not overwrite")
+        skill_dir = tmp_path / "eforge-scenario"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").symlink_to(victim_file)
+
+        with pytest.raises(PermissionError, match="symlinked path"):
+            install_codex_skills(tmp_path)
+
+        assert victim_file.read_text() == "do not overwrite"
+
+    def test_codex_rejects_symlinked_reference_directory(self, tmp_path):
+        """install_codex_skills rejects nested symlinked reference directories."""
+        outside_refs = tmp_path / "outside_refs"
+        outside_refs.mkdir()
+        skill_dir = tmp_path / "eforge-scenario"
+        skill_dir.mkdir()
+        (skill_dir / "references").symlink_to(outside_refs, target_is_directory=True)
+
+        with pytest.raises(PermissionError, match="symlinked path"):
+            install_codex_skills(tmp_path)
+
+        assert list(outside_refs.iterdir()) == []
+
 
 class TestInstallSkillsCli:
     """Tests for the CLI command integration."""

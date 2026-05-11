@@ -118,13 +118,13 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._conn_id_sequences[sensor_hostname] = next_id
         return next_id
 
-    def flush(self) -> None:
-        """Flush all sensor writers and normalize visible connection IDs."""
-        super().flush()
-        self._normalize_visible_connection_ids()
-
     def close(self) -> None:
-        """Close all writers and normalize visible connection IDs."""
+        """Close all writers and normalize visible connection IDs once.
+
+        Barrier flushes can happen many times during long generations. Keep
+        them append-only, and defer the whole-file ID normalization until the
+        final close after writers have performed their final global sort.
+        """
         super().close()
         self._normalize_visible_connection_ids()
 

@@ -28,8 +28,10 @@ coordinates them across multiple log formats for consistency.
 """
 
 import ipaddress
+import itertools
 import logging
 import math
+import ntpath
 import random
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -2128,6 +2130,7 @@ class ActivityGenerator:
         source_ip: str | None = None,
         source_port: int | None = None,
         emit_transport_syslog: bool = True,
+        emit_network_evidence: bool = True,
         logon_id: str | None = None,
     ) -> str:
         """Generate logon event across all applicable log formats.
@@ -2301,14 +2304,15 @@ class ActivityGenerator:
         ):
             self._emit_dc_ntlm_for_logon(user, system, time, source_ip)
 
-        self._maybe_emit_remote_logon_network_connection(
-            system=system,
-            time=time,
-            logon_type=logon_type,
-            source_ip=source_ip,
-            source_port=source_port or 0,
-            auth_package=auth_package_name,
-        )
+        if emit_network_evidence:
+            self._maybe_emit_remote_logon_network_connection(
+                system=system,
+                time=time,
+                logon_type=logon_type,
+                source_ip=source_ip,
+                source_port=source_port or 0,
+                auth_package=auth_package_name,
+            )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
@@ -3410,7 +3414,7 @@ class ActivityGenerator:
             if in_scenario:
                 candidates.extend(in_scenario)
             else:
-                candidates.extend(str(host) for host in list(network.hosts())[:8])
+                candidates.extend(str(host) for host in itertools.islice(network.hosts(), 8))
         return list(dict.fromkeys(candidates))
 
     def _clamp_time_after_process_start(
@@ -3898,7 +3902,8 @@ class ActivityGenerator:
                 process_image=process_image,
             )
 
-            if proxy_context.status_code >= 400:
+            proxy_terminal_failures = {"DENIED", "AUTH_REQUIRED", "GATEWAY_ERROR"}
+            if proxy_context.cache_result in proxy_terminal_failures:
                 return client_uid
             if proxy_context.cache_result == "HIT":
                 return client_uid
@@ -4521,13 +4526,28 @@ class ActivityGenerator:
                 event.network.history = "Dd"
                 event.network.duration = rng.uniform(0.001, 0.03)
                 event.network.resp_bytes = rng.randint(80, 220)
-                event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
-                overhead = rng.choices(
-                    _UDP_OVERHEAD_VALUES,
-                    weights=_UDP_OVERHEAD_WEIGHTS,
-                    k=1,
-                )[0]
-                event.network.resp_ip_bytes = event.network.resp_bytes + overhead
+                overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
+                if proto == "udp":
+                    event.network.orig_pkts = event.network.history.count("D")
+                    event.network.resp_pkts = event.network.history.count("d")
+                    event.network.orig_bytes = max(
+                        event.network.orig_bytes or 0,
+                        event.network.orig_pkts * 28,
+                    )
+                    event.network.orig_ip_bytes = (
+                        event.network.orig_bytes + event.network.orig_pkts * overhead
+                    )
+                    event.network.resp_ip_bytes = (
+                        event.network.resp_bytes + event.network.resp_pkts * overhead
+                    )
+                else:
+                    event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
+                    event.network.resp_ip_bytes = event.network.resp_bytes + overhead
+                self.state_manager.update_connection_bytes(
+                    event.network.conn_id,
+                    event.network.orig_bytes or 0,
+                    event.network.resp_bytes or 0,
+                )
             if event.dns.rtt is not None:
                 event.network.duration = event.dns.rtt
 
@@ -7074,6 +7094,7 @@ class ActivityGenerator:
         if logon_id is not None:
             self.state_manager.update_session_metadata(
                 logon_id,
+                username=user.username,
                 start_time=logon_time,
                 source_port=src_port,
                 session_kind="rdp",
@@ -7085,6 +7106,7 @@ class ActivityGenerator:
             logon_type=10,
             source_ip=source_ip,
             source_port=src_port,
+            emit_network_evidence=False,
             logon_id=logon_id,
         )
 
@@ -7114,12 +7136,30 @@ class ActivityGenerator:
         known_users = getattr(self, "_users_by_username", {})
         if selected.username in known_users:
             return known_users[selected.username]
-        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        ad_domain = self._valid_fallback_email_domain()
         return User(
             username=selected.username,
             full_name=selected.username,
             email=f"{selected.username}@{ad_domain}",
         )
+
+    def _valid_fallback_email_domain(self) -> str:
+        """Return a safe domain for synthetic fallback users."""
+        ad_domain = str(getattr(self, "_ad_domain", "corp.local")).strip().lower()
+        allowed = set("abcdefghijklmnopqrstuvwxyz0123456789.-")
+        labels = ad_domain.split(".")
+        if (
+            len(labels) >= 2
+            and all(labels)
+            and all(
+                set(label) <= allowed and not label.startswith("-") and not label.endswith("-")
+                for label in labels
+            )
+            and labels[-1].isalpha()
+            and len(labels[-1]) >= 2
+        ):
+            return ad_domain
+        return "corp.local"
 
     def generate_service_logon(
         self,
@@ -7627,7 +7667,14 @@ class ActivityGenerator:
     ) -> None:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
         # Entity lifecycle: validate target PID exists
-        self.state_manager.validate_target_pid(system.hostname, target_pid)
+        if not self.state_manager.validate_target_pid(system.hostname, target_pid):
+            logger.debug(
+                "Skipping remote thread for non-running target process: %s source_pid=%s target_pid=%s",
+                system.hostname,
+                source_pid,
+                target_pid,
+            )
+            return
 
         from evidenceforge.events.contexts import ProcessContext
 
@@ -7729,7 +7776,14 @@ class ActivityGenerator:
             granted_access: Access mask (0x1010=VM_READ, 0x1FFFFF=ALL_ACCESS)
         """
         # Entity lifecycle: validate target PID exists
-        self.state_manager.validate_target_pid(system.hostname, target_pid)
+        if not self.state_manager.validate_target_pid(system.hostname, target_pid):
+            logger.debug(
+                "Skipping process access for non-running target process: %s source_pid=%s target_pid=%s",
+                system.hostname,
+                source_pid,
+                target_pid,
+            )
+            return
 
         time = self._clamp_time_after_process_start(system, source_pid, time)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
@@ -8293,12 +8347,12 @@ class ActivityGenerator:
         """Return a seeded Windows singleton PID instead of creating a duplicate."""
         if _get_os_category(system.os) != "windows":
             return None
-        normalized_path = process_name.replace("/", "\\").lower()
+        normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
         exe_name = normalized_path.rsplit("\\", 1)[-1]
         role = _WINDOWS_SINGLETON_SYSTEM_PROCESSES.get(exe_name)
         if role is None:
             return None
-        if "\\" in normalized_path and not normalized_path.startswith("c:\\windows\\system32\\"):
+        if "\\" in normalized_path and normalized_path != f"c:\\windows\\system32\\{exe_name}":
             return None
         pid = getattr(self, "_system_pids", {}).get(system.hostname, {}).get(role)
         if pid is None or not self._is_pid_active_at(system, pid, time):

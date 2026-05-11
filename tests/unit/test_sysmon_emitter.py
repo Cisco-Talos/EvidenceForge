@@ -522,6 +522,48 @@ class TestSysmonEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == create_time + timedelta(milliseconds=1)
 
+    def test_process_create_shifted_after_visible_parent_create_transitively(
+        self, format_def, temp_output
+    ):
+        """Multi-level child Event 1 records should render after shifted visible parent Event 1 records."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        root_guid = "{11111111-abcd-ef01-2345-678901234567}"
+        parent_guid = "{22222222-abcd-ef01-2345-678901234567}"
+        child_guid = "{33333333-abcd-ef01-2345-678901234567}"
+        root_time = datetime(2024, 1, 15, 10, 0, 10, tzinfo=UTC)
+        parent_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        child_time = datetime(2024, 1, 15, 10, 0, 0, 500000, tzinfo=UTC)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "TimeCreated": parent_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": parent_guid,
+                "ParentProcessGuid": root_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": child_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": child_guid,
+                "ParentProcessGuid": parent_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": root_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": root_guid,
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        shifted_parent_time = emitter._event_dicts[0]["TimeCreated"]
+        shifted_child_time = emitter._event_dicts[1]["TimeCreated"]
+        assert shifted_parent_time > root_time
+        assert shifted_child_time > shifted_parent_time
+
     def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
         """Child Event 1 should not render before a visible parent Event 1."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
