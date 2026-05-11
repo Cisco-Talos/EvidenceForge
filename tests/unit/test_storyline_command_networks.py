@@ -3,10 +3,12 @@
 
 """Tests for network evidence inferred from storyline commands."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any
 
 from evidenceforge.generation.engine.storyline import StorylineMixin
-from evidenceforge.models.scenario import System
+from evidenceforge.models.scenario import System, User
 
 
 class TestStorylineCommandNetworks:
@@ -45,3 +47,89 @@ class TestStorylineCommandNetworks:
         assert engine._resolve_storyline_network_target("APP-INT-01.meridianhcs.local") == (
             "10.10.2.30"
         )
+
+
+class _FakeActivityGenerator:
+    def __init__(self) -> None:
+        self.reserved_ports: list[int] = []
+        self.connections: list[dict] = []
+
+    def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def _resolve_parent(self, *args: Any, **kwargs: Any) -> int:
+        return 1
+
+    def generate_process(self, *args: Any, **kwargs: Any) -> int:
+        return 4242
+
+    def _record_user_process(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def reserve_ssh_source_port(self, *args: Any, **kwargs: Any) -> int:
+        self.reserved_ports.append(45678)
+        return 45678
+
+    def generate_connection(self, **kwargs: Any) -> str:
+        self.connections.append(kwargs)
+        return "Cscptransfer00001"
+
+
+class _FakeStateManager:
+    def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
+        return [SimpleNamespace(system="SRC", logon_id="0xabc")]
+
+    def mark_story_process(self, hostname: str, pid: int) -> None:
+        return None
+
+
+class TestStorylineScpCorrelation:
+    def test_scp_receiver_artifacts_reuse_network_source_port(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="DST",
+            ip="10.10.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source, target], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        receiver_ports: list[int] = []
+
+        def capture_receiver_artifacts(**kwargs) -> None:
+            receiver_ports.append(kwargs["source_port"])
+
+        engine._emit_scp_receiver_artifacts = capture_receiver_artifacts
+        spec = SimpleNamespace(
+            type="process",
+            process_name="scp",
+            command_line="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="copy archive to staging host",
+            explicit_types={"process"},
+        )
+
+        assert engine.activity_generator.reserved_ports == [45678]
+        assert engine.activity_generator.connections[0]["src_port"] == 45678
+        assert receiver_ports == [45678]
