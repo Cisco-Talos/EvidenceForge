@@ -91,6 +91,17 @@ def _session_started_by(session: Any, time: datetime) -> bool:
     return session_start <= activity_time
 
 
+def _eligible_for_hourly_module_load(proc: Any, time: datetime) -> bool:
+    """Return whether broad hourly DLL noise may attach to a process at ``time``."""
+    if "\\" not in proc.image or proc.start_time > time:
+        return False
+    lifetime = _windows_foreground_lifetime(proc.image, proc.command_line)
+    if lifetime is None:
+        return True
+    max_follow_on = proc.start_time + timedelta(seconds=lifetime[1] + 5.0)
+    return time <= max_follow_on
+
+
 def _session_logoff_time(
     session: Any,
     current_hour: datetime,
@@ -4184,11 +4195,18 @@ class BaselineMixin:
                 )
 
                 running = self.state_manager.get_processes_on_system(system.hostname)
-                win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
-                if win_procs:
+                if running:
                     generic_dll_pool = get_dll_pool()
                     num_dll = rng.randint(20, 45)
                     for _ in range(num_dll):
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        win_procs: list[tuple[int, str]] = []
+                        for proc in running:
+                            if _eligible_for_hourly_module_load(proc, ts):
+                                win_procs.append((proc.pid, proc.image))
+                        if not win_procs:
+                            continue
                         proc_pid, proc_image = rng.choice(win_procs)
                         exe_name = proc_image.rsplit("\\", 1)[-1]
                         profiled_dlls = get_dlls_for_process(exe_name)
@@ -4214,8 +4232,6 @@ class BaselineMixin:
                         if not dll_pool:
                             continue
                         dll = rng.choice(dll_pool)
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_image_load(
                             user=_SYSTEM_USER,
@@ -5173,14 +5189,15 @@ class BaselineMixin:
                     else:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     from evidenceforge.generation.activity.http_content import (
+                        is_stable_resource_path,
                         response_size_for_mime,
                         response_size_for_status,
                     )
 
                     resp_bytes = (
-                        response_size_for_mime(rng, mime)
-                        if status == 200
-                        else response_size_for_status(status, http_host, path)
+                        response_size_for_status(status, http_host, path)
+                        if status != 200 or is_stable_resource_path(path)
+                        else response_size_for_mime(rng, mime)
                     )
                     ua_rng = random.Random(
                         _stable_seed(f"web_client_ua:{client_ip}:{sys_obj.hostname}")

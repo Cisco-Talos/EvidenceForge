@@ -1114,6 +1114,7 @@ class TestWindowsEventEmitter:
         assert "Microsoft-Windows-Eventlog" in content
         assert "LogFileCleared" in content
         assert "UserData" in content
+        assert '<Security UserID="S-1-5-21-123-456-789-1001"/>' in content
         assert "<SubjectUserName>admin01</SubjectUserName>" in content
         assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0

@@ -373,6 +373,8 @@ def _windows_foreground_lifetime(
         return (0.4, 6.0)
     if exe_name in {"powershell.exe", "pwsh.exe", "cmd.exe", "wmic.exe", "certutil.exe"}:
         return (4.0, 35.0)
+    if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
+        return (2.0, 25.0)
     return None
 
 

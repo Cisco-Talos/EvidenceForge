@@ -45,6 +45,7 @@ from typing import Any
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
+    is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
     response_size_for_status,
@@ -1015,7 +1016,11 @@ class StorylineMixin:
                     if parsed_url.query:
                         uri = f"{uri}?{parsed_url.query}"
                     mime_type = normalize_mime_type_for_path(uri, "text/plain")
-                    response_body_len = response_size_for_mime(rng, mime_type)
+                    response_body_len = (
+                        response_size_for_status(200, hostname, uri)
+                        if is_stable_resource_path(uri)
+                        else response_size_for_mime(rng, mime_type)
+                    )
                     dst_ip = self._resolve_storyline_network_target(hostname)
                     if dst_ip is None:
                         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -2089,9 +2094,9 @@ class StorylineMixin:
                 )
 
                 _response_body_len = (
-                    response_size_for_mime(rng, _mime_type)
-                    if _status < 400
-                    else response_size_for_status(_status, scan_host, _uri)
+                    response_size_for_status(_status, scan_host, _uri)
+                    if _status >= 400 or is_stable_resource_path(_uri)
+                    else response_size_for_mime(rng, _mime_type)
                 )
                 http_ctx = HttpContext(
                     method=_method,

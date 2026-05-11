@@ -255,7 +255,7 @@ class TestSslUidCorrelation:
                 ),
                 x509=X509Context(
                     fuid="Fabcdef1234567890",
-                    fingerprint="a" * 64,
+                    fingerprint="a" * 40,
                     certificate_serial="01",
                     certificate_subject="CN=example.com",
                     certificate_issuer="CN=Example CA",
@@ -278,7 +278,7 @@ class TestSslUidCorrelation:
             assert files_data["fuid"] == x509_data["id"]
             assert files_data["source"] == "SSL"
             assert files_data["analyzers"] == ["X509"]
-            assert files_data["sha1"] != x509_data["fingerprint"]
+            assert files_data["sha1"] == x509_data["fingerprint"]
             assert files_data["sha256"] != x509_data["fingerprint"]
             assert files_data["md5"] != files_data["sha256"][:32]
             assert files_data["sha1"] != files_data["sha256"][:40]

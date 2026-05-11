@@ -217,7 +217,7 @@ class TestFilesUidCorrelation:
                     ),
                     x509=X509Context(
                         fuid=fuid,
-                        fingerprint="a" * 64,
+                        fingerprint="a" * 40,
                         certificate_serial="01",
                         certificate_subject="CN=example.com",
                         certificate_issuer="CN=Example CA",
@@ -230,7 +230,8 @@ class TestFilesUidCorrelation:
 
         assert len(rows) == 2
         assert rows[0]["sha256"] == rows[1]["sha256"]
-        assert rows[0]["sha256"] != "a" * 64
+        assert rows[0]["sha1"] == "a" * 40
+        assert rows[0]["sha256"] != "a" * 40
         assert rows[0]["md5"] == rows[1]["md5"]
         assert rows[0]["sha1"] == rows[1]["sha1"]
 
