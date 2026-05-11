@@ -1992,13 +1992,14 @@ class StorylineMixin:
             for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
-                if pause_until is not None and tick_time < pause_until:
-                    continue
-                if request_count > 0 and rng.random() < 0.025:
-                    continue
-                if request_count > 0 and rng.random() < 0.008:
-                    pause_until = tick_time + timedelta(seconds=rng.uniform(3.0, 45.0))
-                    continue
+                if count is None:
+                    if pause_until is not None and tick_time < pause_until:
+                        continue
+                    if request_count > 0 and rng.random() < 0.025:
+                        continue
+                    if request_count > 0 and rng.random() < 0.008:
+                        pause_until = tick_time + timedelta(seconds=rng.uniform(3.0, 45.0))
+                        continue
 
                 self.state_manager.set_current_time(tick_time)
                 path_entry = scan_paths[path_idx % len(scan_paths)]

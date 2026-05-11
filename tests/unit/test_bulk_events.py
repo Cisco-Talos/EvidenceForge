@@ -5,11 +5,14 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 from pydantic import ValidationError
 
+import evidenceforge.generation.engine.storyline as storyline_module
 from evidenceforge.generation.engine.storyline import (
+    StorylineMixin,
     _effective_rate_interval,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
@@ -23,11 +26,36 @@ from evidenceforge.models.scenario import (
     DnsQueryEventSpec,
     DnsTunnelEventSpec,
     ExplicitCredentialsEventSpec,
+    System,
+    User,
     WebScanEventSpec,
     WorkstationLockEventSpec,
     WorkstationUnlockEventSpec,
     _PeriodicEventBase,
 )
+
+
+class _AlwaysSkipWebScanRng:
+    """RNG that triggers web-scan skip branches while keeping other values realistic."""
+
+    def __init__(self) -> None:
+        self._base = random.Random(7)
+
+    def random(self) -> float:
+        return 0.0
+
+    def uniform(self, a: float, b: float) -> float:
+        return self._base.uniform(a, b)
+
+    def randint(self, a: int, b: int) -> int:
+        return self._base.randint(a, b)
+
+    def choice(self, seq):
+        return self._base.choice(seq)
+
+    def choices(self, population, weights=None, *, cum_weights=None, k=1):
+        return self._base.choices(population, weights=weights, cum_weights=cum_weights, k=k)
+
 
 # ── _PeriodicEventBase validation ─────────────────────────────────────────
 
@@ -399,6 +427,45 @@ class TestWebScanEventSpec:
                 duration="1h",
                 preset="nikto",
             )
+
+
+class TestWebScanGeneration:
+    def test_count_based_web_scan_emits_exact_request_count(self, monkeypatch):
+        """Count-based web scans should not lose requests to realism skip/pause branches."""
+        engine = type("FakeEngine", (StorylineMixin,), {}).__new__(
+            type("FakeEngine", (StorylineMixin,), {})
+        )
+        engine.state_manager = Mock()
+        engine.dispatcher = Mock(visibility_engine=None)
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {}
+        engine._last_storyline_process_by_system = {}
+
+        monkeypatch.setattr(storyline_module, "_get_rng", lambda: _AlwaysSkipWebScanRng())
+
+        actor = User(username="scanner", full_name="Scanner", email="scanner@example.com")
+        system = System(hostname="SCAN-01", ip="10.0.0.10", os="Linux", type="workstation")
+        spec = WebScanEventSpec(
+            dst_ip="10.0.0.5",
+            source_ip="10.0.0.10",
+            rate=50.0,
+            count=25,
+            jitter=0.0,
+            preset="nikto",
+        )
+
+        result = engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            activity="scan web server",
+            explicit_types={"web_scan"},
+        )
+
+        assert engine.activity_generator.generate_connection.call_count == spec.count
+        assert result is not None
+        assert result["request_count"] == spec.count
 
 
 # ── CredentialSprayEventSpec ──────────────────────────────────────────────
