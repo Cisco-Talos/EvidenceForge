@@ -81,7 +81,7 @@ class StateManager:
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
-        self._linux_logind_session_used: dict[str, set[int]] = {}
+        self._linux_logind_session_last_ids: dict[str, int] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
 
         # Entity lifecycle: per-system boot times for temporal validation
@@ -331,10 +331,10 @@ class StateManager:
                     )
                 elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
                 candidate = initial + elapsed_seconds
-                used = self._linux_logind_session_used.setdefault(system, set())
-                while candidate in used:
-                    candidate += 1
-                used.add(candidate)
+                last_id = self._linux_logind_session_last_ids.get(system)
+                if last_id is not None and candidate <= last_id:
+                    candidate = last_id + 1
+                self._linux_logind_session_last_ids[system] = candidate
                 return candidate
 
             if system not in self._linux_logind_session_counters:

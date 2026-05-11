@@ -73,6 +73,23 @@ class TestStateManagerInit:
 
         assert earlier_id < later_id
 
+    def test_linux_logind_session_ids_preboot_events_remain_monotonic(self):
+        """Pre-boot events should still allocate monotonic IDs without collisions."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(17)
+
+        ids = [
+            sm.next_linux_logind_session_id("linux01", rng, start - timedelta(hours=2))
+            for _ in range(10)
+        ]
+
+        assert ids == sorted(ids)
+        assert len(set(ids)) == len(ids)
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
