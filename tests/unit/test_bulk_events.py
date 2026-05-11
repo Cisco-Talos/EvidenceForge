@@ -862,6 +862,46 @@ class TestDnsTunnelEventSpec:
         assert b"ABCD" not in raw_label
         assert event["bytes_exfiltrated"] == 0
 
+    def test_dns_tunnel_generation_uses_natural_pacing_and_variable_labels(self):
+        engine = object.__new__(StorylineMixin)
+        captured = []
+
+        def capture_connection(**kwargs):
+            captured.append((kwargs["time"], kwargs["dns"]))
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=30,
+            payload_size=512,
+            interval="2s",
+            duration="15m",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=System(hostname="WS-01", ip="10.0.0.10", os="Windows 10", type="workstation"),
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        intervals = [
+            (later[0] - earlier[0]).total_seconds()
+            for earlier, later in zip(captured, captured[1:], strict=False)
+        ]
+        label_lengths = {len(dns.query.split(".", 1)[0]) for _ts, dns in captured}
+
+        assert len(captured) < 451
+        assert max(intervals) > 8.0
+        assert len(label_lengths) > 1
+
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────
 

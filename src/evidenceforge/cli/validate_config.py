@@ -1585,19 +1585,33 @@ def validate_config() -> ValidationResult:
     if syslog_data:
         _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
         for entry in syslog_data:
-            if not isinstance(entry, dict) or entry.get("transient"):
+            if not isinstance(entry, dict):
                 continue
             app = str(entry.get("app") or "<unknown>")
             for message in entry.get("messages", []):
                 if not isinstance(message, str):
                     continue
                 message_lower = message.lower()
-                if any(pattern in message_lower for pattern in RECURRING_SYSLOG_STARTUP_PATTERNS):
+                if not entry.get("transient") and any(
+                    pattern in message_lower for pattern in RECURRING_SYSLOG_STARTUP_PATTERNS
+                ):
                     result.issues.append(
                         Issue(
                             "ERROR",
                             "extra_syslog_messages.yaml",
                             f'Persistent app "{app}" has recurring startup banner "{message}"',
+                        )
+                    )
+                if "cron.hourly" in message_lower:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            (
+                                f'App "{app}" has schedule-native cron.hourly message '
+                                f'"{message}"; use systemd_schedules.yaml or a '
+                                "dedicated schedule-aware generator instead"
+                            ),
                         )
                     )
 

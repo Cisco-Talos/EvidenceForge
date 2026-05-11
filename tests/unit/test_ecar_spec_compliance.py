@@ -91,8 +91,8 @@ class TestPidAlwaysPresent:
         record = json.loads(rendered)
         assert record["pid"] == -1
 
-    def test_unlock_reauth_renders_session_open_not_duplicate_login(self, emitter, ts):
-        """Type 7 unlock reauth should not look like a new session login."""
+    def test_unlock_reauth_renders_login_with_logon_type(self, emitter, ts):
+        """Type 7 unlock reauth should use session lifecycle action vocabulary."""
         event = SecurityEvent(
             timestamp=ts,
             event_type="logon",
@@ -112,7 +112,8 @@ class TestPidAlwaysPresent:
 
         row = emitter.emit_event.call_args[0][0]
         assert row["object"] == "USER_SESSION"
-        assert row["action"] == "OPEN"
+        assert row["action"] == "LOGIN"
+        assert row["logon_type"] == 7
         assert row["objectID"] == "session-1"
 
     def test_pid_none_becomes_negative_one(self, emitter, ts):

@@ -83,11 +83,6 @@ programs:
       - "Grace period over, resuming full feature set for DNS server 10.0.0.1."
       - "Positive Trust Anchors: . IN DS 20326"
 
-  - app: cron
-    transient: true
-    messages:
-      - "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))"
-
   - app: thermald
     messages:
       - "Unsupported cpu model, use default config"

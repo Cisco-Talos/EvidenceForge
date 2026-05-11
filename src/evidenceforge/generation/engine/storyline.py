@@ -2447,10 +2447,23 @@ class StorylineMixin:
             chunk_idx = 0
             tunnel_salt = rng.randbytes(4)
 
-            for tick_time in _iter_periodic_ticks(
+            for tick_time in _iter_dns_tunnel_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
+
+                label_length = (
+                    rng.randint(max(20, spec.label_length - 10), spec.label_length)
+                    if spec.label_length >= 20
+                    else spec.label_length
+                )
+                if spec.encoding == "hex":
+                    effective_bytes_per_label = label_length // 2
+                elif spec.encoding == "base32":
+                    effective_bytes_per_label = (label_length * 5) // 8
+                else:  # base64
+                    effective_bytes_per_label = (label_length * 3) // 4
+                effective_bytes_per_label = max(1, effective_bytes_per_label)
 
                 chunk = chunks[chunk_idx % len(chunks)]
                 chunk_idx += 1
@@ -2461,10 +2474,17 @@ class StorylineMixin:
                 ).getrandbits(32)
                 sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
                 visible_nonce = rng.randbytes(visible_nonce_len)
-                visible_payload = chunk[:payload_bytes_per_label]
+                effective_payload_capacity = max(
+                    0,
+                    effective_bytes_per_label - visible_nonce_len - sequence_len,
+                )
+                visible_payload = chunk[: min(payload_bytes_per_label, effective_payload_capacity)]
                 pad_len = max(
                     0,
-                    bytes_per_label - len(visible_nonce) - len(visible_payload) - len(sequence),
+                    effective_bytes_per_label
+                    - len(visible_nonce)
+                    - len(visible_payload)
+                    - len(sequence),
                 )
                 padded_chunk = visible_nonce + visible_payload + rng.randbytes(pad_len) + sequence
 
@@ -2479,7 +2499,7 @@ class StorylineMixin:
                     )
 
                 # Truncate to label_length
-                encoded = encoded[: spec.label_length]
+                encoded = encoded[:label_length]
                 tunnel_query = f"{encoded}.{spec.base_domain}"
 
                 # TXT responses carry data back; CNAME/NULL are smaller

@@ -154,6 +154,14 @@ class TestRegistryKeys:
                 f"Details looks like a value name, not data: {details}"
             )
 
+    def test_hklm_pool_excludes_host_role_specific_service_config(self):
+        """Host-wide noise should not emit role-specific service/app config everywhere."""
+        keys = get_registry_keys_hklm()
+        rendered = [f"{key}\\{value_name}" for key, value_name, _details in keys]
+
+        assert not any(r"Services\DNS\Parameters\ListenAddresses" in key for key in rendered)
+        assert not any(r"App Paths\WinSCP.exe" in key for key in rendered)
+
 
 class TestDllPool:
     """Test DLL path pool content."""

@@ -169,15 +169,15 @@ class EcarEmitter(HostMultiplexEmitter):
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
-        action = "OPEN" if event.auth.logon_type == 7 else "LOGIN"
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
-            "action": action,
+            "action": "LOGIN",
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "success",
+            "logon_type": event.auth.logon_type,
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
