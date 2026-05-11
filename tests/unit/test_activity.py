@@ -1383,6 +1383,50 @@ class TestActivityGenerator:
             if call[0][0].event_type == "process_create"
         ]
 
+    def test_windows_singleton_traversal_path_creates_process_event(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Traversal variants of singleton process paths should not reuse seeded PIDs."""
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(boot_time)
+        lsass_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"lsass": lsass_pid}}
+        mock_emitters["windows_event_security"].reset_mock()
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        returned_pid = activity_gen.generate_process(
+            system_user,
+            test_system,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\..\Temp\lsass.exe",
+            r"C:\Windows\System32\..\Temp\lsass.exe",
+        )
+
+        assert returned_pid != lsass_pid
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        assert process_events
+        assert process_events[-1].process.pid == returned_pid
+        assert process_events[-1].process.image == r"C:\Windows\System32\..\Temp\lsass.exe"
+
     def test_create_remote_thread_carries_shared_thread_context(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
