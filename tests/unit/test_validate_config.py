@@ -14,6 +14,34 @@ class TestValidateConfig:
             + "\n".join(f"  [{i.severity}] {i.file}: {i.message}" for i in result.issues)
         )
 
+    def test_validate_config_rejects_invalid_web_scan_rate_cap(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "max_effective_rate": 0,
+                        "paths": [{"uri": "/", "status": 200}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" max_effective_rate must be a positive finite number'
+            in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_warns_for_unknown_ocsp_responder(self, monkeypatch):
         from evidenceforge.generation.activity import dns_registry, tls_realism
 
