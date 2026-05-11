@@ -165,6 +165,37 @@ class TestHostnameConsistency:
         assert conn_event.ssl is not None
         assert conn_event.ssl.server_name == hostname
 
+    def test_connection_dns_prerequisite_contains_tcp_destination(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Connection DNS evidence should resolve the same IP used by the flow."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        rng = random.Random(42)
+        monkeypatch.setattr(rng, "random", lambda: 0.5)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        state_manager.set_current_time(timestamp)
+        hostname = "cdn-assets-update.com"
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="151.101.141.68",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        dns_event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert dns_event.dns is not None
+        assert dns_event.dns.query_type == "A"
+        assert dns_event.dns.query == hostname
+        assert conn_event.network.dst_ip in dns_event.dns.answers
+
     def test_dns_response_completes_before_dependent_connection(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

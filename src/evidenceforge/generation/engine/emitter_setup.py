@@ -296,13 +296,28 @@ class EmitterSetupMixin:
         _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])
         _oui_weights = [o["weight"] for o in _oui_prefixes]
         _oui_values = [o["prefix"] for o in _oui_prefixes]
+        storyline_macs: dict[str, str] = {}
+        for step in self.scenario.storyline:
+            system_name = getattr(step, "system", "")
+            if not system_name:
+                continue
+            for event in getattr(step, "events", []) or []:
+                if getattr(event, "type", None) != "dhcp_lease":
+                    continue
+                mac_address = getattr(event, "mac_address", None)
+                if mac_address:
+                    storyline_macs.setdefault(system_name, mac_address.lower())
 
         for system in self.scenario.environment.systems:
             ip_seed = _stable_seed(f"mac_{system.ip}")
             # Select OUI prefix deterministically per host using weighted distribution
             oui_rng = random.Random(ip_seed)
             oui = oui_rng.choices(_oui_values, weights=_oui_weights, k=1)[0]
-            mac = f"{oui}:{(ip_seed >> 16) & 0xFF:02x}:{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}"
+            mac = storyline_macs.get(
+                system.hostname,
+                f"{oui}:{(ip_seed >> 16) & 0xFF:02x}"
+                f":{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}",
+            )
             offset = (_stable_seed(f"dhcp_offset_{system.hostname}") % 300) + rng.uniform(0, 5)
             ts = base_time + timedelta(seconds=offset)
             uid = generate_zeek_uid("C")

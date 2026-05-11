@@ -132,8 +132,9 @@ class DnsBeforeConnection(ExpansionRule):
     """Emit a DNS lookup before TCP connections to named hosts.
 
     Reproduces the logic from ActivityGenerator._emit_dns_lookup(), including
-    DNS caching, SERVFAIL probability, multi-answer CDN responses, NXDOMAIN
-    companion queries, and varied query types (A, AAAA, PTR, SRV, MX).
+    DNS caching, SERVFAIL probability, multi-answer CDN responses, and NXDOMAIN
+    companion queries. Connection prerequisites force an address lookup for the
+    destination so DNS evidence always contains the IP used by the TCP flow.
     """
 
     name: str = field(default="dns_before_connection")
@@ -154,6 +155,7 @@ class DnsBeforeConnection(ExpansionRule):
         kwargs = {
             "src_ip": ctx.src_ip,
             "dst_ip": ctx.dst_ip,
+            "force_address": True,
         }
         if ctx.hostname:
             kwargs["hostname"] = ctx.hostname

@@ -4002,6 +4002,7 @@ class ActivityGenerator:
                     dst_ip,
                     time + egress_delay,
                     hostname=proxy_context.host,
+                    force_address=True,
                 )
             egress_conn_state = conn_state
             if not caller_provided_conn_state and proxy_context.status_code < 400:
@@ -5307,7 +5308,7 @@ class ActivityGenerator:
         # Emit DNS for SSH target — only when source is internal (external
         # attacker IPs don't query the victim's internal resolver).
         if _is_private_ip(source_ip):
-            self._emit_dns_lookup(source_ip, target_system.ip, time)
+            self._emit_dns_lookup(source_ip, target_system.ip, time, force_address=True)
 
         source_process = None
         if source_system is not None and source_pid > 0:
@@ -5812,6 +5813,7 @@ class ActivityGenerator:
         dst_ip: str,
         time: datetime,
         hostname: str | None = None,
+        force_address: bool = False,
     ) -> None:
         """Emit a DNS lookup preceding a TCP connection.
 
@@ -5824,6 +5826,7 @@ class ActivityGenerator:
             dst_ip: IP that will be resolved (the "answer")
             time: Timestamp of the DNS query (should precede TCP connection)
             hostname: Explicit domain name to use (bypasses REVERSE_DNS lookup)
+            force_address: Force an A/AAAA lookup for connection prerequisites.
         """
         rng = _get_rng()
 
@@ -5925,9 +5928,13 @@ class ActivityGenerator:
             return
 
         # Determine query type, query string, and answer
-        qtype_roll = rng.random()
+        qtype_roll = 0.0 if force_address else rng.random()
 
-        if qtype_roll < 0.65:
+        if ":" in dst_ip and force_address:
+            qtype, qtype_name = 28, "AAAA"
+            query = hostname
+            answers = [dst_ip]
+        elif qtype_roll < 0.65:
             # A record: hostname → IPv4
             qtype, qtype_name = 1, "A"
             query = hostname
