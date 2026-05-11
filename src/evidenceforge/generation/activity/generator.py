@@ -7652,7 +7652,14 @@ class ActivityGenerator:
     ) -> None:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
         # Entity lifecycle: validate target PID exists
-        self.state_manager.validate_target_pid(system.hostname, target_pid)
+        if not self.state_manager.validate_target_pid(system.hostname, target_pid):
+            logger.debug(
+                "Skipping remote thread for non-running target process: %s source_pid=%s target_pid=%s",
+                system.hostname,
+                source_pid,
+                target_pid,
+            )
+            return
 
         from evidenceforge.events.contexts import ProcessContext
 
@@ -7754,7 +7761,14 @@ class ActivityGenerator:
             granted_access: Access mask (0x1010=VM_READ, 0x1FFFFF=ALL_ACCESS)
         """
         # Entity lifecycle: validate target PID exists
-        self.state_manager.validate_target_pid(system.hostname, target_pid)
+        if not self.state_manager.validate_target_pid(system.hostname, target_pid):
+            logger.debug(
+                "Skipping process access for non-running target process: %s source_pid=%s target_pid=%s",
+                system.hostname,
+                source_pid,
+                target_pid,
+            )
+            return
 
         time = self._clamp_time_after_process_start(system, source_pid, time)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)

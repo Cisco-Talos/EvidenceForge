@@ -127,13 +127,12 @@ class TestStateManagerObjectIds:
     def test_missing_session_returns_empty(self, state_manager):
         assert state_manager.get_session_object_id("nonexistent") == ""
 
-    def test_missing_process_allocates_stable_id(self, state_manager):
+    def test_missing_process_returns_empty_id(self, state_manager):
         first = state_manager.get_process_object_id("WKS-01", 99999)
         second = state_manager.get_process_object_id("WKS-01", 99999)
 
-        assert first == second
-        assert first != ""
-        uuid.UUID(first)
+        assert first == ""
+        assert second == ""
 
 
 # ---- Lifecycle Persistence ----

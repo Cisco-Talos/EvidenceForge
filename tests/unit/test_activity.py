@@ -44,15 +44,15 @@ from evidenceforge.models import System, User
 
 
 class TestStateObjectIds:
-    def test_missing_process_object_id_is_allocated_once(self):
-        """Unseen process IDs should still get stable eCAR object IDs."""
+    def test_missing_process_object_id_returns_empty(self):
+        """Unseen process IDs should not fabricate eCAR object IDs."""
         state = StateManager()
 
         first = state.get_process_object_id("WS-01", 4444)
         second = state.get_process_object_id("WS-01", 4444)
 
-        assert first
-        assert second == first
+        assert first == ""
+        assert second == ""
 
 
 class TestNetworkValidation:
@@ -1558,6 +1558,39 @@ class TestActivityGenerator:
         assert event.edr.actor_id == source_obj_id
         assert event.remote_thread.start_address > 0
         assert event.remote_thread.start_module
+
+    def test_create_remote_thread_skips_missing_target_pid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Remote-thread generation should not reference missing target process objects."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Temp\inject.exe",
+            command_line=r"C:\Temp\inject.exe",
+            username=test_user.username,
+            integrity_level="High",
+            logon_id="0xabc",
+        )
+
+        activity_gen.generate_create_remote_thread(
+            test_user,
+            test_system,
+            timestamp,
+            source_pid=source_pid,
+            source_image=r"C:\Temp\inject.exe",
+            target_pid=99999,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+
+        assert not [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "create_remote_thread"
+        ]
+        assert state_manager.get_process_object_id(test_system.hostname, 99999) == ""
 
     def test_module_load_uses_process_aware_dll_profile(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
