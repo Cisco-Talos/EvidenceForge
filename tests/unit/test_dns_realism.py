@@ -566,10 +566,14 @@ class TestWeirdProtocolConstraint:
         assert event.network.resp_bytes > 0
 
     def test_inferred_servfail_dns_row_keeps_responder_accounting(
-        self, activity_gen, timestamp, state_manager, mock_emitters
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
     ):
-        """Fallback DNS synthesis should not pair SERVFAIL with a one-way conn row."""
+        """Fallback DNS synthesis should not pair SERVFAIL with stale packet accounting."""
+        from evidenceforge.generation.activity import generator as generator_module
+
         state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(generator_module, "_UDP_CONN_ENTRIES", [("S0", 1, "DD")])
+        monkeypatch.setattr(generator_module, "_UDP_CONN_WEIGHTS", [1])
 
         activity_gen.generate_connection(
             src_ip="10.0.1.50",
@@ -587,8 +591,12 @@ class TestWeirdProtocolConstraint:
         assert event.dns.rcode == "SERVFAIL"
         assert event.network.conn_state == "SF"
         assert event.network.history == "Dd"
-        assert event.network.resp_pkts > 0
+        assert event.network.orig_pkts == event.network.history.count("D")
+        assert event.network.resp_pkts == event.network.history.count("d")
         assert event.network.resp_bytes > 0
+        assert event.network.orig_ip_bytes - event.network.orig_bytes == (
+            event.network.resp_ip_bytes - event.network.resp_bytes
+        )
 
     def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
