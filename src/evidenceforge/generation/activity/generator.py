@@ -28,6 +28,7 @@ coordinates them across multiple log formats for consistency.
 """
 
 import ipaddress
+import itertools
 import logging
 import math
 import random
@@ -3412,7 +3413,7 @@ class ActivityGenerator:
             if in_scenario:
                 candidates.extend(in_scenario)
             else:
-                candidates.extend(str(host) for host in list(network.hosts())[:8])
+                candidates.extend(str(host) for host in itertools.islice(network.hosts(), 8))
         return list(dict.fromkeys(candidates))
 
     def _clamp_time_after_process_start(
