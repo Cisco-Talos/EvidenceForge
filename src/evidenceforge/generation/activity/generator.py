@@ -3854,10 +3854,17 @@ class ActivityGenerator:
             )
             egress_delay = timedelta(0)
             if will_emit_egress:
+                proxy_delay_window = get_timing_window(
+                    "network.proxy_upstream_after_client",
+                    default_min_ms=950,
+                    default_max_ms=1800,
+                    default_position="after",
+                    default_class="causal_prerequisite",
+                )
                 egress_delay = timedelta(
                     milliseconds=random.Random(
                         _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
-                    ).lognormvariate(3.0, 0.65)
+                    ).randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
                 )
             client_duration = min(duration or 0.2, 2.0)
             if dst_port == 443 and proxy_context.status_code < 400:
@@ -4140,6 +4147,18 @@ class ActivityGenerator:
             history = "-"
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
+            if resp_bytes and resp_bytes > 0:
+                request_size = max(32, min(orig_bytes or rng.randint(56, 1200), 1472))
+                response_size = max(32, min(resp_bytes, 1472))
+                if abs(response_size - request_size) > max(64, request_size // 10):
+                    response_size = max(32, request_size + rng.randint(-24, 48))
+                orig_bytes = request_size
+                resp_bytes = response_size
+                duration = duration if duration is not None else rng.uniform(0.001, 0.08)
+            else:
+                orig_bytes = max(32, min(orig_bytes or rng.randint(56, 1200), 1472))
+                resp_bytes = 0
+                duration = duration if duration is not None else rng.uniform(0.001, 0.04)
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
@@ -4318,12 +4337,17 @@ class ActivityGenerator:
             if dst_port == 443 and conn_state == "SF":
                 orig_pkts += rng.choices([0, 1, 2, 3, 5], weights=[45, 25, 15, 10, 5], k=1)[0]
                 resp_pkts += rng.choices([0, 1, 2, 4, 8], weights=[35, 25, 20, 15, 5], k=1)[0]
+        elif proto == "icmp":
+            orig_pkts = 1
+            resp_pkts = 1 if resp_bytes and resp_bytes > 0 else 0
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
         if proto == "udp":
             overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
+        elif proto == "icmp":
+            overhead = 28
         else:
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
         # IP bytes = payload + (packets * header overhead). Handshake-only states
@@ -5011,14 +5035,18 @@ class ActivityGenerator:
 
         if event.network.protocol == "tcp" and event.network.conn_state == "SF":
             if event.http is not None:
+                request_overhead = rng.randint(180, 620)
+                response_overhead = rng.randint(180, 900)
+                if event.http.status_code in {204, 304} or event.http.method == "HEAD":
+                    response_overhead = rng.randint(90, 360)
                 event.network.orig_bytes = max(
                     event.network.orig_bytes or 0,
-                    event.http.request_body_len or 0,
+                    (event.http.request_body_len or 0) + request_overhead,
                     rng.randint(180, 520),
                 )
                 event.network.resp_bytes = max(
                     event.network.resp_bytes or 0,
-                    event.http.response_body_len or 0,
+                    (event.http.response_body_len or 0) + response_overhead,
                     rng.randint(90, 450),
                 )
             if event.network.service == "ssl":

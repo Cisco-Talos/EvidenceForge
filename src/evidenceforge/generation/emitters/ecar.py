@@ -625,6 +625,55 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(line)
         return normalized
 
+    @classmethod
+    def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
+        """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        changed = True
+        while changed:
+            changed = False
+            create_times: dict[str, int] = {}
+            for record in records:
+                if (
+                    record is None
+                    or record.get("object") != "PROCESS"
+                    or record.get("action") != "CREATE"
+                ):
+                    continue
+                object_id = record.get("objectID")
+                if object_id:
+                    create_times[str(object_id)] = int(record.get("timestamp_ms", 0))
+
+            for record in records:
+                if (
+                    record is None
+                    or record.get("object") != "PROCESS"
+                    or record.get("action") != "CREATE"
+                ):
+                    continue
+                parent_id = record.get("actorID")
+                if not parent_id:
+                    continue
+                parent_ms = create_times.get(str(parent_id))
+                timestamp_ms = int(record.get("timestamp_ms", 0))
+                if parent_ms is not None and timestamp_ms <= parent_ms:
+                    record["timestamp_ms"] = parent_ms + 1
+                    changed = True
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
     def flush(self, force: bool = False) -> None:
         """Flush per-host eCAR records after final lifecycle normalization."""
         if force:
@@ -632,6 +681,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 writers = list(self._writers.values())
             for writer in writers:
                 with writer._lock:
+                    writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
         super().flush(force=force)
 

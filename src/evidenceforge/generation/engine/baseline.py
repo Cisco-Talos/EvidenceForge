@@ -4653,57 +4653,55 @@ class BaselineMixin:
                     ssh_user = rng.choice(
                         ["admin", "root", "ubuntu"] if not is_rhel_like else ["admin", "root"]
                     )
-                    # Generate login + disconnect sequence (realistic sshd log)
-                    if rng.random() < 0.5:
-                        # Login sequence: connection → auth → session open
-                        _key_rng = random.Random(
-                            _stable_seed(f"ssh_client_key:{ip}:{system.hostname}")
+                    # Generate a stateful SSH lifecycle. Real sshd logs keep
+                    # connection, auth, pam open, and pam close on the same
+                    # per-session sshd[pid]; bounded-window orphan records are
+                    # modeled by occasional missing closes near the window edge,
+                    # not by inventing unrelated close PIDs.
+                    _key_rng = random.Random(_stable_seed(f"ssh_client_key:{ip}:{system.hostname}"))
+                    key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
+                    key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
+                    if rng.random() < 0.7:
+                        auth_msg = (
+                            f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: "
+                            f"{key_type} {key_hash}"
                         )
-                        key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-                        key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
-                        if rng.random() < 0.7:
-                            # Key-based auth (70%)
-                            auth_msg = f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: {key_type} {key_hash}"
-                        else:
-                            # Password auth (30%)
-                            auth_msg = (
-                                f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                            )
-                        ssh_sid = self.state_manager.next_linux_logind_session_id(
-                            system.hostname, rng, ts
-                        )
-                        login_msgs = [
-                            (
-                                "sshd",
-                                sshd_pid,
-                                f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
-                            ),
-                            ("sshd", sshd_pid, auth_msg),
-                            (
-                                "sshd",
-                                sshd_pid,
-                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
-                            ),
-                            (
-                                "systemd-logind",
-                                sys_pids.get("logind", 456),
-                                f"New session {ssh_sid} of user {ssh_user}.",
-                            ),
-                        ]
-                        _msg_offset = rng.randint(10, 50)
-                        for app, pid_val, lm in login_msgs:
-                            self.activity_generator.generate_syslog_event(
-                                system=system,
-                                time=ts + timedelta(milliseconds=_msg_offset),
-                                app_name=app,
-                                message=lm,
-                                pid=pid_val,
-                                facility=10,
-                            )
-                            _msg_offset += rng.randint(1, 50)
                     else:
-                        # Disconnect sequence
-                        disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
+                        auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
+                    ssh_sid = self.state_manager.next_linux_logind_session_id(
+                        system.hostname, rng, ts
+                    )
+                    login_msgs = [
+                        (
+                            "sshd",
+                            sshd_pid,
+                            f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
+                        ),
+                        ("sshd", sshd_pid, auth_msg),
+                        (
+                            "sshd",
+                            sshd_pid,
+                            f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
+                        ),
+                        (
+                            "systemd-logind",
+                            sys_pids.get("logind", 456),
+                            f"New session {ssh_sid} of user {ssh_user}.",
+                        ),
+                    ]
+                    _msg_offset = rng.randint(10, 50)
+                    for app, pid_val, lm in login_msgs:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(milliseconds=_msg_offset),
+                            app_name=app,
+                            message=lm,
+                            pid=pid_val,
+                            facility=10,
+                        )
+                        _msg_offset += rng.randint(1, 50)
+                    disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
+                    if disconnect_time < self.end_time and rng.random() < 0.92:
                         self.activity_generator.generate_syslog_event(
                             system=system,
                             time=disconnect_time,

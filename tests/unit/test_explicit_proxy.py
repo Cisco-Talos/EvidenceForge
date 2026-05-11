@@ -565,6 +565,7 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         ]
         assert client_events
+        assert egress_events[0].timestamp > client_events[0].timestamp
         client_close = client_events[0].timestamp + timedelta(
             seconds=client_events[0].network.duration
         )
