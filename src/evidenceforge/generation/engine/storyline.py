@@ -1002,17 +1002,14 @@ class StorylineMixin:
 
             http_url = self._extract_http_url(command_line)
             if http_url is not None:
-                from urllib.parse import urlparse
-
-                parsed_url = urlparse(http_url)
-                if parsed_url.hostname:
-                    hostname = parsed_url.hostname
+                parsed_target = self._parse_http_url_target(http_url)
+                if parsed_target is not None:
+                    hostname, dst_port = parsed_target
                     dst_ip = self._resolve_storyline_network_target(hostname)
                     if dst_ip is None:
                         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
                         dst_ip = resolve_domain_ip(hostname, src_host=system.hostname)
-                    dst_port = parsed_url.port or (443 if parsed_url.scheme == "https" else 80)
                     service = "ssl" if dst_port == 443 else "http"
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
@@ -2749,6 +2746,24 @@ class StorylineMixin:
         if not match:
             return None
         return match.group(0).rstrip(".")
+
+    @staticmethod
+    def _parse_http_url_target(http_url: str) -> tuple[str, int] | None:
+        """Parse a storyline command URL into a safe hostname and destination port."""
+        from urllib.parse import urlparse
+
+        try:
+            parsed_url = urlparse(http_url)
+            hostname = parsed_url.hostname
+            port = parsed_url.port
+        except ValueError:
+            logger.debug("Ignoring malformed HTTP URL from storyline command: %s", http_url)
+            return None
+
+        if not hostname:
+            return None
+
+        return hostname, port or (443 if parsed_url.scheme.lower() == "https" else 80)
 
     def _resolve_storyline_network_target(self, target: str) -> str | None:
         """Resolve a storyline command target host/IP to an environment IP when possible."""

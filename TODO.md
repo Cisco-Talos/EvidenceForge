@@ -53,6 +53,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Fix Codex skill installer symlink clobber vulnerability by validating/writing nested destination files safely.
 - [x] Fix RDP user coercion session/ground-truth desynchronization vulnerability and malformed fallback user crash — aligned preallocated RDP session usernames with coerced Windows credentials, records RDP ground truth from canonical session identity, and sanitizes fallback email domains.
 - [x] **P1** SCP receiver source-port correlation — fixed Linux SCP storyline receiver-side sshd/file artifacts so target syslog messages reuse the same client source port as the generated SSH network flow evidence; added focused unit coverage.
+- [x] Harden storyline command-line URL inference against malformed scenario-controlled URLs so invalid hosts/ports cannot crash generation.
 - [x] Add dual-agent `eforge install-skills` workflow — default to Claude project installs, add explicit `--agent claude|codex`, keep Claude project/global behavior, add Codex user-level `~/.codex/skills/` installs, reject invalid Codex/global combinations, and cover installer safety/stale-cleanup behavior with tests.
 - [x] Reduce Codex skill reference duplication — bundle only the references each Codex skill needs and rely on installer stale cleanup to prune no-longer-needed reference files from prior installs.
 - [x] Import existing Claude `/eforge assess` command as a Codex skill without modifying the source skill.
