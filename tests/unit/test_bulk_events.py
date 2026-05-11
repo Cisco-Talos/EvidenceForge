@@ -314,6 +314,11 @@ class TestEffectiveRateInterval:
         assert (1.0 / interval) >= 8.2
         assert (1.0 / interval) <= 11.8
 
+    @pytest.mark.parametrize("rate", [0.0, -1.0, float("inf"), float("nan")])
+    def test_invalid_rate_rejected(self, rate):
+        with pytest.raises(ValueError, match="positive finite"):
+            _effective_rate_interval(rate, None, random.Random(42))
+
     def test_duration_based_rate_drift_varies_by_campaign(self):
         intervals = {
             _effective_rate_interval(10.0, None, random.Random(seed)) for seed in range(10)
@@ -511,6 +516,18 @@ class TestWebScanPresets:
             preset = get_preset(name)
             assert preset is not None
             assert 0 < preset["max_effective_rate"] <= preset["default_rate"]
+
+    @pytest.mark.parametrize("value", [0, -0.1, "bad", float("inf"), float("nan"), True])
+    def test_parse_positive_finite_rate_rejects_invalid_values(self, value):
+        from evidenceforge.config.web_scan_presets import parse_positive_finite_rate
+
+        assert parse_positive_finite_rate(value) is None
+
+    @pytest.mark.parametrize("value", [1, 0.5, "2.5"])
+    def test_parse_positive_finite_rate_accepts_valid_values(self, value):
+        from evidenceforge.config.web_scan_presets import parse_positive_finite_rate
+
+        assert parse_positive_finite_rate(value) == float(value)
 
     def test_get_unknown_preset(self):
         from evidenceforge.config.web_scan_presets import get_preset

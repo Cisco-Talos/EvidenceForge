@@ -10,6 +10,7 @@ a user overlay from .eforge/config/activity/web_scan_presets.yaml if present.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
@@ -19,6 +20,19 @@ logger = logging.getLogger(__name__)
 
 _PRESETS_PATH = get_activity_directory() / "web_scan_presets.yaml"
 _CACHED: dict[str, Any] | None = None
+
+
+def parse_positive_finite_rate(value: Any) -> float | None:
+    """Return value as a positive finite float, or None when invalid."""
+    if isinstance(value, bool):
+        return None
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(rate) or rate <= 0.0:
+        return None
+    return rate
 
 
 def _merge_presets(default: dict, overlay: dict) -> dict:

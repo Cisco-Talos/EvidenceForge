@@ -1619,13 +1619,29 @@ def validate_config() -> ValidationResult:
 
     # Deduplicate issues (some checks may flag the same thing multiple times)
     # --- Check: Web scan preset IDS configuration ---
-    from evidenceforge.config.web_scan_presets import list_preset_names, load_web_scan_presets
+    from evidenceforge.config.web_scan_presets import (
+        list_preset_names,
+        load_web_scan_presets,
+        parse_positive_finite_rate,
+    )
 
     scan_data = load_web_scan_presets()
     presets = scan_data.get("presets", {})
     _IDS_REQUIRED_FIELDS = {"sid", "message"}
     for name in list_preset_names():
         preset = presets.get(name, {})
+        max_effective_rate = preset.get("max_effective_rate")
+        if (
+            max_effective_rate is not None
+            and parse_positive_finite_rate(max_effective_rate) is None
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "web_scan_presets.yaml",
+                    f'Preset "{name}" max_effective_rate must be a positive finite number, got {max_effective_rate}',
+                )
+            )
         # Validate ids_ua
         if "ids_ua" in preset:
             ids_ua = preset["ids_ua"]

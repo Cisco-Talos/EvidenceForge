@@ -32,6 +32,7 @@ Contains the StorylineMixin with methods for:
 
 import base64
 import logging
+import math
 import random
 import re
 import shlex
@@ -179,6 +180,8 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     rate as an average throughput and apply deterministic per-campaign drift so
     repeated scans with the same nominal rate do not produce identical counts.
     """
+    if not math.isfinite(rate) or rate <= 0.0:
+        raise ValueError(f"rate must be a positive finite number, got {rate!r}")
     effective_rate = rate
     if count is None:
         effective_rate *= rng.uniform(0.82, 1.18)
@@ -1916,7 +1919,10 @@ class StorylineMixin:
             malicious_event["rcode"] = spec.rcode
 
         elif spec.type == "web_scan":
-            from evidenceforge.config.web_scan_presets import get_preset
+            from evidenceforge.config.web_scan_presets import (
+                get_preset,
+                parse_positive_finite_rate,
+            )
             from evidenceforge.events.contexts import HttpContext
 
             # Load preset and merge with overrides
@@ -1980,7 +1986,15 @@ class StorylineMixin:
             if count is None and preset_data:
                 max_effective_rate = preset_data.get("max_effective_rate")
                 if max_effective_rate is not None:
-                    effective_rate = min(effective_rate, float(max_effective_rate))
+                    rate_cap = parse_positive_finite_rate(max_effective_rate)
+                    if rate_cap is None:
+                        logger.warning(
+                            "Ignoring invalid web_scan max_effective_rate for preset %s: %r",
+                            spec.preset,
+                            max_effective_rate,
+                        )
+                    else:
+                        effective_rate = min(effective_rate, rate_cap)
             interval_sec = _effective_rate_interval(effective_rate, count, rng)
             ua_fired = False
             last_rate_alert_ts = None
