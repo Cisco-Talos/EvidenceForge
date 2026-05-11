@@ -12,6 +12,9 @@ from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _CONFIG_PATH = get_activity_directory() / "windows_auth_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_DEFAULT_MIN_UNLOCK_GAP_SECONDS = 127
+_MIN_UNLOCK_GAP_SECONDS = 60
+_MAX_UNLOCK_GAP_SECONDS = 86_400
 
 
 def load_windows_auth_realism() -> dict[str, Any]:
@@ -40,12 +43,12 @@ def workstation_lock_config() -> dict[str, Any]:
 
 def min_unlock_gap_seconds() -> int:
     """Return the minimum realistic gap between a 4800 lock and 4801 unlock."""
-    value = workstation_lock_config().get("min_unlock_gap_seconds", 127)
+    value = workstation_lock_config().get("min_unlock_gap_seconds", _DEFAULT_MIN_UNLOCK_GAP_SECONDS)
     try:
         seconds = int(value)
     except (TypeError, ValueError):
-        return 127
-    return max(1, seconds)
+        return _DEFAULT_MIN_UNLOCK_GAP_SECONDS
+    return max(_MIN_UNLOCK_GAP_SECONDS, min(seconds, _MAX_UNLOCK_GAP_SECONDS))
 
 
 def failed_logon_config() -> dict[str, Any]:

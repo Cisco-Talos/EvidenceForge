@@ -744,6 +744,8 @@ class WindowsFailedLogonConfig(BaseModel, extra="forbid"):
 class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
     """Windows workstation lock/unlock realism config."""
 
+    MAX_UNLOCK_GAP_SECONDS = 86_400
+
     min_unlock_gap_seconds: int
 
     @field_validator("min_unlock_gap_seconds")
@@ -751,6 +753,11 @@ class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
     def min_gap_realistic(cls, v: int) -> int:
         if v < 60:
             raise ValueError("workstation_lock.min_unlock_gap_seconds must be at least 60")
+        if v > cls.MAX_UNLOCK_GAP_SECONDS:
+            raise ValueError(
+                "workstation_lock.min_unlock_gap_seconds must be at most "
+                f"{cls.MAX_UNLOCK_GAP_SECONDS}"
+            )
         return v
 
 

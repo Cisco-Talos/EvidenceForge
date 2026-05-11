@@ -329,6 +329,27 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_too_large_workstation_unlock_gap(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            return {"workstation_lock": {"min_unlock_gap_seconds": 1_000_000}}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "min_unlock_gap_seconds must be at most 86400" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_empty_failed_auth_validation_path(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 
