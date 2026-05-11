@@ -20,6 +20,21 @@ class TestStorylineCommandNetworks:
 
         assert url == "https://cdn.example.test/stage.ps1"
 
+    def test_parse_http_url_target_accepts_valid_url(self):
+        target = StorylineMixin._parse_http_url_target("https://cdn.example.test:8443/stage.ps1")
+
+        assert target == ("cdn.example.test", 8443)
+
+    def test_parse_http_url_target_rejects_non_numeric_port(self):
+        target = StorylineMixin._parse_http_url_target("http://example.com:bad/path")
+
+        assert target is None
+
+    def test_parse_http_url_target_rejects_malformed_bracketed_host(self):
+        target = StorylineMixin._parse_http_url_target("http://[not-a-valid-host/path")
+
+        assert target is None
+
     def test_extract_scp_target_from_remote_destination(self):
         target = StorylineMixin._extract_scp_target(
             "scp /tmp/patient_claims.sql.gz root@10.10.2.30:/var/tmp/",
