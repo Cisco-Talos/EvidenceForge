@@ -5,17 +5,20 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
 
 from evidenceforge.generation.engine.storyline import (
+    StorylineMixin,
     _effective_rate_interval,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
 )
+from evidenceforge.models import System, User
 from evidenceforge.models.scenario import (
     BeaconEventSpec,
     CredentialSprayEventSpec,
@@ -787,6 +790,77 @@ class TestDnsTunnelEventSpec:
                 count=10,
                 payload="a" * ((1024 * 1024) + 1),
             )
+
+    def test_hex_labels_reserve_metadata_before_accounting_payload(self):
+        engine = object.__new__(StorylineMixin)
+        captured_dns = []
+
+        def capture_connection(**kwargs):
+            captured_dns.append(kwargs["dns"])
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=14,
+            payload="ABCD",
+            interval="1s",
+            count=2,
+        )
+
+        event = engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=System(hostname="WS-01", ip="10.0.0.10", os="Windows 10", type="workstation"),
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        visible_payload = b""
+        for dns_ctx in captured_dns:
+            raw_label = bytes.fromhex(dns_ctx.query.split(".", 1)[0])
+            visible_payload += raw_label[2:-4]
+        assert visible_payload == b"AB"
+        assert event["bytes_exfiltrated"] == len(visible_payload)
+
+    def test_tiny_hex_labels_do_not_report_truncated_payload_as_exfiltrated(self):
+        engine = object.__new__(StorylineMixin)
+        captured_dns = []
+
+        def capture_connection(**kwargs):
+            captured_dns.append(kwargs["dns"])
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=8,
+            payload="ABCD",
+            interval="1s",
+            count=1,
+        )
+
+        event = engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=System(hostname="WS-01", ip="10.0.0.10", os="Windows 10", type="workstation"),
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        raw_label = bytes.fromhex(captured_dns[0].query.split(".", 1)[0])
+        assert b"ABCD" not in raw_label
+        assert event["bytes_exfiltrated"] == 0
 
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────

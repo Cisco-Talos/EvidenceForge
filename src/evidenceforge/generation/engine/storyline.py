@@ -2371,7 +2371,7 @@ class StorylineMixin:
             else:
                 payload_bytes = rng.randbytes(spec.payload_size)
 
-            # Calculate bytes per label based on encoding
+            # Calculate raw bytes that can fit in the visible label for each encoding.
             if spec.encoding == "hex":
                 bytes_per_label = spec.label_length // 2
             elif spec.encoding == "base32":
@@ -2380,10 +2380,23 @@ class StorylineMixin:
                 bytes_per_label = (spec.label_length * 3) // 4
             bytes_per_label = max(1, bytes_per_label)
 
-            # Chunk payload
-            chunks = []
-            for i in range(0, len(payload_bytes), bytes_per_label):
-                chunks.append(payload_bytes[i : i + bytes_per_label])
+            # Reserve visible label capacity for tunnel metadata before chunking the payload.
+            # Otherwise full-sized chunks would be encoded with metadata and truncated, causing
+            # GROUND_TRUTH.md to count bytes that never appeared in the emitted DNS label.
+            visible_nonce_len = 2
+            sequence_len = 4
+            payload_bytes_per_label = max(0, bytes_per_label - visible_nonce_len - sequence_len)
+
+            # Chunk only the bytes that can actually be emitted in the label. Very small labels
+            # still generate DNS traffic but carry no visible payload, so ground truth reports 0.
+            chunks: list[bytes]
+            if payload_bytes_per_label > 0:
+                chunks = [
+                    payload_bytes[i : i + payload_bytes_per_label]
+                    for i in range(0, len(payload_bytes), payload_bytes_per_label)
+                ]
+            else:
+                chunks = [b""]
 
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
@@ -2406,9 +2419,8 @@ class StorylineMixin:
                     )
                 ).getrandbits(32)
                 sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
-                visible_nonce = rng.randbytes(2)
-                visible_payload_len = max(1, bytes_per_label - len(visible_nonce))
-                visible_payload = chunk[:visible_payload_len]
+                visible_nonce = rng.randbytes(visible_nonce_len)
+                visible_payload = chunk[:payload_bytes_per_label]
                 pad_len = max(
                     0,
                     bytes_per_label - len(visible_nonce) - len(visible_payload) - len(sequence),
