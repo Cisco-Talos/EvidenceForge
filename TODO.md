@@ -146,6 +146,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] Security: cap `dns_tunnel` payload/payload_size to 1 MiB to prevent memory exhaustion from untrusted scenarios
 - [x] Security: guard web_scan preset overlay merge against non-dict `presets` payloads to prevent malformed overlay crash/DoS
 - [x] Fix `_find_user_session` mixed tz-aware/naive `start_time` comparison crash (Aardvark finding)
+- [x] Fix RDP remote-logon network evidence duplication/coherence (avoid duplicate type-10 helper connection; preserve shared source-port correlation)
 - [x] Baseline inbound profile traffic no longer depends on outbound role traffic for business-hour gating (fixed UnboundLocalError when outbound profile is empty).
 - [x] Security: validate blocked_c2 interval/duration are > 0 to prevent zero-interval infinite loop DoS
 - [x] Harden temporal evaluator `exclude_ports` parsing against malformed `zeek_conn.id.resp_p` values (prevent eval crash on non-numeric ports)

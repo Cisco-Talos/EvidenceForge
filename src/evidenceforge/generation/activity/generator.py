@@ -2128,6 +2128,7 @@ class ActivityGenerator:
         source_ip: str | None = None,
         source_port: int | None = None,
         emit_transport_syslog: bool = True,
+        emit_network_evidence: bool = True,
         logon_id: str | None = None,
     ) -> str:
         """Generate logon event across all applicable log formats.
@@ -2301,14 +2302,15 @@ class ActivityGenerator:
         ):
             self._emit_dc_ntlm_for_logon(user, system, time, source_ip)
 
-        self._maybe_emit_remote_logon_network_connection(
-            system=system,
-            time=time,
-            logon_type=logon_type,
-            source_ip=source_ip,
-            source_port=source_port or 0,
-            auth_package=auth_package_name,
-        )
+        if emit_network_evidence:
+            self._maybe_emit_remote_logon_network_connection(
+                system=system,
+                time=time,
+                logon_type=logon_type,
+                source_ip=source_ip,
+                source_port=source_port or 0,
+                auth_package=auth_package_name,
+            )
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
@@ -7085,6 +7087,7 @@ class ActivityGenerator:
             logon_type=10,
             source_ip=source_ip,
             source_port=src_port,
+            emit_network_evidence=False,
             logon_id=logon_id,
         )
 
