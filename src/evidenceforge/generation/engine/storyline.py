@@ -1104,13 +1104,18 @@ class StorylineMixin:
                             rng=rng,
                         )
 
-            _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks", "net.exe", "net1.exe"}
+            _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks"}
             proc_basename = (
                 process_name.rsplit("\\", 1)[-1].lower()
                 if "\\" in process_name
                 else process_name.lower()
             )
-            if proc_basename in _EXPLICIT_CRED_TOOLS and os_category == "windows":
+            command_lower = command_line.lower()
+            uses_explicit_creds = proc_basename in _EXPLICIT_CRED_TOOLS or (
+                proc_basename in {"net.exe", "net1.exe"}
+                and any(token in command_lower for token in ("/user:", " /u:", " /user "))
+            )
+            if uses_explicit_creds and os_category == "windows":
                 cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
                 self.activity_generator.generate_explicit_credentials(
                     user=actor,
@@ -2088,8 +2093,6 @@ class StorylineMixin:
                     if _status < 400
                     else response_size_for_status(_status, scan_host, _uri)
                 )
-                if _status >= 400:
-                    _response_body_len = max(128, _response_body_len + rng.randint(-90, 180))
                 http_ctx = HttpContext(
                     method=_method,
                     host=scan_host,

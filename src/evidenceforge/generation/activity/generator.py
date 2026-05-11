@@ -114,6 +114,27 @@ _SYSTEM_ACCOUNT_LOGON_IDS = {
     "LOCAL SERVICE": "0x3e5",
     "NETWORK SERVICE": "0x3e4",
 }
+_BASH_BLOCKING_PREFIXES = (
+    "nano ",
+    "vim ",
+    "vi ",
+    "emacs ",
+    "emacs -nw ",
+    "code ",
+    "make",
+    "npm run",
+    "docker build",
+    "cargo build",
+    "python3 -m pytest",
+    "pytest",
+    "apt ",
+    "apt-get ",
+    "yum ",
+    "dnf ",
+    "pip install",
+    "tail -f ",
+)
+_BASH_MEDIUM_PREFIXES = ("curl ", "wget ", "scp ", "ssh ", "mysql ", "psql ", "git ")
 _NMAP_PORT_SERVICES = {
     22: "ssh",
     80: "http",
@@ -122,6 +143,20 @@ _NMAP_PORT_SERVICES = {
     3306: "mysql",
     3389: "rdp",
 }
+
+
+def _bash_command_dwell_seconds(command: str) -> float:
+    """Return a minimum foreground dwell time before the next shell command."""
+    normalized = command.strip().lower()
+    if normalized.endswith("&") or " nohup " in f" {normalized} ":
+        return 1.0
+    if any(normalized.startswith(prefix) for prefix in _BASH_BLOCKING_PREFIXES):
+        return 45.0
+    if any(normalized.startswith(prefix) for prefix in _BASH_MEDIUM_PREFIXES):
+        return 8.0
+    return 2.0
+
+
 _WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
     "smss.exe": "smss",
     "csrss.exe": "csrss_s0",
@@ -1097,6 +1132,7 @@ class ActivityGenerator:
         self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
+        self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -5484,6 +5520,7 @@ class ActivityGenerator:
             )
             return
 
+        time = self._schedule_bash_history_time(user, system, time, command)
         event = SecurityEvent(
             timestamp=time,
             event_type="bash_command",
@@ -5494,6 +5531,21 @@ class ActivityGenerator:
 
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
+
+    def _schedule_bash_history_time(
+        self,
+        user: User,
+        system: System,
+        requested_time: datetime,
+        command: str,
+    ) -> datetime:
+        """Preserve foreground command dwell time for one user's shell history."""
+        key = (system.hostname, user.username)
+        scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
+        self._bash_history_next_time[key] = scheduled_time + timedelta(
+            seconds=_bash_command_dwell_seconds(command)
+        )
+        return scheduled_time
 
     def generate_bash_command_with_noise(
         self,
@@ -6762,8 +6814,12 @@ class ActivityGenerator:
                 target_username=f"{username}@{domain}",
                 target_domain=domain,
                 service_name=service_name,
-                service_sid=self._get_sid(
-                    f"{service_name.split('/')[1]}$" if "/" in service_name else service_name
+                service_sid=(
+                    self._get_sid("krbtgt")
+                    if service_name.lower().startswith("krbtgt/")
+                    else self._get_sid(
+                        f"{service_name.split('/')[1]}$" if "/" in service_name else service_name
+                    )
                 ),
                 ticket_options=rng.choices(
                     ["0x40810000", "0x40810010", "0x40000000", "0x10"],

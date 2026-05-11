@@ -5,10 +5,12 @@
 
 import fnmatch
 import random
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "tls_realism.yaml"
@@ -76,6 +78,31 @@ def pick_ocsp_responder(issuer_name: str, rng: random.Random) -> str:
 def certificate_chain_config() -> dict[str, Any]:
     """Return TLS certificate chain behavior config."""
     return load_tls_realism().get("certificate_chains", {})
+
+
+def certificate_analyzer_delay_ms(
+    *,
+    zeek_uid: str,
+    event_timestamp: datetime,
+    fuid: str,
+    position: int,
+) -> int:
+    """Return a deterministic, non-uniform Zeek TLS certificate analyzer offset."""
+    base_delay_ms = int(
+        sample_timing_delta(
+            "source.zeek_x509_analyzer",
+            seed_parts=(zeek_uid, event_timestamp),
+        ).total_seconds()
+        * 1000
+    )
+    if position <= 0:
+        return base_delay_ms
+
+    gap_ms = 0
+    for depth in range(1, position + 1):
+        rng = random.Random(_stable_seed(f"tls_cert_chain_gap:{zeek_uid}:{fuid}:{depth}"))
+        gap_ms += rng.randint(3, 45)
+    return base_delay_ms + gap_ms
 
 
 def tls_destination_config() -> dict[str, Any]:

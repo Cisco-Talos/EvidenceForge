@@ -701,6 +701,34 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @staticmethod
+    def _semantic_dedup_key(record: dict[str, Any]) -> str:
+        """Return an eCAR semantic identity that ignores generated UUID fields."""
+        comparable = {
+            key: value for key, value in record.items() if key not in {"id", "objectID", "actorID"}
+        }
+        props = comparable.get("properties")
+        if isinstance(props, dict):
+            comparable["properties"] = {key: props[key] for key in sorted(props)}
+        return json.dumps(comparable, sort_keys=True, separators=(",", ":"))
+
+    def _deduplicate_semantic_events(self, lines: list[str]) -> list[str]:
+        """Drop exact duplicate eCAR facts emitted with fresh UUID wrappers."""
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                deduped.append(line)
+                continue
+            key = self._semantic_dedup_key(record)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(line)
+        return deduped
+
     def flush(self, force: bool = False) -> None:
         """Flush per-host eCAR records after final lifecycle normalization."""
         if force:
@@ -710,6 +738,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 with writer._lock:
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
+                    writer.buffer = self._deduplicate_semantic_events(writer.buffer)
         super().flush(force=force)
 
     # Property keys that belong in the eCAR properties map.

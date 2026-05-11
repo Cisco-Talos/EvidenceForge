@@ -76,6 +76,7 @@ class _FakeActivityGenerator:
     def __init__(self) -> None:
         self.reserved_ports: list[int] = []
         self.connections: list[dict] = []
+        self.explicit_credentials: list[dict] = []
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -96,6 +97,12 @@ class _FakeActivityGenerator:
     def generate_connection(self, **kwargs: Any) -> str:
         self.connections.append(kwargs)
         return "Cscptransfer00001"
+
+    def generate_explicit_credentials(self, **kwargs: Any) -> None:
+        self.explicit_credentials.append(kwargs)
+
+    def _expand_and_emit(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 class _FakeStateManager:
@@ -156,3 +163,39 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.reserved_ports == [45678]
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
+
+    def test_net_domain_queries_do_not_auto_emit_4648(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 10",
+            type="workstation",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="net.exe",
+            command_line='net group "Domain Admins" /domain',
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="query domain admins",
+            explicit_types={"process"},
+        )
+
+        assert engine.activity_generator.explicit_credentials == []

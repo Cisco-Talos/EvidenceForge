@@ -24,7 +24,7 @@
 
 import json
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -397,6 +397,52 @@ class TestSslUidCorrelation:
             assert rows[0]["ts"] < rows[1]["ts"]
             assert rows_by_id["Fleaf12345678901"]["basic_constraints.ca"] is False
             assert rows_by_id["Fintermediate123"]["basic_constraints.ca"] is True
+
+    def test_x509_chain_depth_spacing_is_not_constant_across_connections(self):
+        """Certificate-chain rows should not always use the same depth offset."""
+        x509_fmt = load_format("zeek_x509")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        gaps: list[float] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            for idx in range(6):
+                leaf = X509Context(
+                    fuid=f"Fleaf{idx}2345678901",
+                    fingerprint=f"leaf-{idx}",
+                    certificate_subject=f"CN=leaf{idx}.example.com",
+                    certificate_issuer="CN=Example Intermediate CA",
+                )
+                intermediate = X509Context(
+                    fuid=f"Fint{idx}23456789012",
+                    fingerprint=f"intermediate-{idx}",
+                    certificate_subject="CN=Example Intermediate CA",
+                    certificate_issuer="CN=Example Root CA",
+                    basic_constraints_ca=True,
+                    host_cert=False,
+                )
+                event = SecurityEvent(
+                    timestamp=base_ts + timedelta(seconds=idx),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        zeek_uid=f"CUID{idx}",
+                    ),
+                    x509=leaf,
+                    x509_chain=[leaf, intermediate],
+                )
+                x509_emitter.emit(event)
+            x509_emitter.close()
+
+            rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
+
+        for leaf_row, intermediate_row in zip(rows[0::2], rows[1::2], strict=True):
+            gaps.append(round(intermediate_row["ts"] - leaf_row["ts"], 3))
+        assert len(set(gaps)) > 1
 
     def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):
         """SSL, x509, and OCSP analyzer records should not share the conn timestamp."""

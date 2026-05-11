@@ -233,6 +233,39 @@ class TestFilesUidCorrelation:
         assert rows[0]["md5"] == rows[1]["md5"]
         assert rows[0]["sha1"] == rows[1]["sha1"]
 
+    def test_certificate_file_sizes_vary_by_certificate_identity(self):
+        """Certificate files should not collapse into a few fixed byte buckets."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            for idx, name in enumerate(("api.example.com", "cdn.example.net", "login.example.org")):
+                event = SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 0, idx, tzinfo=UTC),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        zeek_uid=f"CConnUID{idx}",
+                    ),
+                    x509=X509Context(
+                        fuid=f"Fcert{idx}111111111",
+                        fingerprint=f"{idx}" * 64,
+                        certificate_subject=f"CN={name}",
+                        certificate_issuer="CN=Example CA",
+                        san_dns=[name],
+                    ),
+                )
+                emitter.emit(event)
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+
+        assert len({row["seen_bytes"] for row in rows}) == len(rows)
+
     def test_hash_fields_render_when_analyzers_run(self):
         """files.log should include hash fields that correspond to analyzer names."""
         fmt = load_format("zeek_files")

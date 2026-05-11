@@ -906,6 +906,47 @@ class TestActivityGenerator:
         assert event.auth.username == "SYSTEM"
         assert event.auth.target_domain == "NT AUTHORITY"
 
+    def test_kerberos_krbtgt_service_ticket_uses_domain_rid_502(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """4769 krbtgt/<realm> service tickets should use the krbtgt account SID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen.sid_registry["krbtgt"] = "S-1-5-21-1-2-3-502"
+
+        activity_gen.generate_kerberos_service_ticket(
+            username="alice",
+            service_name="krbtgt/example.local",
+            source_ip="10.0.0.25",
+            dc_hostname="DC-01",
+            time=timestamp,
+            domain="EXAMPLE.LOCAL",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.kerberos.service_name == "krbtgt/example.local"
+        assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
+
+    def test_bash_history_preserves_blocking_command_dwell(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Foreground editors should push later same-user bash history forward."""
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        activity_gen.generate_bash_command(user, linux, timestamp, "nano app.py")
+        activity_gen.generate_bash_command(user, linux, timestamp + timedelta(seconds=1), "make")
+
+        events = [call.args[0] for call in bash_emitter.emit.call_args_list]
+        assert events[0].timestamp == timestamp
+        assert events[1].timestamp >= timestamp + timedelta(seconds=45)
+
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

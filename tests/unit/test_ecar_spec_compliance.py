@@ -318,6 +318,35 @@ class TestChronologicalOutput:
         ]
         assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
 
+    def test_close_removes_semantic_duplicate_events(self, tmp_path, ts):
+        """UUID-only duplicate eCAR facts should collapse during final flush."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        base = {
+            "timestamp": ts,
+            "hostname": "ws01",
+            "object": "MODULE",
+            "action": "LOAD",
+            "pid": 1234,
+            "principal": "alice",
+            "file_path": r"C:\Windows\System32\msvcrt.dll",
+            "_host_fqdn": "ws01.example.org",
+        }
+
+        emitter.emit_event({**base, "id": "event-one", "objectID": "object-one"})
+        emitter.emit_event({**base, "id": "event-two", "objectID": "object-two"})
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert len(rows) == 1
+
     def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
         """eCAR output should not terminate a process before later same-process telemetry."""
         fmt = Mock()

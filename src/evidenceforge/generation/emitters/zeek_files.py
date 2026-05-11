@@ -26,8 +26,9 @@ import hashlib
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.tls_realism import certificate_analyzer_delay_ms
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekFilesEmitter(SensorMultiplexEmitter):
@@ -88,17 +89,13 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
 
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
         for depth, cert in enumerate(certificates):
-            size = 900 + (cert.certificate_key_length // 8) + (0 if cert.host_cert else 240)
+            size = _certificate_file_size(cert)
             cert_hashes = _certificate_file_hashes(cert.fingerprint)
-            analyzer_delay_ms = (
-                int(
-                    sample_timing_delta(
-                        "source.zeek_x509_analyzer",
-                        seed_parts=(net.zeek_uid, event.timestamp),
-                    ).total_seconds()
-                    * 1000
-                )
-                + depth * 8
+            analyzer_delay_ms = certificate_analyzer_delay_ms(
+                zeek_uid=net.zeek_uid,
+                event_timestamp=event.timestamp,
+                fuid=cert.fuid,
+                position=depth,
             )
             event_data = {
                 "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
@@ -163,3 +160,31 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
         "sha1": hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest(),
         "sha256": fingerprint,
     }
+
+
+def _certificate_file_size(cert: Any) -> int:
+    """Return a stable file-analysis byte size for a rendered certificate."""
+    identity = "|".join(
+        [
+            str(getattr(cert, "fingerprint", "")),
+            str(getattr(cert, "certificate_subject", "")),
+            str(getattr(cert, "certificate_issuer", "")),
+            ",".join(str(name) for name in getattr(cert, "san_dns", []) or []),
+        ]
+    )
+    rng = hashlib.sha256(identity.encode()).digest()
+    key_overhead = int(getattr(cert, "certificate_key_length", 2048)) // 8
+    san_overhead = 18 * len(getattr(cert, "san_dns", []) or [])
+    ca_overhead = 220 if not getattr(cert, "host_cert", False) else 0
+    subject_overhead = min(180, len(str(getattr(cert, "certificate_subject", ""))) * 2)
+    issuer_overhead = min(220, len(str(getattr(cert, "certificate_issuer", ""))) * 2)
+    jitter = _stable_seed(f"zeek-cert-size:{identity}:{rng.hex()}") % 420
+    return (
+        720
+        + key_overhead
+        + san_overhead
+        + ca_overhead
+        + subject_overhead
+        + issuer_overhead
+        + jitter
+    )
