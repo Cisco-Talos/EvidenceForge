@@ -861,7 +861,7 @@ applications:
     platforms:
       windows:
         image_path: 'C:\Windows\System32\gpupdate.exe'
-        pe_metadata: {description: "Microsoft Group Policy Update Utility", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "GPUpdate.exe", file_version: "10.0.20348.1"}
+        pe_metadata: {description: "Microsoft Group Policy Update Utility", product: "Microsoft Windows", company: "Microsoft Corporation", original_filename: "GPUpdate.exe", file_version: "10.0.19041.1"}
         command_templates:
           - 'gpupdate.exe /force'
           - 'gpupdate.exe /target:computer'

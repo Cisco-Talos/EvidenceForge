@@ -455,6 +455,38 @@ class TestChronologicalOutput:
 
         assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
 
+    def test_inbound_flow_uses_destination_listener_pid(self, emitter, monkeypatch, ts):
+        """Inbound host observations should use the local listener PID when known."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        emitter._system_pids = {"WEB-EXT-01": {"apache2": 24118}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="WEB-EXT-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="web-ext-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="198.51.100.7",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == 24118
+
     def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
         """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""
         fmt = Mock()

@@ -31,6 +31,7 @@ Contains the StorylineMixin with methods for:
 """
 
 import base64
+import binascii
 import logging
 import math
 import random
@@ -1004,7 +1005,17 @@ class StorylineMixin:
             if http_url is not None:
                 parsed_target = self._parse_http_url_target(http_url)
                 if parsed_target is not None:
+                    from urllib.parse import urlparse
+
+                    from evidenceforge.events.contexts import HttpContext
+
                     hostname, dst_port = parsed_target
+                    parsed_url = urlparse(http_url)
+                    uri = parsed_url.path or "/"
+                    if parsed_url.query:
+                        uri = f"{uri}?{parsed_url.query}"
+                    mime_type = normalize_mime_type_for_path(uri, "text/plain")
+                    response_body_len = response_size_for_mime(rng, mime_type)
                     dst_ip = self._resolve_storyline_network_target(hostname)
                     if dst_ip is None:
                         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -1020,13 +1031,26 @@ class StorylineMixin:
                         service=service,
                         duration=rng.uniform(0.8, 6.0),
                         orig_bytes=rng.randint(300, 1400),
-                        resp_bytes=rng.randint(12_000, 250_000),
+                        resp_bytes=response_body_len,
                         conn_state="SF",
                         emit_dns=not _is_private_ip(dst_ip),
                         source_system=system,
                         pid=pid,
                         hostname=hostname,
                         process_image=process_name,
+                        http=HttpContext(
+                            method="GET",
+                            host=hostname,
+                            uri=uri,
+                            version="1.1",
+                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell/5.1",
+                            request_body_len=0,
+                            response_body_len=response_body_len,
+                            status_code=200,
+                            status_msg="OK",
+                            resp_mime_types=[mime_type],
+                            tags=[],
+                        ),
                     )
                     malicious_event["network_url"] = http_url
 
@@ -2742,10 +2766,37 @@ class StorylineMixin:
     @staticmethod
     def _extract_http_url(command_line: str) -> str | None:
         """Extract the first HTTP(S) URL from a storyline process command line."""
-        match = re.search(r"https?://[^\s'\"),;]+", command_line, re.IGNORECASE)
-        if not match:
-            return None
-        return match.group(0).rstrip(".")
+        for candidate in StorylineMixin._http_url_search_texts(command_line):
+            match = re.search(r"https?://[^\s'\"),;]+", candidate, re.IGNORECASE)
+            if match:
+                return match.group(0).rstrip(".")
+        return None
+
+    @staticmethod
+    def _http_url_search_texts(command_line: str) -> list[str]:
+        """Return raw and decoded command strings to scan for embedded URLs."""
+        texts = [command_line]
+        encoded_match = re.search(
+            r"(?i)(?:-|/)(?:encodedcommand|enc|e)\s+([A-Za-z0-9+/=]+)",
+            command_line,
+        )
+        if not encoded_match:
+            return texts
+
+        token = encoded_match.group(1)
+        try:
+            decoded_bytes = base64.b64decode(token, validate=True)
+        except (binascii.Error, ValueError):
+            return texts
+
+        for encoding in ("utf-16le", "utf-8"):
+            try:
+                decoded = decoded_bytes.decode(encoding).strip("\ufeff\x00 \t\r\n")
+            except UnicodeDecodeError:
+                continue
+            if decoded and decoded not in texts:
+                texts.append(decoded)
+        return texts
 
     @staticmethod
     def _parse_http_url_target(http_url: str) -> tuple[str, int] | None:

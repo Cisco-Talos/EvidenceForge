@@ -47,6 +47,18 @@ _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGOUT"): 11,
 }
 
+_INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
+    22: ("sshd",),
+    80: ("nginx", "apache2", "httpd"),
+    443: ("nginx", "apache2", "httpd"),
+    445: ("smbd", "lanmanserver"),
+    1433: ("sqlservr",),
+    3306: ("mysqld",),
+    3389: ("svchost_termservice", "svchost_netsvcs"),
+    5432: ("postgres",),
+    8080: ("squid", "nginx", "apache2", "httpd"),
+}
+
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     """Extract timestamp_ms for chronological per-host eCAR output sorting."""
@@ -353,6 +365,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # INBOUND FLOW on destination host (if destination is internal/known)
         if event.dst_host:
+            inbound_pid = self._resolve_inbound_service_pid(event)
             event_ts = event.timestamp + sample_timing_delta(
                 "source.ecar_flow",
                 seed_parts=(
@@ -376,7 +389,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 "object": "FLOW",
                 "action": "CONNECT",
                 "direction": "INBOUND",
-                "pid": -1,  # Destination doesn't know the initiating PID
+                "pid": inbound_pid,
                 "src_ip": net.src_ip,
                 "src_port": net.src_port,
                 "dst_ip": dst_ip,
@@ -386,6 +399,20 @@ class EcarEmitter(HostMultiplexEmitter):
             }
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    def _resolve_inbound_service_pid(self, event: SecurityEvent) -> int:
+        """Resolve destination-local listener PID for host-observed inbound flows."""
+        net = event.network
+        host = event.dst_host
+        if net is None or host is None:
+            return -1
+
+        system_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+        for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(net.dst_port, ()):
+            pid = system_pids.get(candidate)
+            if pid and pid > 0:
+                return pid
+        return -1
 
     def _render_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render eCAR THREAD/REMOTE_CREATE event (logged on src_host).
