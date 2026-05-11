@@ -48,6 +48,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 ### Skill Installer Agent Support
 
 - [x] Fix Codex skill installer symlink clobber vulnerability by validating/writing nested destination files safely.
+- [x] Fix RDP user coercion session/ground-truth desynchronization vulnerability and malformed fallback user crash — aligned preallocated RDP session usernames with coerced Windows credentials, records RDP ground truth from canonical session identity, and sanitizes fallback email domains.
 - [x] Add dual-agent `eforge install-skills` workflow — default to Claude project installs, add explicit `--agent claude|codex`, keep Claude project/global behavior, add Codex user-level `~/.codex/skills/` installs, reject invalid Codex/global combinations, and cover installer safety/stale-cleanup behavior with tests.
 - [x] Reduce Codex skill reference duplication — bundle only the references each Codex skill needs and rely on installer stale cleanup to prune no-longer-needed reference files from prior installs.
 - [x] Import existing Claude `/eforge assess` command as a Codex skill without modifying the source skill.

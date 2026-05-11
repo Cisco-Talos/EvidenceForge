@@ -236,6 +236,7 @@ class StateManager:
         self,
         logon_id: str,
         *,
+        username: str | None = None,
         start_time: datetime | None = None,
         source_port: int | None = None,
         session_kind: str | None = None,
@@ -247,6 +248,8 @@ class StateManager:
             session = self.state.active_sessions.get(logon_id)
             if session is None:
                 return False
+            if username is not None:
+                session.username = username
             if start_time is not None:
                 session.start_time = ensure_utc(start_time)
             if source_port is not None:
