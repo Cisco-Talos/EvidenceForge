@@ -740,12 +740,13 @@ class CausalityScorer(DimensionScorer):
                         # after-record is inverted; it can be a continuing pre-window session,
                         # DNS cache hit, hosts-file lookup, or static infrastructure flow.
                         continue
-                    elif len(failures) < 10:
+                    else:
                         rule_total += 1
-                        failures.append(
-                            f"Rule '{rule['name']}': after event at line "
-                            f"{rec.line_number} precedes all matching before events"
-                        )
+                        if len(failures) < 10:
+                            failures.append(
+                                f"Rule '{rule['name']}': after event at line "
+                                f"{rec.line_number} precedes all matching before events"
+                            )
 
             if rule_total > 0 and tolerance > 0:
                 failure_rate = 1.0 - (rule_correct / rule_total)

@@ -366,6 +366,53 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
+    def test_causal_ordering_counts_failures_after_sample_cap(self):
+        """Failures beyond the diagnostic sample cap still count against the score."""
+        base = T0 + self._AFTER_GRACE
+        windows_records = []
+        for idx in range(20):
+            logon_id = f"0xbad{idx:x}"
+            windows_records.extend(
+                [
+                    _record(
+                        "windows_event_security",
+                        {"EventID": 4634, "TargetLogonId": logon_id},
+                        ts=base + timedelta(minutes=idx),
+                    ),
+                    _record(
+                        "windows_event_security",
+                        {"EventID": 4624, "TargetLogonId": logon_id},
+                        ts=base + timedelta(minutes=idx, seconds=30),
+                    ),
+                ]
+            )
+        for idx in range(5):
+            logon_id = f"0xgood{idx:x}"
+            windows_records.extend(
+                [
+                    _record(
+                        "windows_event_security",
+                        {"EventID": 4624, "TargetLogonId": logon_id},
+                        ts=base + timedelta(hours=1, minutes=idx),
+                    ),
+                    _record(
+                        "windows_event_security",
+                        {"EventID": 4634, "TargetLogonId": logon_id},
+                        ts=base + timedelta(hours=1, minutes=idx, seconds=30),
+                    ),
+                ]
+            )
+        records = {"windows_event_security": windows_records}
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+
+        result = scorer._score_causal_ordering(records, scenario)
+
+        assert result.score == 20.0
+        assert result.details == "5/25 causal pairs correctly ordered"
+        assert result.sample_failures is not None
+        assert len(result.sample_failures) == 10
+
     def test_non_string_principal_does_not_raise(self):
         """Malformed principal values should not crash exclusion checks."""
         base = T0 + self._AFTER_GRACE
