@@ -3902,7 +3902,8 @@ class ActivityGenerator:
                 process_image=process_image,
             )
 
-            if proxy_context.status_code >= 400:
+            proxy_terminal_failures = {"DENIED", "AUTH_REQUIRED", "GATEWAY_ERROR"}
+            if proxy_context.cache_result in proxy_terminal_failures:
                 return client_uid
             if proxy_context.cache_result == "HIT":
                 return client_uid
