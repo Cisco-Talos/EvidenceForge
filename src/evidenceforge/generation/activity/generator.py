@@ -4526,13 +4526,28 @@ class ActivityGenerator:
                 event.network.history = "Dd"
                 event.network.duration = rng.uniform(0.001, 0.03)
                 event.network.resp_bytes = rng.randint(80, 220)
-                event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
-                overhead = rng.choices(
-                    _UDP_OVERHEAD_VALUES,
-                    weights=_UDP_OVERHEAD_WEIGHTS,
-                    k=1,
-                )[0]
-                event.network.resp_ip_bytes = event.network.resp_bytes + overhead
+                overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
+                if proto == "udp":
+                    event.network.orig_pkts = event.network.history.count("D")
+                    event.network.resp_pkts = event.network.history.count("d")
+                    event.network.orig_bytes = max(
+                        event.network.orig_bytes or 0,
+                        event.network.orig_pkts * 28,
+                    )
+                    event.network.orig_ip_bytes = (
+                        event.network.orig_bytes + event.network.orig_pkts * overhead
+                    )
+                    event.network.resp_ip_bytes = (
+                        event.network.resp_bytes + event.network.resp_pkts * overhead
+                    )
+                else:
+                    event.network.resp_pkts = max(event.network.resp_pkts or 0, 1)
+                    event.network.resp_ip_bytes = event.network.resp_bytes + overhead
+                self.state_manager.update_connection_bytes(
+                    event.network.conn_id,
+                    event.network.orig_bytes or 0,
+                    event.network.resp_bytes or 0,
+                )
             if event.dns.rtt is not None:
                 event.network.duration = event.dns.rtt
 
