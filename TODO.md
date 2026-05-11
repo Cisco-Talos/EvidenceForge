@@ -215,6 +215,7 @@ Verification is complete: dedicated `tests/unit/test_world_model.py` coverage wa
 - [x] Security: bound baseline failed-logon synthetic service account selection loops to prevent scenario-controlled infinite loops/DoS.
 - [x] Security: guard persona `activity_intensity` normalization against all-zero values to prevent divide-by-zero DoS during generation (all-zero overrides now safely map to floor probability instead of crashing).
 - [x] Security: prevent nmap CIDR fallback host expansion from materializing full `network.hosts()` lists (large attacker-controlled CIDRs can trigger memory/CPU DoS).
+- [x] Security: bound cross-source field-agreement joins in evaluation to prevent attacker-controlled pivot buckets from causing quadratic CPU exhaustion (per-pivot B buckets and total pair comparisons are capped, with regression coverage).
 - [x] **Re-generation appends to existing output** — CLI now checks for existing `data/`, `GROUND_TRUTH.md`, and `ENVIRONMENT.md` before generation. Prompts user to confirm overwrite or abort. `--force` / `-f` flag skips prompt for automation/AI use.
 
 ### Tier 1: Foundational Correctness
