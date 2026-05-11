@@ -561,3 +561,36 @@ class TestValidateConfig:
             and "may only reference {token}" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_boot_only_process_in_system_services(self, monkeypatch):
+        from evidenceforge.generation.activity import system_processes
+
+        real_loader = system_processes.load_system_processes
+
+        def load_invalid_system_processes():
+            data = real_loader()
+            services = {
+                role: [dict(entry) for entry in entries]
+                for role, entries in data.get("system_services", {}).items()
+            }
+            services.setdefault("domain_controller", []).append(
+                {
+                    "image": r"C:\Windows\System32\lsass.exe",
+                    "command_templates": [r"C:\Windows\system32\lsass.exe"],
+                    "parent": "wininit",
+                }
+            )
+            return {**data, "system_services": services}
+
+        monkeypatch.setattr(
+            system_processes, "load_system_processes", load_invalid_system_processes
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "system_processes.yaml"
+            and 'Boot-only Windows process "lsass.exe"' in issue.message
+            for issue in result.issues
+        )

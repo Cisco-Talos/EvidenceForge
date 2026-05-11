@@ -41,6 +41,16 @@ from evidenceforge.config import (
 
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
 VALID_BROWSING_INTENSITIES = frozenset({"light", "normal", "heavy"})
+WINDOWS_BOOT_ONLY_PROCESS_EXES = frozenset(
+    {
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "services.exe",
+        "lsass.exe",
+        "winlogon.exe",
+    }
+)
 
 REQUIRED_PERSONA_FIELDS = frozenset(
     {
@@ -1443,6 +1453,22 @@ def validate_config() -> ValidationResult:
                         f"system_processes.yaml (system_binaries.{os_name})",
                     )
                 )
+        for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
+            if not isinstance(role_entries, list):
+                continue
+            for entry in role_entries:
+                if not isinstance(entry, dict):
+                    continue
+                image = str(entry.get("image") or "")
+                exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if exe in WINDOWS_BOOT_ONLY_PROCESS_EXES:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "system_processes.yaml",
+                            f'Boot-only Windows process "{exe}" must be seeded at boot, not emitted as recurring system_services.{role_name}',
+                        )
+                    )
 
     # process_network_map.yaml
     if isinstance(process_net_data, list):

@@ -31,6 +31,7 @@ Per-sensor directory routing: each firewall sensor gets its own cisco_asa.log.
 
 import hashlib
 import ipaddress
+import math
 import re
 from collections import deque
 from datetime import datetime, timedelta
@@ -240,6 +241,36 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         seconds = CiscoAsaEmitter._teardown_duration_seconds(net, protocol, reason, conn_id)
         return CiscoAsaEmitter._format_duration(seconds)
 
+    @staticmethod
+    def _teardown_byte_count(net: Any, protocol: str, conn_id: int) -> int:
+        """Return ASA source-native byte accounting for a connection teardown."""
+        orig_payload = getattr(net, "orig_bytes", 0) or 0
+        resp_payload = getattr(net, "resp_bytes", 0) or 0
+        payload_total = orig_payload + resp_payload
+        if payload_total <= 0:
+            return 0
+
+        orig_ip_bytes = getattr(net, "orig_ip_bytes", None)
+        resp_ip_bytes = getattr(net, "resp_ip_bytes", None)
+        if orig_ip_bytes is not None or resp_ip_bytes is not None:
+            base_total = (orig_ip_bytes or orig_payload) + (resp_ip_bytes or resp_payload)
+        else:
+            packet_total = (getattr(net, "orig_pkts", 0) or 0) + (getattr(net, "resp_pkts", 0) or 0)
+            if packet_total <= 0:
+                packet_total = max(1, math.ceil(payload_total / 1460))
+                if protocol == "tcp":
+                    packet_total += 2
+            header_bytes = 28 if protocol in {"udp", "icmp"} else 40
+            base_total = payload_total + packet_total * header_bytes
+
+        variance_seed = (
+            f"asa-bytes:{conn_id}:{getattr(net, 'src_ip', '')}:{getattr(net, 'dst_ip', '')}"
+        )
+        variance = int(hashlib.md5(variance_seed.encode()).hexdigest()[:4], 16) % 96
+        if protocol == "tcp":
+            variance += 20
+        return max(payload_total + 1, int(base_total) + variance)
+
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
         return event.event_type in self._supported_types and event.network is not None
@@ -397,7 +428,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         reason = self._teardown_reason(net, protocol, conn_id)
         duration_seconds = self._teardown_duration_seconds(net, protocol, reason, conn_id)
         duration = self._format_duration(duration_seconds)
-        total_bytes = (net.orig_bytes or 0) + (net.resp_bytes or 0)
+        total_bytes = self._teardown_byte_count(net, protocol, conn_id)
         teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
 
         if protocol == "icmp":
