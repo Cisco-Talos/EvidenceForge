@@ -5,10 +5,14 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
+
+from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.config.schemas import DnsTunnelRttConfig
 
 _CACHED_DATA: dict[str, Any] | None = None
 
@@ -24,7 +28,7 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         result["public_ntp_servers"] = extend_list(
             default.get("public_ntp_servers", []), overlay["public_ntp_servers"]
         )
-    if "dns_tunnel_rtt" in overlay:
+    if isinstance(overlay.get("dns_tunnel_rtt"), dict):
         result["dns_tunnel_rtt"] = dict(overlay["dns_tunnel_rtt"])
     if "dns_tunnel_response_templates" in overlay:
         result["dns_tunnel_response_templates"] = extend_list(
@@ -73,7 +77,13 @@ def dns_tunnel_rtt_range() -> tuple[float, float]:
     rtt = load_network_params().get("dns_tunnel_rtt", {})
     if not isinstance(rtt, dict):
         return (0.04, 1.5)
-    return (float(rtt.get("min_seconds", 0.04)), float(rtt.get("max_seconds", 1.5)))
+    try:
+        validated = DnsTunnelRttConfig.model_validate(rtt)
+    except ValidationError:
+        return (0.04, 1.5)
+    if not math.isfinite(validated.min_seconds) or not math.isfinite(validated.max_seconds):
+        return (0.04, 1.5)
+    return (validated.min_seconds, validated.max_seconds)
 
 
 def dns_tunnel_response_templates() -> list[str]:
