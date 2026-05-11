@@ -5,6 +5,8 @@
 
 from datetime import timedelta
 
+import pytest
+
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     reset_timing_profiles_cache,
@@ -13,8 +15,14 @@ from evidenceforge.generation.activity.timing_profiles import (
 )
 
 
-def test_timing_profiles_load_default_relationship():
+@pytest.fixture(autouse=True)
+def _reset_cache():
     reset_timing_profiles_cache()
+    yield
+    reset_timing_profiles_cache()
+
+
+def test_timing_profiles_load_default_relationship():
 
     window = get_timing_window(
         "network.dns_before_tcp",

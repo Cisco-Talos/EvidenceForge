@@ -433,7 +433,7 @@ class TestTlsIssuers:
         monkeypatch.chdir(tmp_path)
         reset_network_params_cache()
         try:
-            assert dns_tunnel_rtt_range() == (0.04, 1.5)
+            assert dns_tunnel_rtt_range() == (0.04, 0.35)
         finally:
             reset_network_params_cache()
 
@@ -454,7 +454,7 @@ class TestTlsIssuers:
         monkeypatch.chdir(tmp_path)
         reset_network_params_cache()
         try:
-            assert dns_tunnel_rtt_range() == (0.04, 1.5)
+            assert dns_tunnel_rtt_range() == (0.04, 0.35)
         finally:
             reset_network_params_cache()
 

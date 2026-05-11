@@ -76,13 +76,13 @@ def dns_tunnel_rtt_range() -> tuple[float, float]:
     """Return configured DNS tunnel RTT range in seconds."""
     rtt = load_network_params().get("dns_tunnel_rtt", {})
     if not isinstance(rtt, dict):
-        return (0.04, 1.5)
+        return (0.04, 0.35)
     try:
         validated = DnsTunnelRttConfig.model_validate(rtt)
     except ValidationError:
-        return (0.04, 1.5)
+        return (0.04, 0.35)
     if not math.isfinite(validated.min_seconds) or not math.isfinite(validated.max_seconds):
-        return (0.04, 1.5)
+        return (0.04, 0.35)
     return (validated.min_seconds, validated.max_seconds)
 
 
