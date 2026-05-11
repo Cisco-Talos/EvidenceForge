@@ -30,6 +30,7 @@ coordinates them across multiple log formats for consistency.
 import ipaddress
 import logging
 import math
+import ntpath
 import random
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -8293,12 +8294,12 @@ class ActivityGenerator:
         """Return a seeded Windows singleton PID instead of creating a duplicate."""
         if _get_os_category(system.os) != "windows":
             return None
-        normalized_path = process_name.replace("/", "\\").lower()
+        normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
         exe_name = normalized_path.rsplit("\\", 1)[-1]
         role = _WINDOWS_SINGLETON_SYSTEM_PROCESSES.get(exe_name)
         if role is None:
             return None
-        if "\\" in normalized_path and not normalized_path.startswith("c:\\windows\\system32\\"):
+        if "\\" in normalized_path and normalized_path != f"c:\\windows\\system32\\{exe_name}":
             return None
         pid = getattr(self, "_system_pids", {}).get(system.hostname, {}).get(role)
         if pid is None or not self._is_pid_active_at(system, pid, time):
