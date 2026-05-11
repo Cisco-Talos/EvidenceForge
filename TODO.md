@@ -48,6 +48,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Fix causal-ordering scoring so diagnostic sample caps do not hide additional violations — diagnostic failure samples remain capped at 10, but every non-allow_missing_prior inversion now contributes to causal-ordering totals; covered by a regression test with 20 inversions plus 5 valid pairs.
 - [x] Fix stale storyline source PID handling so skipped create_remote_thread/process_access evidence is reflected in ground truth instead of silently claiming generated evidence.
 - [x] Fix fallback DNS SERVFAIL Zeek packet accounting so rewritten UDP history, packet counts, and IP-byte totals remain consistent.
+- [x] Restore bounded Windows emitter flushing by spooling deferred Windows event dictionaries to an on-disk chronological spool at buffer/barrier flush boundaries, keeping in-memory retention bounded while preserving final RecordID ordering.
 
 ### Skill Installer Agent Support
 
