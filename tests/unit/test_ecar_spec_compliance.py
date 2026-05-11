@@ -287,6 +287,37 @@ class TestSessionOutcomeRendering:
         assert rendered["status_code"] == "0xC000006D"
         assert rendered["sub_status"] == "0xC000006A"
 
+    def test_linux_failed_logon_omits_windows_ntstatus_fields(self, emitter, ts):
+        """Linux eCAR login failures should not carry Windows-only NTSTATUS details."""
+        host = HostContext(
+            hostname="LNX-01",
+            ip="10.0.0.30",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+            fqdn="lnx-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jdoe",
+                source_ip="10.0.0.20",
+                failure_status="0xC000006D",
+                failure_substatus="0xC000006A",
+            ),
+        )
+
+        emitter._render_failed_logon(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["outcome"] == "failure"
+        assert rendered["failure_reason"] == "bad_password"
+        assert "status_code" not in rendered
+        assert "sub_status" not in rendered
+
 
 class TestChronologicalOutput:
     def test_close_sorts_per_host_ecar_by_timestamp(self, tmp_path, ts):

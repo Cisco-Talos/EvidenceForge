@@ -287,6 +287,27 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     return None
 
 
+def _certificate_validity_window(
+    reference_time: datetime,
+    rng: random.Random,
+    *,
+    validity_days_min: int,
+    validity_days_max: int,
+    not_before_max_days: int,
+    not_before_min_days: int = 1,
+) -> tuple[int, int]:
+    """Create a stable certificate validity window independent of observation seconds."""
+    reference_epoch = int(reference_time.timestamp())
+    validity_days = rng.randint(validity_days_min, max(validity_days_max, validity_days_min))
+    max_back_days = min(not_before_max_days, max(validity_days - 1, not_before_min_days))
+    min_back_days = min(not_before_min_days, max_back_days)
+    not_before_days = rng.randint(min_back_days, max_back_days)
+    issued_day_epoch = ((reference_epoch // 86400) - not_before_days) * 86400
+    not_valid_before = issued_day_epoch + rng.randint(0, 86399)
+    not_valid_after = not_valid_before + validity_days * 86400
+    return not_valid_before, not_valid_after
+
+
 def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[float, float] | None:
     """Estimate foreground Linux command lifetime for shell-history ordering."""
     exe_name = process_name.rsplit("/", 1)[-1].lower()
@@ -1672,13 +1693,14 @@ class ActivityGenerator:
         _vd_max = issuer_cfg.get("validity_days_max", _vd_fallback)
         validity = self._tls_cert_validity.get(cert_name)
         if validity is None:
-            now_epoch = int(event.timestamp.timestamp())
-            validity_days = cert_rng.randint(_vd_min, _vd_max)
             not_before_max = issuer_cfg.get("not_before_max_days", 300)
-            not_before_days = cert_rng.randint(1, min(not_before_max, validity_days - 1))
-            not_valid_before = now_epoch - not_before_days * 86400
-            not_valid_after = not_valid_before + validity_days * 86400
-            validity = (not_valid_before, not_valid_after)
+            validity = _certificate_validity_window(
+                event.timestamp,
+                cert_rng,
+                validity_days_min=int(_vd_min),
+                validity_days_max=int(_vd_max),
+                not_before_max_days=int(not_before_max),
+            )
             self._tls_cert_validity[cert_name] = validity
         if internal_cert_name:
             short_name = internal_cert_name.split(".", 1)[0]
@@ -1977,17 +1999,17 @@ class ActivityGenerator:
                 )
                 validity = self._tls_cert_validity.get(subject)
                 if validity is None:
-                    now_epoch = int(event_time.timestamp())
                     min_days = int(config.get("intermediate_validity_days_min", 1825))
                     max_days = int(config.get("intermediate_validity_days_max", 3650))
                     max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
-                    validity_days = profile_rng.randint(min_days, max(max_days, min_days))
-                    not_before_days = profile_rng.randint(
-                        30, min(max_not_before, validity_days - 1)
+                    validity = _certificate_validity_window(
+                        event_time,
+                        profile_rng,
+                        validity_days_min=min_days,
+                        validity_days_max=max_days,
+                        not_before_max_days=max_not_before,
+                        not_before_min_days=30,
                     )
-                    not_valid_before = now_epoch - not_before_days * 86400
-                    not_valid_after = not_valid_before + validity_days * 86400
-                    validity = (not_valid_before, not_valid_after)
                     self._tls_cert_validity[subject] = validity
 
                 key_types = config.get(
@@ -3414,7 +3436,7 @@ class ActivityGenerator:
                     time=time + offset,
                     dst_port=port,
                     proto="tcp",
-                    service=_service_for_port(port),
+                    service="",
                     duration=rng.uniform(0.02, 0.45),
                     orig_bytes=rng.randint(40, 180),
                     resp_bytes=rng.randint(0, 900),
@@ -3644,6 +3666,8 @@ class ActivityGenerator:
             and (orig_bytes or 0) > 0
             and (resp_bytes or 0) > 0
         )
+        process_exe = (process_image or "").rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        is_tcp_probe = process_exe in {"nmap", "nmap.exe"}
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -3709,7 +3733,12 @@ class ActivityGenerator:
         # routing and DNS expansion. Some callers provide only port/protocol;
         # explicit proxy semantics still need to catch 80/443 before a
         # client-side origin DNS lookup is emitted.
-        if proto == "tcp" and dst_port in (80, 443) and service not in ("http", "ssl"):
+        if (
+            proto == "tcp"
+            and dst_port in (80, 443)
+            and service not in ("http", "ssl")
+            and not is_tcp_probe
+        ):
             service = "http" if dst_port == 80 else "ssl"
 
         if (
@@ -4433,7 +4462,12 @@ class ActivityGenerator:
             389: "ldap",
             445: "smb",
         }
-        if service and dst_port in _PORT_SERVICE and service != _PORT_SERVICE[dst_port]:
+        if (
+            service
+            and dst_port in _PORT_SERVICE
+            and service != _PORT_SERVICE[dst_port]
+            and not is_tcp_probe
+        ):
             service = _PORT_SERVICE[dst_port]
         if (
             proto == "tcp"
@@ -8446,8 +8480,9 @@ class ActivityGenerator:
     def _lookup_process_name(self, hostname: str, pid: int, os_category: str = "windows") -> str:
         """Look up the image path of a running process by PID.
 
-        Falls back to an OS-appropriate shell if PID not tracked.
-        PID 4 is always the Windows System process (ntoskrnl.exe).
+        PID 4 is always the Windows System process (ntoskrnl.exe). Unknown
+        Linux PIDs have no safe parent image: returning a shell there fabricates
+        impossible eCAR parent relationships such as bash with ppid=4.
         """
         if pid == 4 and os_category == "windows":
             return r"C:\Windows\System32\ntoskrnl.exe"
@@ -8456,7 +8491,7 @@ class ActivityGenerator:
         if proc:
             return proc.image
         if os_category == "linux":
-            return "/usr/bin/bash"
+            return "-"
         return r"C:\Windows\explorer.exe"
 
     # Process names that can spawn child processes
@@ -8494,6 +8529,33 @@ class ActivityGenerator:
     _LINUX_SHELLS = {"/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/bash", "/usr/bin/zsh"}
     _LINUX_SERVICE_USERS = {"apache", "www-data", "nginx", "httpd"}
     _LINUX_SERVICE_PARENT_KEYS = ("apache2", "httpd", "nginx", "php-fpm")
+
+    def _linux_anchor_pid(self, system: System, time: datetime) -> int:
+        """Return a tracked Linux init/systemd process for parent-chain fallbacks."""
+        sys_pids = getattr(self, "_system_pids", {}).setdefault(system.hostname, {})
+        for role in ("systemd", "init"):
+            pid = sys_pids.get(role)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_exe = proc.image.rsplit("/", 1)[-1].lower()
+            if proc_exe in {"systemd", "init"} and proc.start_time <= time:
+                sys_pids.setdefault("systemd", proc.pid)
+                return proc.pid
+
+        current_time = time - timedelta(minutes=5)
+        self.state_manager.set_current_time(current_time)
+        pid = self.state_manager.create_process(
+            system=system.hostname,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd",
+            username="root",
+            integrity_level="System",
+            logon_id="",
+        )
+        sys_pids["systemd"] = pid
+        return pid
 
     def _active_session_shell_pid(
         self,
@@ -8839,31 +8901,44 @@ class ActivityGenerator:
         parent_pid: int,
         process_username: str,
     ) -> int:
-        """Prevent user-context Windows processes from being parented by PID 4/System."""
-        if _get_os_category(system.os) != "windows":
+        """Prevent user-context processes from being parented by impossible fallbacks."""
+        os_category = _get_os_category(system.os)
+        if os_category not in {"windows", "linux"}:
             return parent_pid
         if process_username in _SYSTEM_ACCOUNTS or process_username.endswith("$"):
             return parent_pid
         parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
         parent_image = (parent_proc.image if parent_proc is not None else "").lower()
-        if (
-            parent_pid != 4
-            and parent_image not in {"system", "ntoskrnl.exe"}
-            and self._is_pid_active_at(system, parent_pid, time)
-        ):
+        if os_category == "windows":
+            if (
+                parent_pid != 4
+                and parent_image not in {"system", "ntoskrnl.exe"}
+                and self._is_pid_active_at(system, parent_pid, time)
+            ):
+                return parent_pid
+        elif parent_proc is not None and self._is_pid_active_at(system, parent_pid, time):
             return parent_pid
 
         resolved = self._resolve_parent(system, user, time, logon_id, process_name)
         resolved_proc = self.state_manager.get_process(system.hostname, resolved)
         resolved_image = (resolved_proc.image if resolved_proc is not None else "").lower()
-        if (
-            resolved != 4
-            and resolved_image not in {"system", "ntoskrnl.exe"}
-            and self._is_pid_active_at(system, resolved, time)
-        ):
+        if os_category == "windows":
+            if (
+                resolved != 4
+                and resolved_image not in {"system", "ntoskrnl.exe"}
+                and self._is_pid_active_at(system, resolved, time)
+            ):
+                return resolved
+        elif resolved_proc is not None and self._is_pid_active_at(system, resolved, time):
             return resolved
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        if os_category == "linux":
+            for role in ("bash", "sshd", "systemd"):
+                candidate = sys_pids.get(role)
+                if candidate and self._is_pid_active_at(system, candidate, time):
+                    return candidate
+            return parent_pid
         for role in ("explorer", "winlogon", "services", "svchost_dcom"):
             candidate = sys_pids.get(role)
             if candidate and candidate != 4 and self._is_pid_active_at(system, candidate, time):
@@ -8906,7 +8981,9 @@ class ActivityGenerator:
                 return sys_pids.get(
                     "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
                 )
-            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+            return (
+                sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
+            )
 
         # Pick a parent for child_exe from the rules
         possible_parents = reverse.get(child_exe, [])
@@ -8915,7 +8992,9 @@ class ActivityGenerator:
                 return sys_pids.get(
                     "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
                 )
-            return sys_pids.get("bash", sys_pids.get("sshd", 1))
+            return (
+                sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
+            )
 
         # Auto-created parent chains should not fabricate a fresh parent with
         # the same executable as the child when another valid parent exists.

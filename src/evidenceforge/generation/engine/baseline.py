@@ -47,7 +47,9 @@ from evidenceforge.generation.activity.generator import (
     _dns_base_ttl,
     _dns_is_internal_name,
     _dns_rtt,
+    _linux_foreground_lifetime,
     _linux_uid_for_user,
+    _windows_foreground_lifetime,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.ids_signatures import (
@@ -508,6 +510,34 @@ class BaselineMixin:
 
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
+
+    def _schedule_foreground_process_termination(
+        self,
+        *,
+        user: User,
+        system: Any,
+        start_time: datetime,
+        pid: int,
+        process_name: str,
+        command_line: str,
+        logon_id: str,
+        rng: random.Random,
+    ) -> None:
+        """Terminate bounded foreground commands near their observed runtime."""
+        if _get_os_category(system.os) == "windows":
+            lifetime = _windows_foreground_lifetime(process_name, command_line)
+        else:
+            lifetime = _linux_foreground_lifetime(process_name, command_line)
+        if lifetime is None:
+            return
+        self.activity_generator.generate_process_termination(
+            user=user,
+            system=system,
+            time=start_time + timedelta(seconds=rng.uniform(*lifetime)),
+            pid=pid,
+            process_name=process_name,
+            logon_id=logon_id,
+        )
 
     def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:
         """Get (lo, hi) rate for a traffic type — scenario override > config default."""
@@ -1472,13 +1502,23 @@ class BaselineMixin:
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
                     )
-                    self.activity_generator.generate_process(
+                    pid = self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
                         time=result["time"],
                         logon_id=logon_id,
                         process_name=result["process_name"],
                         command_line=result["command_line"],
+                    )
+                    self._schedule_foreground_process_termination(
+                        user=result["user"],
+                        system=result["system"],
+                        start_time=result["time"],
+                        pid=pid,
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
+                        logon_id=logon_id,
+                        rng=rng,
                     )
 
             elif pattern_type == "failed_logon_burst":
@@ -1620,13 +1660,23 @@ class BaselineMixin:
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
                     )
-                    self.activity_generator.generate_process(
+                    pid = self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
                         time=result["time"],
                         logon_id=logon_id,
                         process_name=result["process_name"],
                         command_line=result["command_line"],
+                    )
+                    self._schedule_foreground_process_termination(
+                        user=result["user"],
+                        system=result["system"],
+                        start_time=result["time"],
+                        pid=pid,
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
+                        logon_id=logon_id,
+                        rng=rng,
                     )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:

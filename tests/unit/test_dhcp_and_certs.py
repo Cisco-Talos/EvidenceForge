@@ -591,6 +591,56 @@ class TestTlsIssuers:
         assert event.x509.san_dns == []
         assert event.x509_chain == [event.x509]
 
+    def test_tls_validity_window_is_not_observation_second_anchored(self):
+        """Leaf cert validity should not reveal the exact first observation timestamp."""
+        generator = ActivityGenerator(StateManager(), {})
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 34, 56, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip="142.250.190.99",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestExternalValidity",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname="ocsp.pki.goog",
+            dns=None,
+            dst_ip="142.250.190.99",
+            rng=random.Random(42),
+            allow_failure=False,
+        )
+
+        assert event.x509 is not None
+        observed_epoch = int(event.timestamp.timestamp())
+        age_seconds = observed_epoch - event.x509.certificate_not_valid_before
+        assert age_seconds > 0
+        assert age_seconds % 86400 != 0
+
+    def test_intermediate_validity_window_is_not_observation_second_anchored(self):
+        """Intermediate CA validity should have its own issuance clock."""
+        generator = ActivityGenerator(StateManager(), {})
+        event_time = datetime(2024, 10, 14, 12, 34, 56, tzinfo=UTC)
+        chain = generator._build_tls_certificate_chain(
+            leaf=X509Context(fuid="FLeaf", certificate_subject="CN=leaf.example"),
+            cert_name="leaf.example",
+            issuer_name="CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+            event_time=event_time,
+            connection_uid="CIntermediateValidity",
+            rng=random.Random(1),
+        )
+
+        intermediate = chain[1]
+        observed_epoch = int(event_time.timestamp())
+        age_seconds = observed_epoch - intermediate.certificate_not_valid_before
+        assert age_seconds > 0
+        assert age_seconds % 86400 != 0
+
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""
         generator = ActivityGenerator(StateManager(), {})

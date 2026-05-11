@@ -478,6 +478,35 @@ class TestLinuxParentSelection:
 
         assert parent_pid == bash_pid
 
+    def test_linux_generate_process_replaces_untracked_parent_pid(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Linux user processes should not render a fabricated shell parent for PID 4."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        event_time = datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            session_kind="ssh",
+        )
+
+        pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id=logon_id,
+            process_name="/usr/bin/last",
+            command_line="last -n 50",
+            parent_pid=4,
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        assert proc is not None
+        assert proc.parent_pid != 4
+        assert proc.parent_pid == pids["bash"]
+
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(
             hostname="WEB-EXT-01",

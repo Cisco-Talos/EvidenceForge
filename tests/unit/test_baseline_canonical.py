@@ -26,7 +26,7 @@ Verifies that baseline activities dispatch through SecurityEvent to
 multiple emitters, producing correlated cross-source records.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -200,6 +200,34 @@ class TestIdsAlertCorrelation:
         assert event.ssl is not None
         assert event.x509 is not None
         assert event.network.duration >= 0.8
+
+
+class TestForegroundProcessTermination:
+    def test_suspicious_short_command_gets_near_runtime_termination(self):
+        """Suspicious-noise foreground commands should not wait for hourly stale cleanup."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        engine = object.__new__(type("FakeEngine", (BaselineMixin,), {}))
+        engine.activity_generator = Mock()
+        user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.com")
+        system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+        start_time = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+
+        engine._schedule_foreground_process_termination(
+            user=user,
+            system=system,
+            start_time=start_time,
+            pid=4242,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery user -limit 0",
+            logon_id="0x1234",
+            rng=Mock(uniform=Mock(return_value=3.5)),
+        )
+
+        engine.activity_generator.generate_process_termination.assert_called_once()
+        kwargs = engine.activity_generator.generate_process_termination.call_args.kwargs
+        assert kwargs["time"] == start_time + timedelta(seconds=3.5)
+        assert kwargs["pid"] == 4242
 
 
 class TestWebAccessCorrelation:

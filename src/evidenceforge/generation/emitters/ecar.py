@@ -209,10 +209,11 @@ class EcarEmitter(HostMultiplexEmitter):
             "src_ip": event.auth.source_ip,
             "outcome": "failure",
             "failure_reason": "bad_password",
-            "status_code": event.auth.failure_status,
-            "sub_status": event.auth.failure_substatus,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") == "windows":
+            event_data["status_code"] = event.auth.failure_status
+            event_data["sub_status"] = event.auth.failure_substatus
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
