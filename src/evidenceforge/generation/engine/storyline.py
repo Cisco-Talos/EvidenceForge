@@ -495,12 +495,13 @@ class StorylineMixin:
 
     def _recent_storyline_process_logon_id(
         self,
+        actor: User,
         system: System,
         time: datetime,
         *,
         executable: str | None = None,
     ) -> str | None:
-        """Return the LogonID from a recent storyline process on the same host."""
+        """Return a recent storyline process LogonID for this actor and host."""
         pid, image = self._last_storyline_process_for_system(system)
         if pid <= 0 or not image:
             return None
@@ -509,9 +510,18 @@ class StorylineMixin:
             if image_name != executable.lower():
                 return None
         proc = self.state_manager.get_process(system.hostname, pid)
-        if proc is None or not proc.logon_id or proc.start_time is None:
+        if proc is None or proc.username != actor.username or not proc.logon_id:
             return None
-        if proc.start_time > time or time - proc.start_time > timedelta(minutes=5):
+        session = self.state_manager.get_session(proc.logon_id)
+        if (
+            session is None
+            or session.username != actor.username
+            or session.system != system.hostname
+        ):
+            return None
+        if proc.start_time is None or proc.start_time > time:
+            return None
+        if time - proc.start_time > timedelta(minutes=5):
             return None
         return proc.logon_id
 
@@ -1463,6 +1473,7 @@ class StorylineMixin:
 
         elif spec.type == "log_cleared":
             subject_logon_id = self._recent_storyline_process_logon_id(
+                actor,
                 system,
                 time,
                 executable="wevtutil.exe",

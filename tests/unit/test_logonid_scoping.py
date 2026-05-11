@@ -530,3 +530,60 @@ def test_log_cleared_storyline_event_inherits_recent_wevtutil_logon_id(
     )
 
     assert captured["subject_logon_id"] == logon_id
+
+
+def test_log_cleared_storyline_event_rejects_different_actor_wevtutil_logon_id(
+    state_manager, mock_emitters, system_a, attacker, monkeypatch
+):
+    """Typed log_cleared events must not inherit another actor's process token."""
+    other = User(
+        username="other",
+        full_name="Other User",
+        email="other@example.com",
+        enabled=True,
+    )
+    ag = ActivityGenerator(state_manager, mock_emitters)
+    engine = type("FakeEngine", (StorylineMixin,), {}).__new__(
+        type("FakeEngine", (StorylineMixin,), {})
+    )
+    engine.state_manager = state_manager
+    engine.activity_generator = ag
+    engine.dispatcher = ag.dispatcher
+    engine.malicious_events = []
+
+    process_time = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+    state_manager.set_current_time(process_time)
+    other_logon_id = state_manager.create_session(
+        username=other.username,
+        system=system_a.hostname,
+        logon_type=2,
+        source_ip=system_a.ip,
+    )
+    pid = state_manager.create_process(
+        system_a.hostname,
+        4,
+        r"C:\Windows\System32\wevtutil.exe",
+        "wevtutil cl Security",
+        other.username,
+        "High",
+        logon_id=other_logon_id,
+    )
+    engine._record_last_storyline_process(system_a, pid, r"C:\Windows\System32\wevtutil.exe")
+
+    captured: dict[str, str | None] = {}
+
+    def fake_generate_log_cleared(*args, **kwargs):
+        captured["subject_logon_id"] = kwargs["subject_logon_id"]
+
+    monkeypatch.setattr(ag, "generate_log_cleared", fake_generate_log_cleared)
+
+    engine._execute_typed_event(
+        spec=Mock(type="log_cleared"),
+        actor=attacker,
+        system=system_a,
+        time=process_time + timedelta(seconds=2),
+        activity="clear security log",
+        explicit_types=set(),
+    )
+
+    assert captured["subject_logon_id"] is None
