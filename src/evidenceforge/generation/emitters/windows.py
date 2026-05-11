@@ -27,13 +27,13 @@ EventRecordIDs in sorted order (ensuring monotonic IDs match chronological
 order), then renders to XML and writes to per-host FQDN directories.
 """
 
+import json
 import logging
 import os
-import pickle
 import random
 import sqlite3
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -177,6 +177,30 @@ def _special_privilege_fallback(username: str) -> str:
         "SeDebugPrivilege\n\t\t\t"
         "SeImpersonatePrivilege"
     )
+
+
+_DT_PREFIX = "__dt__:"
+
+
+def _spool_encode(event: dict) -> str:
+    def default(obj: object) -> str:
+        if isinstance(obj, datetime):
+            return _DT_PREFIX + obj.isoformat()
+        raise TypeError(f"not serializable: {type(obj)}")
+
+    return json.dumps(event, default=default)
+
+
+def _spool_decode(payload: str) -> dict:
+    def object_hook(d: dict) -> dict:
+        return {
+            k: datetime.fromisoformat(v[len(_DT_PREFIX) :]).replace(tzinfo=UTC)
+            if isinstance(v, str) and v.startswith(_DT_PREFIX)
+            else v
+            for k, v in d.items()
+        }
+
+    return json.loads(payload, object_hook=object_hook)
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -1264,7 +1288,7 @@ class WindowsEventEmitter(LogEmitter):
                 "CREATE TABLE events ("
                 "sort_key TEXT NOT NULL, "
                 "sequence INTEGER NOT NULL, "
-                "payload BLOB NOT NULL)"
+                "payload TEXT NOT NULL)"
             )
         return self._spool_conn
 
@@ -1275,7 +1299,7 @@ class WindowsEventEmitter(LogEmitter):
         conn = self._get_spool_conn_unlocked()
         rows = []
         for event in self._event_dicts:
-            rows.append((self._event_sort_key(event), self._spool_sequence, pickle.dumps(event)))
+            rows.append((self._event_sort_key(event), self._spool_sequence, _spool_encode(event)))
             self._spool_sequence += 1
         conn.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
         conn.commit()
@@ -1288,7 +1312,7 @@ class WindowsEventEmitter(LogEmitter):
             return
         cursor = self._spool_conn.execute("SELECT payload FROM events ORDER BY sort_key, sequence")
         for (payload,) in cursor:
-            yield pickle.loads(payload)
+            yield _spool_decode(payload)
 
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the temporary Windows event spool database."""
@@ -1307,19 +1331,19 @@ class WindowsEventEmitter(LogEmitter):
 
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
-            events = self._iter_spooled_events_unlocked()
-        else:
-            self._shift_process_terminations_after_dependents()
-            self._shift_logoffs_after_dependents()
+            self._event_dicts = list(self._iter_spooled_events_unlocked())
 
-            def _sort_key(event: dict) -> Any:
-                ts = event.get("TimeCreated", "")
-                if isinstance(ts, datetime):
-                    return ensure_utc(ts)
-                return ts
+        self._shift_process_terminations_after_dependents()
+        self._shift_logoffs_after_dependents()
 
-            self._event_dicts.sort(key=_sort_key)
-            events = iter(self._event_dicts)
+        def _sort_key(event: dict) -> Any:
+            ts = event.get("TimeCreated", "")
+            if isinstance(ts, datetime):
+                return ensure_utc(ts)
+            return ts
+
+        self._event_dicts.sort(key=_sort_key)
+        events = iter(self._event_dicts)
 
         # Assign per-computer EventRecordIDs in sorted order
         for sequence, event in enumerate(events):
