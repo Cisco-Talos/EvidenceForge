@@ -483,3 +483,32 @@ class TestValidateConfig:
             and "defines dns_query_templates but is not a DNS signature" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_unsafe_dns_ids_template(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 999002,
+                        "rev": 1,
+                        "message": "ET TEST DNS",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "udp",
+                        "dst_port": 53,
+                        "direction": "out",
+                        "dns_query_templates": ["{token}{missing}.example"],
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+        result = validate_config()
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "may only reference {token}" in issue.message
+            for issue in result.issues
+        )
