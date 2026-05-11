@@ -56,6 +56,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Harden storyline command-line URL inference against malformed scenario-controlled URLs so invalid hosts/ports cannot crash generation.
 - [x] Harden evaluator beacon destination matching to parse URL hosts exactly and avoid substring false positives in proxy/HTTP beacon evidence records.
 - [x] Fix DHCP setup for storyline hosts so setup leases remain warm-up-only state and cannot emit visible out-of-window REQUEST/ACK records.
+- [x] Fix eCAR process object ID lookup so missing processes do not fabricate orphan UUID references; missing lookups now return empty IDs, and remote-thread/process-access generation skips absent targets.
 - [x] Add dual-agent `eforge install-skills` workflow — default to Claude project installs, add explicit `--agent claude|codex`, keep Claude project/global behavior, add Codex user-level `~/.codex/skills/` installs, reject invalid Codex/global combinations, and cover installer safety/stale-cleanup behavior with tests.
 - [x] Reduce Codex skill reference duplication — bundle only the references each Codex skill needs and rely on installer stale cleanup to prune no-longer-needed reference files from prior installs.
 - [x] Import existing Claude `/eforge assess` command as a Codex skill without modifying the source skill.

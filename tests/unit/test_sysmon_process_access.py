@@ -132,6 +132,34 @@ class TestSysmonProcessAccess:
         assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
         assert event.process_access.granted_access == "0x1010"
 
+    def test_process_access_skips_missing_target_pid(
+        self, state_manager, activity_gen, mock_emitters, windows_system, test_user
+    ):
+        """ProcessAccess should not emit orphan object references for missing targets."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        source_image = r"C:\Users\compromised.user\AppData\Local\Temp\mimikatz.exe"
+        source_pid = state_manager.create_process(
+            windows_system.hostname,
+            parent_pid=4,
+            image=source_image,
+            command_line=source_image,
+            username=test_user.username,
+            integrity_level="High",
+        )
+
+        activity_gen.generate_process_access(
+            user=test_user,
+            system=windows_system,
+            time=ts,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=99999,
+        )
+
+        assert mock_emitters["windows_event_sysmon"].emit.call_count == 0
+        assert mock_emitters["ecar"].emit.call_count == 0
+        assert state_manager.get_process_object_id(windows_system.hostname, 99999) == ""
+
     def test_process_access_default_target_is_lsass(
         self, state_manager, activity_gen, mock_emitters, windows_system, test_user
     ):

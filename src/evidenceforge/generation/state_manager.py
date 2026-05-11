@@ -492,9 +492,7 @@ class StateManager:
             proc = self.state.running_processes.get(key)
             if proc:
                 return proc.ecar_object_id
-            if key not in self._process_object_ids:
-                self._process_object_ids[key] = str(uuid.uuid4())
-            return self._process_object_ids[key]
+            return self._process_object_ids.get(key, "")
 
     def update_process_activity_time(self, system: str, pid: int, activity_time: datetime) -> bool:
         """Record the latest dependent activity timestamp for a running process."""
