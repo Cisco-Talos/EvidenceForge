@@ -604,11 +604,39 @@ class TestBeaconProxyMatcher:
         assert scorer._beacon_dst_matches(fields, "evil.example.com")
         assert not scorer._beacon_dst_matches(fields, "other.example.com")
 
-    def test_beacon_allow_proxy_matches_ip_in_url(self):
-        """_beacon_dst_matches should match IP found in url field."""
+    def test_beacon_allow_proxy_matches_ip_url_host(self):
+        """_beacon_dst_matches should match IP found in the URL authority host."""
         scorer = CrossSourceScorer()
         fields = {"url": "https://45.33.32.30/check", "status_code": 200}
         assert scorer._beacon_dst_matches(fields, "45.33.32.30")
+
+    def test_beacon_allow_proxy_rejects_ip_url_path_only(self):
+        """_beacon_dst_matches should not match an IP that appears only in a URL path."""
+        scorer = CrossSourceScorer()
+        fields = {"url": "https://attacker.example/check/45.33.32.30", "status_code": 200}
+        assert not scorer._beacon_dst_matches(fields, "45.33.32.30")
+
+    def test_beacon_allow_proxy_rejects_domain_url_path_only(self):
+        """_beacon_dst_matches should not match a domain that appears only in a URL path."""
+        scorer = CrossSourceScorer()
+        fields = {
+            "host": "attacker.tld",
+            "url": "http://attacker.tld/download/evil.example.com/pixel.gif",
+            "status_code": 200,
+        }
+        assert not scorer._beacon_dst_matches(fields, "evil.example.com")
+
+    def test_beacon_allow_proxy_rejects_larger_hostname(self):
+        """_beacon_dst_matches should not match larger hostnames by substring."""
+        scorer = CrossSourceScorer()
+        fields = {"host": "evil.example.com.attacker.net", "status_code": 200}
+        assert not scorer._beacon_dst_matches(fields, "evil.example.com")
+
+    def test_beacon_allow_proxy_matches_subdomain_boundary(self):
+        """_beacon_dst_matches should allow validated domain-boundary subdomain matches."""
+        scorer = CrossSourceScorer()
+        fields = {"host": "api.evil.example.com", "status_code": 200}
+        assert scorer._beacon_dst_matches(fields, "evil.example.com")
 
     def test_beacon_deny_proxy_403_counts_as_deny(self):
         """proxy_access record with status_code 403 should match beacon deny."""
