@@ -1029,6 +1029,13 @@ class StorylineMixin:
                 dst_ip = self._resolve_storyline_network_target(scp_target)
                 if dst_ip:
                     transfer_time = time + timedelta(milliseconds=rng.randint(250, 900))
+                    source_port = self.activity_generator.reserve_ssh_source_port(
+                        system.ip,
+                        dst_ip,
+                        None,
+                        rng,
+                        _get_os_category(system.os),
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=dst_ip,
@@ -1044,6 +1051,7 @@ class StorylineMixin:
                         source_system=system,
                         pid=pid,
                         process_image=process_name,
+                        src_port=source_port,
                     )
                     target_system = self._system_for_ip(dst_ip)
                     if (
@@ -1061,6 +1069,7 @@ class StorylineMixin:
                             target_user=scp_destination[2] or actor.username,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
+                            source_port=source_port,
                             rng=rng,
                         )
 
@@ -2644,6 +2653,7 @@ class StorylineMixin:
         target_user: str,
         target_path: str,
         transfer_time: datetime,
+        source_port: int,
         rng: random.Random,
     ) -> None:
         """Emit target-side SSH and file evidence for a storyline scp transfer."""
@@ -2655,13 +2665,6 @@ class StorylineMixin:
             ProcessContext,
         )
 
-        source_port = 32768 + (
-            _stable_seed(
-                f"scp_receiver_port:{source_system.ip}:{target_system.ip}:"
-                f"{source_pid}:{transfer_time.isoformat()}"
-            )
-            % 28232
-        )
         self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
         parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
         sshd_pid = self.state_manager.create_process(
