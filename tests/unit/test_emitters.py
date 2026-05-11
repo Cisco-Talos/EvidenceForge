@@ -458,6 +458,79 @@ class TestWindowsEventEmitter:
         assert "user1" in content
         assert "user2" in content
 
+    def test_windows_emitter_spools_buffer_to_bound_memory(self, format_def, temp_output):
+        """Windows event dict buffering should remain bounded before final rendering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=3)
+
+        for idx in range(10):
+            emitter.emit_event(
+                {
+                    "EventID": 4624,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, idx, tzinfo=UTC),
+                    "Computer": "WIN-TEST-01",
+                    "Channel": "Security",
+                    "Level": 0,
+                    "ExecutionProcessID": 4,
+                    "ExecutionThreadID": 100,
+                    "TargetUserName": f"user{idx}",
+                    "TargetDomainName": "CORP",
+                    "TargetLogonId": f"0x{idx:06x}",
+                    "LogonType": 2,
+                    "WorkstationName": "WIN-TEST-01",
+                    "IpAddress": "192.168.1.100",
+                    "LogonProcessName": "User32",
+                    "AuthenticationPackageName": "Negotiate",
+                }
+            )
+
+            assert len(emitter._event_dicts) < emitter.buffer_size
+
+        assert emitter._spooled_count == 9
+        assert not temp_output.exists()
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert content.count("<EventID>4624</EventID>") == 10
+        assert emitter._spooled_count == 0
+        assert len(emitter._event_dicts) == 0
+
+    def test_threaded_windows_barrier_spools_buffer_to_bound_memory(self, format_def, temp_output):
+        """Threaded Windows barrier flush should release in-memory event dicts."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=100, threaded=True)
+
+        for idx in range(10):
+            emitter.emit_event(
+                {
+                    "EventID": 4624,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, idx, tzinfo=UTC),
+                    "Computer": "WIN-TEST-01",
+                    "Channel": "Security",
+                    "Level": 0,
+                    "ExecutionProcessID": 4,
+                    "ExecutionThreadID": 100,
+                    "TargetUserName": f"user{idx}",
+                    "TargetDomainName": "CORP",
+                    "TargetLogonId": f"0x{idx:06x}",
+                    "LogonType": 2,
+                    "WorkstationName": "WIN-TEST-01",
+                    "IpAddress": "192.168.1.100",
+                    "LogonProcessName": "User32",
+                    "AuthenticationPackageName": "Negotiate",
+                }
+            )
+
+        emitter.barrier_flush()
+
+        assert len(emitter._event_dicts) == 0
+        assert emitter._spooled_count == 10
+        assert not temp_output.exists()
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert content.count("<EventID>4624</EventID>") == 10
+
     def test_windows_record_ids_follow_global_chronology_across_flushes(
         self, format_def, temp_output
     ):

@@ -27,9 +27,13 @@ EventRecordIDs in sorted order (ensuring monotonic IDs match chronological
 order), then renders to XML and writes to per-host FQDN directories.
 """
 
+import json
 import logging
+import os
 import random
-from datetime import datetime, timedelta
+import sqlite3
+import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
 from threading import Lock
@@ -173,6 +177,30 @@ def _special_privilege_fallback(username: str) -> str:
         "SeDebugPrivilege\n\t\t\t"
         "SeImpersonatePrivilege"
     )
+
+
+_DT_PREFIX = "__dt__:"
+
+
+def _spool_encode(event: dict) -> str:
+    def default(obj: object) -> str:
+        if isinstance(obj, datetime):
+            return _DT_PREFIX + obj.isoformat()
+        raise TypeError(f"not serializable: {type(obj)}")
+
+    return json.dumps(event, default=default)
+
+
+def _spool_decode(payload: str) -> dict:
+    def object_hook(d: dict) -> dict:
+        return {
+            k: datetime.fromisoformat(v[len(_DT_PREFIX) :]).replace(tzinfo=UTC)
+            if isinstance(v, str) and v.startswith(_DT_PREFIX)
+            else v
+            for k, v in d.items()
+        }
+
+    return json.loads(payload, object_hook=object_hook)
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -1157,6 +1185,10 @@ class WindowsEventEmitter(LogEmitter):
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._current_storyline_origin: bool = False
+        self._spool_path: Path | None = None
+        self._spool_conn: sqlite3.Connection | None = None
+        self._spooled_count: int = 0
+        self._spool_sequence: int = 0
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host_fqdn = sanitize_path_component(host_fqdn)
@@ -1194,6 +1226,8 @@ class WindowsEventEmitter(LogEmitter):
         else:
             with self._file_lock:
                 self._event_dicts.append(event_data)
+                if len(self._event_dicts) >= self.buffer_size:
+                    self._spool_event_dicts_unlocked()
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         """Render Windows Event dict to XML format."""
@@ -1221,17 +1255,83 @@ class WindowsEventEmitter(LogEmitter):
                 event_data = self._event_queue.get(timeout=0.1)
                 with self._file_lock:
                     self._event_dicts.append(event_data)
+                    if len(self._event_dicts) >= self.buffer_size:
+                        self._spool_event_dicts_unlocked()
                 self._event_queue.task_done()
             except Empty:
                 if self._flush_barrier.is_set():
+                    with self._file_lock:
+                        self._spool_event_dicts_unlocked()
                     self._flush_barrier.clear()
 
         win_logger.debug(f"Emitter thread stopped for {self.format_def.name}")
 
-    def _flush_unlocked(self) -> None:
-        """Sort events, assign RecordIDs, render, and write to per-host files."""
+    def _event_sort_key(self, event: dict[str, Any]) -> str:
+        """Return a stable sortable timestamp key for deferred Windows events."""
+        ts = event.get("TimeCreated", "")
+        if isinstance(ts, datetime):
+            return ensure_utc(ts).isoformat()
+        return str(ts)
+
+    def _get_spool_conn_unlocked(self) -> sqlite3.Connection:
+        """Open the on-disk Windows event spool database while holding _file_lock."""
+        if self._spool_conn is None:
+            self._base_dir.mkdir(parents=True, exist_ok=True)
+            fd, path = tempfile.mkstemp(
+                prefix=".windows_event_spool_", suffix=".sqlite3", dir=self._base_dir
+            )
+            os.close(fd)
+            Path(path).unlink(missing_ok=True)
+            self._spool_path = Path(path)
+            self._spool_conn = sqlite3.connect(path, check_same_thread=False)
+            self._spool_conn.execute(
+                "CREATE TABLE events ("
+                "sort_key TEXT NOT NULL, "
+                "sequence INTEGER NOT NULL, "
+                "payload TEXT NOT NULL)"
+            )
+        return self._spool_conn
+
+    def _spool_event_dicts_unlocked(self) -> None:
+        """Move buffered event dictionaries to disk to bound emitter memory usage."""
         if not self._event_dicts:
             return
+        conn = self._get_spool_conn_unlocked()
+        rows = []
+        for event in self._event_dicts:
+            rows.append((self._event_sort_key(event), self._spool_sequence, _spool_encode(event)))
+            self._spool_sequence += 1
+        conn.executemany("INSERT INTO events VALUES (?, ?, ?)", rows)
+        conn.commit()
+        self._spooled_count += len(rows)
+        self._event_dicts.clear()
+
+    def _iter_spooled_events_unlocked(self):
+        """Yield spooled Windows events in chronological order while holding _file_lock."""
+        if self._spool_conn is None:
+            return
+        cursor = self._spool_conn.execute("SELECT payload FROM events ORDER BY sort_key, sequence")
+        for (payload,) in cursor:
+            yield _spool_decode(payload)
+
+    def _cleanup_spool_unlocked(self) -> None:
+        """Remove the temporary Windows event spool database."""
+        if self._spool_conn is not None:
+            self._spool_conn.close()
+            self._spool_conn = None
+        if self._spool_path is not None:
+            self._spool_path.unlink(missing_ok=True)
+            self._spool_path = None
+        self._spooled_count = 0
+
+    def _flush_unlocked(self) -> None:
+        """Sort events, assign RecordIDs, render, and write to per-host files."""
+        if not self._event_dicts and self._spooled_count == 0:
+            return
+
+        if self._spooled_count:
+            self._spool_event_dicts_unlocked()
+            self._event_dicts = list(self._iter_spooled_events_unlocked())
 
         self._shift_process_terminations_after_dependents()
         self._shift_logoffs_after_dependents()
@@ -1243,9 +1343,10 @@ class WindowsEventEmitter(LogEmitter):
             return ts
 
         self._event_dicts.sort(key=_sort_key)
+        events = iter(self._event_dicts)
 
         # Assign per-computer EventRecordIDs in sorted order
-        for sequence, event in enumerate(self._event_dicts):
+        for sequence, event in enumerate(events):
             _normalize_windows_time_created(
                 event,
                 self._last_time_created_by_computer,
@@ -1280,13 +1381,12 @@ class WindowsEventEmitter(LogEmitter):
                 reset_rng = random.Random(f"erid_reset_{counter_key}_{event['EventRecordID']}")
                 self._record_id_counters[counter_key] = reset_rng.randint(0, 5)
 
-        # Render and route to per-host writers
-        for event in self._event_dicts:
             rendered = self._render_event(event)
             host_fqdn = event.get("Computer", "")
             self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
+        self._cleanup_spool_unlocked()
 
     def _shift_logoffs_after_dependents(self) -> None:
         """Prevent visible 4634 records from preceding same-session dependents.
@@ -1361,10 +1461,12 @@ class WindowsEventEmitter(LogEmitter):
                 )
 
     def flush(self, *, force: bool = False) -> None:
-        """Flush host writers, deferring Windows event rendering until final close."""
-        if force:
-            with self._file_lock:
+        """Flush host writers and spill deferred Windows events to bounded disk storage."""
+        with self._file_lock:
+            if force:
                 self._flush_unlocked()
+            else:
+                self._spool_event_dicts_unlocked()
         with self._host_writers_lock:
             for writer in self._host_writers.values():
                 writer.flush()
