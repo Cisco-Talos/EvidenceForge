@@ -12,7 +12,7 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Self
+from typing import Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -744,7 +744,7 @@ class WindowsFailedLogonConfig(BaseModel, extra="forbid"):
 class WindowsWorkstationLockConfig(BaseModel, extra="forbid"):
     """Windows workstation lock/unlock realism config."""
 
-    MAX_UNLOCK_GAP_SECONDS = 86_400
+    MAX_UNLOCK_GAP_SECONDS: ClassVar[int] = 86_400
 
     min_unlock_gap_seconds: int
 
