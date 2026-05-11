@@ -7079,6 +7079,7 @@ class ActivityGenerator:
         if logon_id is not None:
             self.state_manager.update_session_metadata(
                 logon_id,
+                username=user.username,
                 start_time=logon_time,
                 source_port=src_port,
                 session_kind="rdp",
@@ -7120,12 +7121,30 @@ class ActivityGenerator:
         known_users = getattr(self, "_users_by_username", {})
         if selected.username in known_users:
             return known_users[selected.username]
-        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        ad_domain = self._valid_fallback_email_domain()
         return User(
             username=selected.username,
             full_name=selected.username,
             email=f"{selected.username}@{ad_domain}",
         )
+
+    def _valid_fallback_email_domain(self) -> str:
+        """Return a safe domain for synthetic fallback users."""
+        ad_domain = str(getattr(self, "_ad_domain", "corp.local")).strip().lower()
+        allowed = set("abcdefghijklmnopqrstuvwxyz0123456789.-")
+        labels = ad_domain.split(".")
+        if (
+            len(labels) >= 2
+            and all(labels)
+            and all(
+                set(label) <= allowed and not label.startswith("-") and not label.endswith("-")
+                for label in labels
+            )
+            and labels[-1].isalpha()
+            and len(labels[-1]) >= 2
+        ):
+            return ad_domain
+        return "corp.local"
 
     def generate_service_logon(
         self,

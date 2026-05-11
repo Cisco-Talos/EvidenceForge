@@ -1315,6 +1315,8 @@ class StorylineMixin:
                     source_ip=source_ip,
                 )
                 result = SimpleNamespace(network_uid=uid)
+            if getattr(result, "session", None) is not None:
+                malicious_event["actor"] = result.session.username
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 3389
             result_source_ip = (

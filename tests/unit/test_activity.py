@@ -591,6 +591,88 @@ class TestActivityGenerator:
         )
         assert logon_event.auth.username == "aisha.johnson"
 
+    def test_generate_rdp_session_updates_preallocated_session_identity(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """RDP user coercion must keep preallocated session identity aligned."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.99.50"
+        state_manager.set_current_time(timestamp)
+        domain_user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+        )
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        activity_gen.generate_logon(
+            domain_user,
+            test_system,
+            timestamp - timedelta(seconds=10),
+            logon_type=3,
+            source_ip=source_ip,
+        )
+        preallocated_logon_id = state_manager.create_session(
+            username=root_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip=source_ip,
+            session_kind="rdp",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_rdp_session(
+            user=root_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=source_ip,
+            logon_id=preallocated_logon_id,
+        )
+
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        session = state_manager.get_session(preallocated_logon_id)
+
+        assert logon_event.auth.username == "aisha.johnson"
+        assert logon_event.auth.logon_id == preallocated_logon_id
+        assert session is not None
+        assert session.username == logon_event.auth.username
+
+    def test_generate_rdp_session_fallback_user_tolerates_malformed_ad_domain(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Fallback RDP users should not crash when scenario AD domain is malformed."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.99.50"
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        activity_gen._ad_domain = "bad"
+        state_manager.set_current_time(timestamp)
+        state_manager.register_session(
+            logon_id="0xabc123",
+            username="orphan",
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip=source_ip,
+            start_time=timestamp - timedelta(seconds=10),
+            session_kind="network",
+        )
+
+        activity_gen.generate_rdp_session(
+            user=root_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=source_ip,
+        )
+
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        assert logon_event.auth.username == "orphan"
+
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
