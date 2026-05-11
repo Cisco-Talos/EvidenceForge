@@ -29,7 +29,6 @@ programs:
 
   - app: rsyslogd
     messages:
-      - '[origin software="rsyslogd" swVersion="8.2112.0"] start'
       - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog'"
       - '[origin software="rsyslogd"] rsyslogd was HUPed'
 
@@ -59,18 +58,15 @@ programs:
 
   - app: multipathd
     messages:
-      - "daemon started"
       - "sda: add missing path"
       - "sda: remaining active paths: 1"
 
   - app: accounts-daemon
     messages:
-      - "started daemon version 22.08.8"
       - "user 'admin' has logged in"
 
   - app: packagekitd
     messages:
-      - "daemon start"
       - "search-names transaction /{}"
 
   - app: unattended-upgr

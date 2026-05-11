@@ -419,8 +419,10 @@ class StateManager:
                     self._pid_counters[system] = start
                     self._pid_os[system] = "windows"
                 else:
-                    # Linux: PIDs increment by 1, start after boot processes
-                    self._pid_counters[system] = pid_rng.randint(500, 2000)
+                    # Linux: scenario-visible process activity happens on an
+                    # already-running host, so use the same lived-in PID
+                    # namespace syslog exposes rather than a fresh low counter.
+                    self._pid_counters[system] = pid_rng.randint(8000, 42000)
                     self._pid_os[system] = "linux"
 
             pid = self._pid_counters[system]

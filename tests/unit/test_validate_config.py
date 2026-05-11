@@ -594,3 +594,27 @@ class TestValidateConfig:
             and 'Boot-only Windows process "lsass.exe"' in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_recurring_syslog_startup_banner(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "accounts-daemon",
+                    "messages": ["started daemon version 22.08.8"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Persistent app "accounts-daemon" has recurring startup banner' in issue.message
+            for issue in result.issues
+        )

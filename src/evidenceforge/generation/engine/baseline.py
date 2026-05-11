@@ -4588,13 +4588,11 @@ class BaselineMixin:
                                 facility=0,
                                 severity=5,
                             )
-                elif source_roll < 0.45:
+                elif source_roll < 0.32:
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
                     session_users = ["root", "admin"]
-                    if has_web_role:
-                        session_users.append("www-data")
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
@@ -4710,7 +4708,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.68:
+                elif source_roll < 0.63:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -4726,7 +4724,7 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.76:
+                elif source_roll < 0.71:
                     if not has_ntp_client:
                         continue
                     if is_rhel_like:
@@ -4766,7 +4764,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.94:
+                elif source_roll < 0.79:
                     # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
@@ -4775,7 +4773,9 @@ class BaselineMixin:
                     # Journal size grows monotonically during uptime (logs accumulate)
                     jkey = f"_journald_size_{system.hostname}"
                     prev_size = getattr(self, jkey, max_size * 0.1)
-                    size = min(prev_size + rng.uniform(0.5, 8.0), max_size - 1)
+                    size = prev_size + rng.uniform(0.5, 8.0)
+                    if size > max_size * rng.uniform(0.72, 0.9):
+                        size = rng.uniform(max_size * 0.18, max_size * 0.55)
                     setattr(self, jkey, size)
                     free = max_size - size
                     path = (

@@ -51,6 +51,14 @@ WINDOWS_BOOT_ONLY_PROCESS_EXES = frozenset(
         "winlogon.exe",
     }
 )
+RECURRING_SYSLOG_STARTUP_PATTERNS = frozenset(
+    {
+        "started daemon",
+        "daemon started",
+        "daemon start",
+        "] start",
+    }
+)
 
 REQUIRED_PERSONA_FIELDS = frozenset(
     {
@@ -1576,6 +1584,22 @@ def validate_config() -> ValidationResult:
     syslog_data = load_extra_syslog_messages()
     if syslog_data:
         _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
+        for entry in syslog_data:
+            if not isinstance(entry, dict) or entry.get("transient"):
+                continue
+            app = str(entry.get("app") or "<unknown>")
+            for message in entry.get("messages", []):
+                if not isinstance(message, str):
+                    continue
+                message_lower = message.lower()
+                if any(pattern in message_lower for pattern in RECURRING_SYSLOG_STARTUP_PATTERNS):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            f'Persistent app "{app}" has recurring startup banner "{message}"',
+                        )
+                    )
 
     # systemd_schedules.yaml
     from evidenceforge.generation.engine.baseline import _load_systemd_schedules
