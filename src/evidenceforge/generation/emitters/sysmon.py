@@ -37,6 +37,7 @@ from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
@@ -723,6 +724,7 @@ class SysmonEventEmitter(LogEmitter):
             "ParentCommandLine": proc.parent_command_line
             if hasattr(proc, "parent_command_line") and proc.parent_command_line
             else "-",
+            "CurrentDirectory": proc.current_directory or self._default_current_directory(proc),
         }
         # Populate PE metadata from known binary lookup
         fv, desc, prod, company, orig = self._get_pe_metadata(proc.image)
@@ -732,6 +734,20 @@ class SysmonEventEmitter(LogEmitter):
         event_data["Company"] = company
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
+
+    @staticmethod
+    def _default_current_directory(proc: ProcessContext) -> str:
+        """Fallback for older ProcessContext callers that do not set a working directory."""
+        image = proc.image.replace("/", "\\")
+        image_lower = image.lower()
+        username = proc.username.split("\\")[-1]
+        if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"} or username.endswith("$"):
+            return "C:\\Windows\\System32\\"
+        if "\\windows\\system32\\" in image_lower or "\\windows\\syswow64\\" in image_lower:
+            return "C:\\Windows\\System32\\"
+        if "\\" in image:
+            return image.rsplit("\\", 1)[0] + "\\"
+        return f"C:\\Users\\{username}\\"
 
     @staticmethod
     def _source_offset(

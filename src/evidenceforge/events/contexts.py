@@ -99,6 +99,7 @@ class ProcessContext:
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
+    current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
 
 
 @dataclass(slots=True)

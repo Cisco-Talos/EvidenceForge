@@ -397,6 +397,71 @@ class TestDualSessionParentSelection:
             f"incorrectly selected."
         )
 
+    def test_network_logon_prefers_existing_remote_execution_wrapper(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """PsExec follow-on commands should parent from PSEXESVC, not flatten to services.exe."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        network_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=3,
+        )
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC))
+        wrapper_pid = state_manager.create_process(
+            system=win_system.hostname,
+            parent_pid=pids["services"],
+            image=r"C:\Windows\PSEXESVC.exe",
+            command_line=r"C:\Windows\PSEXESVC.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        ag._record_user_process(win_system, user, wrapper_pid, r"C:\Windows\PSEXESVC.exe")
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            user,
+            datetime(2024, 3, 18, 12, 1, 0, tzinfo=UTC),
+            network_logon_id,
+            r"C:\Windows\System32\net.exe",
+        )
+
+        assert parent_pid == wrapper_pid
+
+    def test_system_storyline_process_prefers_existing_remote_execution_wrapper(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """SYSTEM follow-on commands should also parent from a live remote wrapper."""
+        system_user = User(
+            username="SYSTEM",
+            full_name="SYSTEM",
+            email="system@example.com",
+            enabled=True,
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC))
+        wrapper_pid = state_manager.create_process(
+            system=win_system.hostname,
+            parent_pid=pids["services"],
+            image=r"C:\Windows\PSEXESVC.exe",
+            command_line=r"C:\Windows\PSEXESVC.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            system_user,
+            datetime(2024, 3, 18, 12, 1, 0, tzinfo=UTC),
+            "0x3e7",
+            r"C:\Windows\System32\net.exe",
+        )
+
+        assert parent_pid == wrapper_pid
+
     def test_interactive_logon_still_gets_explorer_when_network_exists(
         self, state_manager, mock_emitters, win_system, user
     ):

@@ -2645,16 +2645,28 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            event.syslog = SyslogContext(
-                app_name="sshd",
-                pid=_get_rng().randint(5000, 60000),
-                facility=10,
-                severity=4,
-                message=(
-                    f"Failed password for {effective_username} from {source_ip} "
-                    f"port {_ephemeral_port(_get_rng(), 'linux')} ssh2"
-                ),
-            )
+            if source_ip and source_ip != "-":
+                event.syslog = SyslogContext(
+                    app_name="sshd",
+                    pid=_get_rng().randint(5000, 60000),
+                    facility=10,
+                    severity=4,
+                    message=(
+                        f"Failed password for {effective_username} from {source_ip} "
+                        f"port {_ephemeral_port(_get_rng(), 'linux')} ssh2"
+                    ),
+                )
+            else:
+                event.syslog = SyslogContext(
+                    app_name="login",
+                    pid=_get_rng().randint(5000, 60000),
+                    facility=10,
+                    severity=4,
+                    message=(
+                        "pam_unix(login:auth): authentication failure; "
+                        f"logname= uid=0 euid=0 tty=tty1 ruser= rhost= user={effective_username}"
+                    ),
+                )
 
         self.dispatcher.dispatch(event)
 
@@ -2986,6 +2998,73 @@ class ActivityGenerator:
             f"Generated logoff: {user.username} on {system.hostname} (LogonID: {logon_id})"
         )
 
+    @staticmethod
+    def _user_profile_directory(username: str) -> str:
+        """Return the Windows profile directory for a process owner."""
+        account = username.split("\\")[-1]
+        if account in _SYSTEM_ACCOUNTS or account.endswith("$"):
+            return r"C:\Windows\System32"
+        return rf"C:\Users\{account}"
+
+    def _derive_current_directory(
+        self,
+        system: System,
+        username: str,
+        process_name: str,
+        command_line: str,
+        parent_pid: int,
+    ) -> str:
+        """Derive a source-native process working directory for Sysmon Event 1."""
+        if _get_os_category(system.os) != "windows":
+            account = username.split("\\")[-1]
+            return (
+                "/root" if account in _SYSTEM_ACCOUNTS or account == "root" else f"/home/{account}"
+            )
+
+        image = process_name.replace("/", "\\")
+        image_lower = image.lower()
+        exe = image_lower.rsplit("\\", 1)[-1]
+        profile_dir = self._user_profile_directory(username)
+        system_dir = r"C:\Windows\System32"
+
+        if username in _SYSTEM_ACCOUNTS or username.endswith("$"):
+            return system_dir + "\\"
+
+        parent_image = (
+            self._lookup_process_name(system.hostname, parent_pid, _get_os_category(system.os))
+            or ""
+        ).lower()
+        parent_dir = parent_image.rsplit("\\", 1)[0] if "\\" in parent_image else ""
+
+        if exe in {"winword.exe", "excel.exe", "powerpnt.exe", "acrord32.exe", "acrobat.exe"}:
+            if '"' in command_line:
+                for candidate in command_line.split('"')[1::2]:
+                    if "\\" in candidate:
+                        return candidate.rsplit("\\", 1)[0] + "\\"
+            return profile_dir + "\\Documents\\"
+
+        if exe in {"onedrive.exe", "teams.exe", "outlook.exe"}:
+            return profile_dir + "\\"
+
+        if exe in {"chrome.exe", "msedge.exe", "firefox.exe"}:
+            install_dir = image.rsplit("\\", 1)[0] if "\\" in image else ""
+            if parent_dir and parent_dir == install_dir.lower():
+                return install_dir + "\\"
+            return profile_dir + "\\"
+
+        if exe in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
+            if parent_dir and "windows\\system32" not in parent_dir:
+                return parent_dir + "\\"
+            return profile_dir + "\\"
+
+        if "\\windows\\system32\\" in image_lower or "\\windows\\syswow64\\" in image_lower:
+            return system_dir + "\\"
+
+        if "\\" in image:
+            return image.rsplit("\\", 1)[0] + "\\"
+
+        return profile_dir + "\\"
+
     def generate_process(
         self,
         user: User,
@@ -3169,6 +3248,13 @@ class ActivityGenerator:
                 token_elevation=_token_elevation,
                 mandatory_label=_mandatory_label,
                 start_time=running_proc.start_time if running_proc is not None else None,
+                current_directory=self._derive_current_directory(
+                    system=system,
+                    username=process_username,
+                    process_name=process_name,
+                    command_line=command_line,
+                    parent_pid=parent_pid,
+                ),
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
             storyline_origin=from_storyline,
@@ -5733,6 +5819,13 @@ class ActivityGenerator:
                 token_elevation="%%1936",
                 mandatory_label="S-1-16-16384",
                 start_time=self._lookup_parent_start_time(system.hostname, pid),
+                current_directory=self._derive_current_directory(
+                    system=system,
+                    username=username,
+                    process_name=process_name,
+                    command_line=command_line,
+                    parent_pid=parent_pid,
+                ),
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
@@ -7064,7 +7157,10 @@ class ActivityGenerator:
         """Generate workstation lock event (4800)."""
         if not hasattr(self, "_last_workstation_lock_time"):
             self._last_workstation_lock_time = {}
-        self._last_workstation_lock_time[(system.hostname, user.username, logon_id)] = time
+        lock_key = (system.hostname, user.username, logon_id)
+        if lock_key in self._last_workstation_lock_time:
+            return
+        self._last_workstation_lock_time[lock_key] = time
         session = self.state_manager.get_session(logon_id)
         if session is not None:
             session.last_activity_time = time
@@ -7094,6 +7190,7 @@ class ActivityGenerator:
             min_unlock_time = lock_time + timedelta(seconds=min_unlock_gap_seconds())
             if time < min_unlock_time:
                 time = min_unlock_time
+            self._last_workstation_lock_time.pop(lock_key, None)
         session = self.state_manager.get_session(logon_id)
         if session is not None:
             session.last_activity_time = time
@@ -8828,7 +8925,10 @@ class ActivityGenerator:
         # Real Windows: services.exe → svchost.exe → cmd.exe (never services.exe → cmd.exe)
         _SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "conhost.exe"}
         is_shell = exe_name in _SHELLS
+        remote_wrapper_pid = self._active_remote_execution_wrapper_pid(system, time)
         if user.username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
+            if remote_wrapper_pid is not None:
+                return remote_wrapper_pid
             if is_shell:
                 # Shells get svchost as parent (realistic: service host spawns shell)
                 return sys_pids.get(
@@ -8855,6 +8955,28 @@ class ActivityGenerator:
             )
         is_network_logon = active_session and active_session.logon_type == 3
         if is_network_logon:
+            if remote_wrapper_pid is not None:
+                return remote_wrapper_pid
+            key = (system.hostname, user.username)
+            history = self._user_process_history.get(key, [])
+            remote_wrappers = []
+            shells = []
+            for pid, name in history:
+                if not self._is_pid_active_at(system, pid, time):
+                    continue
+                hist_exe = (
+                    name.rsplit("\\", 1)[-1].lower()
+                    if "\\" in name
+                    else name.rsplit("/", 1)[-1].lower()
+                )
+                if hist_exe in {"psexesvc.exe", "wmiprvse.exe", "healthmonitorsvc.exe"}:
+                    remote_wrappers.append(pid)
+                elif hist_exe in self._WINDOWS_SHELLS:
+                    shells.append(pid)
+            if remote_wrappers:
+                return remote_wrappers[-1]
+            if shells:
+                return shells[-1]
             if is_shell:
                 return sys_pids.get(
                     "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
@@ -8925,6 +9047,21 @@ class ActivityGenerator:
 
         # No valid parent alive — auto-create the chain
         return self._ensure_parent_chain(system, user, time, logon_id, exe_name, os_cat, depth=0)
+
+    def _active_remote_execution_wrapper_pid(self, system: System, time: datetime) -> int | None:
+        """Return a live explicit remote-execution service wrapper, if one exists."""
+        wrappers = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if exe not in {"psexesvc.exe", "healthmonitorsvc.exe"}:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            wrappers.append(proc)
+        if not wrappers:
+            return None
+        wrappers.sort(key=lambda proc: proc.start_time or time)
+        return wrappers[-1].pid
 
     def _sanitize_user_parent_pid(
         self,

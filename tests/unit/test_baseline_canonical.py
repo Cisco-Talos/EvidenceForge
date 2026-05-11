@@ -508,6 +508,26 @@ class TestSyslogContext:
         assert "Failed password" in event.syslog.message
         assert event.syslog.severity == 4  # Warning level
 
+    def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Local Linux auth failures should not render impossible sshd 'from - port' text."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_failed_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=2,
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert event.syslog.app_name == "login"
+        assert "from -" not in event.syslog.message
+
     def test_generate_syslog_event_helper(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):

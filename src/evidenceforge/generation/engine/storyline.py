@@ -381,6 +381,8 @@ _LONG_RUNNING_EXES: set[str] = {
     "mstsc",
     "rdpclip.exe",
     "rdpclip",
+    "psexesvc.exe",
+    "healthmonitorsvc.exe",
     "ncat",
     "ncat.exe",
     "nc",

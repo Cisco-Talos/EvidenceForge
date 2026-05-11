@@ -846,6 +846,41 @@ class TestActivityGenerator:
         assert unlock_logon.timestamp == unlock.timestamp + timedelta(milliseconds=50)
         assert unlock_logon.auth.source_ip == "-"
 
+    def test_workstation_lock_ignores_duplicate_before_unlock(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A session should not emit two visible 4800 locks before a 4801 unlock."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x4f2a1b"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=5),
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=1),
+            logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=5),
+            logon_id,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert sum(event.event_type == "workstation_locked" for event in events) == 1
+        assert sum(event.event_type == "workstation_unlocked" for event in events) == 1
+
     def test_extract_image_from_command_preserves_program_files_path(self):
         """Quoted and unquoted Program Files command lines should not truncate at C:\\Program."""
         assert (
@@ -1070,6 +1105,32 @@ class TestActivityGenerator:
         assert event.process.logon_id == logon_id
         assert event.process.image == process_name
         assert event.process.command_line == command_line
+
+    def test_generate_process_derives_user_current_directory(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """User-launched GUI processes should not all inherit System32 as cwd."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = "0x12345"
+        process_name = r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE"
+        command_line = 'WINWORD.EXE /n "Vendor Proposal.docx"'
+
+        activity_gen.generate_process(
+            test_user, test_system, timestamp, logon_id, process_name, command_line
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+            and call[0][0].process
+            and call[0][0].process.image == process_name
+        ]
+        assert process_events
+        assert process_events[0].process.current_directory == (
+            f"C:\\Users\\{test_user.username}\\Documents\\"
+        )
 
     def test_process_follow_on_file_event_after_process_create(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
