@@ -170,6 +170,13 @@ class GroundTruthGenerator:
             Formatted details string
         """
         event_type = event["type"]
+        skipped_reason = event.get("skipped_reason")
+        if skipped_reason:
+            reason = str(skipped_reason).replace("_", " ")
+            target = event.get("target_process")
+            if target:
+                return f"Skipped ({reason}); no evidence emitted for target {target}"
+            return f"Skipped ({reason}); no evidence emitted"
 
         if event_type == "logon":
             source_ip = event.get("source_ip", "N/A")
@@ -312,6 +319,9 @@ class GroundTruthGenerator:
         }
 
         for event in self.malicious_events:
+            if event.get("skipped_reason"):
+                continue
+
             # Extract actor (user)
             iocs["users"].add(event["actor"])
 

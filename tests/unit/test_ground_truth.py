@@ -641,6 +641,22 @@ class TestGroundTruthGenerator:
         iocs = generator._extract_iocs()
         assert "Injection Target: C:\\Windows\\System32\\lsass.exe" in iocs["processes"]
 
+    def test_extract_iocs_skips_unemitted_events(self, minimal_scenario):
+        """_extract_iocs() should not list indicators for skipped evidence."""
+        events = [
+            {
+                "actor": "attacker",
+                "type": "create_remote_thread",
+                "target_process": "C:\\Windows\\System32\\lsass.exe",
+                "skipped_reason": "no_live_source_process",
+            }
+        ]
+        generator = GroundTruthGenerator(minimal_scenario, events)
+        iocs = generator._extract_iocs()
+        assert "Injection Target: C:\\Windows\\System32\\lsass.exe" not in iocs.get(
+            "processes", set()
+        )
+
     def test_extract_iocs_account_created(self, minimal_scenario):
         """_extract_iocs() should extract target username from account_created."""
         events = [
@@ -712,6 +728,20 @@ class TestGroundTruthGenerator:
         generator = GroundTruthGenerator(minimal_scenario, malicious_events)
         details = generator._format_event_details(event)
         assert "Remote thread injection into C:\\Windows\\System32\\lsass.exe" in details
+
+    def test_format_event_details_skipped_event(self, minimal_scenario, malicious_events):
+        """_format_event_details() should identify skipped evidence without claiming success."""
+        event = {
+            "type": "create_remote_thread",
+            "target_process": "C:\\Windows\\System32\\lsass.exe",
+            "skipped_reason": "no_live_source_process",
+        }
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+        details = generator._format_event_details(event)
+        assert details == (
+            "Skipped (no live source process); "
+            "no evidence emitted for target C:\\Windows\\System32\\lsass.exe"
+        )
 
     def test_format_event_details_account_created(self, minimal_scenario, malicious_events):
         """_format_event_details() should format account_created events."""

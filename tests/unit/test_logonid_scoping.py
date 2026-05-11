@@ -218,9 +218,19 @@ class TestLogonIdSystemScoping:
     ):
         """Typed process_access should emit Sysmon Event 10 from the prior process."""
         engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        state_manager.set_current_time(datetime(2024, 3, 15, 10, 29, 0, tzinfo=UTC))
+        pid = state_manager.create_process(
+            "WKS-A",
+            4,
+            r"C:\Windows\Temp\procdump64.exe",
+            r"C:\Windows\Temp\procdump64.exe -ma lsass.exe",
+            attacker.username,
+            "High",
+            logon_id="0x12345",
+        )
         engine._record_last_storyline_process(
             system_a,
-            4242,
+            pid,
             r"C:\Windows\Temp\procdump64.exe",
         )
         engine.activity_generator.generate_process_access = Mock()
@@ -241,7 +251,7 @@ class TestLogonIdSystemScoping:
 
         engine.activity_generator.generate_process_access.assert_called_once()
         kwargs = engine.activity_generator.generate_process_access.call_args.kwargs
-        assert kwargs["source_pid"] == 4242
+        assert kwargs["source_pid"] == pid
         assert kwargs["source_image"] == r"C:\Windows\Temp\procdump64.exe"
         assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
         assert kwargs["granted_access"] == "0x1010"
@@ -251,9 +261,19 @@ class TestLogonIdSystemScoping:
     ):
         """Typed create_remote_thread should share full target image paths across sources."""
         engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        state_manager.set_current_time(datetime(2024, 3, 15, 10, 29, 0, tzinfo=UTC))
+        pid = state_manager.create_process(
+            "WKS-A",
+            4,
+            r"C:\Windows\Temp\procdump64.exe",
+            r"C:\Windows\Temp\procdump64.exe -ma lsass.exe",
+            attacker.username,
+            "High",
+            logon_id="0x12345",
+        )
         engine._record_last_storyline_process(
             system_a,
-            4242,
+            pid,
             r"C:\Windows\Temp\procdump64.exe",
         )
         engine.activity_generator.generate_create_remote_thread = Mock()
@@ -278,6 +298,67 @@ class TestLogonIdSystemScoping:
         assert kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
         expand_kwargs = engine.activity_generator._expand_and_emit.call_args.kwargs
         assert expand_kwargs["target_image"] == r"C:\Windows\System32\lsass.exe"
+
+    def test_storyline_process_access_with_stale_source_is_marked_skipped(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed process_access should not claim evidence when remembered PID is stale."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        engine._record_last_storyline_process(
+            system_a,
+            4242,
+            r"C:\Windows\Temp\procdump64.exe",
+        )
+        engine.activity_generator.generate_process_access = Mock()
+
+        spec = Mock()
+        spec.type = "process_access"
+        spec.target_process = "lsass.exe"
+        spec.access_mask = "0x1010"
+
+        malicious_event = engine._execute_typed_event(
+            spec=spec,
+            actor=attacker,
+            system=system_a,
+            time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+            activity="Dump credentials",
+            explicit_types={"process_access"},
+        )
+
+        engine.activity_generator.generate_process_access.assert_not_called()
+        assert malicious_event["target_process"] == r"C:\Windows\System32\lsass.exe"
+        assert malicious_event["skipped_reason"] == "no_live_source_process"
+
+    def test_storyline_create_remote_thread_with_stale_source_is_marked_skipped(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed create_remote_thread should not claim evidence when remembered PID is stale."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        engine._record_last_storyline_process(
+            system_a,
+            4242,
+            r"C:\Windows\Temp\injector.exe",
+        )
+        engine.activity_generator.generate_create_remote_thread = Mock()
+        engine.activity_generator._expand_and_emit = Mock()
+
+        spec = Mock()
+        spec.type = "create_remote_thread"
+        spec.target_process = "lsass.exe"
+
+        malicious_event = engine._execute_typed_event(
+            spec=spec,
+            actor=attacker,
+            system=system_a,
+            time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+            activity="Inject into lsass",
+            explicit_types={"create_remote_thread"},
+        )
+
+        engine.activity_generator.generate_create_remote_thread.assert_not_called()
+        engine.activity_generator._expand_and_emit.assert_not_called()
+        assert malicious_event["target_process"] == r"C:\Windows\System32\lsass.exe"
+        assert malicious_event["skipped_reason"] == "no_live_source_process"
 
     def test_storyline_process_termination_is_deferred_until_step_end(
         self, state_manager, mock_emitters, system_a, attacker

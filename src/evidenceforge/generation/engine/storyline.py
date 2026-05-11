@@ -471,7 +471,7 @@ class StorylineMixin:
         return logon_id
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
-        """Return last storyline process only when it belongs to the same source host."""
+        """Return the last live storyline process for the same source host."""
         if system is None:
             return -1, None
         processes = getattr(self, "_last_storyline_process_by_system", {})
@@ -483,6 +483,13 @@ class StorylineMixin:
         if os_category == "windows" and image.startswith("/"):
             return -1, None
         if os_category == "linux" and re.match(r"^[A-Za-z]:\\", image):
+            return -1, None
+        if self.state_manager.get_process(system.hostname, pid) is None:
+            processes.pop(system.hostname, None)
+            if getattr(self, "_last_storyline_system", None) == system.hostname:
+                self._last_storyline_pid = -1
+                self._last_storyline_image = ""
+                self._last_storyline_system = ""
             return -1, None
         return pid, image
 
@@ -1461,9 +1468,6 @@ class StorylineMixin:
 
         elif spec.type == "create_remote_thread":
             source_pid, source_image = self._last_storyline_process_for_system(system)
-            if source_pid <= 0:
-                source_pid = 0
-                source_image = "unknown"
             # Use a realistic target PID — look up the process name from
             # system PIDs or use a plausible default (not 4 = System kernel)
             target_image = _normalize_storyline_process_image(
@@ -1472,50 +1476,57 @@ class StorylineMixin:
                 username=actor.username,
             )
             target_name = target_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-            target_pid = self.activity_generator._get_system_pid(
-                system.hostname,
-                target_name.replace(".exe", ""),
-                0x27C,  # 636 default
-            )
-            self.activity_generator.generate_create_remote_thread(
-                user=actor,
-                system=system,
-                time=time,
-                source_pid=source_pid,
-                source_image=source_image,
-                target_pid=target_pid,
-                target_image=target_image,
-            )
-            # Emit ProcessAccess via causal expansion engine (or legacy fallback)
-            # when targeting lsass.exe — primary credential-dumping detection signal
-            if "lsass" in target_name:
-                self.activity_generator._expand_and_emit(
-                    "create_remote_thread",
-                    time,
-                    actor=actor,
-                    target_system=system,
+            if source_pid <= 0:
+                # Without a live source process, there is no realistic Sysmon
+                # Event 8 relationship to render. Keep the storyline record,
+                # but mark it skipped instead of claiming generated evidence.
+                malicious_event["target_process"] = target_image
+                malicious_event["skipped_reason"] = "no_live_source_process"
+            else:
+                target_pid = self.activity_generator._get_system_pid(
+                    system.hostname,
+                    target_name.replace(".exe", ""),
+                    0x27C,  # 636 default
+                )
+                self.activity_generator.generate_create_remote_thread(
+                    user=actor,
+                    system=system,
+                    time=time,
                     source_pid=source_pid,
                     source_image=source_image,
                     target_pid=target_pid,
                     target_image=target_image,
                 )
-            malicious_event["target_process"] = target_image
+                # Emit ProcessAccess via causal expansion engine (or legacy fallback)
+                # when targeting lsass.exe — primary credential-dumping detection signal
+                if "lsass" in target_name:
+                    self.activity_generator._expand_and_emit(
+                        "create_remote_thread",
+                        time,
+                        actor=actor,
+                        target_system=system,
+                        source_pid=source_pid,
+                        source_image=source_image,
+                        target_pid=target_pid,
+                        target_image=target_image,
+                    )
+                malicious_event["target_process"] = target_image
 
         elif spec.type == "process_access":
             source_pid, source_image = self._last_storyline_process_for_system(system)
+            os_category = _get_os_category(system.os)
+            target_image = _normalize_storyline_process_image(
+                spec.target_process,
+                os_category,
+                username=actor.username,
+            )
             if source_pid <= 0:
-                # Without a source process, there is no realistic Sysmon Event
-                # 10 relationship to render. Keep the storyline record, but do
-                # not fabricate an unowned process-access event.
-                malicious_event["target_process"] = spec.target_process
-                malicious_event["skipped_reason"] = "no_source_process"
+                # Without a live source process, there is no realistic Sysmon
+                # Event 10 relationship to render. Keep the storyline record,
+                # but mark it skipped instead of claiming generated evidence.
+                malicious_event["target_process"] = target_image
+                malicious_event["skipped_reason"] = "no_live_source_process"
             else:
-                os_category = _get_os_category(system.os)
-                target_image = _normalize_storyline_process_image(
-                    spec.target_process,
-                    os_category,
-                    username=actor.username,
-                )
                 target_name = target_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
                 target_pid = self.activity_generator._get_system_pid(
                     system.hostname,
