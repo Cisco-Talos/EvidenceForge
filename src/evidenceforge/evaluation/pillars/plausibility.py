@@ -66,6 +66,11 @@ _OS_BOUND_FORMATS = {
     "bash_history": "linux",
 }
 
+# Cross-source agreement uses attacker-controlled eval log input. Keep pivot joins bounded so
+# a single high-cardinality collision bucket cannot force quadratic CPU work.
+_MAX_PIVOT_BUCKET_RECORDS = 256
+_MAX_FIELD_AGREEMENT_MATCHES = 100_000
+
 
 class PlausibilityScorer(DimensionScorer):
     number = 2
@@ -737,12 +742,17 @@ def _get_pivot_key_a(record: ParsedRecord, pivot: dict) -> Any:
         return raw_key
 
 
-def _build_pivot_index(records: list[ParsedRecord], pivot: dict) -> dict:
+def _build_pivot_index(
+    records: list[ParsedRecord],
+    pivot: dict,
+    max_bucket_records: int = _MAX_PIVOT_BUCKET_RECORDS,
+) -> dict:
     index: dict = defaultdict(list)
     coerce = pivot.get("coerce")
     require_hn = pivot.get("require_hostname_match", False)
 
     for rec in records:
+        key: object | None = None
         if pivot.get("b_fields"):
             parts = []
             for f in pivot["b_fields"]:
@@ -757,7 +767,7 @@ def _build_pivot_index(records: list[ParsedRecord], pivot: dict) -> dict:
                         break
                     parts.append(v)
             else:
-                index[tuple(parts)].append(rec)
+                key = tuple(parts)
         else:
             b_field = pivot.get("b_field")
             if not b_field:
@@ -771,7 +781,12 @@ def _build_pivot_index(records: list[ParsedRecord], pivot: dict) -> dict:
                 key = (hn.lower() if hn else None, raw_key)
             else:
                 key = raw_key
-            index[key].append(rec)
+
+        if key is None:
+            continue
+        bucket = index[key]
+        if len(bucket) < max_bucket_records:
+            bucket.append(rec)
     return dict(index)
 
 
@@ -837,6 +852,7 @@ def _score_pair(
     b_index: dict,
     pivot: dict,
     agree_on: list,
+    max_matches: int = _MAX_FIELD_AGREEMENT_MATCHES,
 ) -> tuple[int, int, list[str]]:
     total_matched = 0
     agreeing = 0
@@ -844,6 +860,9 @@ def _score_pair(
     time_window = pivot.get("time_window_seconds")
 
     for rec_a in filtered_a:
+        if total_matched >= max_matches:
+            break
+
         key_a = _get_pivot_key_a(rec_a, pivot)
         if key_a is None:
             continue
@@ -870,6 +889,8 @@ def _score_pair(
                 continue
 
         for rec_b in matching_b:
+            if total_matched >= max_matches:
+                break
             total_matched += 1
             all_agree = True
             for agree_spec in agree_on:
