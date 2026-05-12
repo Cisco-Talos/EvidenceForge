@@ -1517,31 +1517,64 @@ class SysmonEventEmitter(LogEmitter):
 
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Sysmon Event 1 children from preceding their parent Event 1."""
-        changed = True
-        while changed:
+        process_create_events: dict[tuple[str, str], dict[str, Any]] = {}
+        parent_keys: dict[tuple[str, str], tuple[str, str]] = {}
+
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            computer = str(event.get("Computer", ""))
+            key = (computer, str(guid))
+            process_create_events[key] = event
+            parent_guid = event.get("ParentProcessGuid")
+            if parent_guid:
+                parent_keys[key] = (computer, str(parent_guid))
+
+        if not process_create_events:
+            return
+
+        cyclic_keys: set[tuple[str, str]] = set()
+        for key in process_create_events:
+            path: list[tuple[str, str]] = []
+            seen: set[tuple[str, str]] = set()
+            current: tuple[str, str] | None = key
+            while current is not None:
+                if current in seen:
+                    cyclic_keys.update(path[path.index(current) :])
+                    break
+                if current in cyclic_keys:
+                    break
+                seen.add(current)
+                path.append(current)
+                parent_key = parent_keys.get(current)
+                current = parent_key if parent_key in process_create_events else None
+
+        max_passes = len(process_create_events)
+        for _ in range(max_passes):
             changed = False
             process_create_times: dict[tuple[str, str], datetime] = {}
-            for event in self._event_dicts:
-                if event.get("EventID") != 1:
-                    continue
+            for key, event in process_create_events.items():
                 ts = event.get("TimeCreated")
-                guid = event.get("ProcessGuid")
-                computer = str(event.get("Computer", ""))
-                if isinstance(ts, datetime) and guid:
-                    process_create_times[(computer, str(guid))] = ts
+                if isinstance(ts, datetime):
+                    process_create_times[key] = ts
 
-            for event in self._event_dicts:
-                if event.get("EventID") != 1:
+            for key, event in process_create_events.items():
+                if key in cyclic_keys:
                     continue
                 ts = event.get("TimeCreated")
-                parent_guid = event.get("ParentProcessGuid")
-                computer = str(event.get("Computer", ""))
-                if not isinstance(ts, datetime) or not parent_guid:
+                parent_key = parent_keys.get(key)
+                if not isinstance(ts, datetime) or parent_key is None or parent_key in cyclic_keys:
                     continue
-                parent_time = process_create_times.get((computer, str(parent_guid)))
+                parent_time = process_create_times.get(parent_key)
                 if parent_time is not None and ts <= parent_time:
                     event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
                     changed = True
+            if not changed:
+                break
 
     def _shift_followons_after_process_create(self) -> None:
         """Prevent same-ProcessGuid Sysmon follow-ons from preceding Event 1."""

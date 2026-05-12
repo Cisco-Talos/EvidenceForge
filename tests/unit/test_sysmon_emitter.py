@@ -591,6 +591,56 @@ class TestSysmonEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
 
+    def test_process_create_self_parent_is_not_shifted_forever(self, format_def, temp_output):
+        """Self-parent raw Sysmon Event 1 records should be treated as unshiftable."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_guid = "{12345678-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "TimeCreated": event_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": process_guid,
+                "ParentProcessGuid": process_guid,
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time
+
+    def test_process_create_parent_cycle_is_not_shifted_forever(self, format_def, temp_output):
+        """Cyclic raw Sysmon parent relationships should be treated as unshiftable."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
+        first_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+        first_guid = "{11111111-abcd-ef01-2345-678901234567}"
+        second_guid = "{22222222-abcd-ef01-2345-678901234567}"
+
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "TimeCreated": first_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": first_guid,
+                "ParentProcessGuid": second_guid,
+            },
+            {
+                "EventID": 1,
+                "TimeCreated": second_time,
+                "Computer": "WKS-01.corp.local",
+                "ProcessGuid": second_guid,
+                "ParentProcessGuid": first_guid,
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == first_time
+        assert emitter._event_dicts[1]["TimeCreated"] == second_time
+
     def test_termination_shifted_after_follow_on(self, format_def, temp_output):
         """Event 5 should not precede later visible telemetry for the same ProcessGuid."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=10)
