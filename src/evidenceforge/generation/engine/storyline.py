@@ -1403,6 +1403,7 @@ class StorylineMixin:
                 pid=story_pid,
                 process_image=story_image,
                 hostname=conn_hostname,
+                preserve_dst_ip=bool(spec.hostname),
             )
             malicious_event["dst_ip"] = dst_ip
             malicious_event["dst_port"] = dst_port

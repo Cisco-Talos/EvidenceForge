@@ -22,12 +22,14 @@
 
 """Tests for activity generator SSL/HTTP/FileTransfer context population."""
 
+import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
-from evidenceforge.events.contexts import HttpContext
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -135,6 +137,50 @@ class TestSslContextPopulation:
         assert event.network.resp_bytes >= 1840
         assert event.ssl is not None
         assert event.ssl.established is True
+
+    def test_http_over_tls_forces_established_ssl_context(self, activity_gen, monkeypatch):
+        """Successful HTTP evidence on TLS cannot coexist with failed ssl.log state."""
+        gen, _ = activity_gen
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.generator._SSL_FAILURE_RATE",
+            1.0,
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51432,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/index.html",
+                status_code=200,
+                status_msg="OK",
+                response_body_len=4096,
+            ),
+        )
+
+        gen._attach_ssl_context(
+            event,
+            hostname="example.com",
+            dns=None,
+            dst_ip="93.184.216.34",
+            rng=random.Random(7),
+            allow_failure=True,
+        )
+
+        assert event.network.conn_state == "SF"
+        assert event.ssl is not None
+        assert event.ssl.established is True
+        assert event.ssl.cipher
 
     def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
         """Proxy egress should preserve canonical POST body size for exfil-style uploads."""

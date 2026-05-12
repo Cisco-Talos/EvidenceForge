@@ -1995,6 +1995,11 @@ class ActivityGenerator:
         # Suppressed hostname -> no SNI (raw-IP C2, etc.)
         if server_name == "":
             server_name = None
+        if event.http is not None:
+            # A visible HTTP transaction over TLS means the handshake completed.
+            # Failed-handshake SSL rows cannot coexist with successful http.log,
+            # web/proxy response bytes, or SF conn.log accounting for the same UID.
+            allow_failure = False
 
         # For suppressed external hostnames (raw-IP C2), use the IP as the cert subject.
         # For internal/private endpoints without explicit SNI, use the known
