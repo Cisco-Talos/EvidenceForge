@@ -16,6 +16,7 @@ from evidenceforge.events.contexts import (
     HostContext,
     ImageLoadContext,
     NetworkContext,
+    ProcessAccessContext,
     ProcessContext,
     RegistryContext,
 )
@@ -1169,6 +1170,37 @@ class TestUserFieldFormatting:
         emitter.flush()
         content = list(emitter._host_writers.values())[0].output_path.read_text()
         assert "CORP\\jsmith" in content
+
+    def test_process_access_target_user_gets_domain(self, emitter):
+        """Sysmon Event 10 target user should use source-native domain formatting."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_access",
+            src_host=_win_host(),
+            auth=AuthContext(username="jsmith", logon_id="0x12345"),
+            process=ProcessContext(
+                pid=4002,
+                parent_pid=3000,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe",
+                username="jsmith",
+                start_time=datetime(2024, 1, 15, 9, 59, tzinfo=UTC),
+            ),
+            process_access=ProcessAccessContext(
+                source_pid=4002,
+                source_image=r"C:\Windows\System32\cmd.exe",
+                source_thread_id=4200,
+                target_pid=500,
+                target_image=r"C:\Windows\System32\lsass.exe",
+                target_user="SYSTEM",
+                granted_access="0x1010",
+            ),
+        )
+        emitter._render_sysmon_process_access(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert '<Data Name="TargetUser">NT AUTHORITY\\SYSTEM</Data>' in content
+        assert '<Data Name="TargetUser">SYSTEM</Data>' not in content
 
 
 class TestCallTraceConsistency:

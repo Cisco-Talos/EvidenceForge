@@ -1337,6 +1337,7 @@ class WindowsEventEmitter(LogEmitter):
         self._shift_process_creates_after_visible_parent()
         self._shift_process_terminations_after_dependents()
         self._shift_logoffs_after_dependents()
+        self._suppress_duplicate_lock_unlock_transitions()
 
         def _sort_key(event: dict) -> Any:
             ts = event.get("TimeCreated", "")
@@ -1437,6 +1438,73 @@ class WindowsEventEmitter(LogEmitter):
                     "windows.logoff_after_rendered_dependents",
                     seed_parts=(key[0], key[1], latest),
                 )
+
+    def _suppress_duplicate_lock_unlock_transitions(self) -> None:
+        """Keep 4800/4801 as a chronological session state machine.
+
+        Baseline code can schedule a future unlock before an earlier storyline
+        transition is generated. Final Security rendering has the complete
+        chronological view, so it owns suppression of duplicate visible states.
+        """
+
+        def _sort_key(index_and_event: tuple[int, dict[str, Any]]) -> tuple[datetime, int]:
+            index, event = index_and_event
+            ts = event.get("TimeCreated")
+            if isinstance(ts, datetime):
+                return (ensure_utc(ts), index)
+            return (datetime.max.replace(tzinfo=UTC), index)
+
+        session_state: dict[tuple[str, str, str], str] = {}
+        dropped_indexes: set[int] = set()
+        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+
+        for index, event in sorted(enumerate(self._event_dicts), key=_sort_key):
+            event_id = event.get("EventID")
+            if event_id not in {4800, 4801}:
+                continue
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            logon_id = str(event.get("TargetLogonId") or "")
+            session_id = str(event.get("SessionId") or "")
+            if not computer or not logon_id:
+                continue
+            key = (computer, logon_id, session_id)
+            next_state = "locked" if event_id == 4800 else "unlocked"
+            if session_state.get(key) == next_state:
+                dropped_indexes.add(index)
+                if event_id == 4801:
+                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                continue
+            session_state[key] = next_state
+
+        for index, event in enumerate(self._event_dicts):
+            if index in dropped_indexes or event.get("EventID") != 4624:
+                continue
+            if str(event.get("LogonType") or "") != "7":
+                continue
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            logon_id = str(event.get("TargetLogonId") or "")
+            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
+                delta = ensure_utc(ts) - unlock_ts
+                if (
+                    computer == drop_computer
+                    and logon_id == drop_logon_id
+                    and timedelta(0) <= delta <= timedelta(seconds=2)
+                ):
+                    dropped_indexes.add(index)
+                    break
+
+        if dropped_indexes:
+            self._event_dicts = [
+                event
+                for index, event in enumerate(self._event_dicts)
+                if index not in dropped_indexes
+            ]
 
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Security 4688 children from preceding parent 4688 rows."""

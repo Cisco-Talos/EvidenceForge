@@ -190,7 +190,7 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     return 1.0 / effective_rate
 
 
-def _web_scan_connection_profile(rng) -> tuple[str, float, int, int]:
+def _web_scan_connection_profile(rng, *, is_tls: bool = False) -> tuple[str, float, int, int]:
     """Return source-native connection outcome fields for one web-scan attempt."""
     conn_state = rng.choices(
         ["SF", "S0", "RSTO", "RSTR"],
@@ -201,6 +201,14 @@ def _web_scan_connection_profile(rng) -> tuple[str, float, int, int]:
         return conn_state, rng.uniform(0.002, 0.08), rng.randint(44, 220), 0
     if conn_state in {"RSTO", "RSTR"}:
         return conn_state, rng.uniform(0.01, 0.3), rng.randint(80, 900), rng.randint(0, 400)
+    if is_tls:
+        if rng.random() < 0.72:
+            duration = rng.uniform(0.8, 3.5)
+        elif rng.random() < 0.92:
+            duration = min(rng.lognormvariate(1.0, 0.75), 12.0)
+        else:
+            duration = rng.uniform(6.0, 18.0)
+        return conn_state, duration, rng.randint(260, 2600), rng.randint(700, 12000)
     return conn_state, rng.uniform(0.01, 0.5), rng.randint(200, 2000), rng.randint(200, 5000)
 
 
@@ -2250,7 +2258,9 @@ class StorylineMixin:
                         last_rate_alert_ts = tick_time
                         next_rate_alert_delay = rng.uniform(45.0, 120.0)
 
-                conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(rng)
+                conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(
+                    rng, is_tls=is_tls
+                )
                 http_for_conn = http_ctx if conn_state == "SF" else None
 
                 self.activity_generator.generate_connection(

@@ -659,6 +659,8 @@ class SysmonEventEmitter(LogEmitter):
         Windows always reports SYSTEM, LOCAL SERVICE, and NETWORK SERVICE
         under 'NT AUTHORITY', never under the AD domain name.
         """
+        if "\\" in username:
+            return username
         domain = _subject_domain(username, netbios_domain)
         return f"{domain}\\{username}"
 
@@ -989,6 +991,11 @@ class SysmonEventEmitter(LogEmitter):
         # 0x1FFFFF = PROCESS_ALL_ACCESS
         # 0x1438 = typical mimikatz access mask
         granted_access = access.granted_access if access else "0x1010"
+        target_user = (
+            self._format_user(access.target_user, host.netbios_domain)
+            if access and access.target_user
+            else "NT AUTHORITY\\SYSTEM"
+        )
 
         event_data = {
             "EventID": 10,
@@ -1007,7 +1014,7 @@ class SysmonEventEmitter(LogEmitter):
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
-            "TargetUser": access.target_user if access else "NT AUTHORITY\\SYSTEM",
+            "TargetUser": target_user,
             "GrantedAccess": granted_access,
             "CallTrace": access.call_trace
             if access and access.call_trace

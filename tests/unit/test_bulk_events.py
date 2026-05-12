@@ -397,6 +397,18 @@ class TestWebScanConnectionProfile:
         assert state == "S0"
         assert resp_bytes == 0
 
+    def test_tls_profile_has_wide_duration_and_byte_distribution(self):
+        rng = random.Random(42)
+        samples = []
+        for _ in range(400):
+            sample = _web_scan_connection_profile(rng, is_tls=True)
+            if sample[0] == "SF":
+                samples.append(sample)
+        durations = [sample[1] for sample in samples]
+        resp_bytes = [sample[3] for sample in samples]
+        assert max(durations) - min(durations) > 4.0
+        assert max(resp_bytes) - min(resp_bytes) > 6000
+
     def test_referrer_only_allowed_for_crawl_like_successes(self):
         assert _web_scan_path_allows_referrer({"uri": "/", "status": 200})
         assert not _web_scan_path_allows_referrer({"uri": "/.git/HEAD", "status": 404})
