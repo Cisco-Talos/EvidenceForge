@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
@@ -610,8 +611,20 @@ class TestSslUidCorrelation:
             ]
 
         conn_ts = base_ts.timestamp()
-        assert conn_ts < ssl_ts < conn_ts + 0.1
-        assert ssl_ts < x509_ts < conn_ts + 0.7
+        ssl_window = get_timing_window(
+            "source.zeek_ssl_analyzer",
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        x509_window = get_timing_window(
+            "source.zeek_x509_analyzer",
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000)
+        assert ssl_ts < x509_ts <= conn_ts + (x509_window.max_ms / 1000)
         assert x509_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
         assert "uid" not in ocsp_row

@@ -3790,6 +3790,8 @@ class ActivityGenerator:
         )
         process_exe = (process_image or "").rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         is_tcp_probe = process_exe in {"nmap", "nmap.exe"}
+        if source_system is None and hasattr(self, "_ip_to_system"):
+            source_system = self._ip_to_system.get(src_ip)
 
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
@@ -9703,7 +9705,12 @@ class ActivityGenerator:
         if not is_pre_existing:
             # Emit a process creation event
             from evidenceforge.events.base import SecurityEvent
-            from evidenceforge.events.contexts import AuthContext, ProcessContext
+
+            proc_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
+            actor_obj_id = self.state_manager.get_process_object_id(
+                system.hostname,
+                grandparent_pid,
+            )
 
             event = SecurityEvent(
                 timestamp=parent_time,
@@ -9735,6 +9742,7 @@ class ActivityGenerator:
                     mandatory_label="S-1-16-8192",
                     start_time=self._lookup_parent_start_time(system.hostname, parent_pid),
                 ),
+                edr=EdrContext(object_id=proc_obj_id, actor_id=actor_obj_id),
             )
             self.dispatcher.dispatch(event)
 

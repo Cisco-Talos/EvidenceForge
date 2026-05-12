@@ -75,7 +75,12 @@ relationships:
     class: same_observation
     position: after
     min_ms: 1
-    max_ms: 35
+    max_ms: 450
+  source.zeek_dns_query:
+    class: same_observation
+    position: after
+    min_ms: 1
+    max_ms: 95
   network.proxy_upstream_after_client:
     class: causal_prerequisite
     position: after
@@ -84,8 +89,8 @@ relationships:
   source.zeek_ssl_analyzer:
     class: same_observation
     position: after
-    min_ms: 5
-    max_ms: 80
+    min_ms: 3
+    max_ms: 650
   source.zeek_x509_analyzer:
     class: same_observation
     position: after
