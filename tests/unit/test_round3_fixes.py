@@ -141,7 +141,9 @@ class TestResolveImagePath:
                 "certutil.exe",
                 "servermanager.exe",
                 "eventvwr.exe",
+                "mmc.exe",
                 "perfmon.exe",
+                "wevtutil.exe",
             }
             if basename.lower() not in _SYSTEM32_OK:
                 assert "System32" not in resolved, (

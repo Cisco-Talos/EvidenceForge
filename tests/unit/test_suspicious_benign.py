@@ -35,6 +35,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     generate_failed_logon_burst,
     generate_service_account_anomaly,
     generate_suspicious_cli,
+    generate_temp_dir_execution,
     generate_unusual_powershell,
     get_suspicious_event_count,
     pick_suspicious_pattern,
@@ -248,6 +249,30 @@ class TestGenerateAfterHoursAdmin:
         assert result["time"] < current_hour + timedelta(hours=1)
 
 
+class TestGenerateTempDirExecution:
+    """Tests for temporary-directory execution noise."""
+
+    def test_linux_script_backed_commands_use_interpreter_images(self, users, current_hour):
+        """Linux script invocations should not render the script path as the process image."""
+        linux_systems = [
+            System(hostname="SRV-APP-01", ip="10.0.0.10", os="Ubuntu 22.04", type="server")
+        ]
+        observed: dict[str, str] = {}
+
+        for seed in range(100):
+            result = generate_temp_dir_execution(
+                random.Random(seed),
+                users,
+                linux_systems,
+                current_hour,
+            )
+            assert result is not None
+            observed[result["command_line"]] = result["process_name"]
+
+        assert observed["python3 /tmp/pip-install-cache/setup.py install"] == "/usr/bin/python3"
+        assert observed["bash /tmp/npm-postinstall.sh"] == "/bin/bash"
+
+
 class TestGenerateSuspiciousCli:
     """Tests for generate_suspicious_cli."""
 
@@ -278,6 +303,30 @@ class TestGenerateSuspiciousCli:
                 "powershell" in result["process_name"].lower()
                 or "cmd" in result["process_name"].lower()
             )
+
+    def test_domain_dn_is_scenario_specific(self, current_hour):
+        win_users = [User(username="u1", full_name="U", email="u@x.com")]
+        win_systems = [
+            System(
+                hostname="WS-01",
+                ip="10.0.0.1",
+                os="Windows 10",
+                type="workstation",
+                assigned_user="u1",
+            )
+        ]
+        commands = {
+            generate_suspicious_cli(
+                random.Random(seed),
+                win_users,
+                win_systems,
+                current_hour,
+                ad_domain="meridianhcs.local",
+            )["command_line"]
+            for seed in range(100)
+        }
+        assert any("DC=meridianhcs,DC=local" in command for command in commands)
+        assert not any("DC=corp,DC=local" in command for command in commands)
 
     def test_linux_system_gets_linux_commands(self, rng, current_hour):
         """Linux systems should get Linux commands."""
@@ -411,3 +460,25 @@ class TestEncodedPowershell:
                 encoded_payloads.add(payload)
         # Should get multiple distinct base64 payloads
         assert len(encoded_payloads) > 3, f"Only {len(encoded_payloads)} unique encoded payloads"
+
+    def test_unusual_powershell_api_domain_is_scenario_specific(self, users):
+        systems = [
+            System(
+                hostname="WS-01",
+                ip="10.0.0.1",
+                os="Windows 10 Enterprise",
+                type="workstation",
+            )
+        ]
+        commands = {
+            generate_unusual_powershell(
+                random.Random(seed),
+                users,
+                systems,
+                datetime(2024, 1, 15, 10, 0),
+                ad_domain="meridianhcs.local",
+            )["command_line"]
+            for seed in range(100)
+        }
+        assert any("internal-api.meridianhcs.local" in command for command in commands)
+        assert not any("internal-api.corp.local" in command for command in commands)

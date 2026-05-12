@@ -127,6 +127,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     distro: str | None = None
     roles: list[str] | None = None
     transient: bool | None = None
+    weight: int = Field(default=10, gt=0)
 
 
 # --- TLS Issuers ---
@@ -779,7 +780,19 @@ class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
 class WindowsSpecialPrivilegesConfig(BaseModel, extra="forbid"):
     """Windows 4672 privilege profile config."""
 
+    emission_probabilities: dict[str, float] = Field(default_factory=dict)
     profiles: dict[str, WindowsSpecialPrivilegesProfile]
+
+    @field_validator("emission_probabilities")
+    @classmethod
+    def probabilities_are_unit_interval(cls, v: dict[str, float]) -> dict[str, float]:
+        for profile_name, probability in v.items():
+            if probability < 0.0 or probability > 1.0:
+                raise ValueError(
+                    f"special_privileges.emission_probabilities.{profile_name} "
+                    "must be between 0.0 and 1.0"
+                )
+        return v
 
     @field_validator("profiles")
     @classmethod
@@ -945,6 +958,13 @@ class RemoteThreadStartLocationEntry(BaseModel, extra="forbid"):
         if v <= 0:
             raise ValueError("weight must be positive")
         return v
+
+
+class CreateRemoteThreadNoiseConfig(BaseModel, extra="forbid"):
+    """Rate controls for benign Sysmon Event 8 baseline noise."""
+
+    probability_per_host_hour: float = Field(ge=0.0, le=1.0)
+    max_events_per_hour: int = Field(ge=0, le=5)
 
 
 # --- Traffic Profile Connection ---

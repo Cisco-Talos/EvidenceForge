@@ -99,6 +99,7 @@ class ProcessContext:
     token_elevation: str = ""  # TokenElevationType (%%1936/%%1938)
     mandatory_label: str = ""  # MandatoryLabel SID
     start_time: datetime | None = None  # Process creation time for stable cross-event GUIDs
+    current_directory: str = ""  # Sysmon Event 1 CurrentDirectory / process working dir
 
 
 @dataclass(slots=True)
@@ -401,7 +402,7 @@ class X509Context:
     """X.509 certificate details for Zeek x509.log."""
 
     fuid: str = ""  # Zeek file UID referenced by ssl.cert_chain_fuids
-    fingerprint: str = ""  # SHA256 hex
+    fingerprint: str = ""  # SHA1 hex as rendered by Zeek x509.log
     certificate_version: int = 3
     certificate_serial: str = ""
     certificate_subject: str = ""
@@ -466,6 +467,8 @@ class OcspContext:
     cert_status: str = "good"  # "good", "revoked", "unknown"
     this_update: float = 0.0
     next_update: float = 0.0
+    revoketime: float | None = None
+    revokereason: str | None = None
 
 
 @dataclass(slots=True)

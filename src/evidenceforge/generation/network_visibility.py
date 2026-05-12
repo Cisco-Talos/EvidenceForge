@@ -165,6 +165,26 @@ class NetworkVisibilityEngine:
         """Return the public VIP for a given real (internal) IP, or None."""
         return self._real_ip_to_vip.get(real_ip)
 
+    def get_public_inbound_address(self, real_ip: str) -> str | None:
+        """Return the address an external source can use to reach a host.
+
+        Static-NAT hosts are reached through their VIP. Hosts with directly
+        public addresses can be reached as-is. Private hosts without static NAT
+        are unreachable from outside and return None.
+        """
+        vip = self.get_inbound_vip(real_ip)
+        if vip:
+            return vip
+        try:
+            addr = ipaddress.ip_address(real_ip)
+        except ValueError:
+            return None
+        if not addr.is_private:
+            return real_ip
+        if any(addr in public_net for public_net in self._public_cidrs):
+            return real_ip
+        return None
+
     def _resolve_ip_segments(self, ip: str) -> set[str]:
         """Return the set of segment names an IP belongs to.
 

@@ -231,14 +231,20 @@ class TestParallelGeneration:
                 list(Path(tmpdir).rglob("windows_event_security.xml"))[0]
             )
 
-            # Verify LogonID uniqueness (only in logon events; logoff events reuse the same ID)
-            logon_ids = [
+            # Verify session-establishing LogonIDs are unique. Workstation unlocks
+            # are 4624 Type 7 re-authentications that can reuse an active interactive
+            # session LogonID. In a slice-of-time dataset, that original session may
+            # have started before the rendered window, so Type 7 is excluded from
+            # this uniqueness contract rather than required to match a visible 4624.
+            session_logon_ids = [
                 e.get("TargetLogonId")
                 for e in windows_events
-                if e.get("TargetLogonId") and e.get("EventID") == "4624"
+                if e.get("TargetLogonId")
+                and e.get("EventID") == "4624"
+                and str(e.get("LogonType")) != "7"
             ]
-            assert len(logon_ids) > 0
-            assert len(logon_ids) == len(set(logon_ids)), (
+            assert len(session_logon_ids) > 0
+            assert len(session_logon_ids) == len(set(session_logon_ids)), (
                 "Duplicate LogonIDs found in logon events!"
             )
 
