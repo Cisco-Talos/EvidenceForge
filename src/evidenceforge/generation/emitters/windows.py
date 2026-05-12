@@ -1183,6 +1183,7 @@ class WindowsEventEmitter(LogEmitter):
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
+        self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._current_storyline_origin: bool = False
         self._spool_path: Path | None = None
@@ -1382,6 +1383,15 @@ class WindowsEventEmitter(LogEmitter):
                 else:
                     self._record_id_counters[counter_key] += 1
                 event["EventRecordID"] = self._record_id_counters[counter_key]
+
+            normalized_time = event.get("TimeCreated")
+            if isinstance(normalized_time, datetime):
+                current_time = ensure_utc(normalized_time)
+                previous_record_time = self._last_record_time_created_by_computer.get(counter_key)
+                if previous_record_time is not None and current_time <= previous_record_time:
+                    current_time = previous_record_time + timedelta(microseconds=1)
+                    event["TimeCreated"] = current_time
+                self._last_record_time_created_by_computer[counter_key] = current_time
 
             rendered = self._render_event(event)
             host_fqdn = event.get("Computer", "")

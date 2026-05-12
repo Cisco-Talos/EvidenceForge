@@ -107,12 +107,12 @@ class TestPerSensorDirectoryRouting:
                 assert core[field] == dmz[field]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
+            assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
+            assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert any(
                 core[field] != dmz[field]
                 for field in (
                     "duration",
-                    "orig_bytes",
-                    "resp_bytes",
                     "orig_pkts",
                     "resp_pkts",
                     "orig_ip_bytes",

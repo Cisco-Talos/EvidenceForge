@@ -107,8 +107,6 @@ def _apply_sensor_observation_variance(
     facts. This only models source-native observation differences from packet
     loss, snaplen, tap placement, and analyzer cutoffs.
     """
-    for field in ("orig_bytes", "resp_bytes"):
-        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035)
     for field in ("orig_pkts", "resp_pkts"):
         _jitter_numeric_observation(
             render_data,

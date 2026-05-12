@@ -990,7 +990,10 @@ class TestActivityGenerator:
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in event.scheduled_task.task_content
+        assert "<LogonType>ServiceAccount</LogonType>" in event.scheduled_task.task_content
+        assert "<RunLevel>HighestAvailable</RunLevel>" in event.scheduled_task.task_content
         assert "<UserId>CORP\\SYSTEM</UserId>" not in event.scheduled_task.task_content
+        assert "<LogonType>Password</LogonType>" not in event.scheduled_task.task_content
 
     def test_kerberos_krbtgt_service_ticket_uses_domain_rid_502(
         self, activity_gen, state_manager, mock_emitters

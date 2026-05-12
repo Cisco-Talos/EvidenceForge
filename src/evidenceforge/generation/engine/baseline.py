@@ -4196,14 +4196,29 @@ class BaselineMixin:
                         self.state_manager.set_current_time(gpo_ts)
                         # Group Policy refresh runs as SYSTEM but does not normally
                         # create a 4648 explicit-credential audit for SYSTEM->SYSTEM.
-                        self.activity_generator.generate_system_process(
+                        gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
+                        gpupdate_command = r"gpupdate.exe /target:computer /force"
+                        parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                        gpupdate_pid = self.activity_generator.generate_system_process(
                             system=system,
                             time=gpo_ts,
-                            process_name=r"C:\Windows\System32\gpupdate.exe",
-                            command_line=r"gpupdate.exe /target:computer /force",
-                            parent_pid=sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4)),
+                            process_name=gpupdate_image,
+                            command_line=gpupdate_command,
+                            parent_pid=parent_pid,
                             username="SYSTEM",
                         )
+                        lifetime = _windows_foreground_lifetime(gpupdate_image, gpupdate_command)
+                        if lifetime is not None:
+                            end_ts = gpo_ts + timedelta(seconds=rng.uniform(*lifetime))
+                            self.state_manager.set_current_time(end_ts)
+                            self.activity_generator.generate_system_process_termination(
+                                system=system,
+                                time=end_ts,
+                                pid=gpupdate_pid,
+                                process_name=gpupdate_image,
+                                parent_pid=parent_pid,
+                                username="SYSTEM",
+                            )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
             if os_cat == "windows" and "windows_event_sysmon" in self.emitters:

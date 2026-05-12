@@ -612,6 +612,56 @@ class TestWindowsEventEmitter:
         assert timestamps == sorted(timestamps)
         assert len(set(timestamps)) == len(timestamps)
 
+    def test_event_record_ids_preserve_rendered_time_order_for_storyline_events(
+        self, format_def, temp_output
+    ):
+        """RecordID order should not move backward in rendered SystemTime."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        base = {
+            "Computer": "WIN-TEST-01",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x123",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "10.0.0.10",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+
+        for idx in range(3):
+            emitter.emit_event(
+                {
+                    **base,
+                    "EventID": 4624,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, 17, 361258, tzinfo=UTC),
+                    "ExecutionThreadID": 100 + idx,
+                    "TargetUserName": f"user{idx}",
+                    "_storyline_origin": True,
+                }
+            )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        rows = list(
+            zip(
+                re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content),
+                re.findall(r'SystemTime="([^"]+)"', content),
+                strict=True,
+            )
+        )
+
+        assert [int(record_id) for record_id, _ in rows] == sorted(
+            int(record_id) for record_id, _ in rows
+        )
+        assert [timestamp for _, timestamp in rows] == sorted(timestamp for _, timestamp in rows)
+        assert len({timestamp for _, timestamp in rows}) == len(rows)
+
     def test_failed_logon_keywords_and_task(self, format_def, temp_output):
         """Test that 4625 uses Audit Failure keywords and correct task ID."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

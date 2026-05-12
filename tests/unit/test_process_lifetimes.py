@@ -5,6 +5,8 @@
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from evidenceforge.generation.activity.generator import _windows_foreground_lifetime
 from evidenceforge.generation.engine.baseline import _eligible_for_hourly_module_load
 from evidenceforge.models.state import RunningProcess
@@ -31,6 +33,32 @@ def test_sqlcmd_select_query_has_bounded_foreground_lifetime() -> None:
 
     assert lifetime is not None
     assert lifetime[1] <= 25.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        (
+            r"C:\Windows\System32\dsquery.exe",
+            'dsquery.exe group -name "Domain Admins"',
+        ),
+        (
+            r"C:\Windows\System32\gpresult.exe",
+            "gpresult.exe /r",
+        ),
+        (
+            r"C:\Windows\System32\gpupdate.exe",
+            "gpupdate.exe /target:computer /force",
+        ),
+    ],
+)
+def test_windows_one_shot_admin_utilities_have_short_lifetimes(
+    image: str, command_line: str
+) -> None:
+    lifetime = _windows_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[1] <= 6.0
 
 
 def test_hourly_module_noise_skips_stale_one_shot_processes() -> None:

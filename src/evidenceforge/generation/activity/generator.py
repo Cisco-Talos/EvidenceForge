@@ -364,6 +364,8 @@ def _windows_foreground_lifetime(
         "dsquery.exe",
         "dsget.exe",
         "dsmod.exe",
+        "gpresult.exe",
+        "gpupdate.exe",
         "tasklist.exe",
         "arp.exe",
         "route.exe",
@@ -4257,6 +4259,31 @@ class ActivityGenerator:
                 and time < resolved_process.start_time
             ):
                 time = resolved_process.start_time + timedelta(milliseconds=1)
+            if (
+                resolved_process
+                and resolved_process.start_time
+                and _get_os_category(resolved_source_system.os) == "windows"
+            ):
+                process_lifetime = _windows_foreground_lifetime(
+                    resolved_process.image,
+                    resolved_process.command_line,
+                )
+                if process_lifetime is not None:
+                    max_process_time = resolved_process.start_time + timedelta(
+                        seconds=process_lifetime[1] + 5.0
+                    )
+                    if time > max_process_time:
+                        logger.debug(
+                            "Dropping expired foreground process attribution: "
+                            "host=%s pid=%s image=%s dst=%s:%s",
+                            resolved_source_system.hostname,
+                            pid,
+                            resolved_process.image,
+                            dst_ip,
+                            dst_port,
+                        )
+                        pid = -1
+                        resolved_process = None
             elif resolved_process is None and pid != 4:
                 logger.debug(
                     "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
@@ -7933,6 +7960,10 @@ class ActivityGenerator:
         command_xml = xml_escape(command)
         arguments_xml = xml_escape(arguments)
         arguments_line = f"\n      <Arguments>{arguments_xml}</Arguments>" if arguments else ""
+        logon_type = "ServiceAccount" if author.upper().startswith("NT AUTHORITY\\") else "Password"
+        run_level = (
+            "HighestAvailable" if author.upper() == "NT AUTHORITY\\SYSTEM" else "LeastPrivilege"
+        )
         return (
             '<?xml version="1.0" encoding="UTF-16"?>\n'
             '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -7950,8 +7981,8 @@ class ActivityGenerator:
             "  <Principals>\n"
             '    <Principal id="Author">\n'
             f"      <UserId>{xml_escape(author)}</UserId>\n"
-            "      <LogonType>Password</LogonType>\n"
-            "      <RunLevel>LeastPrivilege</RunLevel>\n"
+            f"      <LogonType>{logon_type}</LogonType>\n"
+            f"      <RunLevel>{run_level}</RunLevel>\n"
             "    </Principal>\n"
             "  </Principals>\n"
             "  <Settings>\n"
