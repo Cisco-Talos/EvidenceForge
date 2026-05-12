@@ -22,7 +22,7 @@
 
 """Tests for system process stability — seeded PIDs must survive the full scenario."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -133,6 +133,59 @@ class TestSystemProcessProtection:
             assert key in state_manager.state.running_processes, (
                 f"Seeded system process '{role}' (PID {pid}) was terminated"
             )
+
+    def test_seeded_defender_processes_use_host_platform_version(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Seeded Defender process paths should not mix versioned and unversioned roots."""
+        _, pids = self._seed_and_get_pids(state_manager, mock_emitters, win_system)
+
+        msmpeng = state_manager.get_process(win_system.hostname, pids["msmpeng"])
+        mpcmdrun = state_manager.get_process(win_system.hostname, pids["mpcmdrun"])
+
+        assert msmpeng is not None
+        assert mpcmdrun is not None
+        assert r"\Windows Defender\Platform\4.18." in msmpeng.image
+        assert mpcmdrun.image.rsplit("\\", 1)[0] == msmpeng.image.rsplit("\\", 1)[0]
+
+    def test_engine_seeded_boot_processes_use_host_boot_times(self, state_manager, mock_emitters):
+        """Fleet-seeded system processes should not all share the scenario-window epoch."""
+        systems = [
+            System(hostname="WKS-A", ip="10.0.10.11", os="Windows 10", type="workstation"),
+            System(hostname="WKS-B", ip="10.0.10.12", os="Windows 10", type="workstation"),
+        ]
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        engine = type("FakeEngine", (EmitterSetupMixin, BaselineMixin), {}).__new__(
+            type("FakeEngine", (EmitterSetupMixin, BaselineMixin), {})
+        )
+        engine.state_manager = state_manager
+        engine.activity_generator = ag
+        engine.scenario = Mock()
+        engine.scenario.environment.systems = systems
+        engine.scenario.environment.users = []
+        engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        engine._kernel_boot_uptimes = {
+            "WKS-A": 5 * 86400.0,
+            "WKS-B": 17 * 86400.0,
+        }
+        engine._system_pids = {}
+        engine._infra_ips = {"dns": ["10.0.0.1"]}
+        engine._system_service_defaults = {}
+        engine._find_actor = lambda username: User(
+            username=username, full_name=username, email=f"{username}@test.com", enabled=True
+        )
+
+        original_time = state_manager.state.current_time
+        engine._seed_system_process_trees()
+
+        proc_a = state_manager.get_process("WKS-A", engine._system_pids["WKS-A"]["services"])
+        proc_b = state_manager.get_process("WKS-B", engine._system_pids["WKS-B"]["services"])
+        assert proc_a is not None
+        assert proc_b is not None
+        assert proc_a.start_time < engine.start_time - timedelta(days=4)
+        assert proc_b.start_time < engine.start_time - timedelta(days=16)
+        assert proc_a.start_time != proc_b.start_time
+        assert state_manager.state.current_time == original_time
 
     def test_all_seeded_linux_pids_survive_termination(
         self, state_manager, mock_emitters, linux_system

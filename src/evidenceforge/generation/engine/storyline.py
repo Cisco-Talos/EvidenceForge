@@ -31,6 +31,7 @@ Contains the StorylineMixin with methods for:
 """
 
 import base64
+import binascii
 import logging
 import math
 import random
@@ -44,6 +45,7 @@ from typing import Any
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
+    is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
     response_size_for_status,
@@ -188,7 +190,7 @@ def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     return 1.0 / effective_rate
 
 
-def _web_scan_connection_profile(rng) -> tuple[str, float, int, int]:
+def _web_scan_connection_profile(rng, *, is_tls: bool = False) -> tuple[str, float, int, int]:
     """Return source-native connection outcome fields for one web-scan attempt."""
     conn_state = rng.choices(
         ["SF", "S0", "RSTO", "RSTR"],
@@ -199,6 +201,14 @@ def _web_scan_connection_profile(rng) -> tuple[str, float, int, int]:
         return conn_state, rng.uniform(0.002, 0.08), rng.randint(44, 220), 0
     if conn_state in {"RSTO", "RSTR"}:
         return conn_state, rng.uniform(0.01, 0.3), rng.randint(80, 900), rng.randint(0, 400)
+    if is_tls:
+        if rng.random() < 0.72:
+            duration = rng.uniform(0.8, 3.5)
+        elif rng.random() < 0.92:
+            duration = min(rng.lognormvariate(1.0, 0.75), 12.0)
+        else:
+            duration = rng.uniform(6.0, 18.0)
+        return conn_state, duration, rng.randint(260, 2600), rng.randint(700, 12000)
     return conn_state, rng.uniform(0.01, 0.5), rng.randint(200, 2000), rng.randint(200, 5000)
 
 
@@ -379,6 +389,8 @@ _LONG_RUNNING_EXES: set[str] = {
     "mstsc",
     "rdpclip.exe",
     "rdpclip",
+    "psexesvc.exe",
+    "healthmonitorsvc.exe",
     "ncat",
     "ncat.exe",
     "nc",
@@ -929,7 +941,13 @@ class StorylineMixin:
                     time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
             if os_category == "linux":
-                self.activity_generator.generate_bash_command(actor, system, time, command_line)
+                self.activity_generator.generate_bash_command(
+                    actor,
+                    system,
+                    time,
+                    command_line,
+                    emit_process_telemetry=False,
+                )
 
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(
@@ -939,9 +957,15 @@ class StorylineMixin:
                     ),
                 )
 
+            output_file = self._extract_output_file(command_line, os_category)
             parent_pid = self.activity_generator._resolve_parent(
                 system, actor, time, logon_id, process_name
             )
+            exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            service_backed_process = "service_installed" in explicit_types and exe_name in {
+                "psexesvc.exe",
+                "healthmonitorsvc.exe",
+            }
             pid = self.activity_generator.generate_process(
                 user=actor,
                 system=system,
@@ -950,8 +974,9 @@ class StorylineMixin:
                 process_name=process_name,
                 command_line=command_line,
                 parent_pid=parent_pid,
-                ensure_file_event=True,
+                ensure_file_event=not service_backed_process,
                 from_storyline=True,
+                suppress_command_file_effect=output_file is not None,
             )
             self.activity_generator._record_user_process(system, actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name)
@@ -959,7 +984,6 @@ class StorylineMixin:
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
 
-            output_file = self._extract_output_file(command_line, os_category)
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
                     home = "/root" if actor.username == "root" else f"/home/{actor.username}"
@@ -1004,7 +1028,21 @@ class StorylineMixin:
             if http_url is not None:
                 parsed_target = self._parse_http_url_target(http_url)
                 if parsed_target is not None:
+                    from urllib.parse import urlparse
+
+                    from evidenceforge.events.contexts import HttpContext
+
                     hostname, dst_port = parsed_target
+                    parsed_url = urlparse(http_url)
+                    uri = parsed_url.path or "/"
+                    if parsed_url.query:
+                        uri = f"{uri}?{parsed_url.query}"
+                    mime_type = normalize_mime_type_for_path(uri, "text/plain")
+                    response_body_len = (
+                        response_size_for_status(200, hostname, uri)
+                        if is_stable_resource_path(uri)
+                        else response_size_for_mime(rng, mime_type)
+                    )
                     dst_ip = self._resolve_storyline_network_target(hostname)
                     if dst_ip is None:
                         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -1020,13 +1058,26 @@ class StorylineMixin:
                         service=service,
                         duration=rng.uniform(0.8, 6.0),
                         orig_bytes=rng.randint(300, 1400),
-                        resp_bytes=rng.randint(12_000, 250_000),
+                        resp_bytes=response_body_len,
                         conn_state="SF",
                         emit_dns=not _is_private_ip(dst_ip),
                         source_system=system,
                         pid=pid,
                         hostname=hostname,
                         process_image=process_name,
+                        http=HttpContext(
+                            method="GET",
+                            host=hostname,
+                            uri=uri,
+                            version="1.1",
+                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell/5.1",
+                            request_body_len=0,
+                            response_body_len=response_body_len,
+                            status_code=200,
+                            status_msg="OK",
+                            resp_mime_types=[mime_type],
+                            tags=[],
+                        ),
                     )
                     malicious_event["network_url"] = http_url
 
@@ -1080,13 +1131,18 @@ class StorylineMixin:
                             rng=rng,
                         )
 
-            _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks", "net.exe", "net1.exe"}
+            _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks"}
             proc_basename = (
                 process_name.rsplit("\\", 1)[-1].lower()
                 if "\\" in process_name
                 else process_name.lower()
             )
-            if proc_basename in _EXPLICIT_CRED_TOOLS and os_category == "windows":
+            command_lower = command_line.lower()
+            uses_explicit_creds = proc_basename in _EXPLICIT_CRED_TOOLS or (
+                proc_basename in {"net.exe", "net1.exe"}
+                and any(token in command_lower for token in ("/user:", " /u:", " /user "))
+            )
+            if uses_explicit_creds and os_category == "windows":
                 cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
                 self.activity_generator.generate_explicit_credentials(
                     user=actor,
@@ -1154,6 +1210,27 @@ class StorylineMixin:
                 _uri_raw = spec.uri or "/"
                 _uri = _uri_raw.lower()
                 _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
+                _desc = f"{spec.description or ''} {spec.technique or ''} {_uri}".lower()
+                _is_c2_http = any(
+                    marker in _desc
+                    for marker in (
+                        "c2",
+                        "beacon",
+                        "callback",
+                        "checkin",
+                        "tasking",
+                        "exfil",
+                        "upload",
+                        "t1041",
+                        "t1071",
+                    )
+                )
+                if _is_c2_http and _mime_type == "text/html":
+                    _mime_type = rng.choices(
+                        ["application/json", "text/plain", "application/octet-stream"],
+                        weights=[55, 25, 20],
+                        k=1,
+                    )[0]
                 if spec.response_body_len is not None:
                     resp_bytes = spec.response_body_len
                 elif _method == "POST" and any(
@@ -1197,6 +1274,8 @@ class StorylineMixin:
                     }.get(spec.status_code or 200, "OK"),
                     referrer=spec.referrer
                     if spec.referrer is not None
+                    else ""
+                    if _is_c2_http and rng.random() < 0.8
                     else pick_referrer(rng, _http_host, context="general"),
                     resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                     tags=[],
@@ -1210,6 +1289,11 @@ class StorylineMixin:
             elif source_ip == system.ip:
                 src_sys = system
             story_pid, story_image = self._last_storyline_process_for_system(src_sys)
+            if story_pid > 0 and src_sys is not None and service in {"ssl", "https"}:
+                story_proc = self.state_manager.get_process(src_sys.hostname, story_pid)
+                story_command = story_proc.command_line if story_proc is not None else ""
+                if self._command_contains_raw_tcp_endpoint(story_command, dst_ip, dst_port):
+                    service = ""
             # Only use explicit hostname from scenario.  Do NOT fall back to
             # Hostname resolution for storyline connections:
             # - Explicit hostname → use it, emit DNS
@@ -1563,17 +1647,28 @@ class StorylineMixin:
                 malicious_event["target_process"] = target_image
 
         elif spec.type == "dhcp_lease":
-            ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")
-            mac = spec.mac_address or (
-                f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
-                f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
-            )
+            existing_lease = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
+            if spec.mac_address:
+                mac = spec.mac_address
+            elif existing_lease:
+                mac = existing_lease["mac"]
+            else:
+                ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")
+                mac = (
+                    f"00:50:56:{(ip_hash >> 16) & 0xFF:02x}"
+                    f":{(ip_hash >> 8) & 0xFF:02x}:{ip_hash & 0xFF:02x}"
+                )
             from evidenceforge.utils.ids import generate_zeek_uid
 
             # Use DC as DHCP server (common in AD environments)
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"]) if hasattr(self, "_infra_ips") else []
             dhcp_server = dc_ips[0] if dc_ips else "10.0.0.1"
-            lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
+            lease_time = (
+                float(existing_lease["lease_time"])
+                if existing_lease
+                else float(rng.choice([3600, 7200, 14400, 86400]))
+            )
+            msg_types = ["REQUEST", "ACK"] if existing_lease else None
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=time,
@@ -1581,12 +1676,14 @@ class StorylineMixin:
                 server_addr=dhcp_server,
                 lease_time=lease_time,
                 uid=generate_zeek_uid("C"),
+                msg_types=msg_types,
             )
             if hasattr(self, "_dhcp_lease_state"):
                 self._dhcp_lease_state[system.hostname] = {
                     "mac": mac,
                     "lease_time": lease_time,
                     "last_renewal": time.timestamp(),
+                    "server_addr": dhcp_server,
                     "system": system,
                 }
             malicious_event["mac_address"] = mac
@@ -1594,9 +1691,27 @@ class StorylineMixin:
         elif spec.type == "port_scan":
             import ipaddress
 
+            # Use source_ip override if specified, otherwise use system IP
+            scan_src_ip = spec.source_ip or system.ip
+            is_external_scan = (
+                not _is_private_ip(scan_src_ip)
+                and hasattr(self, "dispatcher")
+                and self.dispatcher.visibility_engine
+            )
+
             # Resolve target IPs
             if spec.target_ips:
-                resolved_targets = list(spec.target_ips)
+                resolved_targets = []
+                for target_ip in spec.target_ips:
+                    if is_external_scan:
+                        public_target = (
+                            self.dispatcher.visibility_engine.get_public_inbound_address(target_ip)
+                        )
+                        if public_target is None:
+                            continue
+                        resolved_targets.append(public_target)
+                    else:
+                        resolved_targets.append(target_ip)
             elif spec.target_segment and self.scenario.environment.network:
                 seg = next(
                     (
@@ -1607,8 +1722,24 @@ class StorylineMixin:
                     None,
                 )
                 if seg:
-                    net = ipaddress.ip_network(seg.cidr, strict=False)
-                    all_hosts = [str(h) for h in net.hosts()]
+                    if is_external_scan:
+                        segment_systems = [
+                            candidate
+                            for candidate in self.scenario.environment.systems
+                            if candidate.hostname in (seg.systems or [])
+                        ]
+                        all_hosts = []
+                        for candidate in segment_systems:
+                            public_target = (
+                                self.dispatcher.visibility_engine.get_public_inbound_address(
+                                    candidate.ip
+                                )
+                            )
+                            if public_target:
+                                all_hosts.append(public_target)
+                    else:
+                        net = ipaddress.ip_network(seg.cidr, strict=False)
+                        all_hosts = [str(h) for h in net.hosts()]
                     count = min(spec.target_count, len(all_hosts))
                     resolved_targets = rng.sample(all_hosts, count)
                 else:
@@ -1618,9 +1749,6 @@ class StorylineMixin:
 
             # Determine conn_state from firewall drop_mode
             conn_state = self._get_firewall_deny_conn_state()
-
-            # Use source_ip override if specified, otherwise use system IP
-            scan_src_ip = spec.source_ip or system.ip
 
             # Resolve interfaces
             src_iface = self._resolve_firewall_interface(scan_src_ip)
@@ -1716,10 +1844,30 @@ class StorylineMixin:
                     _method = spec.method or "GET"
                     _uri_raw = spec.uri or "/"
                     _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
+                    _desc = f"{spec.description or ''} {spec.technique or ''} {_uri_raw}".lower()
+                    _is_c2_http = any(
+                        marker in _desc
+                        for marker in (
+                            "c2",
+                            "beacon",
+                            "callback",
+                            "checkin",
+                            "tasking",
+                            "t1071",
+                        )
+                    )
+                    if _is_c2_http and _mime_type == "text/html":
+                        _mime_type = rng.choices(
+                            ["application/json", "text/plain", "application/octet-stream"],
+                            weights=[65, 25, 10],
+                            k=1,
+                        )[0]
                     if spec.response_body_len is not None:
                         resp_bytes = spec.response_body_len
                     elif _method == "POST":
                         resp_bytes = rng.randint(200, 2000)
+                    elif _is_c2_http:
+                        resp_bytes = rng.randint(180, 6500)
                     else:
                         resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
@@ -1751,6 +1899,8 @@ class StorylineMixin:
                         }.get(spec.status_code or 200, "OK"),
                         referrer=spec.referrer
                         if spec.referrer is not None
+                        else ""
+                        if _is_c2_http and rng.random() < 0.75
                         else pick_referrer(rng, _http_host2, context="general"),
                         resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                         tags=[],
@@ -2028,10 +2178,25 @@ class StorylineMixin:
             interval_sec = _effective_rate_interval(effective_rate, count, rng)
             ua_fired = False
             last_rate_alert_ts = None
+            next_rate_alert_delay = rng.uniform(45.0, 95.0)
             _send_referrer_config = preset_data.get("send_referrer") if preset_data else None
 
             request_count = 0
-            path_idx = 0
+            path_sequence: list[dict[str, Any]] = []
+
+            def _next_scan_path() -> dict[str, Any]:
+                nonlocal path_sequence
+                if not path_sequence:
+                    path_sequence = list(scan_paths)
+                    rng.shuffle(path_sequence)
+                    if len(path_sequence) > 8:
+                        skip_count = rng.randint(0, max(1, len(path_sequence) // 10))
+                        for _ in range(skip_count):
+                            if len(path_sequence) <= 4:
+                                break
+                            del path_sequence[rng.randrange(len(path_sequence))]
+                return path_sequence.pop()
+
             pause_until: datetime | None = None
             for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
@@ -2045,8 +2210,7 @@ class StorylineMixin:
                     continue
 
                 self.state_manager.set_current_time(tick_time)
-                path_entry = scan_paths[path_idx % len(scan_paths)]
-                path_idx += 1
+                path_entry = _next_scan_path()
 
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")
@@ -2060,12 +2224,10 @@ class StorylineMixin:
                 )
 
                 _response_body_len = (
-                    response_size_for_mime(rng, _mime_type)
-                    if _status < 400
-                    else response_size_for_status(_status, scan_host, _uri)
+                    response_size_for_status(_status, scan_host, _uri)
+                    if _status >= 400 or is_stable_resource_path(_uri)
+                    else response_size_for_mime(rng, _mime_type)
                 )
-                if _status >= 400:
-                    _response_body_len = max(128, _response_body_len + rng.randint(-90, 180))
                 http_ctx = HttpContext(
                     method=_method,
                     host=scan_host,
@@ -2119,7 +2281,7 @@ class StorylineMixin:
                     fire_rate = False
                     if last_rate_alert_ts is None:
                         fire_rate = True
-                    elif (tick_time - last_rate_alert_ts).total_seconds() >= 60:
+                    elif (tick_time - last_rate_alert_ts).total_seconds() >= next_rate_alert_delay:
                         fire_rate = True
                     if fire_rate:
                         ids_ctx = IdsContext(
@@ -2130,8 +2292,11 @@ class StorylineMixin:
                             priority=ids_rate_def.get("priority", 2),
                         )
                         last_rate_alert_ts = tick_time
+                        next_rate_alert_delay = rng.uniform(45.0, 120.0)
 
-                conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(rng)
+                conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(
+                    rng, is_tls=is_tls
+                )
                 http_for_conn = http_ctx if conn_state == "SF" else None
 
                 self.activity_generator.generate_connection(
@@ -2361,12 +2526,13 @@ class StorylineMixin:
 
             from evidenceforge.events.contexts import DnsContext
             from evidenceforge.generation.activity.network_params import (
+                dns_tunnel_rcode_weights,
                 dns_tunnel_response_templates,
                 dns_tunnel_rtt_range,
             )
 
             _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
-            _RCODE_MAP = {"NOERROR": 0}
+            _RCODE_MAP = {"NOERROR": 0, "NXDOMAIN": 3, "SERVFAIL": 2, "REFUSED": 5}
 
             # Timing
             start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
@@ -2418,15 +2584,31 @@ class StorylineMixin:
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
             response_templates = dns_tunnel_response_templates() or ["status={token}"]
+            rcode_weights = dns_tunnel_rcode_weights()
+            rcode_names = list(rcode_weights)
+            rcode_values = [rcode_weights[name] for name in rcode_names]
             total_bytes = 0
             query_count = 0
             chunk_idx = 0
             tunnel_salt = rng.randbytes(4)
 
-            for tick_time in _iter_periodic_ticks(
+            for tick_time in _iter_dns_tunnel_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
+
+                label_length = (
+                    rng.randint(max(20, spec.label_length - 10), spec.label_length)
+                    if spec.label_length >= 20
+                    else spec.label_length
+                )
+                if spec.encoding == "hex":
+                    effective_bytes_per_label = label_length // 2
+                elif spec.encoding == "base32":
+                    effective_bytes_per_label = (label_length * 5) // 8
+                else:  # base64
+                    effective_bytes_per_label = (label_length * 3) // 4
+                effective_bytes_per_label = max(1, effective_bytes_per_label)
 
                 chunk = chunks[chunk_idx % len(chunks)]
                 chunk_idx += 1
@@ -2437,10 +2619,17 @@ class StorylineMixin:
                 ).getrandbits(32)
                 sequence = (query_count ^ sequence_mask).to_bytes(4, "big", signed=False)
                 visible_nonce = rng.randbytes(visible_nonce_len)
-                visible_payload = chunk[:payload_bytes_per_label]
+                effective_payload_capacity = max(
+                    0,
+                    effective_bytes_per_label - visible_nonce_len - sequence_len,
+                )
+                visible_payload = chunk[: min(payload_bytes_per_label, effective_payload_capacity)]
                 pad_len = max(
                     0,
-                    bytes_per_label - len(visible_nonce) - len(visible_payload) - len(sequence),
+                    effective_bytes_per_label
+                    - len(visible_nonce)
+                    - len(visible_payload)
+                    - len(sequence),
                 )
                 padded_chunk = visible_nonce + visible_payload + rng.randbytes(pad_len) + sequence
 
@@ -2455,25 +2644,49 @@ class StorylineMixin:
                     )
 
                 # Truncate to label_length
-                encoded = encoded[: spec.label_length]
+                encoded = encoded[:label_length]
                 tunnel_query = f"{encoded}.{spec.base_domain}"
 
-                # TXT responses carry data back; CNAME/NULL are smaller
-                if spec.qtype == "TXT":
-                    resp_bytes = rng.randint(200, 2000)
+                rcode_name = rng.choices(rcode_names, weights=rcode_values, k=1)[0]
+                rcode_num = _RCODE_MAP.get(rcode_name, 0)
+                answers: list[str] = []
+                ttls: list[float] = []
+                if rcode_name == "NOERROR":
+                    # TXT responses carry data back; CNAME/NULL are smaller.
+                    if spec.qtype == "TXT":
+                        resp_bytes = rng.randint(140, 2400)
+                    else:
+                        resp_bytes = rng.randint(50, 240)
+                    token_rng = random.Random(
+                        _stable_seed(
+                            f"dns_tunnel_response:{spec.base_domain}:{query_count}:"
+                            f"{tunnel_salt.hex()}"
+                        )
+                    )
+                    token_bytes = token_rng.randbytes(token_rng.randint(3, 10))
+                    token_style = token_rng.choice(["hex", "base32", "base64url"])
+                    if token_style == "base32":
+                        response_token = _b64.b32encode(token_bytes).decode("ascii").rstrip("=")
+                    elif token_style == "base64url":
+                        response_token = (
+                            _b64.urlsafe_b64encode(token_bytes).decode("ascii").rstrip("=")
+                        )
+                    else:
+                        response_token = token_bytes.hex()
+                    response_template = rng.choice(response_templates)
+                    answers = [response_template.replace("{token}", response_token)]
+                    ttls = [float(rng.choice([0, 1, 2, 5, 10, 15, 30, 60]))]
                 else:
-                    resp_bytes = rng.randint(50, 200)
-                response_token = f"{random.Random(_stable_seed(f'dns_tunnel_response:{spec.base_domain}:{query_count}:{tunnel_salt.hex()}')).getrandbits(32):08x}"
-                response_template = rng.choice(response_templates)
+                    resp_bytes = rng.randint(55, 180)
 
                 dns_ctx = DnsContext(
                     query=tunnel_query,
                     query_type=spec.qtype,
                     qtype=qtype_num,
-                    rcode="NOERROR",
-                    rcode_num=0,
-                    answers=[response_template.replace("{token}", response_token)],
-                    TTLs=[float(rng.randint(1, 10))],
+                    rcode=rcode_name,
+                    rcode_num=rcode_num,
+                    answers=answers,
+                    TTLs=ttls,
                     trans_id=rng.randint(1, 65535),
                     AA=False,
                     RD=True,
@@ -2742,10 +2955,54 @@ class StorylineMixin:
     @staticmethod
     def _extract_http_url(command_line: str) -> str | None:
         """Extract the first HTTP(S) URL from a storyline process command line."""
-        match = re.search(r"https?://[^\s'\"),;]+", command_line, re.IGNORECASE)
-        if not match:
-            return None
-        return match.group(0).rstrip(".")
+        for candidate in StorylineMixin._http_url_search_texts(command_line):
+            match = re.search(r"https?://[^\s'\"),;]+", candidate, re.IGNORECASE)
+            if match:
+                return match.group(0).rstrip(".")
+        return None
+
+    @staticmethod
+    def _http_url_search_texts(command_line: str) -> list[str]:
+        """Return raw and decoded command strings to scan for embedded URLs."""
+        texts = [command_line]
+        shell_b64_match = re.search(
+            r"(?i)(?:echo|printf)\s+['\"]?([A-Za-z0-9+/=]{16,})['\"]?\s*\|\s*base64\s+-d",
+            command_line,
+        )
+        if shell_b64_match:
+            try:
+                decoded = base64.b64decode(shell_b64_match.group(1), validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                decoded = ""
+            if decoded and decoded not in texts:
+                texts.append(decoded)
+        encoded_match = re.search(
+            r"(?i)(?:-|/)(?:encodedcommand|enc|e)\s+([A-Za-z0-9+/=]+)",
+            command_line,
+        )
+        if not encoded_match:
+            return texts
+
+        token = encoded_match.group(1)
+        try:
+            decoded_bytes = base64.b64decode(token, validate=True)
+        except (binascii.Error, ValueError):
+            return texts
+
+        for encoding in ("utf-16le", "utf-8"):
+            try:
+                decoded = decoded_bytes.decode(encoding).strip("\ufeff\x00 \t\r\n")
+            except UnicodeDecodeError:
+                continue
+            if decoded and decoded not in texts:
+                texts.append(decoded)
+        return texts
+
+    @staticmethod
+    def _command_contains_raw_tcp_endpoint(command_line: str, dst_ip: str, dst_port: int) -> bool:
+        """Return true when a command uses bash /dev/tcp for this endpoint."""
+        endpoint = f"/dev/tcp/{dst_ip}/{dst_port}"
+        return any(endpoint in text for text in StorylineMixin._http_url_search_texts(command_line))
 
     @staticmethod
     def _parse_http_url_target(http_url: str) -> tuple[str, int] | None:

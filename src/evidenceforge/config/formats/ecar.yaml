@@ -159,6 +159,13 @@ fields:
     constraints:
       allowed_values: [success, failure]
 
+  - name: session_lifecycle
+    type: string
+    required: false
+    description: "Session lifecycle qualifier for attempts that do not create a durable session"
+    constraints:
+      allowed_values: [attempt_failed]
+
   - name: status_code
     type: string
     required: false

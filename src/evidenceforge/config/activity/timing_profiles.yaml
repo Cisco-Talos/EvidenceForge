@@ -23,7 +23,7 @@ relationships:
     max_ms: 350
   process.remote_thread_lsass_access:
     class: source_latency
-    position: after
+    position: before
     min_ms: 1
     max_ms: 75
   windows.audit_from_admin_command:
@@ -41,6 +41,11 @@ relationships:
     position: after
     min_ms: 125
     max_ms: 750
+  windows.process_create_before_logoff:
+    class: teardown
+    position: before
+    min_ms: 250
+    max_ms: 3000
   source.windows_wfp_connection:
     class: source_latency
     position: after
@@ -49,8 +54,13 @@ relationships:
   source.sysmon_network_connection:
     class: source_latency
     position: after
-    min_ms: 12
-    max_ms: 90
+    min_ms: 35
+    max_ms: 750
+  source.sysmon_dns_query:
+    class: source_latency
+    position: after
+    min_ms: 25
+    max_ms: 420
   source.ecar_flow:
     class: source_latency
     position: after
@@ -70,12 +80,22 @@ relationships:
     class: same_observation
     position: after
     min_ms: 1
-    max_ms: 35
+    max_ms: 450
+  source.zeek_dns_query:
+    class: same_observation
+    position: after
+    min_ms: 1
+    max_ms: 95
+  network.proxy_upstream_after_client:
+    class: causal_prerequisite
+    position: after
+    min_ms: 950
+    max_ms: 1800
   source.zeek_ssl_analyzer:
     class: same_observation
     position: after
-    min_ms: 5
-    max_ms: 80
+    min_ms: 3
+    max_ms: 650
   source.zeek_x509_analyzer:
     class: same_observation
     position: after

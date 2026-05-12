@@ -17,8 +17,9 @@
 programs:
   - app: NetworkManager
     messages:
-      - "<info>  [{}] dhcp4 (ens160): state changed bound -> bound"
-      - "<info>  [{}] device (ens160): state change: activated -> activated"
+      - "<info>  [{}] dhcp4 (ens160): state changed renew -> bound"
+      - "<info>  [{}] device (ens160): state change: disconnected -> prepare"
+      - "<info>  [{}] device (ens160): state change: ip-config -> activated"
       - "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL"
 
   - app: dbus-daemon
@@ -29,26 +30,33 @@ programs:
 
   - app: rsyslogd
     messages:
-      - '[origin software="rsyslogd" swVersion="8.2112.0"] start'
       - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog'"
       - '[origin software="rsyslogd"] rsyslogd was HUPed'
 
   - app: sudo
     transient: true
+    weight: 2
     messages:
-      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status"
-      - "root : TTY=pts/1 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/apt update"
+      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status nginx"
+      - "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/systemctl reload nginx"
+      - "ops : TTY=pts/2 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/journalctl -u ssh -n 50"
+      - "ubuntu : TTY=pts/0 ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/apt list --upgradable"
 
   - app: sudo
     transient: true
     roles: [web_server, forward_proxy]
+    weight: 1
     messages:
       - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/bin/cat /etc/shadow"
+      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/head /etc/shadow"
+      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/tail /var/log/auth.log"
+      - "nginx : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/find /root -maxdepth 1"
+      - "apache : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/id"
 
   - app: dhclient
     messages:
-      - "DHCPREQUEST for {ip} on ens160 to 10.0.0.1 port 67"
-      - "DHCPACK of {ip} from 10.0.0.1"
+      - "DHCPREQUEST for {ip} on ens160 to {server} port 67"
+      - "DHCPACK of {ip} from {server}"
       - "bound to {ip} -- renewal in {renewal} seconds."
 
   - app: polkitd
@@ -59,18 +67,15 @@ programs:
 
   - app: multipathd
     messages:
-      - "daemon started"
       - "sda: add missing path"
       - "sda: remaining active paths: 1"
 
   - app: accounts-daemon
     messages:
-      - "started daemon version 22.08.8"
       - "user 'admin' has logged in"
 
   - app: packagekitd
     messages:
-      - "daemon start"
       - "search-names transaction /{}"
 
   - app: unattended-upgr
@@ -83,14 +88,9 @@ programs:
   - app: systemd-resolved
     distro: ubuntu
     messages:
-      - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.0.0.1."
-      - "Grace period over, resuming full feature set for DNS server 10.0.0.1."
+      - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server {dns_server}."
+      - "Grace period over, resuming full feature set for DNS server {dns_server}."
       - "Positive Trust Anchors: . IN DS 20326"
-
-  - app: cron
-    transient: true
-    messages:
-      - "(root) CMD (test -x /usr/sbin/anacron || ( cd / && run-parts /etc/cron.hourly ))"
 
   - app: thermald
     messages:

@@ -139,6 +139,63 @@ class TestHostnameConsistency:
         assert conn_event.ssl is not None
         assert conn_event.ssl.server_name == hostname
 
+    def test_unregistered_hostname_uses_dns_derived_destination(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Unregistered explicit hostnames should not connect to a different caller IP."""
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+        state_manager.set_current_time(timestamp)
+        hostname = "unlisted-cdn.example.test"
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="151.101.141.68",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        expected_ip = resolve_domain_ip(hostname, src_host="10.0.1.50")
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert conn_event.network.dst_ip == expected_ip
+        assert conn_event.ssl is not None
+        assert conn_event.ssl.server_name == hostname
+
+    def test_connection_dns_prerequisite_contains_tcp_destination(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """Connection DNS evidence should resolve the same IP used by the flow."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        rng = random.Random(42)
+        monkeypatch.setattr(rng, "random", lambda: 0.5)
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: rng)
+        state_manager.set_current_time(timestamp)
+        hostname = "cdn-assets-update.com"
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="151.101.141.68",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+            conn_state="SF",
+        )
+
+        dns_event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert dns_event.dns is not None
+        assert dns_event.dns.query_type == "A"
+        assert dns_event.dns.query == hostname
+        assert conn_event.network.dst_ip in dns_event.dns.answers
+
     def test_dns_response_completes_before_dependent_connection(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
@@ -472,6 +529,36 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.orig_bytes > 0
         assert event.network.orig_ip_bytes > event.network.orig_bytes
+
+    def test_dns_txt_accounting_matches_visible_answer_size(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Tiny TXT answers should not imply oversized single-packet DNS responses."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="abcd1234.exfil.example.com",
+                query_type="TXT",
+                qtype=16,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["cache=56f09cfc"],
+                rtt=0.12,
+            ),
+            resp_bytes=2000,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.resp_bytes < 300
+        assert event.network.resp_pkts == 1
+        assert event.network.resp_ip_bytes <= 1500
 
     def test_dns_conn_duration_uses_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters

@@ -417,7 +417,7 @@ so tuning can happen at the relationship class without hardcoding one global del
 |------|---------|-------|--------|
 | `DnsBeforeConnection` | TCP connection (not port 53) | DNS query (UDP/53) | `network.dns_before_tcp` timing profile |
 | `KerberosBeforeLogon` | Kerberos-auth Windows logon (not on DC) | TGT (4768) + TGS (4769) | `auth.kerberos_before_logon` timing profile; elevated-session 4672 remains tied to the target-host 4624 |
-| `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) | `process.remote_thread_lsass_access` timing profile |
+| `ProcessAccessAfterRemoteThread` | CreateRemoteThread targeting lsass | ProcessAccess (Sysmon 10) before the remote thread | `process.remote_thread_lsass_access` timing profile |
 | `SupplementaryAuditEvents` | Process creation with admin commands | 4720/4726/4728/4697/4698/1102 | `windows.audit_from_admin_command` timing profile |
 
 **Adding a new rule:** Create a new `ExpansionRule` subclass in `rules.py`, implement `matches()` and `expand()`, and add it to `default_rules()` in `registry.py`. The engine auto-creates with defaults — no wiring needed in ActivityGenerator or GenerationEngine.

@@ -30,6 +30,7 @@ import pytest
 from evidenceforge.events.contexts import HttpContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -180,7 +181,8 @@ class TestSslContextPopulation:
             for event in events
             if event.network
             and event.network.src_ip == proxy.ip
-            and event.network.dst_ip == "45.33.32.30"
+            and event.network.dst_ip
+            == resolve_domain_ip("cdn-assets-update.com", src_host=proxy.hostname)
         ]
         assert egress_events
         egress = egress_events[-1]
@@ -928,6 +930,48 @@ class TestHttpContextPopulation:
         event = events[-1]
         assert event.http is None
 
+    def test_syn_only_tcp_connection_has_no_analyzer_service(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=1433,
+            proto="tcp",
+            service="mssql",
+            conn_state="S0",
+        )
+
+        event = events[-1]
+        assert event.network.conn_state == "S0"
+        assert event.network.service == ""
+        assert event.network.orig_bytes == 0
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
+        assert event.network.resp_ip_bytes == 0
+
+    def test_empty_service_suppresses_port_based_tls_inference(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="203.0.113.10",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="",
+            conn_state="SF",
+            duration=2.0,
+            orig_bytes=620,
+            resp_bytes=1840,
+            hostname="",
+        )
+
+        event = events[-1]
+        assert event.network.service == ""
+        assert event.ssl is None
+
     def test_caller_provided_http_forces_conn_accounting_consistency(self, activity_gen):
         gen, events = activity_gen
 
@@ -958,6 +1002,58 @@ class TestHttpContextPopulation:
         assert event.network.conn_state == "SF"
         assert event.network.resp_bytes >= event.http.response_body_len
         assert event.network.resp_pkts > 0
+
+    def test_http_conn_response_bytes_include_protocol_overhead(self, activity_gen):
+        """Zeek conn.resp_bytes should not exactly mirror HTTP entity body size."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=128,
+            resp_bytes=4096,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/index.html",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=4096,
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        event = events[-1]
+        assert event.network.resp_bytes > event.http.response_body_len
+
+    def test_icmp_accounting_is_echo_like(self, activity_gen):
+        """ICMP echo-style flows should not inherit bulk TCP byte/packet accounting."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.10.1",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            proto="icmp",
+            service="icmp",
+            duration=0.05,
+            orig_bytes=1204,
+            resp_bytes=72384,
+        )
+
+        event = events[-1]
+        assert event.network.orig_pkts == 1
+        assert event.network.resp_pkts == 1
+        assert event.network.resp_bytes <= 1520
+        assert event.network.resp_bytes == event.network.orig_bytes
+        assert event.network.duration <= 0.15
 
 
 class TestFileTransferContext:

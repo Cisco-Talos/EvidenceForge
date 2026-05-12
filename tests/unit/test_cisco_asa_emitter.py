@@ -262,8 +262,23 @@ class TestPermitRecords:
         assert "%ASA-6-302014:" in lines[1]
         assert "Teardown TCP connection" in lines[1]
         assert "duration 0:01:23" in lines[1]
-        assert "bytes 5120" in lines[1]
+        byte_match = re.search(r"bytes (\d+)", lines[1])
+        assert byte_match is not None
+        assert int(byte_match.group(1)) > 5120
         assert "SYN Timeout" not in lines[1]
+
+    def test_teardown_byte_count_is_not_exact_zeek_payload_sum(self, asa_emitter, tmp_path):
+        """ASA teardown accounting should not exactly mirror Zeek payload bytes."""
+        event = _make_connection_event(protocol="tcp", orig_bytes=1024, resp_bytes=4096)
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        teardown = next(line for line in output.splitlines() if "%ASA-6-302014:" in line)
+        byte_match = re.search(r"bytes (\d+)", teardown)
+        assert byte_match is not None
+        assert int(byte_match.group(1)) != 5120
 
     def test_same_interface_permit_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
         """ASA should not mirror same-interface internal permits by default."""
@@ -272,6 +287,28 @@ class TestPermitRecords:
             dst_ip="10.0.20.10",
             dst_port=88,
             protocol="tcp",
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
+
+    def test_same_interface_deny_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
+        """ASA should not mirror same-interface internal denies by default."""
+        event = _make_connection_event(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            dst_port=88,
+            protocol="tcp",
+        )
+        event.firewall = FirewallContext(
+            action="deny",
+            msg_id=106023,
+            connection_id=0,
+            src_interface="",
+            dst_interface="",
+            access_group="inside_access_in",
         )
 
         asa_emitter.emit(event)
@@ -321,6 +358,28 @@ class TestPermitRecords:
         assert "%ASA-6-302020:" in lines[0]
         assert "Built outbound ICMP connection" in lines[0]
         assert "%ASA-6-302021:" in lines[1]
+
+    def test_inbound_icmp_keeps_foreign_and_local_addresses_directional(
+        self, asa_emitter, tmp_path
+    ):
+        """Inbound ICMP faddr is the outside source; gaddr/laddr are local destination."""
+        event = _make_connection_event(
+            protocol="icmp",
+            src_ip="203.0.113.50",
+            src_port=0,
+            dst_ip="172.16.0.5",
+            dst_port=8,
+            duration=0.5,
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        built_line = next(line for line in output.splitlines() if "%ASA-6-302020:" in line)
+        assert "Built inbound ICMP connection" in built_line
+        assert "faddr outside:203.0.113.50/8" in built_line
+        assert "gaddr dmz:172.16.0.5/0" in built_line
+        assert "laddr dmz:172.16.0.5/0" in built_line
 
     def test_inbound_direction_for_external_source(self, asa_emitter, tmp_path):
         """External source -> internal destination should be 'inbound'."""

@@ -36,6 +36,7 @@ import random
 from datetime import timedelta
 
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.network_params import load_network_params, public_ntp_ips
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
@@ -65,6 +66,30 @@ from evidenceforge.models.scenario import System
 from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
+
+
+def _system_uses_dhcp(system: System) -> bool:
+    """Return whether baseline should model this host as a DHCP client."""
+    system_type = str(getattr(system, "type", "") or "").lower()
+    services = {str(s).lower() for s in (getattr(system, "services", []) or [])}
+    roles = {str(r).lower() for r in (getattr(system, "roles", []) or [])}
+    if "dhclient" in services:
+        return True
+    if system_type == "workstation":
+        return True
+    static_roles = {
+        "domain_controller",
+        "dns_server",
+        "file_server",
+        "web_server",
+        "forward_proxy",
+        "app_server",
+        "database",
+    }
+    return not roles.intersection(static_roles) and system_type not in {
+        "server",
+        "domain_controller",
+    }
 
 
 def _build_emitter_classes() -> dict:
@@ -296,22 +321,43 @@ class EmitterSetupMixin:
         _oui_prefixes = _net_params.get("oui_prefixes", [{"prefix": "00:50:56", "weight": 100}])
         _oui_weights = [o["weight"] for o in _oui_prefixes]
         _oui_values = [o["prefix"] for o in _oui_prefixes]
+        storyline_macs: dict[str, str] = {}
+        for step in self.scenario.storyline:
+            system_name = getattr(step, "system", "")
+            if not system_name:
+                continue
+            for event in getattr(step, "events", []) or []:
+                if getattr(event, "type", None) != "dhcp_lease":
+                    continue
+                mac_address = getattr(event, "mac_address", None)
+                if mac_address:
+                    storyline_macs.setdefault(system_name, mac_address.lower())
 
         for system in self.scenario.environment.systems:
+            if not _system_uses_dhcp(system):
+                continue
             ip_seed = _stable_seed(f"mac_{system.ip}")
             # Select OUI prefix deterministically per host using weighted distribution
             oui_rng = random.Random(ip_seed)
             oui = oui_rng.choices(_oui_values, weights=_oui_weights, k=1)[0]
-            mac = f"{oui}:{(ip_seed >> 16) & 0xFF:02x}:{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}"
+            mac = storyline_macs.get(
+                system.hostname,
+                f"{oui}:{(ip_seed >> 16) & 0xFF:02x}"
+                f":{(ip_seed >> 8) & 0xFF:02x}:{ip_seed & 0xFF:02x}",
+            )
             offset = (_stable_seed(f"dhcp_offset_{system.hostname}") % 300) + rng.uniform(0, 5)
             ts = base_time + timedelta(seconds=offset)
             uid = generate_zeek_uid("C")
             lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
+            infra_ips = getattr(self, "_infra_ips", {})
+            dhcp_servers = infra_ips.get("dc") or infra_ips.get("dns") or ["10.0.0.1"]
+            dhcp_server = dhcp_servers[0] if isinstance(dhcp_servers, list) else dhcp_servers
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=ts,
                 mac=mac,
+                server_addr=dhcp_server,
                 lease_time=lease_time,
                 uid=uid,
             )
@@ -320,6 +366,7 @@ class EmitterSetupMixin:
                 "mac": mac,
                 "lease_time": lease_time,
                 "last_renewal": ts.timestamp(),
+                "server_addr": dhcp_server,
                 "system": system,
             }
 
@@ -488,10 +535,19 @@ class EmitterSetupMixin:
         from evidenceforge.generation.activity import _get_os_category
 
         self._machine_ids: dict[str, str] = {}
+        original_time = self.state_manager.state.current_time
 
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
             pids: dict[str, int] = {}
+            boot_uptime = getattr(self, "_kernel_boot_uptimes", {}).get(system.hostname)
+            boot_time = (
+                self.start_time - timedelta(seconds=boot_uptime)
+                if self.start_time and boot_uptime is not None
+                else original_time
+            )
+            if boot_time is not None:
+                self.state_manager.set_current_time(boot_time)
 
             if os_cat == "windows":
                 self._seed_windows_process_tree(system, pids)
@@ -505,8 +561,11 @@ class EmitterSetupMixin:
             self._system_pids[system.hostname] = pids
 
             # Register boot time for entity lifecycle validation
-            if self.start_time:
-                self.state_manager.register_boot_time(system.hostname, self.start_time)
+            if boot_time is not None:
+                self.state_manager.register_boot_time(system.hostname, boot_time)
+
+        if original_time is not None:
+            self.state_manager.set_current_time(original_time)
 
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
@@ -553,8 +612,20 @@ class EmitterSetupMixin:
         """Seed Windows system process tree in StateManager."""
         sm = self.state_manager
         hn = system.hostname
+        boot_base = sm.state.current_time
+        boot_rng = random.Random(_stable_seed(f"windows_boot_sequence:{hn}"))
+        boot_elapsed = 0.0
+
+        def _advance_boot_clock() -> None:
+            nonlocal boot_elapsed
+            if boot_base is None:
+                return
+            boot_elapsed += boot_rng.uniform(0.08, 2.75)
+            sm.set_current_time(boot_base + timedelta(seconds=boot_elapsed))
 
         def _c(parent, image, cmd, user):
+            _advance_boot_clock()
+            image = normalize_defender_platform_path(image, hn)
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
         # PID 4 is always the Windows System process (parent of smss.exe).
@@ -667,6 +738,8 @@ class EmitterSetupMixin:
             # Servers/DCs: no persistent desktop session at boot
             pids["explorer"] = pids["winlogon"]  # Alias for fallback lookups
         pids["dwm"] = _c(pids["csrss_s0"], r"C:\Windows\System32\dwm.exe", "dwm.exe", "SYSTEM")
+        if boot_base is not None:
+            sm.set_current_time(boot_base)
 
     def _seed_linux_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Linux system process tree in StateManager."""
@@ -675,8 +748,19 @@ class EmitterSetupMixin:
         os_str = system.os.lower()
 
         is_rhel = any(d in os_str for d in ("centos", "rhel", "red hat", "rocky", "alma"))
+        boot_base = sm.state.current_time
+        boot_rng = random.Random(_stable_seed(f"linux_boot_sequence:{hn}"))
+        boot_elapsed = 0.0
+
+        def _advance_boot_clock() -> None:
+            nonlocal boot_elapsed
+            if boot_base is None:
+                return
+            boot_elapsed += boot_rng.uniform(0.05, 1.9)
+            sm.set_current_time(boot_base + timedelta(seconds=boot_elapsed))
 
         def _c(parent, image, cmd, user):
+            _advance_boot_clock()
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
         pids["systemd"] = _c(
@@ -762,6 +846,8 @@ class EmitterSetupMixin:
             )
 
         pids["bash"] = _c(pids["sshd"], "/bin/bash", "-bash", "root")
+        if boot_base is not None:
+            sm.set_current_time(boot_base)
 
     def _get_system_exposure(self, system) -> str:
         """Get the network exposure for a system based on its segment.

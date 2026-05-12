@@ -73,6 +73,30 @@ def response_size_for_mime(rng: random.Random, content_type: str) -> int:
     return rng.randint(lo, hi)
 
 
+def is_stable_resource_path(uri: str) -> bool:
+    """Return whether repeated 200 responses should keep a stable body size."""
+    clean_path = uri.split("?", 1)[0].split("#", 1)[0].lower()
+    suffix = PurePosixPath(clean_path).suffix.lower()
+    if clean_path in {"/", "/index.html", "/robots.txt", "/sitemap.xml", "/favicon.ico"}:
+        return True
+    return suffix in {
+        ".css",
+        ".gif",
+        ".ico",
+        ".jpeg",
+        ".jpg",
+        ".js",
+        ".map",
+        ".png",
+        ".svg",
+        ".txt",
+        ".webp",
+        ".woff",
+        ".woff2",
+        ".xml",
+    }
+
+
 def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     """Return a stable source-native web response body size for an HTTP status."""
     if status_code < 400:

@@ -382,6 +382,9 @@ variants:
       - name: Image
         type: string
         required: true
+      - name: User
+        type: string
+        required: true
       - name: TargetObject
         type: string
         required: true
@@ -407,6 +410,9 @@ variants:
         type: integer
         required: true
       - name: Image
+        type: string
+        required: true
+      - name: User
         type: string
         required: true
       - name: TargetObject
@@ -478,7 +484,7 @@ output:
       </System>
       <EventData>
         {% if EventID == 1 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
@@ -501,14 +507,14 @@ output:
         <Data Name="ParentImage">{{ ParentImage | default('-') }}</Data>
         <Data Name="ParentCommandLine">{{ ParentCommandLine | default('-') }}</Data>
         {% elif EventID == 5 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
         <Data Name="User">{{ User }}</Data>
         {% elif EventID == 8 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="SourceProcessGuid">{{ SourceProcessGuid }}</Data>
         <Data Name="SourceProcessId">{{ SourceProcessId }}</Data>
@@ -521,7 +527,7 @@ output:
         <Data Name="StartModule">{{ StartModule | default('') }}</Data>
         <Data Name="StartFunction">{{ StartFunction | default('') }}</Data>
         {% elif EventID == 10 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="SourceProcessGUID">{{ SourceProcessGUID }}</Data>
         <Data Name="SourceProcessId">{{ SourceProcessId }}</Data>
@@ -535,7 +541,7 @@ output:
         <Data Name="GrantedAccess">{{ GrantedAccess }}</Data>
         <Data Name="CallTrace">{{ CallTrace | default('') }}</Data>
         {% elif EventID == 3 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
@@ -554,7 +560,7 @@ output:
         <Data Name="DestinationPort">{{ DestinationPort }}</Data>
         <Data Name="DestinationPortName">{{ DestinationPortName | default('-') }}</Data>
         {% elif EventID == 7 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
@@ -570,7 +576,7 @@ output:
         <Data Name="Signature">{{ Signature | default('-') }}</Data>
         <Data Name="SignatureStatus">{{ SignatureStatus }}</Data>
         {% elif EventID == 11 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
@@ -578,20 +584,22 @@ output:
         <Data Name="TargetFilename">{{ TargetFilename }}</Data>
         <Data Name="CreationUtcTime">{{ CreationUtcTime }}</Data>
         {% elif EventID == 12 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="EventType">{{ EventType }}</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetObject">{{ TargetObject }}</Data>
         {% elif EventID == 13 %}
-        <Data Name="RuleName">{{ RuleName | default('') }}</Data>
+        <Data Name="RuleName">{{ RuleName | default('-') }}</Data>
         <Data Name="EventType">SetValue</Data>
         <Data Name="UtcTime">{{ UtcTime }}</Data>
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetObject">{{ TargetObject }}</Data>
         <Data Name="Details">{{ Details | default('-') }}</Data>
         {% elif EventID == 22 %}
