@@ -1160,6 +1160,36 @@ def _is_ip_literal(value: str) -> bool:
         return False
 
 
+def _tls_certificate_serial(seed: str) -> str:
+    """Return a stable certificate serial with CA-realistic length variation."""
+    from evidenceforge.generation.activity.tls_realism import serial_number_config
+
+    configured_lengths = serial_number_config().get("byte_lengths", [])
+    lengths: list[int] = []
+    weights: list[int] = []
+    for entry in configured_lengths:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            byte_length = int(entry.get("bytes", 0))
+            weight = int(entry.get("weight", 0))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= byte_length <= 20 and weight > 0:
+            lengths.append(byte_length)
+            weights.append(weight)
+
+    if not lengths:
+        lengths = [8, 9, 10, 12, 16, 18, 20]
+        weights = [8, 6, 6, 14, 40, 12, 14]
+
+    length_rng = random.Random(_stable_seed(f"tls_serial_length:{seed}"))
+    byte_length = length_rng.choices(lengths, weights=weights, k=1)[0]
+    value_rng = random.Random(_stable_seed(f"tls_serial_value:{seed}:{byte_length}"))
+    value = value_rng.getrandbits(byte_length * 8) or 1
+    return f"{value:0{byte_length * 2}X}"
+
+
 def _raw_ip_tls_issuer(cert_name: str) -> dict[str, Any]:
     """Return a non-public-CA profile for raw-IP TLS certificates."""
     return {
@@ -1951,7 +1981,7 @@ class ActivityGenerator:
                 str(validity[1]),
             ]
         )
-        serial_number = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+        serial_number = _tls_certificate_serial(serial_seed)
         cert_hash = hashlib.sha1(
             "|".join(
                 [
@@ -2324,7 +2354,7 @@ class ActivityGenerator:
                         str(validity[1]),
                     ]
                 )
-                serial = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+                serial = _tls_certificate_serial(serial_seed)
                 cert_hash = hashlib.sha1(
                     "|".join(
                         [

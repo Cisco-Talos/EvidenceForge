@@ -167,6 +167,40 @@ class TlsSanConfig(BaseModel, extra="forbid"):
     multi_label_public_suffixes: list[str]
 
 
+class TlsSerialLength(BaseModel, extra="forbid"):
+    """Weighted serial-number byte length in tls_realism.yaml."""
+
+    bytes: int
+    weight: int
+
+    @field_validator("bytes")
+    @classmethod
+    def bytes_within_rfc_limit(cls, v: int) -> int:
+        if not 1 <= v <= 20:
+            raise ValueError("serial byte length must be between 1 and 20")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class TlsSerialNumberConfig(BaseModel, extra="forbid"):
+    """Certificate serial-number behavior settings in tls_realism.yaml."""
+
+    byte_lengths: list[TlsSerialLength]
+
+    @field_validator("byte_lengths")
+    @classmethod
+    def byte_lengths_non_empty(cls, v: list[TlsSerialLength]) -> list[TlsSerialLength]:
+        if not v:
+            raise ValueError("byte_lengths must not be empty")
+        return v
+
+
 class TlsOcspResponder(BaseModel, extra="forbid"):
     """Issuer-pattern to OCSP responder mapping in tls_realism.yaml."""
 
@@ -326,6 +360,7 @@ class TlsRealismConfig(BaseModel, extra="forbid"):
     """Root schema for tls_realism.yaml."""
 
     san: TlsSanConfig
+    serial_numbers: TlsSerialNumberConfig
     ocsp: TlsOcspConfig
     certificate_chains: TlsCertificateChainConfig
     destinations: TlsDestinationsConfig

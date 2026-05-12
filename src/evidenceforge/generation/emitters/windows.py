@@ -544,6 +544,11 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
+        ip_address = self._ipv6_mapped(auth.source_ip)
+        has_source_ip = ip_address != "-"
+        ip_port = auth.source_port if has_source_ip else 0
+        if not ip_port and has_source_ip and auth.logon_type == 3:
+            ip_port = rng.randint(49152, 65535)
 
         event_data = {
             "EventID": 4625,
@@ -572,9 +577,8 @@ class WindowsEventEmitter(LogEmitter):
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or "-",
-            "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": auth.source_port
-            or (rng.randint(49152, 65535) if auth.logon_type == 3 else 0),
+            "IpAddress": ip_address,
+            "IpPort": ip_port,
         }
         self.emit_event(event_data)
 

@@ -927,6 +927,51 @@ class TestWindowsEventEmitter:
         assert "<Task>12544</Task>" in content  # Logon category, not Account Lockout
         assert "<Version>0</Version>" in content  # 4625 is always Version 0
 
+    def test_failed_logon_without_source_ip_does_not_keep_source_port(
+        self, format_def, temp_output
+    ):
+        """4625 source port should not survive when the source address is unavailable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="baduser",
+                user_sid="S-1-0-0",
+                logon_type=3,
+                source_ip="-",
+                source_port=58680,
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                failure_status="0xc000006d",
+                failure_substatus="0xc000006a",
+                failure_reason="%%2313",
+                logon_process="NtLmSsp",
+                auth_package="NTLM",
+                lm_package="NTLM V2",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">0</Data>' in content
+        assert "58680" not in content
+
     def test_ntlm_field_names(self, format_def, temp_output):
         """Test that 4776 uses correct field names (TargetUserName, Workstation)."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

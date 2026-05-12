@@ -4,6 +4,7 @@
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
 import random
+import re
 from datetime import UTC, datetime
 
 import yaml
@@ -15,6 +16,7 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _ntp_stratum_and_ref_id,
     _ocsp_status_for_certificate,
+    _tls_certificate_serial,
     _tls_san_dns_names,
 )
 from evidenceforge.generation.activity.tls_issuers import (
@@ -180,6 +182,16 @@ class TestTlsIssuers:
         for domain in domains:
             statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
             assert "revoked" not in statuses
+
+    def test_tls_certificate_serial_lengths_vary_but_remain_stable(self):
+        """Certificate serials should not all look like fixed 128-bit generated values."""
+        serials = [_tls_certificate_serial(f"cert-{idx}") for idx in range(120)]
+
+        assert _tls_certificate_serial("stable-cert") == _tls_certificate_serial("stable-cert")
+        assert len({len(serial) for serial in serials}) >= 3
+        assert all(16 <= len(serial) <= 40 for serial in serials)
+        assert all(len(serial) % 2 == 0 for serial in serials)
+        assert all(re.fullmatch(r"[0-9A-F]+", serial) for serial in serials)
 
     def test_ocsp_responder_selection_is_issuer_aware(self):
         """OCSP responders should come from issuer-specific config."""

@@ -50,6 +50,11 @@ def multi_label_public_suffixes() -> set[str]:
     return {str(suffix).lower() for suffix in suffixes}
 
 
+def serial_number_config() -> dict[str, Any]:
+    """Return certificate serial-number behavior config."""
+    return load_tls_realism().get("serial_numbers", {})
+
+
 def ocsp_config() -> dict[str, Any]:
     """Return OCSP behavior config."""
     return load_tls_realism().get("ocsp", {})

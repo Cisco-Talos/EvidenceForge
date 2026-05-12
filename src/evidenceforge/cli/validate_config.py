@@ -191,7 +191,7 @@ def validate_config() -> ValidationResult:
             "dict_fields": {"domain_ca_overrides"},
         },
         "activity/tls_realism.yaml": {
-            "dict_fields": {"san", "ocsp", "certificate_chains", "destinations"},
+            "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
         },
         "activity/smb_file_transfers.yaml": {
             "list_fields": {"mime_types": None, "analyzer_sets": None},
