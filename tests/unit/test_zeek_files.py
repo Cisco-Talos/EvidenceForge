@@ -405,6 +405,13 @@ class TestFilesUidCorrelation:
                 certificate_issuer="CN=Example Root",
                 host_cert=False,
             )
+            root = X509Context(
+                fuid="FRootCert123456",
+                fingerprint="d" * 40,
+                certificate_subject="CN=Example Root",
+                certificate_issuer="CN=Example Root",
+                host_cert=False,
+            )
             event = SecurityEvent(
                 timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
                 event_type="connection",
@@ -421,10 +428,10 @@ class TestFilesUidCorrelation:
                 ),
                 ssl=SslContext(
                     server_name="updates.example.test",
-                    cert_chain_fuids=[leaf.fuid, intermediate.fuid],
+                    cert_chain_fuids=[leaf.fuid, intermediate.fuid, root.fuid],
                 ),
                 x509=leaf,
-                x509_chain=[leaf, intermediate],
+                x509_chain=[leaf, intermediate, root],
             )
 
             emitter.emit(event)
@@ -435,7 +442,9 @@ class TestFilesUidCorrelation:
         by_depth = {row["depth"]: row for row in rows}
         assert by_depth[0]["fuid"] == leaf.fuid
         assert by_depth[1]["fuid"] == intermediate.fuid
+        assert by_depth[2]["fuid"] == root.fuid
         assert by_depth[0]["ts"] < by_depth[1]["ts"]
+        assert by_depth[1]["ts"] < by_depth[2]["ts"]
 
     def test_same_certificate_fingerprint_keeps_file_hashes(self):
         """Repeated observations of the same cert bytes should keep all hashes stable."""

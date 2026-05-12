@@ -89,6 +89,7 @@ def certificate_analyzer_delay_ms(
     position: int,
 ) -> int:
     """Return a deterministic, non-uniform Zeek TLS certificate analyzer offset."""
+    del fuid
     base_delay_ms = ssl_analyzer_delay_ms(zeek_uid=zeek_uid, event_timestamp=event_timestamp)
     base_delay_ms += int(
         sample_timing_delta(
@@ -102,7 +103,8 @@ def certificate_analyzer_delay_ms(
 
     gap_ms = 0
     for depth in range(1, position + 1):
-        rng = random.Random(_stable_seed(f"tls_cert_chain_gap:{zeek_uid}:{fuid}:{depth}"))
+        gap_seed = f"tls_cert_chain_gap:{zeek_uid}:{event_timestamp.isoformat()}:{depth}"
+        rng = random.Random(_stable_seed(gap_seed))
         gap_ms += rng.randint(3, 45)
     return base_delay_ms + gap_ms
 
