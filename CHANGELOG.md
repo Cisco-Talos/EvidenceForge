@@ -4,6 +4,31 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.6.2 (2026-05-12)
+
+This patch release packages the `dev` branch hardening work since v0.6.1. The branch contains only `fix:` and `docs:` commits, so the version moves from `0.6.1` to `0.6.2` under the pre-1.0 semver policy.
+
+**Lifecycle, identity, and endpoint realism**
+
+- Tightened process/session lifecycle and network timing across endpoint sources, including storyline logoff ordering, singleton process reuse, eCAR listener flow correlation, endpoint/DNS tunnel tells, and renderer artifacts (`614bb75`, `843e860`, `e042dd5`, `8fa1ce5`, `0d21ea7`, `982b0ff`).
+- Improved Linux process/syslog texture, dhclient ordering, workstation lock/unlock realism, web scan behavior, packet/process identity, and slow-suite proxy/logon contracts (`45e570a`, `4b23312`, `cf29343`, `68eb0de`, `fb95f13`).
+- Addressed iterative endpoint and source-invariant review findings from loops 30-33, 35-40, 41-57, 61, and 63 (`bf4ff40`, `c3c8ced`, `84eec44`, `b7f3c30`, `b995e4e`, `e579236`, `9d1981e`, `804d54c`, `48fdfce`, `37e2ab9`, `254d129`, `38fc7be`, `245f55c`, `d02500a`, `7039592`, `2bdbb0e`, `24725fa`, `a79354b`, `d8d914b`, `63a26e9`, `c77bef7`, `9e87cb3`, `8f9c61a`, `25d2a20`, `2a1982f`, `52c3c0d`, `788364f`, `24cc06b`, `b3695c9`).
+
+**Network, proxy, TLS, and analyzer correlation**
+
+- Fixed protocol and source-native network evidence issues around loop 34 protocol correlation, proxy egress DNS, multisensor Zeek file timing, loop 62 analyzer/auth telemetry, TLS certificate chain ordering, and loop 65 parent/NAT visibility (`e5f4268`, `e8cb425`, `1f23689`, `ed5d34b`, `9aa20c9`, `6be55b3`, `762562b`).
+- Closed loop 65 hard-probe gaps and recorded loop 40 and loop 65 assessment outcomes in the development history (`da81c78`, `9d6d8b2`, `495918f`).
+
+**Security and evaluator hardening**
+
+- Hardened Windows event spool decoding and final flush behavior with typed spool payloads and SQLite-backed streaming fixup passes that preserve process-create, process-termination, logoff, and lock/unlock ordering (`e04b49a`).
+- Prevented ground truth from claiming skipped process-access/create-remote-thread evidence, hardened malformed beacon URL parsing, bounded cyclic Sysmon parent-process ordering, and preserved TCP header accounting for DNS SERVFAIL fallback rows (`13a6e19`, `bf901fb`, `791106e`, `4627326`).
+
+**Validation**
+
+- Focused verification during the branch included targeted unit coverage for DNS fallback accounting, Sysmon parent ordering, evaluator beacon matching, process-access/remote-thread skip propagation, and Windows emitter spool behavior.
+- Release-prep validation ran `uv run ruff check .`, `uv run ruff format --check .`, and the focused tests listed in the dev-to-main PR description.
+
 ## v0.6.1 (2026-05-03)
 
 This patch release packages the dependency refresh PRs merged into `dev` after v0.6.0. The branch contains only `chore(deps)` commits, so the version moves from `0.6.0` to `0.6.1` under the pre-1.0 semver policy.
