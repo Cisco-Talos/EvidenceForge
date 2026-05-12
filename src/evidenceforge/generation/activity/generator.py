@@ -3173,6 +3173,11 @@ class ActivityGenerator:
         process_name = normalize_defender_platform_path(process_name, system.hostname)
         if _exe_lower in _HIGH_INTEGRITY_EXES:
             _integrity = "High"
+        elif _get_os_category(system.os) == "windows" and any(
+            marker in command_line.lower()
+            for marker in ("sekurlsa::", "privilege::debug", "lsadump::", "token::elevate")
+        ):
+            _integrity = "High"
         else:
             _integrity = "Medium"
             # Browser child processes (renderers) run at Low integrity.
@@ -3505,6 +3510,7 @@ class ActivityGenerator:
                     rng,
                     _template_user,
                     host_key=system.hostname,
+                    host_ip=system.ip,
                 )
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
@@ -4393,16 +4399,14 @@ class ActivityGenerator:
             dst_port = 0
             if resp_bytes and resp_bytes > 0:
                 request_size = max(32, min(orig_bytes or rng.randint(56, 1200), 1472))
-                response_size = max(32, min(resp_bytes, 1472))
-                if abs(response_size - request_size) > max(64, request_size // 10):
-                    response_size = max(32, request_size + rng.randint(-24, 48))
+                response_size = request_size
                 orig_bytes = request_size
                 resp_bytes = response_size
-                duration = duration if duration is not None else rng.uniform(0.001, 0.08)
+                duration = min(duration if duration is not None else rng.uniform(0.001, 0.08), 0.15)
             else:
                 orig_bytes = max(32, min(orig_bytes or rng.randint(56, 1200), 1472))
                 resp_bytes = 0
-                duration = duration if duration is not None else rng.uniform(0.001, 0.04)
+                duration = min(duration if duration is not None else rng.uniform(0.001, 0.04), 0.15)
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
@@ -8349,7 +8353,6 @@ class ActivityGenerator:
         )
 
         start_module, start_function = pick_remote_thread_start(source_image, target_image, rng)
-        start_address = rng.randint(0x01000000, 0x7FFFFFFF)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
         if source_proc is None:
             logger.debug(
@@ -8369,6 +8372,11 @@ class ActivityGenerator:
             )
         else:
             target_image = normalize_defender_platform_path(target_image, system.hostname)
+        module_key = (start_module or target_image).rsplit("\\", 1)[-1].lower()
+        module_base = (
+            0x00007FF600000000 + (_stable_seed(f"module_base:{module_key}") % 0x700000) * 0x1000
+        )
+        start_address = module_base + rng.randrange(0x1000, 0x1F000, 0x10)
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
@@ -8378,8 +8386,8 @@ class ActivityGenerator:
                 f"{system.hostname}:{source_pid}:{target_pid}:{time.isoformat()}:{start_address}",
             )
         )
-        stack_base = 0xFFFFF80000000000 + (rng.randint(0, 0xFFFFF) << 12)
-        user_stack_base = 0x000000C0000000 + (rng.randint(0, 0xFFF) << 12)
+        stack_base = 0x000000C0000000 + (rng.randint(0, 0x7FFF) << 12)
+        user_stack_base = stack_base
         event = SecurityEvent(
             timestamp=time,
             event_type="create_remote_thread",
@@ -8505,6 +8513,9 @@ class ActivityGenerator:
                 source_thread_id=source_thread_id,
                 target_pid=target_pid,
                 target_image=target_image,
+                target_user=target_proc.username
+                if target_proc is not None and target_proc.username
+                else "NT AUTHORITY\\SYSTEM",
                 target_process_object_id=target_obj_id,
                 granted_access=granted_access,
             ),

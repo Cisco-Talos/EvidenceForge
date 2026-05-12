@@ -1010,7 +1010,8 @@ class TestHttpContextPopulation:
         assert event.network.orig_pkts == 1
         assert event.network.resp_pkts == 1
         assert event.network.resp_bytes <= 1520
-        assert abs(event.network.resp_bytes - event.network.orig_bytes) <= 128
+        assert event.network.resp_bytes == event.network.orig_bytes
+        assert event.network.duration <= 0.15
 
 
 class TestFileTransferContext:

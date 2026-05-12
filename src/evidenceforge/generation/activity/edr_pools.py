@@ -156,6 +156,26 @@ def normalize_defender_platform_path(path: str, host_key: str) -> str:
     return f"{prefix}{defender_platform_version(host_key)}\\{suffix}"
 
 
+def _interface_guid(rng: random.Random, host_key: str, host_ip: str) -> str:
+    """Return a stable interface GUID when host context is known."""
+    if not host_key and not host_ip:
+        return (
+            f"{rng.getrandbits(32):08X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(48):012X}"
+        )
+    seed_key = f"interface_guid:{host_key}:{host_ip}"
+    return (
+        f"{_stable_seed(seed_key) & 0xFFFFFFFF:08X}-"
+        f"{(_stable_seed(f'{seed_key}:a') >> 16) & 0xFFFF:04X}-"
+        f"{(_stable_seed(f'{seed_key}:b') >> 16) & 0xFFFF:04X}-"
+        f"{(_stable_seed(f'{seed_key}:c') >> 16) & 0xFFFF:04X}-"
+        f"{_stable_seed(f'{seed_key}:d') & 0xFFFFFFFFFFFF:012X}"
+    )
+
+
 def materialize_edr_template(
     template: str,
     rng: random.Random,
@@ -181,7 +201,9 @@ def materialize_edr_template(
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "guid": (
-            f"{rng.getrandbits(32):08X}-"
+            _interface_guid(rng, host_key, host_ip)
+            if "services\\tcpip\\parameters\\interfaces" in template_lower
+            else f"{rng.getrandbits(32):08X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
@@ -216,6 +238,7 @@ def materialize_edr_template_group(
     user: str = "SYSTEM",
     *,
     host_key: str = "",
+    host_ip: str = "",
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -228,12 +251,15 @@ def materialize_edr_template_group(
         version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
+        "host_ip": host_ip,
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "guid": (
-            f"{rng.getrandbits(32):08X}-"
+            _interface_guid(rng, host_key, host_ip)
+            if "services\\tcpip\\parameters\\interfaces" in combined_lower
+            else f"{rng.getrandbits(32):08X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
@@ -302,6 +328,17 @@ def select_file_side_effect(
             return None
         action = str(rng.choice(actions)).lower()
         path = materialize_edr_template(str(rng.choice(paths)), rng, user=user)
+        if (
+            exe in {"bash", "sh"}
+            and user.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}
+            and path.endswith("/.bash_history")
+        ):
+            non_history_paths = [
+                candidate for candidate in paths if not str(candidate).endswith("/.bash_history")
+            ]
+            if not non_history_paths:
+                return None
+            path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
         return action, path

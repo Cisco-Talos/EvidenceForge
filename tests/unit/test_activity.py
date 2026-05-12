@@ -1664,6 +1664,33 @@ class TestActivityGenerator:
         assert event.process.token_elevation == "%%1936"
         assert event.process.mandatory_label == "S-1-16-16384"
 
+    def test_credential_dump_command_uses_high_integrity_token(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Credential-dump process telemetry should include visible elevation semantics."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0xabc",
+            r"C:\Windows\System32\ms-index-service.exe",
+            'ms-index-service.exe "privilege::debug" "sekurlsa::logonpasswords" exit',
+            parent_pid=4,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        event = process_events[-1]
+        assert event.process.integrity_level == "High"
+        assert event.process.token_elevation == "%%1936"
+        assert event.process.mandatory_label == "S-1-16-12288"
+
     def test_windows_singleton_process_uses_seeded_pid_without_create_event(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -1797,7 +1824,51 @@ class TestActivityGenerator:
         assert event.remote_thread.thread_object_id == event.edr.object_id
         assert event.edr.actor_id == source_obj_id
         assert event.remote_thread.start_address > 0
+        assert event.remote_thread.start_address >= 0x00007FF600000000
+        assert event.remote_thread.stack_base < 0x0000800000000000
         assert event.remote_thread.start_module
+
+    def test_process_access_uses_target_process_owner(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Sysmon Event 10 target user should follow the target process owner."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Temp\inject.exe",
+            command_line=r"C:\Temp\inject.exe",
+            username=test_user.username,
+            integrity_level="High",
+            logon_id="0xabc",
+        )
+        target_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line=r"C:\Windows\explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0xabc",
+        )
+
+        activity_gen.generate_process_access(
+            test_user,
+            test_system,
+            timestamp,
+            source_pid=source_pid,
+            source_image=r"C:\Temp\inject.exe",
+            target_pid=target_pid,
+            target_image=r"C:\Windows\explorer.exe",
+        )
+
+        event = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_access"
+        ][-1]
+        assert event.process_access.target_user == test_user.username
 
     def test_create_remote_thread_skips_missing_target_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
