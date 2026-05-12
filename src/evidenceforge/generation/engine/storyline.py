@@ -1987,6 +1987,7 @@ class StorylineMixin:
                             hostname=conn_hostname if conn_hostname is not None else spec.hostname,
                             pid=story_pid,
                             process_image=story_image,
+                            preserve_dst_ip=bool(spec.hostname),
                         )
                     else:
                         self.activity_generator.generate_connection(
@@ -2018,6 +2019,7 @@ class StorylineMixin:
                         hostname=conn_hostname,
                         pid=story_pid,
                         process_image=story_image,
+                        preserve_dst_ip=bool(spec.hostname),
                     )
                 attempt_count += 1
 
