@@ -1685,6 +1685,46 @@ def validate_config() -> ValidationResult:
                             f"entry {idx} must be a string containing '{{token}}'",
                         )
                     )
+        rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
+        allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+        if not isinstance(rcode_weights, dict) or not rcode_weights:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_rcode_weights)",
+                    "dns_tunnel_rcode_weights must be a non-empty mapping",
+                )
+            )
+        else:
+            total_weight = 0.0
+            for rcode, weight in rcode_weights.items():
+                if str(rcode).upper() not in allowed_rcodes:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_rcode_weights)",
+                            f"unsupported rcode '{rcode}'",
+                        )
+                    )
+                    continue
+                if not isinstance(weight, int | float) or weight <= 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_rcode_weights)",
+                            f"weight for '{rcode}' must be a positive number",
+                        )
+                    )
+                    continue
+                total_weight += float(weight)
+            if total_weight <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_rcode_weights)",
+                        "at least one response code must have positive weight",
+                    )
+                )
 
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:

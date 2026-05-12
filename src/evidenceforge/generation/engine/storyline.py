@@ -1196,6 +1196,27 @@ class StorylineMixin:
                 _uri_raw = spec.uri or "/"
                 _uri = _uri_raw.lower()
                 _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
+                _desc = f"{spec.description or ''} {spec.technique or ''} {_uri}".lower()
+                _is_c2_http = any(
+                    marker in _desc
+                    for marker in (
+                        "c2",
+                        "beacon",
+                        "callback",
+                        "checkin",
+                        "tasking",
+                        "exfil",
+                        "upload",
+                        "t1041",
+                        "t1071",
+                    )
+                )
+                if _is_c2_http and _mime_type == "text/html":
+                    _mime_type = rng.choices(
+                        ["application/json", "text/plain", "application/octet-stream"],
+                        weights=[55, 25, 20],
+                        k=1,
+                    )[0]
                 if spec.response_body_len is not None:
                     resp_bytes = spec.response_body_len
                 elif _method == "POST" and any(
@@ -1239,6 +1260,8 @@ class StorylineMixin:
                     }.get(spec.status_code or 200, "OK"),
                     referrer=spec.referrer
                     if spec.referrer is not None
+                    else ""
+                    if _is_c2_http and rng.random() < 0.8
                     else pick_referrer(rng, _http_host, context="general"),
                     resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                     tags=[],
@@ -1771,10 +1794,30 @@ class StorylineMixin:
                     _method = spec.method or "GET"
                     _uri_raw = spec.uri or "/"
                     _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
+                    _desc = f"{spec.description or ''} {spec.technique or ''} {_uri_raw}".lower()
+                    _is_c2_http = any(
+                        marker in _desc
+                        for marker in (
+                            "c2",
+                            "beacon",
+                            "callback",
+                            "checkin",
+                            "tasking",
+                            "t1071",
+                        )
+                    )
+                    if _is_c2_http and _mime_type == "text/html":
+                        _mime_type = rng.choices(
+                            ["application/json", "text/plain", "application/octet-stream"],
+                            weights=[65, 25, 10],
+                            k=1,
+                        )[0]
                     if spec.response_body_len is not None:
                         resp_bytes = spec.response_body_len
                     elif _method == "POST":
                         resp_bytes = rng.randint(200, 2000)
+                    elif _is_c2_http:
+                        resp_bytes = rng.randint(180, 6500)
                     else:
                         resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
@@ -1806,6 +1849,8 @@ class StorylineMixin:
                         }.get(spec.status_code or 200, "OK"),
                         referrer=spec.referrer
                         if spec.referrer is not None
+                        else ""
+                        if _is_c2_http and rng.random() < 0.75
                         else pick_referrer(rng, _http_host2, context="general"),
                         resp_mime_types=[_mime_type] if (spec.status_code or 200) == 200 else [],
                         tags=[],
@@ -2429,12 +2474,13 @@ class StorylineMixin:
 
             from evidenceforge.events.contexts import DnsContext
             from evidenceforge.generation.activity.network_params import (
+                dns_tunnel_rcode_weights,
                 dns_tunnel_response_templates,
                 dns_tunnel_rtt_range,
             )
 
             _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
-            _RCODE_MAP = {"NOERROR": 0}
+            _RCODE_MAP = {"NOERROR": 0, "NXDOMAIN": 3, "SERVFAIL": 2, "REFUSED": 5}
 
             # Timing
             start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
@@ -2486,6 +2532,9 @@ class StorylineMixin:
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
             response_templates = dns_tunnel_response_templates() or ["status={token}"]
+            rcode_weights = dns_tunnel_rcode_weights()
+            rcode_names = list(rcode_weights)
+            rcode_values = [rcode_weights[name] for name in rcode_names]
             total_bytes = 0
             query_count = 0
             chunk_idx = 0
@@ -2546,22 +2595,46 @@ class StorylineMixin:
                 encoded = encoded[:label_length]
                 tunnel_query = f"{encoded}.{spec.base_domain}"
 
-                # TXT responses carry data back; CNAME/NULL are smaller
-                if spec.qtype == "TXT":
-                    resp_bytes = rng.randint(200, 2000)
+                rcode_name = rng.choices(rcode_names, weights=rcode_values, k=1)[0]
+                rcode_num = _RCODE_MAP.get(rcode_name, 0)
+                answers: list[str] = []
+                ttls: list[float] = []
+                if rcode_name == "NOERROR":
+                    # TXT responses carry data back; CNAME/NULL are smaller.
+                    if spec.qtype == "TXT":
+                        resp_bytes = rng.randint(140, 2400)
+                    else:
+                        resp_bytes = rng.randint(50, 240)
+                    token_rng = random.Random(
+                        _stable_seed(
+                            f"dns_tunnel_response:{spec.base_domain}:{query_count}:"
+                            f"{tunnel_salt.hex()}"
+                        )
+                    )
+                    token_bytes = token_rng.randbytes(token_rng.randint(3, 10))
+                    token_style = token_rng.choice(["hex", "base32", "base64url"])
+                    if token_style == "base32":
+                        response_token = _b64.b32encode(token_bytes).decode("ascii").rstrip("=")
+                    elif token_style == "base64url":
+                        response_token = (
+                            _b64.urlsafe_b64encode(token_bytes).decode("ascii").rstrip("=")
+                        )
+                    else:
+                        response_token = token_bytes.hex()
+                    response_template = rng.choice(response_templates)
+                    answers = [response_template.replace("{token}", response_token)]
+                    ttls = [float(rng.choice([0, 1, 2, 5, 10, 15, 30, 60]))]
                 else:
-                    resp_bytes = rng.randint(50, 200)
-                response_token = f"{random.Random(_stable_seed(f'dns_tunnel_response:{spec.base_domain}:{query_count}:{tunnel_salt.hex()}')).getrandbits(32):08x}"
-                response_template = rng.choice(response_templates)
+                    resp_bytes = rng.randint(55, 180)
 
                 dns_ctx = DnsContext(
                     query=tunnel_query,
                     query_type=spec.qtype,
                     qtype=qtype_num,
-                    rcode="NOERROR",
-                    rcode_num=0,
-                    answers=[response_template.replace("{token}", response_token)],
-                    TTLs=[float(rng.randint(1, 10))],
+                    rcode=rcode_name,
+                    rcode_num=rcode_num,
+                    answers=answers,
+                    TTLs=ttls,
                     trans_id=rng.randint(1, 65535),
                     AA=False,
                     RD=True,

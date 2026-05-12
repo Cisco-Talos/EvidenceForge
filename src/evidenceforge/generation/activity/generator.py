@@ -33,6 +33,7 @@ import logging
 import math
 import ntpath
 import random
+import shlex
 import uuid
 from datetime import UTC, datetime, timedelta
 from threading import Lock
@@ -138,6 +139,79 @@ _BASH_BLOCKING_PREFIXES = (
     "tail -f ",
 )
 _BASH_MEDIUM_PREFIXES = ("curl ", "wget ", "scp ", "ssh ", "mysql ", "psql ", "git ")
+_BASH_BUILTIN_COMMANDS = {
+    ".",
+    "alias",
+    "bg",
+    "cd",
+    "clear",
+    "echo",
+    "exit",
+    "export",
+    "fg",
+    "history",
+    "jobs",
+    "logout",
+    "pwd",
+    "read",
+    "source",
+    "ulimit",
+    "umask",
+    "unset",
+}
+_LINUX_COMMAND_IMAGE_OVERRIDES = {
+    "awk": "/usr/bin/awk",
+    "cat": "/usr/bin/cat",
+    "chmod": "/usr/bin/chmod",
+    "chown": "/usr/bin/chown",
+    "cp": "/usr/bin/cp",
+    "curl": "/usr/bin/curl",
+    "date": "/usr/bin/date",
+    "df": "/usr/bin/df",
+    "docker": "/usr/bin/docker",
+    "du": "/usr/bin/du",
+    "file": "/usr/bin/file",
+    "find": "/usr/bin/find",
+    "free": "/usr/bin/free",
+    "gcc": "/usr/bin/gcc",
+    "git": "/usr/bin/git",
+    "grep": "/usr/bin/grep",
+    "gzip": "/usr/bin/gzip",
+    "head": "/usr/bin/head",
+    "id": "/usr/bin/id",
+    "ip": "/usr/sbin/ip",
+    "journalctl": "/usr/bin/journalctl",
+    "kubectl": "/usr/local/bin/kubectl",
+    "last": "/usr/bin/last",
+    "ls": "/usr/bin/ls",
+    "make": "/usr/bin/make",
+    "mount": "/usr/bin/mount",
+    "mysql": "/usr/bin/mysql",
+    "mysqldump": "/usr/bin/mysqldump",
+    "nmap": "/usr/bin/nmap",
+    "npm": "/usr/bin/npm",
+    "ps": "/usr/bin/ps",
+    "psql": "/usr/bin/psql",
+    "python": "/usr/bin/python",
+    "python3": "/usr/bin/python3",
+    "redis-cli": "/usr/bin/redis-cli",
+    "rm": "/usr/bin/rm",
+    "scp": "/usr/bin/scp",
+    "sed": "/usr/bin/sed",
+    "shred": "/usr/bin/shred",
+    "sqlite3": "/usr/bin/sqlite3",
+    "ss": "/usr/sbin/ss",
+    "ssh": "/usr/bin/ssh",
+    "systemctl": "/usr/bin/systemctl",
+    "tail": "/usr/bin/tail",
+    "tar": "/usr/bin/tar",
+    "top": "/usr/bin/top",
+    "uptime": "/usr/bin/uptime",
+    "vim": "/usr/bin/vim",
+    "w": "/usr/bin/w",
+    "wget": "/usr/bin/wget",
+    "whoami": "/usr/bin/whoami",
+}
 _NMAP_PORT_SERVICES = {
     22: "ssh",
     80: "http",
@@ -936,6 +1010,70 @@ def _linux_uid_for_user(username: str) -> int:
     return 1000 + (_stable_seed(f"linux_uid_{username}") % 5000)
 
 
+def _icmp_echo_payload_size(rng: random.Random, requested: int | None) -> int:
+    """Return a varied but source-native ICMP echo payload size."""
+    common_sizes = [32, 48, 56, 64, 84, 120, 256, 512, 1024, 1200, 1472]
+    weights = [8, 10, 18, 18, 10, 8, 7, 7, 5, 4, 5]
+    if requested is not None and 32 <= requested <= 1472 and rng.random() < 0.45:
+        jitter = rng.choice([-16, -8, 0, 0, 0, 8, 16])
+        return max(32, min(1472, requested + jitter))
+    return rng.choices(common_sizes, weights=weights, k=1)[0]
+
+
+def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
+    """Return realistic ICMP RTT without leaving clamp-shaped plateaus."""
+    if requested is not None and 0.001 <= requested <= 0.15 and rng.random() < 0.65:
+        return requested
+    if rng.random() < 0.85:
+        return rng.uniform(0.001, 0.045)
+    return rng.uniform(0.045, 0.145)
+
+
+def _linux_command_image_from_shell(command: str) -> str | None:
+    """Infer the executable image for a Linux shell-history command."""
+    first_stage = command.split("|", 1)[0].strip()
+    if not first_stage:
+        return None
+    try:
+        parts = shlex.split(first_stage, comments=False, posix=True)
+    except ValueError:
+        return None
+    if not parts:
+        return None
+
+    index = 0
+    while index < len(parts):
+        token = parts[index]
+        if "=" in token and not token.startswith(("/", "./", "../")):
+            name, _, _value = token.partition("=")
+            if name.replace("_", "").isalnum():
+                index += 1
+                continue
+        if token in {"sudo", "time"}:
+            index += 1
+            continue
+        if token == "env":
+            index += 1
+            while index < len(parts) and "=" in parts[index]:
+                index += 1
+            continue
+        break
+
+    if index >= len(parts):
+        return None
+    executable = parts[index].rsplit("/", 1)[-1]
+    if executable in _BASH_BUILTIN_COMMANDS:
+        return None
+    if parts[index].startswith("/"):
+        return parts[index]
+    mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
+    if mapped is not None:
+        return mapped
+    if executable.isidentifier() or "-" in executable:
+        return f"/usr/bin/{executable}"
+    return None
+
+
 def _dns_base_ttl(query: str, is_internal: bool) -> int:
     """Return a stable authoritative TTL for a DNS query name."""
     domain_seed = random.Random(_stable_seed(f"dns_ttl_{query}"))
@@ -1344,6 +1482,14 @@ class ActivityGenerator:
             candidates = ["sshd"]
         elif "forward_proxy" in roles and service_name in ("http", "ssl"):
             candidates = ["squid", "nginx", "apache2", "httpd"]
+        elif os_category == "linux" and (
+            service_name in ("http", "ssl", "https") or dst_port in (80, 443, 8080, 8443)
+        ):
+            candidates = ["bash", "curl", "wget", "apache2", "httpd", "nginx", "python3"]
+        elif os_category == "windows" and (
+            service_name in ("http", "ssl", "https") or dst_port in (80, 443, 8080, 8443)
+        ):
+            candidates = ["chrome", "msedge", "firefox", "powershell", "svchost_netsvcs"]
 
         for name in candidates:
             pid = pids.get(name)
@@ -4398,15 +4544,15 @@ class ActivityGenerator:
             src_port = 0  # ICMP has no ports; Zeek emits 0
             dst_port = 0
             if resp_bytes and resp_bytes > 0:
-                request_size = max(32, min(orig_bytes or rng.randint(56, 1200), 1472))
+                request_size = _icmp_echo_payload_size(rng, orig_bytes)
                 response_size = request_size
                 orig_bytes = request_size
                 resp_bytes = response_size
-                duration = min(duration if duration is not None else rng.uniform(0.001, 0.08), 0.15)
+                duration = _icmp_echo_duration(rng, duration)
             else:
-                orig_bytes = max(32, min(orig_bytes or rng.randint(56, 1200), 1472))
+                orig_bytes = _icmp_echo_payload_size(rng, orig_bytes)
                 resp_bytes = 0
-                duration = min(duration if duration is not None else rng.uniform(0.001, 0.04), 0.15)
+                duration = _icmp_echo_duration(rng, duration)
         elif dns_has_response:
             conn_state = "SF"
             history = "Dd"
@@ -5754,6 +5900,7 @@ class ActivityGenerator:
 
         time = self._schedule_bash_history_time(user, system, time, command)
         self._emit_bash_command_event(user, system, time, command)
+        self._maybe_emit_bash_process_telemetry(user, system, time, command)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
         return time
 
@@ -5776,6 +5923,77 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
+
+    def _maybe_emit_bash_process_telemetry(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        command: str,
+    ) -> None:
+        """Emit process telemetry for interactive Linux shell commands when state supports it."""
+        if _get_os_category(system.os) != "linux":
+            return
+        image = _linux_command_image_from_shell(command)
+        if image is None:
+            return
+
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname and _session_started_by(session, time)
+        ]
+        if not sessions:
+            return
+        session = max(sessions, key=lambda candidate: candidate.start_time)
+
+        suspicious_markers = (
+            "/etc/shadow",
+            "curl ",
+            "wget ",
+            "scp ",
+            "ssh ",
+            "nmap",
+            "mysqldump",
+            "tar ",
+            "shred",
+            "chmod ",
+            "chown ",
+        )
+        rng = random.Random(
+            _stable_seed(
+                f"bash_process_telemetry:{system.hostname}:{user.username}:{time}:{command}"
+            )
+        )
+        if (
+            not any(marker in command.lower() for marker in suspicious_markers)
+            and rng.random() > 0.65
+        ):
+            return
+
+        parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
+        process_time = time + timedelta(milliseconds=rng.randint(20, 450))
+        pid = self.generate_process(
+            user=user,
+            system=system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
+        self._record_user_process(system, user, pid, image)
+        lifetime = _linux_foreground_lifetime(image, command)
+        if lifetime is not None:
+            self.generate_process_termination(
+                user=user,
+                system=system,
+                time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
+                pid=pid,
+                process_name=image,
+                logon_id=session.logon_id,
+            )
 
     def _schedule_bash_history_time(
         self,
