@@ -25,7 +25,7 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.tls_realism import ssl_analyzer_delay_ms
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -54,13 +54,7 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
         event_data: dict[str, Any] = {
             "ts": self._offset_timestamp(
                 event.timestamp,
-                int(
-                    sample_timing_delta(
-                        "source.zeek_ssl_analyzer",
-                        seed_parts=(net.zeek_uid, event.timestamp),
-                    ).total_seconds()
-                    * 1000
-                ),
+                ssl_analyzer_delay_ms(zeek_uid=net.zeek_uid, event_timestamp=event.timestamp),
             ),
             "uid": net.zeek_uid,
             "id.orig_h": net.src_ip,

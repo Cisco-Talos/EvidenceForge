@@ -57,6 +57,16 @@ fields:
     required: true
     description: "Next update timestamp (epoch)"
 
+  - name: revoketime
+    type: float
+    required: false
+    description: "Revocation timestamp (epoch) for revoked certificates"
+
+  - name: revokereason
+    type: string
+    required: false
+    description: "Revocation reason for revoked certificates"
+
 output:
   format: json
   file_extension: ".json"
@@ -71,5 +81,7 @@ output:
       "serialNumber": {{ serialNumber | tojson }},
       "certStatus": {{ certStatus | tojson }},
       "thisUpdate": {{ thisUpdate | tojson }},
-      "nextUpdate": {{ nextUpdate | tojson }}
+      "nextUpdate": {{ nextUpdate | tojson }},
+      "revoketime": {{ revoketime | tojson }},
+      "revokereason": {{ revokereason | tojson }}
     }

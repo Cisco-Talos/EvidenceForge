@@ -467,6 +467,8 @@ class OcspContext:
     cert_status: str = "good"  # "good", "revoked", "unknown"
     this_update: float = 0.0
     next_update: float = 0.0
+    revoketime: float | None = None
+    revokereason: str | None = None
 
 
 @dataclass(slots=True)

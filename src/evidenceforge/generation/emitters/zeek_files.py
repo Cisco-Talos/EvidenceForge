@@ -28,9 +28,11 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
+    ssl_analyzer_delay_ms,
 )
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
@@ -68,6 +70,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 net.zeek_uid,
                 ft.fuid,
                 ft.duration,
+                min_start=_related_http_analyzer_timestamp(event),
             )
             event_data: dict[str, Any] = {
                 "ts": file_ts,
@@ -110,7 +113,17 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 position=depth,
             )
             event_data = {
-                "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
+                "ts": self._offset_timestamp(
+                    event.timestamp,
+                    max(
+                        analyzer_delay_ms,
+                        ssl_analyzer_delay_ms(
+                            zeek_uid=net.zeek_uid,
+                            event_timestamp=event.timestamp,
+                        )
+                        + 1,
+                    ),
+                ),
                 "fuid": cert.fuid,
                 "tx_hosts": [net.dst_ip],
                 "rx_hosts": [net.src_ip],
@@ -192,9 +205,12 @@ def _bounded_file_transfer_observation(
     zeek_uid: str,
     fuid: str,
     file_duration: float,
+    min_start: datetime | None = None,
 ) -> tuple[datetime, float]:
     """Keep files.log observation timing inside the owning conn.log interval."""
     file_ts = _file_transfer_analyzer_timestamp(conn_ts, zeek_uid, fuid)
+    if min_start is not None and file_ts < min_start:
+        file_ts = min_start
     if conn_duration is None or conn_duration <= 0:
         return file_ts, file_duration
 
@@ -210,3 +226,27 @@ def _bounded_file_transfer_observation(
     if file_ts + timedelta(seconds=bounded_duration) > conn_end:
         bounded_duration = max(0.0, (conn_end - file_ts).total_seconds() - epsilon)
     return file_ts, bounded_duration
+
+
+def _related_http_analyzer_timestamp(event: SecurityEvent) -> datetime | None:
+    """Return the owning HTTP analyzer timestamp when this file belongs to http.log."""
+    net = event.network
+    ft = event.file_transfer
+    http = event.http
+    if net is None or ft is None or http is None or ft.fuid not in http.resp_fuids:
+        return None
+    return (
+        event.timestamp
+        + sample_timing_delta(
+            "source.zeek_http_request",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+        )
+        + timedelta(milliseconds=1)
+    )

@@ -624,7 +624,7 @@ class TestSslUidCorrelation:
             default_position="after",
         )
         assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000)
-        assert ssl_ts < x509_ts <= conn_ts + (x509_window.max_ms / 1000)
+        assert ssl_ts < x509_ts <= conn_ts + ((ssl_window.max_ms + x509_window.max_ms) / 1000)
         assert x509_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
         assert "uid" not in ocsp_row
@@ -639,6 +639,37 @@ class TestSslUidCorrelation:
         assert "uid" not in ocsp_file_row
         assert "id.orig_h" not in ocsp_file_row
         assert ocsp_file_row["mime_type"] == "application/ocsp-response"
+
+    def test_revoked_ocsp_status_renders_revocation_metadata(self):
+        """Revoked OCSP rows should include source-native revocation details."""
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "ocsp.json"
+            emitter = ZeekOcspEmitter(ocsp_fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="revoked",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                    revoketime=1705000000.0,
+                    revokereason="keyCompromise",
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            row = json.loads(output.read_text().splitlines()[0])
+
+        assert row["certStatus"] == "revoked"
+        assert row["revoketime"] == 1705000000.0
+        assert row["revokereason"] == "keyCompromise"
 
     def test_tls_conn_duration_contains_ssl_analyzer_offset(self):
         """Zeek conn duration for completed TLS should contain ssl/x509 analyzer evidence."""

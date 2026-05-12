@@ -31,9 +31,17 @@ from pathlib import Path
 import yaml
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import FileTransferContext, NetworkContext, X509Context
+from evidenceforge.events.contexts import (
+    FileTransferContext,
+    HttpContext,
+    NetworkContext,
+    SslContext,
+    X509Context,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
+from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 
 
 class TestFilesFormatAccuracy:
@@ -284,6 +292,98 @@ class TestFilesUidCorrelation:
 
         assert data["ts"] >= event.timestamp.timestamp()
         assert data["ts"] + data["duration"] <= event.timestamp.timestamp() + 0.08
+
+    def test_http_file_transfer_timestamp_follows_parent_http_record(self):
+        """HTTP response files should not predate the owning http.log row."""
+        files_fmt = load_format("zeek_files")
+        http_fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            http_output = Path(tmpdir) / "http.json"
+            files_output = Path(tmpdir) / "files.json"
+            http_emitter = ZeekHttpEmitter(http_fmt, http_output)
+            files_emitter = ZeekFilesEmitter(files_fmt, files_output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CHttpUID1234567",
+                    duration=2.0,
+                ),
+                http=HttpContext(
+                    host="updates.example.test",
+                    uri="/agent.dat",
+                    resp_fuids=["FHttpFile1234567"],
+                    resp_mime_types=["application/octet-stream"],
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FHttpFile1234567",
+                    source="HTTP",
+                    duration=0.04,
+                    seen_bytes=8192,
+                ),
+            )
+
+            http_emitter.emit(event)
+            files_emitter.emit(event)
+            http_emitter.close()
+            files_emitter.close()
+
+            http_row = json.loads(http_output.read_text().splitlines()[0])
+            file_row = json.loads(files_output.read_text().splitlines()[0])
+
+        assert file_row["ts"] > http_row["ts"]
+
+    def test_certificate_file_timestamp_follows_parent_ssl_record(self):
+        """Certificate files should not predate the owning ssl.log row."""
+        files_fmt = load_format("zeek_files")
+        ssl_fmt = load_format("zeek_ssl")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ssl_output = Path(tmpdir) / "ssl.json"
+            files_output = Path(tmpdir) / "files.json"
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, ssl_output)
+            files_emitter = ZeekFilesEmitter(files_fmt, files_output)
+            cert = X509Context(
+                fuid="FCertFile123456",
+                fingerprint="a" * 40,
+                certificate_subject="CN=updates.example.test",
+                certificate_issuer="CN=Example Issuer",
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="CSslUID12345678",
+                    duration=2.0,
+                ),
+                ssl=SslContext(
+                    server_name="updates.example.test",
+                    cert_chain_fuids=[cert.fuid],
+                ),
+                x509=cert,
+            )
+
+            ssl_emitter.emit(event)
+            files_emitter.emit(event)
+            ssl_emitter.close()
+            files_emitter.close()
+
+            ssl_row = json.loads(ssl_output.read_text().splitlines()[0])
+            file_row = json.loads(files_output.read_text().splitlines()[0])
+
+        assert file_row["ts"] > ssl_row["ts"]
 
     def test_same_certificate_fingerprint_keeps_file_hashes(self):
         """Repeated observations of the same cert bytes should keep all hashes stable."""

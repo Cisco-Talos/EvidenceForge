@@ -2033,15 +2033,36 @@ class ActivityGenerator:
                 usedforsecurity=False,
             ).hexdigest()
             ocsp_id = _gen_uid("F")
+            cert_status = _ocsp_status_for_certificate(
+                cert_name,
+                event.x509.certificate_serial,
+            )
+            revoketime = None
+            revokereason = None
+            if cert_status == "revoked":
+                revocation_rng = random.Random(
+                    _stable_seed(f"ocsp_revocation:{cert_name}:{event.x509.certificate_serial}")
+                )
+                revoketime = float(this_update - revocation_rng.randint(86400, 90 * 86400))
+                revokereason = revocation_rng.choice(
+                    [
+                        "keyCompromise",
+                        "cessationOfOperation",
+                        "affiliationChanged",
+                        "superseded",
+                    ]
+                )
             ocsp_ctx = OcspContext(
                 id=ocsp_id,
                 hash_algorithm="sha1",
                 issuer_name_hash=issuer_name_hash,
                 issuer_key_hash=issuer_key_hash,
                 serial_number=event.x509.certificate_serial,
-                cert_status=_ocsp_status_for_certificate(cert_name, event.x509.certificate_serial),
+                cert_status=cert_status,
                 this_update=this_update,
                 next_update=next_update,
+                revoketime=revoketime,
+                revokereason=revokereason,
             )
             self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
 
@@ -2570,6 +2591,7 @@ class ActivityGenerator:
             and event.dst_host.os_category == "linux"
             and emit_transport_syslog
             and is_ssh_session
+            and auth_source_ip not in {"", "-", system.ip}
         ):
             from evidenceforge.events.contexts import SyslogContext
 
@@ -7585,6 +7607,14 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
         subject = self._account_subject_fields(user.username, system, subject_logon_id)
+        if process_pid > 0 and process_name:
+            running_process = self.state_manager.get_process(system.hostname, process_pid)
+            running_image = running_process.image if running_process is not None else ""
+            if (
+                running_image
+                and ntpath.basename(running_image).lower() != ntpath.basename(process_name).lower()
+            ):
+                process_pid = 0
         if process_pid <= 0 and process_name:
             process_time = time - timedelta(seconds=1)
             scenario_start = getattr(self, "_scenario_start_time", None)

@@ -2612,6 +2612,40 @@ class TestActivityGenerator:
         assert explicit.auth.process_pid > 0
         assert process.timestamp < explicit.timestamp
 
+    def test_generate_explicit_credentials_replaces_mismatched_caller_pid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4648 ProcessId should not point at a different process image."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mmc_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\mmc.exe",
+            command_line="mmc.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=mmc_pid,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.process_pid != mmc_pid
+        assert explicit.auth.process_name.endswith("runas.exe")
+
     def test_generate_explicit_credentials_bootstraps_subject_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
