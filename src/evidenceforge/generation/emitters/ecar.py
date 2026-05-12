@@ -198,7 +198,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
-        """Render eCAR USER_SESSION/LOGIN with failure_reason (logged on dst_host)."""
+        """Render eCAR failed USER_SESSION/LOGIN attempt on dst_host."""
         host = event.dst_host
         event_data = {
             "timestamp": event.timestamp,
@@ -208,6 +208,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "failure",
+            "session_lifecycle": "attempt_failed",
             "failure_reason": "bad_password",
             "_host_fqdn": self._host_fqdn(host),
         }
@@ -760,6 +761,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_value",
         "failure_reason",
         "outcome",
+        "session_lifecycle",
         "status_code",
         "sub_status",
         "src_pid",

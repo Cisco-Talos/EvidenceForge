@@ -107,7 +107,7 @@ def _apply_sensor_observation_variance(
     facts. This only models source-native observation differences from packet
     loss, snaplen, tap placement, and analyzer cutoffs.
     """
-    for field in ("orig_bytes", "resp_bytes", "orig_ip_bytes", "resp_ip_bytes"):
+    for field in ("orig_bytes", "resp_bytes"):
         _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035)
     for field in ("orig_pkts", "resp_pkts"):
         _jitter_numeric_observation(
@@ -129,6 +129,23 @@ def _apply_sensor_observation_variance(
             seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
             if seed % 11 == 0:
                 render_data["missed_bytes"] = missed + 16 + (seed % 496)
+    _enforce_ip_byte_invariants(render_data)
+
+
+def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
+    """Keep Zeek IP-byte counters physically possible after observation jitter."""
+    for side in ("orig", "resp"):
+        payload = render_data.get(f"{side}_bytes")
+        ip_bytes = render_data.get(f"{side}_ip_bytes")
+        packets = render_data.get(f"{side}_pkts")
+        if not isinstance(payload, int) or not isinstance(ip_bytes, int):
+            continue
+        if payload < 0 or ip_bytes < 0:
+            continue
+        packet_count = packets if isinstance(packets, int) and packets > 0 else 1
+        minimum_ip_bytes = payload + (20 * packet_count)
+        if ip_bytes < minimum_ip_bytes:
+            render_data[f"{side}_ip_bytes"] = minimum_ip_bytes
 
 
 class _SingleZeekWriter:
@@ -404,10 +421,9 @@ class SensorMultiplexEmitter(LogEmitter):
                 # but with per-event jitter so independent sensors do not have a
                 # perfectly fixed microsecond offset across every log stream.
                 if i > 0:
-                    sensor_delay_us = (
-                        (_stable_seed(f"sensor_delay_{hostname}") % 90_000)
-                        + 2_000
-                        + (_stable_seed(f"sensor_delay_jitter_{hostname}_{original_uid}") % 45_000)
+                    sensor_delay_us = 10_000 + (
+                        _stable_seed(f"sensor_delay_observation:{hostname}:{original_uid}")
+                        % 1_800_000
                     )
                     ts = render_data.get("ts")
                     if ts is not None:

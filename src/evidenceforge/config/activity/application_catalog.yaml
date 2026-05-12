@@ -779,9 +779,12 @@ applications:
           company: "Microsoft Corporation"
           original_filename: "dsquery.exe"
         command_templates:
-          - 'dsquery.exe user -name "*" -limit 50'
-          - 'dsquery.exe computer -stalepwd 90'
-          - 'dsquery.exe group -name "Domain Admins"'
+          - 'dsquery.exe user -name "{ad_user_pattern}" -limit {ad_limit}'
+          - 'dsquery.exe user -samid {username}'
+          - 'dsquery.exe computer -name "{ad_computer_pattern}" -limit {ad_limit}'
+          - 'dsquery.exe computer -stalepwd {ad_stalepwd_days} -limit {ad_limit}'
+          - 'dsquery.exe group -name "{ad_group_pattern}"'
+          - 'dsquery.exe group -samid "*admin*" -limit {ad_limit}'
     categories: [query]
     personas: [sysadmin, help_desk]
 

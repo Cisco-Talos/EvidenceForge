@@ -59,6 +59,19 @@ class ZeekEmitter(SensorMultiplexEmitter):
         duration = net.duration
         src_ip = net.src_ip
         dst_ip = net.dst_ip
+        src_port = net.src_port
+        dst_port = net.dst_port
+        conn_state = net.conn_state
+        history = self._normalize_history_for_state(net.conn_state, net.history)
+        if net.protocol == "icmp":
+            src_port = net.src_port if net.src_port else 8
+            dst_port = net.dst_port if net.dst_port else 0
+            if (net.resp_bytes or 0) > 0:
+                conn_state = "SF"
+                history = "Dd"
+            else:
+                conn_state = "S0"
+                history = "D"
         if event.event_type == "dhcp_lease" and event.dhcp is not None:
             msg_types = set(event.dhcp.msg_types)
             if "DISCOVER" in msg_types:
@@ -84,9 +97,9 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "ts": event.timestamp,
             "uid": net.zeek_uid,
             "id.orig_h": src_ip,
-            "id.orig_p": net.src_port,
+            "id.orig_p": src_port,
             "id.resp_h": dst_ip,
-            "id.resp_p": net.dst_port,
+            "id.resp_p": dst_port,
             "proto": net.protocol,
             "service": net.service or None,
             "duration": duration,
@@ -94,11 +107,11 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "_lock_duration": event.dns is not None,
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
-            "conn_state": net.conn_state,
+            "conn_state": conn_state,
             "local_orig": net.local_orig,
             "local_resp": net.local_resp,
             "missed_bytes": net.missed_bytes,
-            "history": self._normalize_history_for_state(net.conn_state, net.history),
+            "history": history,
             "orig_pkts": net.orig_pkts,
             "orig_ip_bytes": net.orig_ip_bytes,
             "resp_pkts": net.resp_pkts,

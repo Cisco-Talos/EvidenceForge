@@ -1705,6 +1705,42 @@ class TestZeekEmitter:
         print(content)
         print(f"{'=' * 80}\n")
 
+    def test_emit_icmp_uses_zeek_type_code_ports(self, format_def, temp_output):
+        """ICMP conn rows should render type/code semantics, not all-zero ports."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 5, 654321, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=0,
+                dst_ip="8.8.8.8",
+                dst_port=0,
+                protocol="icmp",
+                zeek_uid="CTestIcmp123456",
+                duration=0.04,
+                orig_bytes=64,
+                resp_bytes=64,
+                conn_state="OTH",
+                history="-",
+                orig_pkts=1,
+                orig_ip_bytes=92,
+                resp_pkts=1,
+                resp_ip_bytes=92,
+                ip_proto=1,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["proto"] == "icmp"
+        assert conn["id.orig_p"] == 8
+        assert conn["id.resp_p"] == 0
+        assert conn["conn_state"] == "SF"
+        assert conn["history"] == "Dd"
+
     def test_dhcp_discover_renders_unassigned_client_tuple(self, format_def, temp_output):
         """Initial DHCP acquisition should not render the assigned lease as originator."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)

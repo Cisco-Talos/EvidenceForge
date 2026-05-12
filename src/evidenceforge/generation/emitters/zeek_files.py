@@ -23,6 +23,7 @@
 """Zeek files.log emitter."""
 
 import hashlib
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -58,7 +59,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
         if ft is not None:
             event_data: dict[str, Any] = {
-                "ts": event.timestamp,
+                "ts": _file_transfer_analyzer_timestamp(event.timestamp, net.zeek_uid, ft.fuid),
                 "fuid": ft.fuid,
                 "tx_hosts": [net.src_ip] if ft.is_orig else [net.dst_ip],
                 "rx_hosts": [net.dst_ip] if ft.is_orig else [net.src_ip],
@@ -189,3 +190,9 @@ def _certificate_file_size(cert: Any) -> int:
         + issuer_overhead
         + jitter
     )
+
+
+def _file_transfer_analyzer_timestamp(ts: datetime, zeek_uid: str, fuid: str) -> datetime:
+    """Return a deterministic files.log analysis time after the conn start."""
+    delay_ms = 25 + (_stable_seed(f"zeek-file-delay:{zeek_uid}:{fuid}") % 225)
+    return ts + timedelta(milliseconds=delay_ms)

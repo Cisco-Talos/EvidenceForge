@@ -327,6 +327,41 @@ class TestSslUidCorrelation:
             assert files_data["tx_hosts"] == ["10.10.3.10"]
             assert files_data["rx_hosts"] == ["185.70.41.45"]
 
+    def test_file_transfer_analysis_time_follows_connection_start(self):
+        """SMB files.log rows should not predate the referenced connection."""
+        files_fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            event = SecurityEvent(
+                timestamp=event_time,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.20",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Fabcdef1234567890",
+                    source="SMB",
+                    filename="report.xlsx",
+                    mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    seen_bytes=8192,
+                    total_bytes=8192,
+                ),
+            )
+
+            files_emitter.emit(event)
+            files_emitter.close()
+
+            files_data = json.loads((out_dir / "files.json").read_text())
+            assert files_data["conn_uids"] == ["CMySpecificUID123"]
+            assert files_data["ts"] > event_time.timestamp()
+
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
         x509_fmt = load_format("zeek_x509")

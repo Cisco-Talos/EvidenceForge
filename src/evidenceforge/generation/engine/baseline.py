@@ -365,6 +365,21 @@ def _registry_writer_candidates(
     return [candidate for candidate in candidates if candidate is not None]
 
 
+def _materialize_registry_value_for_time(
+    target: str,
+    value: str,
+    event_time: datetime,
+    rng: random.Random,
+) -> str:
+    """Adjust time-like registry values so they cannot point after the event."""
+    if "\\Office\\16.0\\Word\\Reading Locations\\" not in target or not target.endswith(
+        "\\Datetime"
+    ):
+        return value
+    prior_time = event_time - timedelta(minutes=rng.randint(2, 180), seconds=rng.randint(0, 59))
+    return prior_time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 # Synthetic SYSTEM user for baseline Event 8/10 generation
 _SYSTEM_USER = User(
     username="SYSTEM",
@@ -4081,6 +4096,12 @@ class BaselineMixin:
                     if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
                         _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
                     _target = f"{_key}\\{_vname}"
+                    _details = _materialize_registry_value_for_time(
+                        _target,
+                        _details,
+                        _reg_ts,
+                        rng,
+                    )
                     # Sysmon value writes are Event 13. Event 12 is reserved for key-only
                     # create/delete contexts, not the value-name pools used here.
                     _reg_action = "modify"

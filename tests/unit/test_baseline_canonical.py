@@ -26,6 +26,7 @@ Verifies that baseline activities dispatch through SecurityEvent to
 multiple emitters, producing correlated cross-source records.
 """
 
+import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -33,6 +34,7 @@ import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.engine.baseline import _materialize_registry_value_for_time
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -760,6 +762,18 @@ class TestBaselineSshTiming:
 
 class TestBaselineRegistryRealism:
     """Regression tests for ambient registry-noise distribution."""
+
+    def test_office_reading_location_datetime_is_before_event_time(self):
+        """Office reading-location values should describe prior document access."""
+        event_time = datetime(2024, 3, 18, 12, 4, 53, tzinfo=UTC)
+        value = _materialize_registry_value_for_time(
+            r"HKCU\Software\Microsoft\Office\16.0\Word\Reading Locations\Document 7\Datetime",
+            "2024-03-18T13:21:00",
+            event_time,
+            random.Random(7),
+        )
+
+        assert datetime.fromisoformat(value).replace(tzinfo=UTC) < event_time
 
     def test_registry_noise_prefers_dynamic_pools_and_filters_repeated_tells(self):
         import inspect

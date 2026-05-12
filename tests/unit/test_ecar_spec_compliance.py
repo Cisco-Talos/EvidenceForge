@@ -284,6 +284,7 @@ class TestSessionOutcomeRendering:
 
         rendered = emitter.emit_event.call_args[0][0]
         assert rendered["outcome"] == "failure"
+        assert rendered["session_lifecycle"] == "attempt_failed"
         assert rendered["status_code"] == "0xC000006D"
         assert rendered["sub_status"] == "0xC000006A"
 

@@ -644,24 +644,22 @@ class SysmonEventEmitter(LogEmitter):
         The first DWORD is a stable machine-specific value (same for all
         processes on a given host), matching real Sysmon behavior.
 
-        The second segment XORs the process timestamp with the host boot
-        time so that the same absolute creation time produces different
-        GUIDs on hosts with different boot times — matching real Sysmon
-        behavior where the timestamp segment is boot-relative.
+        The timestamp segments use the process creation timestamp so the GUID
+        does not expose synthetic boot-relative low counters. Host boot time is
+        still included in the stable hash material for per-host uniqueness.
         """
         # Machine-specific first DWORD (stable across all processes on this host)
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
 
-        # Second segment: boot-relative timestamp for per-host uniqueness
+        # Second/third segments: source-native-looking process creation time.
         unix_ts = int(timestamp.timestamp())
         boot_time = getattr(self, "_host_boot_times", {}).get(hostname)
-        if boot_time:
-            unix_ts ^= int(boot_time.timestamp())
         hex_ts = f"{unix_ts:08x}"
 
-        seed = f"{hostname}:{pid}:{unix_ts}"
+        boot_seed = int(boot_time.timestamp()) if boot_time else 0
+        seed = f"{hostname}:{pid}:{unix_ts}:{boot_seed}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
         # Third segment: source-native-looking deterministic sequence. Avoid
         # directly exposing the PID in the GUID shape while preserving stable

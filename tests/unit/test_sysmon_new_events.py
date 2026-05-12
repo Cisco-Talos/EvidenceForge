@@ -1085,9 +1085,9 @@ class TestCallTraceConsistency:
 
 
 class TestProcessGuidBootTime:
-    """Fix 4: ProcessGuid second segment varies with boot time."""
+    """ProcessGuid shape should be stable, host-specific, and source-native."""
 
-    def test_guid_differs_with_different_boot_times(self, emitter):
+    def test_guid_differs_with_different_boot_times_without_low_counter_shape(self, emitter):
         emitter._host_boot_times = {
             "HOST-A": datetime(2024, 2, 1, 6, 0, tzinfo=UTC),
             "HOST-B": datetime(2024, 3, 15, 12, 0, tzinfo=UTC),
@@ -1095,11 +1095,9 @@ class TestProcessGuidBootTime:
         creation = datetime(2024, 4, 1, 10, 0, tzinfo=UTC)
         guid_a = emitter._generate_process_guid("HOST-A", 1234, creation)
         guid_b = emitter._generate_process_guid("HOST-B", 1234, creation)
-        # Same PID and creation time, different boot times → different GUIDs
-        # (second segment should differ)
-        seg_a = guid_a.split("-")[1]
-        seg_b = guid_b.split("-")[1]
-        assert seg_a != seg_b, f"Boot-relative segment should differ: {seg_a} vs {seg_b}"
+        assert guid_a != guid_b
+        assert guid_a.split("-")[1] == guid_b.split("-")[1]
+        assert guid_a.split("-")[1] != "000c"
 
     def test_guid_deterministic_with_boot_time(self, emitter):
         emitter._host_boot_times = {

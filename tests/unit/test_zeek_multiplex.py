@@ -119,6 +119,9 @@ class TestPerSensorDirectoryRouting:
                     "resp_ip_bytes",
                 )
             )
+            for row in (core, dmz):
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
 
     def test_second_sensor_observation_varies_http_body_lengths(self):
         """HTTP analyzer rows should not be byte-for-byte clones across sensors."""
