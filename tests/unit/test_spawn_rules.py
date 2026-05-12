@@ -60,6 +60,9 @@ def _setup_activity_gen(state_manager, mock_emitters, system):
     """Set up ActivityGenerator with seeded process tree for a system."""
     from evidenceforge.generation.engine import GenerationEngine
 
+    original_time = state_manager.state.current_time
+    if original_time is not None:
+        state_manager.set_current_time(original_time.replace(hour=10, minute=0, second=0))
     engine = object.__new__(GenerationEngine)
     engine.state_manager = state_manager
     engine._system_pids = {}
@@ -69,6 +72,8 @@ def _setup_activity_gen(state_manager, mock_emitters, system):
         engine._seed_windows_process_tree(system, pids)
     else:
         engine._seed_linux_process_tree(system, pids)
+    if original_time is not None:
+        state_manager.set_current_time(original_time)
     engine._system_pids[system.hostname] = pids
 
     ag = ActivityGenerator(state_manager, mock_emitters)

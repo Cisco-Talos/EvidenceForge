@@ -700,7 +700,12 @@ class SysmonEventEmitter(LogEmitter):
         return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
     @classmethod
-    def _generate_hashes(cls, image: str, host: Any | str | None = None) -> str:
+    def _generate_hashes(
+        cls,
+        image: str,
+        host: Any | str | None = None,
+        rendered_identity: tuple[Any, ...] | None = None,
+    ) -> str:
         """Generate deterministic fake file hashes from image path.
 
         Hashes are keyed by rendered binary identity. That keeps identical
@@ -709,7 +714,9 @@ class SysmonEventEmitter(LogEmitter):
         """
         normalized_image = image.replace("/", "\\").lower()
         seed = normalized_image
-        if host is not None and not isinstance(host, str):
+        if rendered_identity is not None:
+            seed = f"{normalized_image}:{':'.join(str(part) for part in rendered_identity)}"
+        elif host is not None and not isinstance(host, str):
             fv, _desc, prod, company, orig = cls._get_pe_metadata(image, host)
             seed = f"{normalized_image}:{fv}:{prod}:{company}:{orig}"
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
@@ -1297,8 +1304,20 @@ class SysmonEventEmitter(LogEmitter):
                 il.image_loaded,
                 il.signature,
             )
-        hashes = self._generate_hashes(il.image_loaded, host)
         signature_status = il.signature_status if il.signed else "Unavailable"
+        hashes = self._generate_hashes(
+            il.image_loaded,
+            host,
+            rendered_identity=(
+                fv,
+                desc,
+                prod,
+                company,
+                orig,
+                il.signature if il.signed else "-",
+                signature_status,
+            ),
+        )
 
         event_data = {
             "EventID": 7,

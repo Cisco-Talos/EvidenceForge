@@ -335,12 +335,6 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
                 if system:
                     self.activity_generator._ip_to_system[vip] = system
 
-        # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
-        self._infra_ips = self._detect_infrastructure_ips()
-        self._system_service_defaults = self._build_service_defaults()
-        self._system_pids: dict[str, dict[str, int]] = {}  # hostname -> {role: pid}
-        self._seed_system_process_trees()
-
         # Per-host kernel boot uptime: deterministic offset (seconds since boot at scenario start)
         self._kernel_boot_uptimes: dict[str, float] = {}
         self._audit_serials: dict[str, int] = {}  # per-host monotonic audit serial
@@ -350,6 +344,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._audit_serials[system.hostname] = (
                 _stable_seed(f"audit_serial_{system.hostname}") % 5000
             ) + 1000
+
+        # Phase 5.4: Pre-seed system process trees and detect infrastructure IPs
+        self._infra_ips = self._detect_infrastructure_ips()
+        self._system_service_defaults = self._build_service_defaults()
+        self._system_pids: dict[str, dict[str, int]] = {}  # hostname -> {role: pid}
+        self._seed_system_process_trees()
 
         # Pass per-host boot datetimes to Sysmon emitter for ProcessGUID realism
         if "windows_event_sysmon" in self.emitters:

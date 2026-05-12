@@ -535,10 +535,19 @@ class EmitterSetupMixin:
         from evidenceforge.generation.activity import _get_os_category
 
         self._machine_ids: dict[str, str] = {}
+        original_time = self.state_manager.state.current_time
 
         for system in self.scenario.environment.systems:
             os_cat = _get_os_category(system.os)
             pids: dict[str, int] = {}
+            boot_uptime = getattr(self, "_kernel_boot_uptimes", {}).get(system.hostname)
+            boot_time = (
+                self.start_time - timedelta(seconds=boot_uptime)
+                if self.start_time and boot_uptime is not None
+                else original_time
+            )
+            if boot_time is not None:
+                self.state_manager.set_current_time(boot_time)
 
             if os_cat == "windows":
                 self._seed_windows_process_tree(system, pids)
@@ -552,8 +561,11 @@ class EmitterSetupMixin:
             self._system_pids[system.hostname] = pids
 
             # Register boot time for entity lifecycle validation
-            if self.start_time:
-                self.state_manager.register_boot_time(system.hostname, self.start_time)
+            if boot_time is not None:
+                self.state_manager.register_boot_time(system.hostname, boot_time)
+
+        if original_time is not None:
+            self.state_manager.set_current_time(original_time)
 
         total = sum(len(p) for p in self._system_pids.values())
         logger.info(f"Seeded {total} system processes across {len(self._system_pids)} systems")
@@ -600,8 +612,19 @@ class EmitterSetupMixin:
         """Seed Windows system process tree in StateManager."""
         sm = self.state_manager
         hn = system.hostname
+        boot_base = sm.state.current_time
+        boot_rng = random.Random(_stable_seed(f"windows_boot_sequence:{hn}"))
+        boot_elapsed = 0.0
+
+        def _advance_boot_clock() -> None:
+            nonlocal boot_elapsed
+            if boot_base is None:
+                return
+            boot_elapsed += boot_rng.uniform(0.08, 2.75)
+            sm.set_current_time(boot_base + timedelta(seconds=boot_elapsed))
 
         def _c(parent, image, cmd, user):
+            _advance_boot_clock()
             image = normalize_defender_platform_path(image, hn)
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
@@ -715,6 +738,8 @@ class EmitterSetupMixin:
             # Servers/DCs: no persistent desktop session at boot
             pids["explorer"] = pids["winlogon"]  # Alias for fallback lookups
         pids["dwm"] = _c(pids["csrss_s0"], r"C:\Windows\System32\dwm.exe", "dwm.exe", "SYSTEM")
+        if boot_base is not None:
+            sm.set_current_time(boot_base)
 
     def _seed_linux_process_tree(self, system: System, pids: dict[str, int]) -> None:
         """Seed Linux system process tree in StateManager."""
@@ -723,8 +748,19 @@ class EmitterSetupMixin:
         os_str = system.os.lower()
 
         is_rhel = any(d in os_str for d in ("centos", "rhel", "red hat", "rocky", "alma"))
+        boot_base = sm.state.current_time
+        boot_rng = random.Random(_stable_seed(f"linux_boot_sequence:{hn}"))
+        boot_elapsed = 0.0
+
+        def _advance_boot_clock() -> None:
+            nonlocal boot_elapsed
+            if boot_base is None:
+                return
+            boot_elapsed += boot_rng.uniform(0.05, 1.9)
+            sm.set_current_time(boot_base + timedelta(seconds=boot_elapsed))
 
         def _c(parent, image, cmd, user):
+            _advance_boot_clock()
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
         pids["systemd"] = _c(
@@ -810,6 +846,8 @@ class EmitterSetupMixin:
             )
 
         pids["bash"] = _c(pids["sshd"], "/bin/bash", "-bash", "root")
+        if boot_base is not None:
+            sm.set_current_time(boot_base)
 
     def _get_system_exposure(self, system) -> str:
         """Get the network exposure for a system based on its segment.

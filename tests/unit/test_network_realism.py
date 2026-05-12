@@ -50,6 +50,7 @@ class TestProtocolOverhead:
         assert counts[28] > 800
         assert counts[28] < 1000  # some variance
         assert len(counts) > 1
+        assert max(samples) <= 68
 
     def test_tcp_overhead_bimodal_favoring_52(self):
         rng = random.Random(42)

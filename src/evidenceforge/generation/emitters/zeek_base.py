@@ -84,10 +84,10 @@ def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
     """Return per-flow capture timestamp variance for a sensor observation."""
     seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}")
     # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
-    # all perturb when one sensor reports an otherwise identical packet stream.
-    # Keep this deterministic per sensor+UID so conn/http/ssl/files rows for a
-    # flow remain internally correlated within a sensor.
-    return (seed % 1_100_001) - 250_000
+    # all add small positive path delay. The stable per-sensor clock skew owns
+    # the sign of cross-sensor offsets, so identical paths do not flip earlier
+    # and later flow-by-flow like independent synthetic jitter.
+    return 5_000 + (seed % 75_001)
 
 
 def _jitter_numeric_observation(
@@ -165,6 +165,7 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
     """Keep Zeek IP-byte counters physically possible after observation jitter."""
     proto = str(render_data.get("proto") or "").lower()
     header_bytes = {"tcp": 40, "udp": 28, "icmp": 28}.get(proto, 20)
+    max_header_bytes = {"udp": 68}.get(proto)
     for side in ("orig", "resp"):
         payload = render_data.get(f"{side}_bytes")
         ip_bytes = render_data.get(f"{side}_ip_bytes")
@@ -177,6 +178,11 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
         minimum_ip_bytes = payload + (header_bytes * packet_count)
         if ip_bytes < minimum_ip_bytes:
             render_data[f"{side}_ip_bytes"] = minimum_ip_bytes
+            ip_bytes = minimum_ip_bytes
+        if max_header_bytes is not None:
+            maximum_ip_bytes = payload + (max_header_bytes * packet_count)
+            if ip_bytes > maximum_ip_bytes:
+                render_data[f"{side}_ip_bytes"] = maximum_ip_bytes
 
 
 class _SingleZeekWriter:

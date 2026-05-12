@@ -791,6 +791,39 @@ class TestProcessCreateMetadata:
             image, workstation
         ) == SysmonEventEmitter._generate_hashes(image, server)
 
+    def test_image_load_hashes_include_rendered_signature_identity(self):
+        """Same DLL path with different rendered signer metadata must not share hashes."""
+        image = r"C:\Program Files\Mozilla Firefox\lgpllibs.dll"
+
+        mozilla_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(
+                "1.0.0.0",
+                "lgpllibs.dll module",
+                "Mozilla Corporation",
+                "Mozilla Corporation",
+                "lgpllibs.dll",
+                "Mozilla Corporation",
+                "Valid",
+            ),
+        )
+        microsoft_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(
+                "10.0.19041.1",
+                "lgpllibs.dll system library",
+                "Microsoft Windows Operating System",
+                "Microsoft Corporation",
+                "lgpllibs.dll",
+                "Microsoft Windows",
+                "Valid",
+            ),
+        )
+
+        assert mozilla_hashes != microsoft_hashes
+
 
 class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""

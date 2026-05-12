@@ -845,8 +845,9 @@ _CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
 
 # --- Network realism constants ---
 
-# UDP header overhead: standard (93%), VLAN-tagged (5%), tunneled (2%)
-_UDP_OVERHEAD_VALUES = (28, 32, 52, 60, 78)
+# UDP/IP header overhead: standard IPv4 (28), VLAN/QinQ and IP options variants.
+# Keep this bounded by the physical IPv4 maximum: IP header 60 + UDP header 8.
+_UDP_OVERHEAD_VALUES = (28, 32, 52, 60, 68)
 _UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
 
 # TCP header overhead: bimodal around 40/52/60

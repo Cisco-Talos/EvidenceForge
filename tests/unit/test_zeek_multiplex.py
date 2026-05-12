@@ -160,8 +160,9 @@ class TestPerSensorDirectoryRouting:
                 for port in sorted(core_by_port)
             ]
 
-            assert max(offsets) - min(offsets) > 0.25
+            assert max(offsets) - min(offsets) > 0.05
             assert len(set(offsets)) > 30
+            assert all(offset > 0 for offset in offsets) or all(offset < 0 for offset in offsets)
 
     def test_second_sensor_observation_preserves_http_body_lengths(self):
         """HTTP body sizes are transaction facts, not per-sensor packet-counter jitter."""
