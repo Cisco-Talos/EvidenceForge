@@ -24,6 +24,7 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -167,6 +168,41 @@ class TestActivityGenerator:
         assert event.auth.username == test_user.username
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
+
+    def test_interactive_logons_get_distinct_userinit_parents(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Interactive shells should not all inherit one long-lived userinit.exe parent."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+
+        first_logon = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        second_logon = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=30),
+            logon_type=2,
+        )
+
+        sessions = {
+            session.logon_id: session for session in state_manager.get_sessions_for_user("testuser")
+        }
+        first_explorer = state_manager.get_process(
+            test_system.hostname, sessions[first_logon].explorer_pid
+        )
+        second_explorer = state_manager.get_process(
+            test_system.hostname, sessions[second_logon].explorer_pid
+        )
+        assert first_explorer.parent_pid != second_explorer.parent_pid
 
     def test_generate_scheduled_task_builds_full_task_xml(
         self, activity_gen, test_user, test_system, mock_emitters
@@ -1393,6 +1429,55 @@ class TestActivityGenerator:
             and event.file.path == r"C:\Windows\PSEXESVC.exe"
         )
         assert file_event.timestamp < service_event.timestamp
+
+    def test_remote_service_install_emits_smb_and_rpc_network_evidence(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """PsExec-style service creation should have matching SMB/RPC flows."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Admin",
+            email="alice@example.com",
+            primary_system=source.hostname,
+        )
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={source.hostname: source, target.hostname: target}
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_service_installed(
+            user,
+            target,
+            timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert {(event.network.dst_port, event.network.service) for event in network_events} >= {
+            (445, "smb"),
+            (135, "dce_rpc"),
+        }
+        assert all(event.network.src_ip == source.ip for event in network_events)
+        assert all(event.network.dst_ip == target.ip for event in network_events)
 
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

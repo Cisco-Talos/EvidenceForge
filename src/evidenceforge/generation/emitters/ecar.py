@@ -359,6 +359,13 @@ class EcarEmitter(HostMultiplexEmitter):
         For internal-to-external, emits only the OUTBOUND on src_host.
         """
         net = event.network
+        source_proc = event.process
+        if (
+            (source_proc is None or source_proc.start_time is None)
+            and event.src_host is not None
+            and net.initiating_pid > 0
+        ):
+            source_proc = self._lookup_running_process(event.src_host, net.initiating_pid)
 
         # OUTBOUND FLOW on source host (if source is internal/known)
         if event.src_host:
@@ -375,8 +382,8 @@ class EcarEmitter(HostMultiplexEmitter):
                     event.timestamp,
                 ),
             )
-            if event.process is not None:
-                event_ts = max(event_ts, self._after_process_create_timestamp(event, event.process))
+            if source_proc is not None:
+                event_ts = max(event_ts, self._after_process_create_timestamp(event, source_proc))
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.src_host.hostname,
@@ -434,6 +441,13 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["connection_state"] = net.conn_state
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    def _lookup_running_process(self, host: HostContext, pid: int) -> Any | None:
+        """Read a process from attached state when a connection only carries a PID."""
+        state_manager = getattr(self, "_state_manager", None)
+        if state_manager is None:
+            return None
+        return state_manager.get_process(host.hostname, pid)
 
     @staticmethod
     def _inbound_listener_observed(event: SecurityEvent) -> bool:

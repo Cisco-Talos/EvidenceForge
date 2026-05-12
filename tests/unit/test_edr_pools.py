@@ -351,6 +351,21 @@ class TestFileSideEffectRealism:
 
         assert effect == ("create", "/tmp/patient_claims.sql")
 
+    def test_powershell_compress_archive_uses_destination_path(self):
+        effect = select_file_side_effect(
+            "powershell.exe",
+            (
+                r"powershell.exe -NoProfile -Command Compress-Archive "
+                r"-Path C:\ProgramData\Microsoft\*.log "
+                r"-DestinationPath C:\ProgramData\Microsoft\health-cache.zip"
+            ),
+            "windows",
+            random.Random(7),
+            user="alice",
+        )
+
+        assert effect == ("create", r"C:\ProgramData\Microsoft\health-cache.zip")
+
     def test_noninteractive_web_shell_does_not_write_bash_history_artifact(self):
         effects = {
             select_file_side_effect(

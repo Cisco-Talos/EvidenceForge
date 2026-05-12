@@ -1595,7 +1595,10 @@ class ActivityGenerator:
             proxy_hostname = dst_ip
 
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
-        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+        from evidenceforge.generation.activity.proxy_uri import (
+            is_browser_like_proxy_domain,
+            pick_proxy_uri,
+        )
         from evidenceforge.generation.activity.referrer import pick_referrer
 
         domain_tags = get_domain_tags(proxy_hostname)
@@ -1631,10 +1634,15 @@ class ActivityGenerator:
             )
             user_agent = ""
 
-        domain_user_agent = pick_proxy_domain_user_agent(
-            rng,
-            source_system,
-            hostname=proxy_hostname,
+        apply_domain_user_agent = http is None or not is_browser_like_proxy_domain(proxy_hostname)
+        domain_user_agent = (
+            pick_proxy_domain_user_agent(
+                rng,
+                source_system,
+                hostname=proxy_hostname,
+            )
+            if apply_domain_user_agent
+            else None
         )
         if domain_user_agent:
             user_agent = domain_user_agent
@@ -2675,64 +2683,43 @@ class ActivityGenerator:
                 os_cat = _get_os_category(system.os)
                 if os_cat == "windows":
                     sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-                    if logon_type == 10:
-                        # RDP: per-session winlogon → userinit → explorer chain
-                        # Windows creates a new session subsystem for each RDP logon
-                        smss_pid = sys_pids.get("smss")
-                        parent_for_chain = smss_pid or sys_pids.get("wininit")
-                        if parent_for_chain and self.state_manager.get_process(
-                            system.hostname, parent_for_chain
-                        ):
-                            winlogon_pid = self.state_manager.create_process(
-                                system.hostname,
-                                parent_for_chain,
-                                r"C:\Windows\System32\winlogon.exe",
-                                "winlogon.exe",
-                                "SYSTEM",
-                                "System",
-                                logon_id=logon_id,
-                            )
-                            session.session_winlogon_pid = winlogon_pid
-                            userinit_pid = self.state_manager.create_process(
-                                system.hostname,
-                                winlogon_pid,
-                                r"C:\Windows\System32\userinit.exe",
-                                "userinit.exe",
-                                user.username,
-                                "Medium",
-                                logon_id=logon_id,
-                            )
-                            explorer_pid = self.state_manager.create_process(
-                                system.hostname,
-                                userinit_pid,
-                                r"C:\Windows\explorer.exe",
-                                "explorer.exe",
-                                user.username,
-                                "Medium",
-                                logon_id=logon_id,
-                            )
-                            session.explorer_pid = explorer_pid
-                            session.process_tree_root = winlogon_pid
-                    else:
-                        # Interactive/cached: use system-wide userinit/winlogon
-                        parent_pid = None
-                        for candidate in ("userinit", "winlogon", "explorer", "services"):
-                            pid = sys_pids.get(candidate)
-                            if pid and self.state_manager.get_process(system.hostname, pid):
-                                parent_pid = pid
-                                break
-                        if parent_pid is not None:
-                            explorer_pid = self.state_manager.create_process(
-                                system.hostname,
-                                parent_pid,
-                                r"C:\Windows\explorer.exe",
-                                "explorer.exe",
-                                user.username,
-                                "Medium",
-                                logon_id=logon_id,
-                            )
-                            session.explorer_pid = explorer_pid
-                            session.process_tree_root = explorer_pid
+                    parent_for_chain = None
+                    for candidate in ("smss", "wininit", "winlogon", "services"):
+                        pid = sys_pids.get(candidate)
+                        if pid and self.state_manager.get_process(system.hostname, pid):
+                            parent_for_chain = pid
+                            break
+                    if parent_for_chain is not None:
+                        winlogon_pid = self.state_manager.create_process(
+                            system.hostname,
+                            parent_for_chain,
+                            r"C:\Windows\System32\winlogon.exe",
+                            "winlogon.exe",
+                            "SYSTEM",
+                            "System",
+                            logon_id=logon_id,
+                        )
+                        session.session_winlogon_pid = winlogon_pid
+                        userinit_pid = self.state_manager.create_process(
+                            system.hostname,
+                            winlogon_pid,
+                            r"C:\Windows\System32\userinit.exe",
+                            "userinit.exe",
+                            user.username,
+                            "Medium",
+                            logon_id=logon_id,
+                        )
+                        explorer_pid = self.state_manager.create_process(
+                            system.hostname,
+                            userinit_pid,
+                            r"C:\Windows\explorer.exe",
+                            "explorer.exe",
+                            user.username,
+                            "Medium",
+                            logon_id=logon_id,
+                        )
+                        session.explorer_pid = explorer_pid
+                        session.process_tree_root = winlogon_pid
                 session.last_activity_time = time
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
@@ -3664,7 +3651,45 @@ class ActivityGenerator:
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
         auth_ctx = AuthContext(username=process_username)
-        if not suppress_command_file_effect and rng.random() < 0.40:
+        semantic_file_effect = None
+        if not suppress_command_file_effect:
+            from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
+
+            semantic_file_effect = select_command_file_side_effect(process_name, command_line)
+            if semantic_file_effect is not None:
+                action, path = semantic_file_effect
+                event_type = {
+                    "create": "file_create",
+                    "modify": "file_modify",
+                    "delete": "file_delete",
+                }[action]
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time + timedelta(milliseconds=180),
+                        event_type=event_type,
+                        src_host=host_ctx,
+                        auth=auth_ctx,
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=process_name,
+                            command_line=command_line,
+                            username=process_username,
+                            logon_id=process_logon_id,
+                            start_time=running_proc.start_time
+                            if running_proc is not None
+                            else None,
+                        ),
+                        file=FileContext(path=path, action=action, pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        storyline_origin=from_storyline,
+                    ),
+                )
+        if (
+            not suppress_command_file_effect
+            and semantic_file_effect is None
+            and rng.random() < 0.40
+        ):
             from evidenceforge.generation.activity.edr_pools import select_file_side_effect
 
             side_effect = select_file_side_effect(
@@ -5219,10 +5244,19 @@ class ActivityGenerator:
                             hostname=proxy_hostname,
                             domain_tags=domain_tags,
                         )
-                domain_user_agent = pick_proxy_domain_user_agent(
-                    rng,
-                    source_system,
-                    hostname=proxy_hostname,
+                from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+
+                apply_domain_user_agent = event.http is None or not is_browser_like_proxy_domain(
+                    proxy_hostname
+                )
+                domain_user_agent = (
+                    pick_proxy_domain_user_agent(
+                        rng,
+                        source_system,
+                        hostname=proxy_hostname,
+                    )
+                    if apply_domain_user_agent
+                    else None
                 )
                 if domain_user_agent:
                     user_agent = domain_user_agent
@@ -8254,6 +8288,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ServiceContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        self._emit_remote_service_control_network_evidence(user, system, time)
         if _get_os_category(system.os) == "windows":
             service_path = service_file_name.replace("%SystemRoot%", r"C:\Windows")
             service_path = service_path.replace("%systemroot%", r"C:\Windows")
@@ -8309,6 +8344,56 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def _emit_remote_service_control_network_evidence(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+    ) -> None:
+        """Emit SMB/RPC flows that usually precede remote Windows service creation."""
+        world_model = getattr(self, "_world_model", None)
+        source_system = None
+        primary_system_name = getattr(user, "primary_system", None)
+        if world_model is not None and primary_system_name:
+            source_system = world_model.systems_by_hostname.get(primary_system_name)
+        if source_system is None:
+            sessions = [
+                session
+                for session in self.state_manager.get_sessions_for_user(user.username)
+                if session.system != target_system.hostname
+            ]
+            if sessions and world_model is not None:
+                newest = max(sessions, key=lambda session: session.start_time)
+                source_system = world_model.systems_by_hostname.get(newest.system)
+        if source_system is None or source_system.ip == target_system.ip:
+            return
+        if _get_os_category(target_system.os) != "windows":
+            return
+        rng = _get_rng()
+        base_src_port = _ephemeral_port(rng, _get_os_category(source_system.os))
+        flow_specs = (
+            (445, "smb", time - timedelta(milliseconds=rng.randint(1100, 1800))),
+            (135, "dce_rpc", time - timedelta(milliseconds=rng.randint(350, 900))),
+        )
+        for idx, (dst_port, service, flow_time) in enumerate(flow_specs):
+            self.generate_connection(
+                src_ip=source_system.ip,
+                dst_ip=target_system.ip,
+                time=flow_time,
+                dst_port=dst_port,
+                proto="tcp",
+                service=service,
+                duration=rng.uniform(0.08, 0.9),
+                orig_bytes=rng.randint(45_000, 160_000)
+                if dst_port == 445
+                else rng.randint(450, 1800),
+                resp_bytes=rng.randint(1500, 7000) if dst_port == 445 else rng.randint(350, 2200),
+                src_port=base_src_port + idx,
+                emit_dns=False,
+                source_system=source_system,
+                conn_state="SF",
+            )
 
     def generate_scheduled_task(
         self,

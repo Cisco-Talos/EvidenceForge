@@ -1190,6 +1190,55 @@ class TestExplicitProxyVisibility:
         assert proxy_context.sc_bytes == 5050
         assert proxy_context.cs_bytes == 580
 
+    def test_supplied_http_user_agent_survives_domain_override(self, monkeypatch):
+        """Proxy context must preserve caller-owned request metadata for correlated egress."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        generator, _ = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        proxy_system = generator._ip_to_system["10.0.3.10"]
+        monkeypatch.setattr(
+            generator_module,
+            "pick_proxy_domain_user_agent",
+            lambda *a, **k: "python-requests/2.31.0",
+        )
+
+        proxy_context = generator._build_proxy_context(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            dst_port=443,
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            hostname="example.com",
+            source_system=generator._ip_to_system["10.0.1.10"],
+            proxy_sys=proxy_system,
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/portal",
+                version="1.1",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/html"],
+            ),
+            explicit_mode=True,
+        )
+
+        assert proxy_context.user_agent == "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
     def test_auth_required_connect_stops_before_origin_side_sources(self):
         generator, emitters = _generator(
             [

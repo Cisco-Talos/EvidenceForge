@@ -345,15 +345,33 @@ def select_file_side_effect(
     return None
 
 
+def select_command_file_side_effect(process_name: str, command_line: str) -> tuple[str, str] | None:
+    """Return a guaranteed command-owned file artifact when the syntax identifies one."""
+    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    return _select_command_semantic_file_effect(exe, command_line)
+
+
 def _select_command_semantic_file_effect(
     exe: str,
     command_line: str,
 ) -> tuple[str, str] | None:
     """Return command-owned file artifacts for common shell tools."""
+    command_lower = command_line.lower()
     if exe == "mysqldump":
         match = re.search(r">\s*(?P<path>\S+)", command_line)
         if match:
             return "create", match.group("path")
+
+    if exe in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"} and "compress-archive" in (
+        command_lower
+    ):
+        match = re.search(
+            r"-(?:DestinationPath|Destination)\s+(?:'(?P<sq>[^']+)'|\"(?P<dq>[^\"]+)\"|(?P<bare>\S+))",
+            command_line,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return "create", match.group("sq") or match.group("dq") or match.group("bare")
 
     if exe == "gzip":
         try:

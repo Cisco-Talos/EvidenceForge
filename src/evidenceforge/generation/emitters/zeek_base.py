@@ -143,6 +143,37 @@ def _apply_sensor_observation_variance(
                 0.018,
                 minimum=1,
             )
+    if not render_data.get("_lock_duration"):
+        _jitter_numeric_observation(render_data, "duration", hostname, original_uid, 0.027)
+    for field in ("orig_pkts", "resp_pkts"):
+        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035, minimum=1)
+    if render_data.get("_http_request_body_len") is None:
+        _jitter_numeric_observation(
+            render_data,
+            "orig_bytes",
+            hostname,
+            original_uid,
+            0.012,
+            minimum=0,
+        )
+    if render_data.get("_http_response_body_len") is None:
+        _jitter_numeric_observation(
+            render_data,
+            "resp_bytes",
+            hostname,
+            original_uid,
+            0.012,
+            minimum=0,
+        )
+    for field in ("orig_ip_bytes", "resp_ip_bytes"):
+        _jitter_numeric_observation(
+            render_data,
+            field,
+            hostname,
+            original_uid,
+            0.024,
+            minimum=0,
+        )
     _enforce_http_body_invariants(render_data)
     _enforce_ip_byte_invariants(render_data)
 
@@ -173,6 +204,9 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
         if not isinstance(payload, int) or not isinstance(ip_bytes, int):
             continue
         if payload < 0 or ip_bytes < 0:
+            continue
+        if packets == 0 and payload == 0:
+            render_data[f"{side}_ip_bytes"] = 0
             continue
         packet_count = packets if isinstance(packets, int) and packets > 0 else 1
         minimum_ip_bytes = payload + (header_bytes * packet_count)
@@ -398,6 +432,8 @@ class SensorMultiplexEmitter(LogEmitter):
 
         if not targets:
             # No sensor targets: render once to the flat output.
+            _enforce_http_body_invariants(event_data)
+            _enforce_ip_byte_invariants(event_data)
             rendered = self._render_event(event_data)
             if rendered is None:
                 return
@@ -481,7 +517,8 @@ class SensorMultiplexEmitter(LogEmitter):
                             render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                         elif isinstance(ts, (int, float)):
                             render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                    _apply_sensor_observation_variance(render_data, hostname, original_uid)
+                    if render_data.get("_allow_sensor_observation_variance"):
+                        _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)
                 if original_uid:

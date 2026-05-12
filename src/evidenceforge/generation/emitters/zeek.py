@@ -119,6 +119,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "ip_proto": net.ip_proto,
             "_http_request_body_len": event.http.request_body_len if event.http else None,
             "_http_response_body_len": event.http.response_body_len if event.http else None,
+            "_allow_sensor_observation_variance": True,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:
