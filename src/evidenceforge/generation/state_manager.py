@@ -334,11 +334,12 @@ class StateManager:
                         normalized_time,
                     )
                 elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
-                # systemd-logind IDs are monotonic counters, not wall-clock
-                # encodings. Use a coarse time bucket so out-of-order
-                # generation still sorts sensibly without leaking elapsed
-                # seconds into the rendered session number.
-                candidate = initial + (elapsed_seconds // 300) * 8
+                # Use timestamp-derived spacing rather than generation-order
+                # counters. Baseline and storyline syslog paths can dispatch
+                # out of chronological order before emitters sort the file; a
+                # one-second stride leaves enough room that earlier visible
+                # events cannot collide into later session IDs.
+                candidate = initial + elapsed_seconds
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
                 if candidate in used:
                     while candidate in used:

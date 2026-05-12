@@ -122,3 +122,33 @@ def test_emit_dhcp_leases_uses_storyline_mac_as_host_identity(tmp_path):
     kwargs = engine.activity_generator.generate_dhcp_lease.call_args.kwargs
     assert kwargs["mac"] == "dc:a6:32:44:91:7b"
     assert engine._dhcp_lease_state["TEST-01"]["mac"] == "dc:a6:32:44:91:7b"
+
+
+def test_emit_dhcp_leases_skips_static_infrastructure_servers(tmp_path):
+    """Static servers should not get ambient DHCP leases just because Zeek DHCP is enabled."""
+    scenario = _scenario_with_storyline_dhcp()
+    scenario.environment.systems.append(
+        System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+        )
+    )
+    engine = GenerationEngine(scenario, tmp_path)
+    engine.start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    engine.end_time = datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC)
+    engine.warmup_start_time = engine.start_time - timedelta(hours=8)
+    engine.emitters = {"zeek_dhcp": Mock()}
+    engine.state_manager = Mock()
+    engine.activity_generator = Mock()
+
+    engine._emit_dhcp_leases()
+
+    leased_hosts = [
+        call.kwargs["system"].hostname
+        for call in engine.activity_generator.generate_dhcp_lease.call_args_list
+    ]
+    assert leased_hosts == ["TEST-01"]
+    assert "DC-01" not in engine._dhcp_lease_state

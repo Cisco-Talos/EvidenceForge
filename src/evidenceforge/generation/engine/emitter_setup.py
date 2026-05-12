@@ -67,6 +67,30 @@ from evidenceforge.utils.rng import _stable_seed
 logger = logging.getLogger(__name__)
 
 
+def _system_uses_dhcp(system: System) -> bool:
+    """Return whether baseline should model this host as a DHCP client."""
+    system_type = str(getattr(system, "type", "") or "").lower()
+    services = {str(s).lower() for s in (getattr(system, "services", []) or [])}
+    roles = {str(r).lower() for r in (getattr(system, "roles", []) or [])}
+    if "dhclient" in services:
+        return True
+    if system_type == "workstation":
+        return True
+    static_roles = {
+        "domain_controller",
+        "dns_server",
+        "file_server",
+        "web_server",
+        "forward_proxy",
+        "app_server",
+        "database",
+    }
+    return not roles.intersection(static_roles) and system_type not in {
+        "server",
+        "domain_controller",
+    }
+
+
 def _build_emitter_classes() -> dict:
     """Build emitter class map at call time (supports test patching of module-level names)."""
     return {
@@ -309,6 +333,8 @@ class EmitterSetupMixin:
                     storyline_macs.setdefault(system_name, mac_address.lower())
 
         for system in self.scenario.environment.systems:
+            if not _system_uses_dhcp(system):
+                continue
             ip_seed = _stable_seed(f"mac_{system.ip}")
             # Select OUI prefix deterministically per host using weighted distribution
             oui_rng = random.Random(ip_seed)

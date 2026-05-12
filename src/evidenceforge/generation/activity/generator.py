@@ -6201,6 +6201,75 @@ class ActivityGenerator:
             dns=dns_ctx,
         )
 
+        # Address lookups that are prerequisites for TCP still occur in a
+        # resolver ecosystem. Add low-volume companion questions so Zeek DNS
+        # does not collapse to only A/TXT/SRV in generated enterprise slices.
+        if force_address and rng.random() < 0.25:
+            companion_time = dns_time + timedelta(milliseconds=rng.randint(1, 30))
+            companion_src_port = self._allocate_ephemeral_port(
+                src_ip, dns_server_ip, 53, "udp", companion_time, _src_os
+            )
+            companion_kind = rng.choices(
+                ["AAAA", "PTR", "NS", "MX", "SOA"],
+                weights=[45, 30, 10, 10, 5],
+                k=1,
+            )[0]
+            companion_query = hostname
+            companion_answers: list[str] = []
+            companion_qtype = 28
+            if companion_kind == "AAAA":
+                companion_qtype = 28
+                companion_answers = [
+                    dst_ip
+                    if ":" in dst_ip
+                    else (_IPV6_MAP.get(dst_ip) or _ipv4_to_fake_ipv6(dst_ip))
+                ]
+            elif companion_kind == "PTR":
+                companion_qtype = 12
+                octets = dst_ip.split(".")
+                companion_query = ".".join(reversed(octets)) + ".in-addr.arpa"
+                companion_answers = [hostname]
+            elif companion_kind == "NS":
+                companion_qtype = 2
+                companion_query = _dns_registrable_domain(hostname)
+                companion_answers = [f"ns1.{companion_query}", f"ns2.{companion_query}"]
+            elif companion_kind == "MX" and _dns_hostname_allows_mx(hostname):
+                companion_qtype = 15
+                companion_query = _dns_registrable_domain(hostname)
+                companion_answers = [f"10 mail.{companion_query}"]
+            else:
+                companion_kind = "SOA"
+                companion_qtype = 6
+                companion_query = _dns_registrable_domain(hostname)
+                companion_answers = [f"ns1.{companion_query} hostmaster.{companion_query}"]
+            companion_ctx = DnsContext(
+                query=companion_query,
+                trans_id=rng.randint(1, 65535),
+                qtype=companion_qtype,
+                query_type=companion_kind,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=companion_answers,
+                TTLs=[float(_dns_base_ttl(companion_query, is_internal))] * len(companion_answers),
+                rtt=_dns_rtt(rng, dns_server_ip),
+                AA=is_internal,
+                RD=True,
+                RA=True,
+            )
+            self.generate_connection(
+                src_ip=src_ip,
+                dst_ip=dns_server_ip,
+                time=companion_time,
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                duration=rng.uniform(0.001, 0.02),
+                orig_bytes=rng.randint(40, 100),
+                resp_bytes=rng.randint(80, 500),
+                src_port=companion_src_port,
+                dns=companion_ctx,
+            )
+
         # Occasional resolver search-suffix mistakes/background discovery probes.
         # Keep this low-volume and avoid doubling an already-qualified internal name.
         if rng.random() < 0.05:
@@ -6935,7 +7004,7 @@ class ActivityGenerator:
         rng = _get_rng()
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
 
-        tgt_fields = pick_tgt_success_fields(rng)
+        tgt_fields = pick_tgt_success_fields(rng, domain.lower())
 
         event = SecurityEvent(
             timestamp=time,

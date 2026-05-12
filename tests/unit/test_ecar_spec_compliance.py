@@ -695,6 +695,36 @@ class TestTidAlwaysPresent:
         record = json.loads(rendered)
         assert record["tid"] == 200
 
+    def test_process_create_derives_tid_when_context_has_pid(self, emitter, ts):
+        """Process-owned eCAR rows should avoid placeholder thread IDs when possible."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                process=ProcessContext(
+                    pid=4321,
+                    parent_pid=4,
+                    image=r"C:\Windows\System32\cmd.exe",
+                    command_line="cmd.exe",
+                    username="alice",
+                ),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        assert row["tid"] > 0
+
 
 class TestPpidOnlyOnProcess:
     def test_ppid_on_process_create(self, emitter, ts):

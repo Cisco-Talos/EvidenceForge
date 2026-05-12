@@ -31,6 +31,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -166,6 +167,14 @@ class EcarEmitter(HostMultiplexEmitter):
             if event.edr.tid != -1:
                 event_data["tid"] = event.edr.tid
 
+    @staticmethod
+    def _stable_tid(hostname: str, pid: int, timestamp: datetime, salt: str) -> int:
+        """Return a plausible source thread ID for process-owned eCAR events."""
+        if pid <= 0:
+            return -1
+        bucket_ms = int(timestamp.timestamp() * 1000)
+        return 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
+
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
@@ -238,6 +247,10 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), proc.pid, event_ts, "process_create"),
+        )
         self.emit_event(event_data)
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
@@ -255,6 +268,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), proc.pid, event.timestamp, "process_terminate"),
+        )
         self.emit_event(event_data)
 
     def _render_file_event(self, event: SecurityEvent) -> None:
@@ -278,6 +295,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "file"),
+        )
         self.emit_event(event_data)
 
     def _render_registry_event(self, event: SecurityEvent) -> None:
@@ -296,6 +317,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "registry"),
+        )
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
@@ -320,6 +345,10 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc:
             event_data["image_path"] = proc.image
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "module"),
+        )
         self.emit_event(event_data)
 
     def _render_connection(self, event: SecurityEvent) -> None:
