@@ -4718,16 +4718,16 @@ class ActivityGenerator:
 
             client_pid = pid
             client_process_image = process_image
-            if client_pid <= 0:
-                client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
-                    source_system=source_system,
-                    time=time,
-                    proxy_context=proxy_context,
-                    proxy_sys=proxy_sys,
-                    dst_port=dst_port,
-                )
-                if owned_process_image:
-                    client_process_image = owned_process_image
+            owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+                source_system=source_system,
+                time=time,
+                proxy_context=proxy_context,
+                proxy_sys=proxy_sys,
+                dst_port=dst_port,
+            )
+            if owned_client_pid > 0:
+                client_pid = owned_client_pid
+                client_process_image = owned_process_image
 
             client_uid = self.generate_connection(
                 src_ip=src_ip,

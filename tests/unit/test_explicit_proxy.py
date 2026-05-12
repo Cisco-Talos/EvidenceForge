@@ -477,9 +477,11 @@ class TestExplicitProxyVisibility:
             duration=1.0,
             orig_bytes=500,
             resp_bytes=5000,
+            pid=svchost_pid,
             source_system=generator._ip_to_system["10.0.1.10"],
             hostname="example.com",
             conn_state="SF",
+            process_image=r"C:\Windows\System32\svchost.exe",
         )
 
         client_event = next(
