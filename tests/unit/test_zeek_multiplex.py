@@ -30,6 +30,7 @@ from threading import Barrier, Thread
 
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 
 
@@ -69,6 +70,95 @@ class TestPerSensorDirectoryRouting:
             assert line2["uid"] != line1["uid"]  # Independent sensors have unique UIDs
             assert line1["uid"].startswith("C")
             assert line2["uid"].startswith("C")
+
+    def test_second_sensor_observation_varies_conn_counters(self):
+        """Multi-sensor conn rows keep tuple truth but do not clone observation counters."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "proto": "tcp",
+                    "duration": 12.5,
+                    "orig_bytes": 23124,
+                    "resp_bytes": 80921,
+                    "orig_pkts": 52,
+                    "resp_pkts": 74,
+                    "orig_ip_bytes": 25204,
+                    "resp_ip_bytes": 83881,
+                    "conn_state": "SF",
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            for field in ("id.orig_h", "id.orig_p", "id.resp_h", "id.resp_p", "proto"):
+                assert core[field] == dmz[field]
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            assert any(
+                core[field] != dmz[field]
+                for field in (
+                    "duration",
+                    "orig_bytes",
+                    "resp_bytes",
+                    "orig_pkts",
+                    "resp_pkts",
+                    "orig_ip_bytes",
+                    "resp_ip_bytes",
+                )
+            )
+
+    def test_second_sensor_observation_varies_http_body_lengths(self):
+        """HTTP analyzer rows should not be byte-for-byte clones across sensors."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekHttpEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTest123456789ab",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "trans_depth": 1,
+                    "method": "GET",
+                    "host": "example.com",
+                    "uri": "/index.html",
+                    "request_body_len": 1024,
+                    "response_body_len": 65536,
+                    "status_code": 200,
+                    "status_msg": "OK",
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "http.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "http.json").read_text().splitlines()[0])
+
+            assert core["host"] == dmz["host"]
+            assert core["uri"] == dmz["uri"]
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            assert (
+                core["request_body_len"] != dmz["request_body_len"]
+                or core["response_body_len"] != dmz["response_body_len"]
+            )
 
     def test_single_sensor_single_subdir(self):
         """Single sensor creates a single subdirectory."""

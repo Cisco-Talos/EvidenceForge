@@ -4017,7 +4017,7 @@ class BaselineMixin:
 
                 _REG_KEYS_HKCU = get_registry_keys_hkcu()
                 _REG_KEYS_HKLM = get_registry_keys_hklm()
-                _reg_count = rng.randint(50, 120)
+                _reg_count = rng.randint(18, 42)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
                 # Only emit HKCU on workstations with a logged-in user;
@@ -4029,11 +4029,33 @@ class BaselineMixin:
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     if rng.random() < _hkcu_rate:
-                        _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
+                        dynamic_hkcu = [entry for entry in _REG_KEYS_HKCU if "{" in entry[0]]
+                        static_hkcu = [
+                            entry
+                            for entry in _REG_KEYS_HKCU
+                            if "{" not in entry[0]
+                            and "Office\\16.0\\Word\\Reading Locations\\Document 1" not in entry[0]
+                        ]
+                        pool = dynamic_hkcu if dynamic_hkcu and rng.random() < 0.80 else static_hkcu
+                        _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKCU)
                     else:
                         dynamic_hklm = [entry for entry in _REG_KEYS_HKLM if "{" in entry[0]]
-                        static_hklm = [entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]]
-                        pool = dynamic_hklm if dynamic_hklm and rng.random() < 0.65 else static_hklm
+                        noisy_static_hklm = [
+                            entry
+                            for entry in _REG_KEYS_HKLM
+                            if "{" not in entry[0]
+                            and "Windows NT\\CurrentVersion\\Winlogon" not in entry[0]
+                            and "Services\\EventLog\\Application" not in entry[0]
+                        ]
+                        rare_static_hklm = [
+                            entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]
+                        ]
+                        if dynamic_hklm and rng.random() < 0.85:
+                            pool = dynamic_hklm
+                        elif rng.random() < 0.95:
+                            pool = noisy_static_hklm
+                        else:
+                            pool = rare_static_hklm
                         _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
                     _template_user = system.assigned_user or "SYSTEM"
                     _key = materialize_edr_template(_key, rng, _template_user)
@@ -4613,6 +4635,7 @@ class BaselineMixin:
                 continue
 
             sys_pids = self._system_pids.get(system.hostname, {})
+            sys_type = (system.type or "workstation").lower()
             is_dmz = "dmz" in system.hostname.lower() or "web" in system.hostname.lower()
             is_rhel_like = any(
                 d in system.os.lower() for d in ("centos", "rhel", "red hat", "rocky", "alma")
@@ -4734,7 +4757,7 @@ class BaselineMixin:
                             message=f"Removed session {sid}.",
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                         )
-                elif source_roll < 0.53:
+                elif source_roll < 0.34 and sys_type == "server":
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -4771,9 +4794,19 @@ class BaselineMixin:
                         conn_state="SF",
                     )
                     sshd_pid = rng.randint(5000, 60000)
-                    ssh_user = rng.choice(
-                        ["admin", "root", "ubuntu"] if not is_rhel_like else ["admin", "root"]
-                    )
+                    ssh_roster = self._get_server_ssh_users(system)
+                    ssh_usernames = [user.username for user in ssh_roster]
+                    if ssh_usernames:
+                        fallback_users = ["admin", "root"]
+                        if not is_rhel_like:
+                            fallback_users.append("ubuntu")
+                        ssh_user = rng.choices(
+                            ssh_usernames + fallback_users,
+                            weights=([20] * len(ssh_usernames)) + [3, 1, 1][: len(fallback_users)],
+                            k=1,
+                        )[0]
+                    else:
+                        ssh_user = rng.choice(["admin", "root"] if is_rhel_like else ["admin"])
                     # Generate a stateful SSH lifecycle. Real sshd logs keep
                     # connection, auth, pam open, and pam close on the same
                     # per-session sshd[pid]; bounded-window orphan records are
@@ -4831,7 +4864,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.63:
+                elif source_roll < 0.39:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -4847,7 +4880,7 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.71:
+                elif source_roll < 0.47:
                     if not has_ntp_client:
                         continue
                     if is_rhel_like:
@@ -4887,7 +4920,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.79:
+                elif source_roll < 0.59:
                     # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))

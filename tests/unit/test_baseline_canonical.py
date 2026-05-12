@@ -746,6 +746,32 @@ class TestBaselineSshTiming:
         assert 'conn_state="SF"' in source
         assert "max(1.0, ssh_duration)" in source
 
+    def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
+        """Generic syslog SSH churn should not blanket every Linux host."""
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert 'source_roll < 0.34 and sys_type == "server"' in source
+        assert "ssh_roster = self._get_server_ssh_users(system)" in source
+        assert "ssh_usernames = [user.username for user in ssh_roster]" in source
+
+
+class TestBaselineRegistryRealism:
+    """Regression tests for ambient registry-noise distribution."""
+
+    def test_registry_noise_prefers_dynamic_pools_and_filters_repeated_tells(self):
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert "_reg_count = rng.randint(18, 42)" in source
+        assert "Office\\\\16.0\\\\Word\\\\Reading Locations\\\\Document 1" in source
+        assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
+        assert "Services\\\\EventLog\\\\Application" in source
+
 
 class TestSensorStartup:
     """Sensor startup events dispatch through canonical path."""

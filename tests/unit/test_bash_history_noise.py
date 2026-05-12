@@ -13,7 +13,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.generator import ActivityGenerator
+from evidenceforge.generation.emitters.bash_history import BashHistoryEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -275,3 +277,30 @@ class TestBashHistoryChronological:
 
         assert deltas
         assert any(delta != 2.0 for delta in deltas)
+
+    def test_shred_remove_clears_rendered_history(self, tmp_path):
+        """A destructive shred of .bash_history should erase prior collected entries."""
+        emitter = BashHistoryEmitter(load_format("bash_history"), tmp_path)
+        base = {
+            "username": "root",
+            "hostname": "web01",
+            "host_fqdn": "web01.example.test",
+        }
+        emitter.emit_event(
+            {
+                **base,
+                "timestamp": datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+                "command": "whoami",
+            }
+        )
+        emitter.emit_event(
+            {
+                **base,
+                "timestamp": datetime(2024, 3, 18, 12, 1, 0, tzinfo=UTC),
+                "command": "shred -u /root/.bash_history",
+            }
+        )
+        emitter.close()
+
+        history = tmp_path / "web01.example.test" / "bash_history" / "root.bash_history"
+        assert not history.exists() or history.read_text() == ""

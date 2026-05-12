@@ -966,6 +966,7 @@ class TestTemplateCompleteness:
         optional = {"RuleName"}
         required_empty = [f for f in empty if f not in optional]
         assert required_empty == [], f"Empty required fields in Event 13: {required_empty}"
+        assert '<Data Name="User">CORP\\admin</Data>' in content
 
     def test_event22_no_empty_required_fields(self, emitter):
         event = SecurityEvent(

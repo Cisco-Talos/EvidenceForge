@@ -34,9 +34,12 @@ programs:
 
   - app: sudo
     transient: true
+    weight: 2
     messages:
-      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status"
-      - "root : TTY=pts/1 ; PWD=/root ; USER=root ; COMMAND=/usr/bin/apt update"
+      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status nginx"
+      - "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/systemctl reload nginx"
+      - "ops : TTY=pts/2 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/journalctl -u ssh -n 50"
+      - "ubuntu : TTY=pts/0 ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/apt list --upgradable"
 
   - app: sudo
     transient: true

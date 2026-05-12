@@ -572,6 +572,22 @@ class TestWebScanPresets:
             assert preset is not None
             assert 0 < preset["max_effective_rate"] <= preset["default_rate"]
 
+    def test_nikto_rate_cap_limits_repeated_probe_cycles(self):
+        from evidenceforge.config.web_scan_presets import get_preset
+
+        nikto = get_preset("nikto")
+        assert nikto is not None
+        assert nikto["max_effective_rate"] <= 0.35
+
+    def test_web_scan_paths_are_shuffled_between_passes(self):
+        import inspect
+
+        from evidenceforge.generation.engine.storyline import StorylineMixin
+
+        source = inspect.getsource(StorylineMixin)
+        assert "rng.shuffle(path_sequence)" in source
+        assert "skip_count = rng.randint" in source
+
     @pytest.mark.parametrize("value", [0, -0.1, "bad", float("inf"), float("nan"), True])
     def test_parse_positive_finite_rate_rejects_invalid_values(self, value):
         from evidenceforge.config.web_scan_presets import parse_positive_finite_rate

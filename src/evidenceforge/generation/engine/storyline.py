@@ -2086,7 +2086,21 @@ class StorylineMixin:
             _send_referrer_config = preset_data.get("send_referrer") if preset_data else None
 
             request_count = 0
-            path_idx = 0
+            path_sequence: list[dict[str, Any]] = []
+
+            def _next_scan_path() -> dict[str, Any]:
+                nonlocal path_sequence
+                if not path_sequence:
+                    path_sequence = list(scan_paths)
+                    rng.shuffle(path_sequence)
+                    if len(path_sequence) > 8:
+                        skip_count = rng.randint(0, max(1, len(path_sequence) // 10))
+                        for _ in range(skip_count):
+                            if len(path_sequence) <= 4:
+                                break
+                            del path_sequence[rng.randrange(len(path_sequence))]
+                return path_sequence.pop()
+
             pause_until: datetime | None = None
             for tick_time in _iter_periodic_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
@@ -2100,8 +2114,7 @@ class StorylineMixin:
                     continue
 
                 self.state_manager.set_current_time(tick_time)
-                path_entry = scan_paths[path_idx % len(scan_paths)]
-                path_idx += 1
+                path_entry = _next_scan_path()
 
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")

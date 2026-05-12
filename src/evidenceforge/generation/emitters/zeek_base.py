@@ -48,6 +48,7 @@ from typing import Any
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.utils.paths import sanitize_path_component
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,73 @@ def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     ):
         return value
     return [visible_ip if item == original_ip else item for item in value]
+
+
+def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: float) -> float:
+    """Return a deterministic signed per-sensor observation variation."""
+    seed = _stable_seed(f"zeek_sensor_observation:{hostname}:{uid}:{field}")
+    # Deterministic fraction in [-magnitude, +magnitude], avoiding an exact zero.
+    centered = ((seed % 2001) - 1000) / 1000.0
+    if centered == 0:
+        centered = 0.137
+    return centered * magnitude
+
+
+def _jitter_numeric_observation(
+    render_data: dict[str, Any],
+    field: str,
+    hostname: str,
+    uid: Any,
+    magnitude: float,
+    *,
+    minimum: int | float = 0,
+) -> None:
+    """Apply deterministic per-sensor jitter to numeric Zeek observation fields."""
+    value = render_data.get(field)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return
+    if value <= 0:
+        return
+    fraction = _sensor_variation_fraction(hostname, uid, field, magnitude)
+    varied = value * (1.0 + fraction)
+    if isinstance(value, int):
+        varied = int(round(varied))
+    render_data[field] = max(type(value)(minimum), type(value)(varied))
+
+
+def _apply_sensor_observation_variance(
+    render_data: dict[str, Any],
+    hostname: str,
+    original_uid: Any,
+) -> None:
+    """Make multi-sensor Zeek rows look like independent tap observations.
+
+    The canonical event still owns the true connection tuple and protocol
+    facts. This only models source-native observation differences from packet
+    loss, snaplen, tap placement, and analyzer cutoffs.
+    """
+    for field in ("orig_bytes", "resp_bytes", "orig_ip_bytes", "resp_ip_bytes"):
+        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035)
+    for field in ("orig_pkts", "resp_pkts"):
+        _jitter_numeric_observation(
+            render_data,
+            field,
+            hostname,
+            original_uid,
+            0.018,
+            minimum=1,
+        )
+    for field in ("request_body_len", "response_body_len"):
+        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.025)
+
+    # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
+    # cleanly. Keep this sparse and small so it reads as capture imperfection.
+    if "missed_bytes" in render_data:
+        missed = render_data.get("missed_bytes") or 0
+        if isinstance(missed, int):
+            seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
+            if seed % 11 == 0:
+                render_data["missed_bytes"] = missed + 16 + (seed % 496)
 
 
 class _SingleZeekWriter:
@@ -336,14 +404,10 @@ class SensorMultiplexEmitter(LogEmitter):
                 # but with per-event jitter so independent sensors do not have a
                 # perfectly fixed microsecond offset across every log stream.
                 if i > 0:
-                    from datetime import datetime, timedelta
-
-                    from evidenceforge.utils.rng import _stable_seed
-
                     sensor_delay_us = (
-                        (_stable_seed(f"sensor_delay_{hostname}") % 400)
-                        + 100
-                        + (_stable_seed(f"sensor_delay_jitter_{hostname}_{original_uid}") % 900)
+                        (_stable_seed(f"sensor_delay_{hostname}") % 90_000)
+                        + 2_000
+                        + (_stable_seed(f"sensor_delay_jitter_{hostname}_{original_uid}") % 45_000)
                     )
                     ts = render_data.get("ts")
                     if ts is not None:
@@ -357,13 +421,21 @@ class SensorMultiplexEmitter(LogEmitter):
                         and isinstance(dur, (int, float))
                         and not render_data.get("_lock_duration")
                     ):
-                        dur_jitter = (
-                            (_stable_seed(f"dur_jitter_{hostname}_{original_uid}") % 200) - 100
-                        ) / 1_000_000
                         min_duration = render_data.get("_min_duration")
                         if not isinstance(min_duration, (int, float)):
                             min_duration = 0.0
-                        render_data["duration"] = max(min_duration, dur + dur_jitter)
+                        dur_fraction = _sensor_variation_fraction(
+                            hostname,
+                            original_uid,
+                            "duration",
+                            0.025,
+                        )
+                        if dur >= 0.01:
+                            varied_duration = dur * (1.0 + dur_fraction)
+                        else:
+                            varied_duration = dur + dur_fraction / 1000.0
+                        render_data["duration"] = max(min_duration, varied_duration)
+                    _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)

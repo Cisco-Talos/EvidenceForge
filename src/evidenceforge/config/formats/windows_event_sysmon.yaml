@@ -382,6 +382,9 @@ variants:
       - name: Image
         type: string
         required: true
+      - name: User
+        type: string
+        required: true
       - name: TargetObject
         type: string
         required: true
@@ -407,6 +410,9 @@ variants:
         type: integer
         required: true
       - name: Image
+        type: string
+        required: true
+      - name: User
         type: string
         required: true
       - name: TargetObject
@@ -584,6 +590,7 @@ output:
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetObject">{{ TargetObject }}</Data>
         {% elif EventID == 13 %}
         <Data Name="RuleName">{{ RuleName | default('') }}</Data>
@@ -592,6 +599,7 @@ output:
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetObject">{{ TargetObject }}</Data>
         <Data Name="Details">{{ Details | default('-') }}</Data>
         {% elif EventID == 22 %}

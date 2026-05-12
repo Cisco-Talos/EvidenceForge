@@ -40,7 +40,7 @@ presets:
     # Non-crawl probes send none. This approximates a mixed crawl+probe run.
     send_referrer: {mode: same_origin, probability: 0.3}
     default_rate: 10.0
-    max_effective_rate: 0.7
+    max_effective_rate: 0.35
     ids_ua:
       sid: 2002677
       rev: 14

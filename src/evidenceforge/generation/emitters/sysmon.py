@@ -1338,6 +1338,12 @@ class SysmonEventEmitter(LogEmitter):
         process_guid = self._get_stable_process_guid(
             host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
         )
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc and proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
 
         # Route value operations to Event 13. Sysmon Event 12 is key create/delete;
         # Event 14 would be value rename, and value deletes are not modeled separately.
@@ -1367,6 +1373,7 @@ class SysmonEventEmitter(LogEmitter):
             "ProcessGuid": process_guid,
             "ProcessId": pid,
             "Image": image,
+            "User": user,
             "EventType": event_type,
             "TargetObject": reg.key,
         }
