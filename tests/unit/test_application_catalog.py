@@ -46,6 +46,12 @@ class TestCatalogLoading:
                 assert pe is not None, f"{app['id']} missing pe_metadata"
                 assert pe.get("company", "-") != "-", f"{app['id']} has dash company"
 
+    def test_gpupdate_uses_workstation_build_metadata(self):
+        """Fleet-wide gpupdate metadata should match workstation System32 peers."""
+        file_version, _, _, _, _ = get_pe_metadata("gpupdate.exe")
+
+        assert file_version == "10.0.19041.1"
+
     def test_all_entries_have_command_templates(self):
         """P1-3: Every platform entry should have at least one command template."""
         data = load_catalog()
@@ -53,6 +59,18 @@ class TestCatalogLoading:
             for os_cat, platform in app.get("platforms", {}).items():
                 templates = platform.get("command_templates", [])
                 assert len(templates) > 0, f"{app['id']} {os_cat} has no command_templates"
+
+    def test_browser_entry_commands_are_user_launches_not_renderer_children(self):
+        """Browser renderer/content processes belong under children, not app launch commands."""
+        data = load_catalog()
+        browser_ids = {"chrome", "firefox", "edge"}
+        child_markers = ("--type=renderer", "--type=gpu-process", "-contentproc")
+        for app in data["applications"]:
+            if app["id"] not in browser_ids:
+                continue
+            windows = app.get("platforms", {}).get("windows", {})
+            for template in windows.get("command_templates", []):
+                assert not any(marker in template for marker in child_markers)
 
 
 class TestPersonaFiltering:
@@ -119,6 +137,15 @@ class TestPeMetadataLookup:
     def test_outlook_has_metadata(self):
         fv, desc, prod, company, orig = get_pe_metadata("outlook.exe")
         assert company == "Microsoft Corporation"
+
+    def test_windows_admin_binaries_have_metadata(self):
+        for exe in ("mmc.exe", "wevtutil.exe"):
+            fv, desc, prod, company, orig = get_pe_metadata(exe)
+            assert company == "Microsoft Corporation"
+            assert prod != "-"
+            assert fv != "-"
+            assert desc != "-"
+            assert orig.lower() == exe
 
     def test_unknown_returns_dashes(self):
         result = get_pe_metadata("totally_unknown.exe")

@@ -19,10 +19,13 @@ import yaml
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay
+from evidenceforge.utils.rng import _stable_seed
 
 _EDR_POOLS_PATH = get_activity_directory() / "edr_pools.yaml"
 _CACHED: dict[str, Any] | None = None
 logger = logging.getLogger(__name__)
+
+_DEFENDER_PLATFORM_VERSIONS = ("4.18.2301.6-0", "4.18.24010.12-0", "4.18.24030.9-0")
 
 
 def _merge_edr_pools(default: dict, overlay: dict) -> dict:
@@ -127,14 +130,69 @@ def get_dll_pool() -> list[str]:
     return pools.get("dll_pool", [])
 
 
+def defender_platform_version(host_key: str) -> str:
+    """Return one stable Windows Defender platform version for a host."""
+    seed = _stable_seed(f"defender_platform_version:{host_key or 'default'}")
+    return _DEFENDER_PLATFORM_VERSIONS[seed % len(_DEFENDER_PLATFORM_VERSIONS)]
+
+
+def normalize_defender_platform_path(path: str, host_key: str) -> str:
+    """Keep Windows Defender Platform paths version-consistent per host."""
+    normalized = path.replace("/", "\\")
+    marker = "\\Windows Defender\\Platform\\"
+    marker_index = normalized.lower().find(marker.lower())
+    if marker_index == -1:
+        return path
+
+    prefix_end = marker_index + len(marker)
+    prefix = normalized[:prefix_end]
+    suffix = normalized[prefix_end:]
+    if not suffix:
+        return f"{prefix}{defender_platform_version(host_key)}"
+
+    first, separator, remainder = suffix.partition("\\")
+    if first.lower().startswith("4.18.") and separator:
+        suffix = remainder
+    return f"{prefix}{defender_platform_version(host_key)}\\{suffix}"
+
+
+def _interface_guid(rng: random.Random, host_key: str, host_ip: str) -> str:
+    """Return a stable interface GUID when host context is known."""
+    if not host_key and not host_ip:
+        return (
+            f"{rng.getrandbits(32):08X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(16):04X}-"
+            f"{rng.getrandbits(48):012X}"
+        )
+    seed_key = f"interface_guid:{host_key}:{host_ip}"
+    return (
+        f"{_stable_seed(seed_key) & 0xFFFFFFFF:08X}-"
+        f"{(_stable_seed(f'{seed_key}:a') >> 16) & 0xFFFF:04X}-"
+        f"{(_stable_seed(f'{seed_key}:b') >> 16) & 0xFFFF:04X}-"
+        f"{(_stable_seed(f'{seed_key}:c') >> 16) & 0xFFFF:04X}-"
+        f"{_stable_seed(f'{seed_key}:d') & 0xFFFFFFFFFFFF:012X}"
+    )
+
+
 def materialize_edr_template(
     template: str,
     rng: random.Random,
     user: str = "SYSTEM",
     *,
     host_ip: str = "",
+    host_key: str = "",
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
+    version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
+    template_lower = template.lower()
+    if "windows defender\\platform" in template_lower:
+        version = defender_platform_version(host_key)
+    elif "google\\chrome\\application" in template_lower:
+        version = rng.choice(["121.0.6167.185", "122.0.6261.129", "123.0.6312.86"])
+    elif "microsoft onedrive" in template_lower:
+        version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
         "host_ip": host_ip,
@@ -143,7 +201,9 @@ def materialize_edr_template(
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "guid": (
-            f"{rng.getrandbits(32):08X}-"
+            _interface_guid(rng, host_key, host_ip)
+            if "services\\tcpip\\parameters\\interfaces" in template_lower
+            else f"{rng.getrandbits(32):08X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
@@ -160,7 +220,7 @@ def materialize_edr_template(
                 "Microsoft-Windows-Client-Features",
             ]
         ),
-        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+        "version": version,
     }
 
     def _replace(match: re.Match[str]) -> str:
@@ -168,23 +228,38 @@ def materialize_edr_template(
         return str(replacements[token]) if token in replacements else match.group(0)
 
     materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
-    return materialized.replace("{{", "{").replace("}}", "}")
+    materialized = materialized.replace("{{", "{").replace("}}", "}")
+    return normalize_defender_platform_path(materialized, host_key)
 
 
 def materialize_edr_template_group(
     templates: tuple[str, ...],
     rng: random.Random,
     user: str = "SYSTEM",
+    *,
+    host_key: str = "",
+    host_ip: str = "",
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
+    version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
+    combined_lower = "\n".join(templates).lower()
+    if "windows defender\\platform" in combined_lower:
+        version = defender_platform_version(host_key)
+    elif "google\\chrome\\application" in combined_lower:
+        version = rng.choice(["121.0.6167.185", "122.0.6261.129", "123.0.6312.86"])
+    elif "microsoft onedrive" in combined_lower:
+        version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
+        "host_ip": host_ip,
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "guid": (
-            f"{rng.getrandbits(32):08X}-"
+            _interface_guid(rng, host_key, host_ip)
+            if "services\\tcpip\\parameters\\interfaces" in combined_lower
+            else f"{rng.getrandbits(32):08X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
             f"{rng.getrandbits(16):04X}-"
@@ -201,7 +276,7 @@ def materialize_edr_template_group(
                 "Microsoft-Windows-Client-Features",
             ]
         ),
-        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+        "version": version,
     }
 
     def _replace(match: re.Match[str]) -> str:
@@ -209,9 +284,12 @@ def materialize_edr_template_group(
         return str(replacements[token]) if token in replacements else match.group(0)
 
     return tuple(
-        re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
-        .replace("{{", "{")
-        .replace("}}", "}")
+        normalize_defender_platform_path(
+            re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
+            .replace("{{", "{")
+            .replace("}}", "}"),
+            host_key,
+        )
         for template in templates
     )
 
@@ -250,6 +328,17 @@ def select_file_side_effect(
             return None
         action = str(rng.choice(actions)).lower()
         path = materialize_edr_template(str(rng.choice(paths)), rng, user=user)
+        if (
+            exe in {"bash", "sh"}
+            and user.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}
+            and path.endswith("/.bash_history")
+        ):
+            non_history_paths = [
+                candidate for candidate in paths if not str(candidate).endswith("/.bash_history")
+            ]
+            if not non_history_paths:
+                return None
+            path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
         return action, path

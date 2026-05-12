@@ -66,7 +66,15 @@ class ZeekDhcpEmitter(SensorMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
-        optional_fields = ["mac", "host_name", "domain", "duration"]
+        optional_fields = [
+            "server_addr",
+            "assigned_addr",
+            "mac",
+            "host_name",
+            "domain",
+            "lease_time",
+            "duration",
+        ]
         for f in optional_fields:
             if f not in event_data:
                 event_data[f] = None

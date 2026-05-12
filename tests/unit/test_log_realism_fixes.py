@@ -302,7 +302,7 @@ class TestSshKeyFingerprint:
     def test_different_source_hosts_get_different_keys(self):
         keys = set()
         for src_ip in ["10.10.1.10", "10.10.1.20", "10.10.1.30", "10.10.1.40"]:
-            _key_rng = random.Random(_stable_seed(f"ssh_client_key:{src_ip}:WEB-EXT-01"))
+            _key_rng = random.Random(_stable_seed(f"ssh_client_key:{src_ip}:WEB-EXT-01:admin"))
             key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
             key_hash = "".join(
                 _key_rng.choices(
@@ -312,10 +312,10 @@ class TestSshKeyFingerprint:
             keys.add(f"{key_type}:{key_hash}")
         assert len(keys) == 4, f"Expected 4 unique keys, got {len(keys)}"
 
-    def test_same_source_host_gets_same_key(self):
+    def test_same_source_host_and_user_gets_same_key(self):
         keys = []
         for _ in range(3):
-            _key_rng = random.Random(_stable_seed("ssh_client_key:10.10.1.10:WEB-EXT-01"))
+            _key_rng = random.Random(_stable_seed("ssh_client_key:10.10.1.10:WEB-EXT-01:admin"))
             key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
             key_hash = "".join(
                 _key_rng.choices(
@@ -324,6 +324,21 @@ class TestSshKeyFingerprint:
             )
             keys.append(f"{key_type}:{key_hash}")
         assert keys[0] == keys[1] == keys[2]
+
+    def test_same_source_host_different_users_get_different_keys(self):
+        keys = set()
+        for username in ["admin", "root", "aisha.johnson", "marcus.chen"]:
+            _key_rng = random.Random(
+                _stable_seed(f"ssh_client_key:10.10.1.10:WEB-EXT-01:{username}")
+            )
+            key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
+            key_hash = "".join(
+                _key_rng.choices(
+                    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", k=43
+                )
+            )
+            keys.add(f"{key_type}:{key_hash}")
+        assert len(keys) == 4, f"Expected 4 user-scoped keys, got {len(keys)}"
 
 
 # ── eCAR NAT-aware IP ────────────────────────────────────────────────────

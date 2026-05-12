@@ -10,6 +10,7 @@ from unittest.mock import Mock
 from evidenceforge.events.contexts import FirewallContext, HttpContext, IdsContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import (
@@ -36,7 +37,7 @@ def test_proxy_user_agent_selection_is_role_aware_for_servers():
 
     assert user_agents
     assert all("Mozilla/" not in ua for ua in user_agents)
-    assert any(token in ua for ua in user_agents for token in ("curl", "apt", "Wget", "requests"))
+    assert any(token in ua for ua in user_agents for token in ("curl", "Wget", "requests"))
 
 
 def test_server_proxy_package_user_agents_are_destination_aware():
@@ -108,6 +109,38 @@ def test_server_proxy_package_user_agents_match_os_family():
 
     assert fedora_user_agents == {"libdnf (Fedora Linux 39; server; Linux.x86_64)"}
     assert all("Fedora" not in user_agent for user_agent in ubuntu_user_agents)
+
+
+def test_workstation_package_user_agents_are_destination_aware():
+    from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+
+    ubuntu_workstation = System(
+        hostname="dev01",
+        ip="10.0.4.20",
+        os="Ubuntu 24.04",
+        type="workstation",
+    )
+
+    generic_user_agents = {
+        pick_proxy_user_agent(random.Random(seed), ubuntu_workstation, hostname="www.github.com")
+        for seed in range(40)
+    }
+    package_tokens = ("apt", "APT", "dnf", "Fedora")
+    assert all(
+        not any(token in user_agent for token in package_tokens)
+        for user_agent in generic_user_agents
+    )
+
+    package_user_agents = {
+        pick_proxy_user_agent(
+            random.Random(seed),
+            ubuntu_workstation,
+            hostname="archive.ubuntu.com",
+        )
+        for seed in range(20)
+    }
+    assert package_user_agents
+    assert all("apt" in user_agent.lower() for user_agent in package_user_agents)
 
 
 def test_proxy_user_agent_overlay_adds_package_family(tmp_path, monkeypatch):
@@ -385,7 +418,8 @@ class TestExplicitProxyVisibility:
 
         pairs = _conn_pairs(emitters)
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
-        assert ("10.0.3.10", "203.0.113.45", 80) in pairs
+        origin_ip = resolve_domain_ip("dynsync-update.net", src_host="PROXY-01")
+        assert ("10.0.3.10", origin_ip, 80) in pairs
         assert ("10.0.1.10", "203.0.113.45", 80) not in pairs
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
         assert proxy_event.proxy.host == "dynsync-update.net"
@@ -453,8 +487,9 @@ class TestExplicitProxyVisibility:
         )
 
         pairs = _conn_pairs(emitters)
+        origin_ip = resolve_domain_ip("example.com", src_host="PROXY-01")
         assert any(pair[0] == "10.0.3.10" and pair[2] == 53 for pair in pairs)
-        assert ("10.0.3.10", "93.184.216.34", 443) in pairs
+        assert ("10.0.3.10", origin_ip, 443) in pairs
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
         assert emitters["zeek_dns"].emit.called
         assert emitters["zeek_ssl"].emit.called
@@ -488,8 +523,9 @@ class TestExplicitProxyVisibility:
         )
 
         pairs = _conn_pairs(emitters)
+        origin_ip = resolve_domain_ip("example.com", src_host="PROXY-01")
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
-        assert ("10.0.3.10", "93.184.216.34", 443) in pairs
+        assert ("10.0.3.10", origin_ip, 443) in pairs
         assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
 
     def test_https_miss_propagates_http_size_to_origin_tls_leg(self):
@@ -548,11 +584,12 @@ class TestExplicitProxyVisibility:
             ),
         )
 
+        origin_ip = resolve_domain_ip("example.com", src_host="PROXY-01")
         egress_events = [
             call.args[0]
             for call in emitters["zeek_conn"].emit.call_args_list
             if call.args[0].network.src_ip == "10.0.3.10"
-            and call.args[0].network.dst_ip == "93.184.216.34"
+            and call.args[0].network.dst_ip == origin_ip
             and call.args[0].network.dst_port == 443
         ]
         assert egress_events
@@ -565,6 +602,7 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         ]
         assert client_events
+        assert egress_events[0].timestamp > client_events[0].timestamp
         client_close = client_events[0].timestamp + timedelta(
             seconds=client_events[0].network.duration
         )
@@ -573,7 +611,7 @@ class TestExplicitProxyVisibility:
             call.args[0]
             for call in emitters["zeek_http"].emit.call_args_list
             if call.args[0].network.src_ip == "10.0.3.10"
-            and call.args[0].network.dst_ip == "93.184.216.34"
+            and call.args[0].network.dst_ip == origin_ip
             and call.args[0].network.dst_port == 443
         ]
         assert egress_http_events
@@ -705,11 +743,12 @@ class TestExplicitProxyVisibility:
             ),
         )
 
+        origin_ip = resolve_domain_ip("example.com", src_host="PROXY-01")
         egress_events = [
             call.args[0]
             for call in emitters["zeek_conn"].emit.call_args_list
             if call.args[0].network.src_ip == "10.0.3.10"
-            and call.args[0].network.dst_ip == "93.184.216.34"
+            and call.args[0].network.dst_ip == origin_ip
             and call.args[0].network.dst_port == 443
         ]
         assert egress_events
@@ -718,6 +757,8 @@ class TestExplicitProxyVisibility:
         assert egress_events[0].ssl.established is True
 
     def test_https_subresources_reuse_active_connect_tunnel(self):
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
         generator, emitters = _generator(
             [
                 NetworkSensor(
@@ -788,7 +829,8 @@ class TestExplicitProxyVisibility:
         assert reused_uid == first_uid
         assert _conn_pairs(emitters) == pairs_after_first
         assert ("10.0.1.10", "10.0.3.10", 8080) in pairs_after_first
-        assert ("10.0.3.10", "93.184.216.34", 443) in pairs_after_first
+        resolved_origin_ip = resolve_domain_ip("example.com", src_host="PROXY-01")
+        assert ("10.0.3.10", resolved_origin_ip, 443) in pairs_after_first
         assert emitters["proxy_access"].emit.call_count == proxy_calls_after_first
         assert emitters["zeek_ssl"].emit.call_count == ssl_calls_after_first
 

@@ -50,6 +50,7 @@ class TestProtocolOverhead:
         assert counts[28] > 800
         assert counts[28] < 1000  # some variance
         assert len(counts) > 1
+        assert max(samples) <= 68
 
     def test_tcp_overhead_bimodal_favoring_52(self):
         rng = random.Random(42)
@@ -154,9 +155,10 @@ class TestProxyRealism:
 class TestProxyUaOsMatch:
     """Bug #19: Proxy UAs match source OS."""
 
-    def test_linux_ua_pool_has_package_managers(self):
+    def test_linux_ua_pool_is_generic_not_package_specific(self):
         linux_uas = " ".join(_proxy_ua_pool("workstation", "linux"))
-        assert "apt-http" in linux_uas
+        assert "apt-http" not in linux_uas
+        assert "Fedora" not in linux_uas
         assert "python-requests" in linux_uas
         assert "curl" in linux_uas
 

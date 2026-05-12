@@ -217,6 +217,37 @@ class TestObjectIdLifecycle:
         assert terminate_event.event_type == "process_terminate"
         assert terminate_event.edr.object_id == create_obj_id
 
+    def test_parent_chain_process_create_uses_state_object_id(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Auto-created parent-chain processes should render the StateManager objectID."""
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, win_system, timestamp)
+        mock_emitters["ecar"].reset_mock()
+
+        parent_pid = activity_gen._ensure_parent_chain(
+            win_system,
+            test_user,
+            timestamp + timedelta(minutes=30),
+            logon_id,
+            "powershell.exe",
+            "windows",
+        )
+
+        create_event = next(
+            call[0][0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+            and call[0][0].process
+            and call[0][0].process.pid == parent_pid
+        )
+
+        assert create_event.edr.object_id == state_manager.get_process_object_id(
+            win_system.hostname,
+            parent_pid,
+        )
+        assert create_event.edr.object_id != ""
+
 
 # ---- actorID Linkage ----
 

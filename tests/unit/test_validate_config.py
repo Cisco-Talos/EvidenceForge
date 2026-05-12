@@ -336,6 +336,28 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_dns_tunnel_rcode_weights(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_rcode_weights": {"NOERROR": 0, "BOGUS": 1},
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_rcode_weights)"
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_too_short_workstation_unlock_gap(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 
@@ -559,5 +581,170 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "ids_signatures.yaml"
             and "may only reference {token}" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_boot_only_process_in_system_services(self, monkeypatch):
+        from evidenceforge.generation.activity import system_processes
+
+        real_loader = system_processes.load_system_processes
+
+        def load_invalid_system_processes():
+            data = real_loader()
+            services = {
+                role: [dict(entry) for entry in entries]
+                for role, entries in data.get("system_services", {}).items()
+            }
+            services.setdefault("domain_controller", []).append(
+                {
+                    "image": r"C:\Windows\System32\lsass.exe",
+                    "command_templates": [r"C:\Windows\system32\lsass.exe"],
+                    "parent": "wininit",
+                }
+            )
+            return {**data, "system_services": services}
+
+        monkeypatch.setattr(
+            system_processes, "load_system_processes", load_invalid_system_processes
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "system_processes.yaml"
+            and 'Boot-only Windows process "lsass.exe"' in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_recurring_syslog_startup_banner(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "accounts-daemon",
+                    "messages": ["started daemon version 22.08.8"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Persistent app "accounts-daemon" has recurring startup banner' in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_cron_hourly_in_extra_syslog_noise(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "cron",
+                    "transient": True,
+                    "messages": [
+                        "(root) CMD (test -x /usr/sbin/anacron || "
+                        "( cd / && run-parts /etc/cron.hourly ))"
+                    ],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and "cron.hourly" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_nonpositive_extra_syslog_weight(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "sudo",
+                    "transient": True,
+                    "weight": 0,
+                    "messages": ["admin : TTY=pts/0 ; USER=root ; COMMAND=/usr/bin/id"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and "weight" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_networkmanager_same_state_transition(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "NetworkManager",
+                    "messages": [
+                        "<info>  [{}] device (ens160): state change: activated -> activated"
+                    ],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and "NetworkManager state transition must change states" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        real_loader = windows_auth_realism.load_windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            data = real_loader()
+            special_privileges = dict(data["special_privileges"])
+            probabilities = dict(special_privileges.get("emission_probabilities", {}))
+            probabilities["service_account"] = 1.5
+            special_privileges["emission_probabilities"] = probabilities
+            return {**data, "special_privileges": special_privileges}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "emission_probabilities" in issue.message
             for issue in result.issues
         )

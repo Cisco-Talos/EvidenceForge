@@ -72,6 +72,7 @@ class TestStateManagerInit:
         )
 
         assert earlier_id < later_id
+        assert later_id - earlier_id < 600
 
     def test_linux_logind_session_ids_preboot_events_remain_monotonic(self):
         """Pre-boot events should still allocate monotonic IDs without collisions."""

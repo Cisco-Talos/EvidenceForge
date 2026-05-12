@@ -313,6 +313,39 @@ class TestConnectionPidPropagation:
         assert event.edr is not None
         assert event.edr.actor_id == ""
 
+    def test_connection_drops_expired_one_shot_process_pid_attribution(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """Short-lived admin utilities should not own later unrelated network flows."""
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            "WKS-01",
+            4,
+            r"C:\Windows\System32\dsquery.exe",
+            'dsquery.exe group -name "Domain Admins"',
+            "jdoe",
+            "Medium",
+        )
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.1",
+            dst_ip="10.0.20.10",
+            time=timestamp + timedelta(minutes=10),
+            dst_port=389,
+            proto="tcp",
+            service="ldap",
+            duration=0.5,
+            source_system=win_system,
+            pid=pid,
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == -1
+        assert event.process is None
+        assert event.edr is not None
+        assert event.edr.actor_id == ""
+
     def test_connection_with_pid_gets_edr_actor_id(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters
     ):

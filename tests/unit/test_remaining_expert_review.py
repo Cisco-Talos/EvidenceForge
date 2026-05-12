@@ -1,8 +1,15 @@
 # Tests for remaining expert review fixes (#15, #34).
 
 import random
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
-from evidenceforge.generation.engine.baseline import _pick_non_colliding_account_name
+from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
+from evidenceforge.generation.engine.baseline import (
+    BaselineMixin,
+    _pick_non_colliding_account_name,
+)
+from evidenceforge.models.scenario import AccountCreatedEventSpec, AccountDeletedEventSpec
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -100,3 +107,79 @@ class TestBaselineFailedLogonPatterns:
         # All failure times should be within 20s of base
         for ft in fail_times:
             assert (ft - base_time).total_seconds() < 20
+
+
+class TestStorylineAccountLifecycle:
+    """Storyline-created accounts should not leak into pre-creation baseline noise."""
+
+    def test_service_account_unavailable_before_storyline_creation(self):
+        class Engine(BaselineMixin):
+            start_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+            def _parse_storyline_time(self, time_str):
+                hours = int(time_str.removeprefix("+").removesuffix("h"))
+                return self.start_time + timedelta(hours=hours)
+
+        engine = Engine()
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    time="+4h",
+                    events=[AccountCreatedEventSpec(target_username="svc_sqlreader")],
+                )
+            ]
+        )
+
+        assert not engine._service_account_available_at(
+            "svc_sqlreader",
+            datetime(2024, 3, 18, 14, 0, tzinfo=UTC),
+        )
+        assert engine._service_account_available_at(
+            "svc_sqlreader",
+            datetime(2024, 3, 18, 16, 1, tzinfo=UTC),
+        )
+        assert engine._service_account_available_at(
+            "svc_backup",
+            datetime(2024, 3, 18, 14, 0, tzinfo=UTC),
+        )
+
+    def test_service_account_unavailable_after_storyline_deletion(self):
+        class Engine(BaselineMixin):
+            start_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+            def _parse_storyline_time(self, time_str):
+                hours = int(time_str.removeprefix("+").removesuffix("h"))
+                return self.start_time + timedelta(hours=hours)
+
+        engine = Engine()
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    time="+1h",
+                    events=[AccountCreatedEventSpec(target_username="svc_sqlreader")],
+                ),
+                SimpleNamespace(
+                    time="+5h",
+                    events=[AccountDeletedEventSpec(target_username="svc_sqlreader")],
+                ),
+            ]
+        )
+
+        assert engine._service_account_available_at(
+            "svc_sqlreader",
+            datetime(2024, 3, 18, 14, 0, tzinfo=UTC),
+        )
+        assert not engine._service_account_available_at(
+            "svc_sqlreader",
+            datetime(2024, 3, 18, 17, 1, tzinfo=UTC),
+        )
+
+
+class TestIdsFalsePositiveSignatures:
+    """Baseline false positives should not claim artifacts the generator does not model."""
+
+    def test_protocol_artifact_signatures_are_not_baseline_false_positives(self):
+        signatures = {sig["sid"]: sig for sig in load_ids_signatures()["signatures"]}
+
+        for sid in (255, 2000536, 2000537, 2000545, 2019876):
+            assert signatures[sid]["baseline_fp_allowed"] is False

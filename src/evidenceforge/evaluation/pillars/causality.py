@@ -639,10 +639,18 @@ class CausalityScorer(DimensionScorer):
         text = str(value).strip()
         if not text:
             return ""
-        parsed = urlsplit(text)
-        if not parsed.hostname and text.startswith("//"):
-            parsed = urlsplit(f"http:{text}")
-        return cls._normalize_beacon_host(parsed.hostname)
+        try:
+            parsed = urlsplit(text)
+            hostname = parsed.hostname
+        except ValueError:
+            return ""
+        if not hostname and text.startswith("//"):
+            try:
+                parsed = urlsplit(f"http:{text}")
+                hostname = parsed.hostname
+            except ValueError:
+                return ""
+        return cls._normalize_beacon_host(hostname)
 
     @staticmethod
     def _beacon_host_matches(candidate: str, expected: str) -> bool:

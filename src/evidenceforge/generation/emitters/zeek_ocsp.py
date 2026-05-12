@@ -56,6 +56,8 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
             "certStatus": ocsp.cert_status,
             "thisUpdate": ocsp.this_update,
             "nextUpdate": ocsp.next_update,
+            "revoketime": ocsp.revoketime,
+            "revokereason": ocsp.revokereason,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(
                 self.format_def.name if self.format_def else "zeek_ocsp", []
             ),
