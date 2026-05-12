@@ -1118,7 +1118,13 @@ class StorylineMixin:
                         if is_stable_resource_path(uri)
                         else response_size_for_mime(rng, mime_type)
                     )
+                    preserve_url_dst_ip = False
                     dst_ip = self._resolve_storyline_network_target(hostname)
+                    if dst_ip is None:
+                        authored_dst_ip = self._storyline_authored_ip_for_hostname(hostname)
+                        if authored_dst_ip is not None:
+                            dst_ip = authored_dst_ip
+                            preserve_url_dst_ip = True
                     if dst_ip is None:
                         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
@@ -1140,6 +1146,7 @@ class StorylineMixin:
                         pid=pid,
                         hostname=hostname,
                         process_image=process_name,
+                        preserve_dst_ip=preserve_url_dst_ip,
                         http=HttpContext(
                             method="GET",
                             host=hostname,
@@ -3133,6 +3140,39 @@ class StorylineMixin:
             if lowered in candidates:
                 return system.ip
         return None
+
+    def _storyline_authored_ip_for_hostname(self, hostname: str) -> str | None:
+        """Return an explicit storyline IP for an external hostname when one exists."""
+        lowered = hostname.rstrip(".").lower()
+        for story_event in getattr(self.scenario, "storyline", []):
+            for spec in getattr(story_event, "events", []):
+                event_hostname = self._storyline_spec_value(spec, "hostname")
+                dst_ip = self._storyline_spec_value(spec, "dst_ip")
+                if (
+                    event_hostname
+                    and str(event_hostname).rstrip(".").lower() == lowered
+                    and isinstance(dst_ip, str)
+                    and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", dst_ip)
+                ):
+                    return dst_ip
+
+                query = self._storyline_spec_value(spec, "query")
+                answer = self._storyline_spec_value(spec, "answer")
+                if (
+                    query
+                    and str(query).rstrip(".").lower() == lowered
+                    and isinstance(answer, str)
+                    and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", answer)
+                ):
+                    return answer
+        return None
+
+    @staticmethod
+    def _storyline_spec_value(spec: Any, field_name: str) -> Any:
+        """Read a typed or raw storyline event field."""
+        if isinstance(spec, dict):
+            return spec.get(field_name)
+        return getattr(spec, field_name, None)
 
     def _parse_storyline_time(self, time_str: str) -> datetime:
         """Parse storyline event time to absolute datetime.
