@@ -27,6 +27,16 @@ fields:
     required: true
     description: "DHCP client IP address"
 
+  - name: server_addr
+    type: ip_address
+    required: false
+    description: "DHCP server IP address"
+
+  - name: assigned_addr
+    type: ip_address
+    required: false
+    description: "Assigned client lease IP address"
+
   - name: mac
     type: string
     required: true
@@ -47,6 +57,11 @@ fields:
     required: true
     description: "DHCP message types (JSON array of strings)"
 
+  - name: lease_time
+    type: float
+    required: false
+    description: "Lease lifetime in seconds"
+
   - name: duration
     type: float
     required: false
@@ -61,6 +76,12 @@ output:
       "ts": {{ ts | tojson }},
       "uids": {{ uids | tojson }},
       "client_addr": {{ client_addr | tojson }}
+      {%- if server_addr is not none %},
+      "server_addr": {{ server_addr | tojson }}
+      {%- endif %}
+      {%- if assigned_addr is not none %},
+      "assigned_addr": {{ assigned_addr | tojson }}
+      {%- endif %}
       {%- if mac is not none %},
       "mac": {{ mac | tojson }}
       {%- endif %}
@@ -71,6 +92,9 @@ output:
       "domain": {{ domain | tojson }}
       {%- endif %},
       "msg_types": {{ msg_types | tojson }}
+      {%- if lease_time is not none %},
+      "lease_time": {{ lease_time | tojson }}
+      {%- endif %}
       {%- if duration is not none %},
       "duration": {{ duration | tojson }}
       {%- endif %}

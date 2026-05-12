@@ -482,6 +482,30 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_dns_tunnel_rcode_weights_are_loaded_from_network_params_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response-code mix should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rcode_weights,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_rcode_weights": {"NOERROR": 80, "NXDOMAIN": 20}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert dns_tunnel_rcode_weights() == {"NOERROR": 80.0, "NXDOMAIN": 20.0}
+        finally:
+            reset_network_params_cache()
+
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
         generator = ActivityGenerator(StateManager(), {})
@@ -591,6 +615,56 @@ class TestTlsIssuers:
         assert event.x509.san_dns == []
         assert event.x509_chain == [event.x509]
 
+    def test_tls_validity_window_is_not_observation_second_anchored(self):
+        """Leaf cert validity should not reveal the exact first observation timestamp."""
+        generator = ActivityGenerator(StateManager(), {})
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 34, 56, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip="142.250.190.99",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CTestExternalValidity",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname="ocsp.pki.goog",
+            dns=None,
+            dst_ip="142.250.190.99",
+            rng=random.Random(42),
+            allow_failure=False,
+        )
+
+        assert event.x509 is not None
+        observed_epoch = int(event.timestamp.timestamp())
+        age_seconds = observed_epoch - event.x509.certificate_not_valid_before
+        assert age_seconds > 0
+        assert age_seconds % 86400 != 0
+
+    def test_intermediate_validity_window_is_not_observation_second_anchored(self):
+        """Intermediate CA validity should have its own issuance clock."""
+        generator = ActivityGenerator(StateManager(), {})
+        event_time = datetime(2024, 10, 14, 12, 34, 56, tzinfo=UTC)
+        chain = generator._build_tls_certificate_chain(
+            leaf=X509Context(fuid="FLeaf", certificate_subject="CN=leaf.example"),
+            cert_name="leaf.example",
+            issuer_name="CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+            event_time=event_time,
+            connection_uid="CIntermediateValidity",
+            rng=random.Random(1),
+        )
+
+        intermediate = chain[1]
+        observed_epoch = int(event_time.timestamp())
+        age_seconds = observed_epoch - intermediate.certificate_not_valid_before
+        assert age_seconds > 0
+        assert age_seconds % 86400 != 0
+
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""
         generator = ActivityGenerator(StateManager(), {})
@@ -631,7 +705,9 @@ class TestTlsIssuers:
 
         assert first.x509 is not None
         assert second.x509 is not None
+        assert len(first.x509.fingerprint) == 40
         assert first.x509.fingerprint == second.x509.fingerprint
+        assert {len(first.x509.fuid), len(second.x509.fuid)} <= {17, 18, 19}
         assert first.x509.certificate_issuer == second.x509.certificate_issuer
         assert first.x509.certificate_key_type == second.x509.certificate_key_type
         assert first.x509.certificate_key_length == second.x509.certificate_key_length
@@ -661,6 +737,7 @@ class TestTlsIssuers:
         second_intermediate = second_chain[1]
 
         assert first_intermediate.fuid != second_intermediate.fuid
+        assert {len(first_intermediate.fuid), len(second_intermediate.fuid)} <= {17, 18, 19}
         assert first_intermediate.certificate_subject == second_intermediate.certificate_subject
         assert first_intermediate.certificate_issuer == second_intermediate.certificate_issuer
         assert first_intermediate.certificate_serial == second_intermediate.certificate_serial

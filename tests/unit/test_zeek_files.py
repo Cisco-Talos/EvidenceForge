@@ -31,9 +31,17 @@ from pathlib import Path
 import yaml
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import FileTransferContext, NetworkContext, X509Context
+from evidenceforge.events.contexts import (
+    FileTransferContext,
+    HttpContext,
+    NetworkContext,
+    SslContext,
+    X509Context,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
+from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 
 
 class TestFilesFormatAccuracy:
@@ -99,6 +107,60 @@ class TestFilesFormatAccuracy:
             assert data["seen_bytes"] == 1024
             assert data["is_orig"] is False
             assert data["timedout"] is False
+
+    def test_local_orig_follows_transmitting_host(self):
+        """Zeek files.local_orig describes the file transmitter, not the connection originator."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "fuid": "FExternalCert123",
+                    "tx_hosts": ["91.189.91.39"],
+                    "rx_hosts": ["10.10.3.20"],
+                    "conn_uids": ["CExternalCert123"],
+                    "source": "SSL",
+                    "depth": 0,
+                    "analyzers": ["X509"],
+                    "mime_type": "application/pkix-cert",
+                    "duration": None,
+                    "local_orig": True,
+                    "is_orig": False,
+                    "seen_bytes": 1024,
+                    "total_bytes": 1024,
+                    "missing_bytes": 0,
+                    "overflow_bytes": 0,
+                    "timedout": False,
+                }
+            )
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+                    "fuid": "FLocalServerCert",
+                    "tx_hosts": ["10.10.3.10"],
+                    "rx_hosts": ["113.160.39.29"],
+                    "conn_uids": ["CLocalServerCert"],
+                    "source": "SSL",
+                    "depth": 0,
+                    "analyzers": ["X509"],
+                    "mime_type": "application/pkix-cert",
+                    "duration": None,
+                    "local_orig": False,
+                    "is_orig": False,
+                    "seen_bytes": 1024,
+                    "total_bytes": 1024,
+                    "missing_bytes": 0,
+                    "overflow_bytes": 0,
+                    "timedout": False,
+                }
+            )
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+            assert rows[0]["local_orig"] is False
+            assert rows[1]["local_orig"] is True
 
     def test_fuid_has_f_prefix(self):
         """fuid should start with 'F' prefix."""
@@ -197,6 +259,193 @@ class TestFilesUidCorrelation:
             assert "uid" not in data
             assert "id.orig_h" not in data
 
+    def test_file_transfer_timestamp_stays_within_parent_connection(self):
+        """files.log observations should not begin after the owning conn closes."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CConnUID12345678",
+                    duration=0.08,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FFileUID12345678",
+                    source="SMB",
+                    duration=0.06,
+                    seen_bytes=4096,
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            data = json.loads(output.read_text().splitlines()[0])
+
+        assert data["ts"] >= event.timestamp.timestamp()
+        assert data["ts"] + data["duration"] <= event.timestamp.timestamp() + 0.08
+
+    def test_http_file_transfer_timestamp_follows_parent_http_record(self):
+        """HTTP response files should not predate the owning http.log row."""
+        files_fmt = load_format("zeek_files")
+        http_fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            http_output = Path(tmpdir) / "http.json"
+            files_output = Path(tmpdir) / "files.json"
+            http_emitter = ZeekHttpEmitter(http_fmt, http_output)
+            files_emitter = ZeekFilesEmitter(files_fmt, files_output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CHttpUID1234567",
+                    duration=2.0,
+                ),
+                http=HttpContext(
+                    host="updates.example.test",
+                    uri="/agent.dat",
+                    resp_fuids=["FHttpFile1234567"],
+                    resp_mime_types=["application/octet-stream"],
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FHttpFile1234567",
+                    source="HTTP",
+                    duration=0.04,
+                    seen_bytes=8192,
+                ),
+            )
+
+            http_emitter.emit(event)
+            files_emitter.emit(event)
+            http_emitter.close()
+            files_emitter.close()
+
+            http_row = json.loads(http_output.read_text().splitlines()[0])
+            file_row = json.loads(files_output.read_text().splitlines()[0])
+
+        assert file_row["ts"] > http_row["ts"]
+
+    def test_certificate_file_timestamp_follows_parent_ssl_record(self):
+        """Certificate files should not predate the owning ssl.log row."""
+        files_fmt = load_format("zeek_files")
+        ssl_fmt = load_format("zeek_ssl")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ssl_output = Path(tmpdir) / "ssl.json"
+            files_output = Path(tmpdir) / "files.json"
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, ssl_output)
+            files_emitter = ZeekFilesEmitter(files_fmt, files_output)
+            cert = X509Context(
+                fuid="FCertFile123456",
+                fingerprint="a" * 40,
+                certificate_subject="CN=updates.example.test",
+                certificate_issuer="CN=Example Issuer",
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="CSslUID12345678",
+                    duration=2.0,
+                ),
+                ssl=SslContext(
+                    server_name="updates.example.test",
+                    cert_chain_fuids=[cert.fuid],
+                ),
+                x509=cert,
+            )
+
+            ssl_emitter.emit(event)
+            files_emitter.emit(event)
+            ssl_emitter.close()
+            files_emitter.close()
+
+            ssl_row = json.loads(ssl_output.read_text().splitlines()[0])
+            file_row = json.loads(files_output.read_text().splitlines()[0])
+
+        assert file_row["ts"] > ssl_row["ts"]
+
+    def test_certificate_file_timestamps_follow_chain_depth_order(self):
+        """Certificate file observations should preserve TLS chain order."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            leaf = X509Context(
+                fuid="FLeafCert123456",
+                fingerprint="b" * 40,
+                certificate_subject="CN=updates.example.test",
+                certificate_issuer="CN=Example Intermediate",
+                host_cert=True,
+            )
+            intermediate = X509Context(
+                fuid="FInterCert12345",
+                fingerprint="c" * 40,
+                certificate_subject="CN=Example Intermediate",
+                certificate_issuer="CN=Example Root",
+                host_cert=False,
+            )
+            root = X509Context(
+                fuid="FRootCert123456",
+                fingerprint="d" * 40,
+                certificate_subject="CN=Example Root",
+                certificate_issuer="CN=Example Root",
+                host_cert=False,
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="CChainUID123456",
+                    duration=2.0,
+                ),
+                ssl=SslContext(
+                    server_name="updates.example.test",
+                    cert_chain_fuids=[leaf.fuid, intermediate.fuid, root.fuid],
+                ),
+                x509=leaf,
+                x509_chain=[leaf, intermediate, root],
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+
+        by_depth = {row["depth"]: row for row in rows}
+        assert by_depth[0]["fuid"] == leaf.fuid
+        assert by_depth[1]["fuid"] == intermediate.fuid
+        assert by_depth[2]["fuid"] == root.fuid
+        assert by_depth[0]["ts"] < by_depth[1]["ts"]
+        assert by_depth[1]["ts"] < by_depth[2]["ts"]
+
     def test_same_certificate_fingerprint_keeps_file_hashes(self):
         """Repeated observations of the same cert bytes should keep all hashes stable."""
         fmt = load_format("zeek_files")
@@ -217,7 +466,7 @@ class TestFilesUidCorrelation:
                     ),
                     x509=X509Context(
                         fuid=fuid,
-                        fingerprint="a" * 64,
+                        fingerprint="a" * 40,
                         certificate_serial="01",
                         certificate_subject="CN=example.com",
                         certificate_issuer="CN=Example CA",
@@ -229,9 +478,44 @@ class TestFilesUidCorrelation:
             rows = [json.loads(line) for line in output.read_text().splitlines()]
 
         assert len(rows) == 2
-        assert rows[0]["sha256"] == rows[1]["sha256"] == "a" * 64
+        assert rows[0]["sha256"] == rows[1]["sha256"]
+        assert rows[0]["sha1"] == "a" * 40
+        assert rows[0]["sha256"] != "a" * 40
         assert rows[0]["md5"] == rows[1]["md5"]
         assert rows[0]["sha1"] == rows[1]["sha1"]
+
+    def test_certificate_file_sizes_vary_by_certificate_identity(self):
+        """Certificate files should not collapse into a few fixed byte buckets."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            for idx, name in enumerate(("api.example.com", "cdn.example.net", "login.example.org")):
+                event = SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 0, idx, tzinfo=UTC),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        zeek_uid=f"CConnUID{idx}",
+                    ),
+                    x509=X509Context(
+                        fuid=f"Fcert{idx}111111111",
+                        fingerprint=f"{idx}" * 64,
+                        certificate_subject=f"CN={name}",
+                        certificate_issuer="CN=Example CA",
+                        san_dns=[name],
+                    ),
+                )
+                emitter.emit(event)
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+
+        assert len({row["seen_bytes"] for row in rows}) == len(rows)
 
     def test_hash_fields_render_when_analyzers_run(self):
         """files.log should include hash fields that correspond to analyzer names."""

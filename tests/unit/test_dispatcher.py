@@ -505,6 +505,40 @@ class TestCanHandleDefault:
         assert "Accepted password" in lines[1]
         assert "pam_unix(sshd:session): session opened" in lines[2]
 
+    def test_syslog_sorts_same_second_dhclient_lifecycle(self, tmp_path):
+        """Same-second DHCP syslog groups should keep lease transaction order."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        timestamp = datetime(2024, 3, 18, 12, 11, 6, tzinfo=UTC)
+        for message in [
+            "DHCPACK of 10.10.1.99 from 10.10.2.10",
+            "bound to 10.10.1.99 -- renewal in 7200 seconds.",
+            "DHCPREQUEST for 10.10.1.99 on eth0 to 10.10.2.10 port 67",
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "ROGUE-LAPTOP",
+                    "app_name": "dhclient",
+                    "pid": 32883,
+                    "facility": 3,
+                    "severity": 6,
+                    "message": message,
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert "DHCPREQUEST" in lines[0]
+        assert "DHCPACK" in lines[1]
+        assert "bound to" in lines[2]
+
     def test_syslog_ssh_session_routes_to_target_host_when_both_hosts_are_linux(self):
         """SSH auth syslog belongs to the server, not the Linux client host."""
         from evidenceforge.generation.emitters.syslog import SyslogEmitter

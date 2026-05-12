@@ -1165,14 +1165,20 @@ output:
         <Execution ProcessID="{{ ExecutionProcessID }}" ThreadID="{{ ExecutionThreadID }}"/>
         <Channel>{{ Channel }}</Channel>
         <Computer>{{ Computer }}</Computer>
+        {% if EventID == 1102 %}
+        <Security UserID="{{ SubjectUserSid }}"/>
+        {% else %}
         <Security/>
+        {% endif %}
       </System>
       {% if EventID == 1102 %}
-      <UserData><LogFileCleared xmlns="http://manifests.microsoft.com/win/2004/08/windows/eventlog"><SubjectUserSid>{{ SubjectUserSid }}</SubjectUserSid>
-      <SubjectUserName>{{ SubjectUserName }}</SubjectUserName>
-      <SubjectDomainName>{{ SubjectDomainName }}</SubjectDomainName>
-      <SubjectLogonId>{{ SubjectLogonId }}</SubjectLogonId>
-      </LogFileCleared>
+      <UserData>
+        <LogFileCleared xmlns="http://manifests.microsoft.com/win/2004/08/windows/eventlog">
+          <SubjectUserSid>{{ SubjectUserSid }}</SubjectUserSid>
+          <SubjectUserName>{{ SubjectUserName }}</SubjectUserName>
+          <SubjectDomainName>{{ SubjectDomainName }}</SubjectDomainName>
+          <SubjectLogonId>{{ SubjectLogonId }}</SubjectLogonId>
+        </LogFileCleared>
       </UserData>
       {% else %}
       <EventData>

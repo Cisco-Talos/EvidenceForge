@@ -79,6 +79,23 @@ def _systemd_lifecycle_priority(line: str) -> int:
     return 50
 
 
+def _dhclient_lifecycle_priority(line: str) -> int:
+    """Order same-second DHCP client messages after timestamp precision is lost."""
+    if " dhclient[" not in line:
+        return 50
+    if ": DHCPDISCOVER " in line:
+        return 10
+    if ": DHCPOFFER " in line:
+        return 20
+    if ": DHCPREQUEST " in line:
+        return 30
+    if ": DHCPACK " in line:
+        return 40
+    if ": bound to " in line:
+        return 50
+    return 60
+
+
 def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
     """Sort traditional syslog lines by their rendered month/day/time prefix."""
     match = _SYSLOG_TS_RE.match(line)
@@ -88,7 +105,11 @@ def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
         _SYSLOG_MONTHS.get(match.group("mon"), 13),
         int(match.group("day")),
         match.group("hms"),
-        min(_ssh_lifecycle_priority(line), _systemd_lifecycle_priority(line)),
+        min(
+            _ssh_lifecycle_priority(line),
+            _systemd_lifecycle_priority(line),
+            _dhclient_lifecycle_priority(line),
+        ),
         line,
     )
 

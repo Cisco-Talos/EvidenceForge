@@ -19,6 +19,9 @@
 #   direction: "in" (external->internal) or "out" (internal->external)
 #   target_services: Optional list of services the target system should run
 #   target_os: Optional list of OS categories (windows, linux)
+#   baseline_fp_allowed: Optional bool. Set false for signatures that require
+#        source-native protocol/file artifacts the baseline false-positive
+#        generator does not currently model.
 #
 # Depended on by: baseline.py (IDS alert generation)
 
@@ -55,16 +58,16 @@ signatures:
   # ===== TCP Inbound (external -> internal) =====
   # TLS/SSL anomalies
   - {sid: 2024364, rev: 3, message: "ET INFO TLS Handshake Failure", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: in}
-  - {sid: 2019876, rev: 2, message: "ET INFO Packed Executable Download", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 80, direction: in}
+  - {sid: 2019876, rev: 2, message: "ET INFO Packed Executable Download", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
 
   # Scanning activity
   - {sid: 2002911, rev: 7, message: "ET SCAN Potential SSH Scan", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 22, direction: in}
   - {sid: 2010937, rev: 3, message: "ET SCAN Suspicious inbound to mySQL port 3306", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 3306, direction: in, target_services: [mysql, mssql]}
   - {sid: 2010936, rev: 3, message: "ET SCAN Suspicious inbound to MSSQL port 1433", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 1433, direction: in, target_services: [mssql]}
   - {sid: 2002910, rev: 5, message: "ET SCAN Potential VNC Scan 5900-5920", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5900, direction: in}
-  - {sid: 2000536, rev: 7, message: "ET SCAN NMAP -sO", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in}
-  - {sid: 2000537, rev: 8, message: "ET SCAN NMAP -sS window 2048", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in}
-  - {sid: 2000545, rev: 8, message: "ET SCAN NMAP -f -sV", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 443, direction: in}
+  - {sid: 2000536, rev: 7, message: "ET SCAN NMAP -sO", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
+  - {sid: 2000537, rev: 8, message: "ET SCAN NMAP -sS window 2048", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
+  - {sid: 2000545, rev: 8, message: "ET SCAN NMAP -f -sV", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 443, direction: in, baseline_fp_allowed: false}
   - {sid: 2010939, rev: 3, message: "ET SCAN Suspicious inbound to PostgreSQL port 5432", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5432, direction: in}
   - {sid: 2002106, rev: 6, message: "ET SCAN Rapid POP3 Connection - Possible Brute Force Attack", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 110, direction: in}
 
@@ -82,7 +85,7 @@ signatures:
 
   # Snort Community rules (SIDs < 1000000)
   - {sid: 257, rev: 1, message: "PROTOCOL-DNS named version attempt", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 53, direction: in}
-  - {sid: 255, rev: 1, message: "PROTOCOL-DNS dns zone transfer via TCP detected", classification: "attempted-recon", priority: 1, proto: tcp, dst_port: 53, direction: in}
+  - {sid: 255, rev: 1, message: "PROTOCOL-DNS dns zone transfer via TCP detected", classification: "attempted-recon", priority: 1, proto: tcp, dst_port: 53, direction: in, baseline_fp_allowed: false}
 
   # ===== UDP =====
   # DNS anomalies (outbound)

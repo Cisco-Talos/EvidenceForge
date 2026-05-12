@@ -50,6 +50,14 @@ failed_logon:
         weight: 15
 
 special_privileges:
+  emission_probabilities:
+    service_account: 0.35
+    system_account: 0.65
+    machine_account: 0.45
+    domain_admin: 0.55
+    workstation_admin: 0.50
+    uac_elevated_user: 0.15
+    regular_user: 0.0
   profiles:
     service_account:
       privileges:

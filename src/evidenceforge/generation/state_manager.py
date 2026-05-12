@@ -239,6 +239,7 @@ class StateManager:
         *,
         username: str | None = None,
         start_time: datetime | None = None,
+        source_ip: str | None = None,
         source_port: int | None = None,
         session_kind: str | None = None,
         transport_pid: int | None = None,
@@ -253,6 +254,8 @@ class StateManager:
                 session.username = username
             if start_time is not None:
                 session.start_time = ensure_utc(start_time)
+            if source_ip is not None:
+                session.source_ip = source_ip
             if source_port is not None:
                 session.source_port = source_port
             if session_kind is not None:
@@ -334,21 +337,16 @@ class StateManager:
                         normalized_time,
                     )
                 elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
+                # Use timestamp-derived spacing rather than generation-order
+                # counters. Baseline and storyline syslog paths can dispatch
+                # out of chronological order before emitters sort the file; a
+                # one-second stride leaves enough room that earlier visible
+                # events cannot collide into later session IDs.
                 candidate = initial + elapsed_seconds
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
                 if candidate in used:
-                    # Search downward for an unused slot to preserve temporal ordering
-                    probe = candidate - 1
-                    while probe >= initial and probe in used:
-                        probe -= 1
-                    if probe >= initial:
-                        candidate = probe
-                    else:
-                        # All slots below are taken — bump upward instead
-                        last_id = self._linux_logind_session_last_ids.get(system, candidate)
-                        candidate = last_id + 1
-                        while candidate in used:
-                            candidate += 1
+                    while candidate in used:
+                        candidate += 1
                 used.add(candidate)
                 self._linux_logind_session_last_ids[system] = max(
                     candidate, self._linux_logind_session_last_ids.get(system, candidate)
@@ -419,8 +417,10 @@ class StateManager:
                     self._pid_counters[system] = start
                     self._pid_os[system] = "windows"
                 else:
-                    # Linux: PIDs increment by 1, start after boot processes
-                    self._pid_counters[system] = pid_rng.randint(500, 2000)
+                    # Linux: scenario-visible process activity happens on an
+                    # already-running host, so use the same lived-in PID
+                    # namespace syslog exposes rather than a fresh low counter.
+                    self._pid_counters[system] = pid_rng.randint(8000, 42000)
                     self._pid_os[system] = "linux"
 
             pid = self._pid_counters[system]

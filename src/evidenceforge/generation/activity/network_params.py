@@ -35,6 +35,8 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
             default.get("dns_tunnel_response_templates", []),
             overlay["dns_tunnel_response_templates"],
         )
+    if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
+        result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
     return result
 
 
@@ -92,3 +94,23 @@ def dns_tunnel_response_templates() -> list[str]:
     if not isinstance(templates, list):
         return []
     return [str(template) for template in templates if isinstance(template, str) and template]
+
+
+def dns_tunnel_rcode_weights() -> dict[str, float]:
+    """Return configured DNS tunnel response-code weights."""
+    weights = load_network_params().get("dns_tunnel_rcode_weights", {})
+    if not isinstance(weights, dict):
+        return {"NOERROR": 1.0}
+    allowed = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+    cleaned: dict[str, float] = {}
+    for key, value in weights.items():
+        name = str(key).upper()
+        if name not in allowed:
+            continue
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if numeric > 0 and math.isfinite(numeric):
+            cleaned[name] = numeric
+    return cleaned or {"NOERROR": 1.0}

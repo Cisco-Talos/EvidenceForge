@@ -409,6 +409,108 @@ class TestZeekDnsFormatAccuracy:
             if output_file.exists():
                 output_file.unlink()
 
+    def test_dns_timestamp_uses_source_native_offset(self, tmp_path):
+        """dns.log timestamps should not exactly mirror conn.log timestamps."""
+        from datetime import UTC
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
+
+        format_def = load_format("zeek_dns")
+        emitter = ZeekDnsEmitter(format_def, tmp_path)
+        ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=53533,
+                dst_ip="10.0.0.53",
+                dst_port=53,
+                protocol="udp",
+                zeek_uid="Cabc123",
+                duration=0.25,
+            ),
+            dns=DnsContext(
+                query="example.com",
+                trans_id=1234,
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                TTLs=[300.0],
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        record = json.loads((tmp_path / "zeek_dns.json").read_text().splitlines()[0])
+        assert record["ts"] > ts.timestamp()
+        assert record["ts"] - ts.timestamp() <= 0.095
+
+    def test_dns_timestamp_stays_inside_short_conn_lifetime(self, tmp_path):
+        """dns.log timestamps should not render after the matching conn lifetime."""
+        from datetime import UTC
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
+
+        format_def = load_format("zeek_dns")
+        emitter = ZeekDnsEmitter(format_def, tmp_path)
+        ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        duration = 0.0005607147741810154
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=53533,
+                dst_ip="10.0.0.53",
+                dst_port=53,
+                protocol="udp",
+                zeek_uid="Cshortdns",
+                duration=duration,
+            ),
+            dns=DnsContext(
+                query="example.com",
+                trans_id=1234,
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                TTLs=[300.0],
+                rtt=duration,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        record = json.loads((tmp_path / "zeek_dns.json").read_text().splitlines()[0])
+        delta = record["ts"] - ts.timestamp()
+        assert 0 < delta < duration
+
     def test_nxdomain_omits_answers_and_ttls(self):
         """NXDOMAIN records should NOT include answers or TTLs fields."""
         from evidenceforge.formats import load_format

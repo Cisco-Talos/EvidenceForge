@@ -28,6 +28,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.generation.engine import GenerationEngine
+from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
 from evidenceforge.models import (
     BaselineActivity,
     Environment,
@@ -39,6 +40,24 @@ from evidenceforge.models import (
     User,
 )
 from evidenceforge.models.scenario import ConnectionEventSpec
+
+
+def test_service_wrapper_storyline_processes_are_long_lived():
+    """Remote service wrappers should remain available for later follow-on commands."""
+    assert (
+        _estimate_process_lifetime(
+            r"C:\Windows\System32\PSEXESVC.exe",
+            "PSEXESVC.exe -accepteula",
+        )
+        is None
+    )
+    assert (
+        _estimate_process_lifetime(
+            r"C:\Windows\System32\HealthMonitorSvc.exe",
+            r"C:\Windows\System32\HealthMonitorSvc.exe",
+        )
+        is None
+    )
 
 
 class TestGenerationEngine:

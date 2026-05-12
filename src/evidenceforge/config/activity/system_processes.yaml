@@ -98,10 +98,6 @@ system_services:
       parent: svchost_local_system
 
   domain_controller:
-    - image: "C:\\Windows\\System32\\lsass.exe"
-      command_templates:
-        - "C:\\Windows\\system32\\lsass.exe"
-      parent: wininit
     - image: "C:\\Windows\\System32\\dfsr.exe"
       command_templates:
         - "dfsr.exe"

@@ -91,8 +91,8 @@ class TestPidAlwaysPresent:
         record = json.loads(rendered)
         assert record["pid"] == -1
 
-    def test_unlock_reauth_renders_session_open_not_duplicate_login(self, emitter, ts):
-        """Type 7 unlock reauth should not look like a new session login."""
+    def test_unlock_reauth_renders_login_with_logon_type(self, emitter, ts):
+        """Type 7 unlock reauth should use session lifecycle action vocabulary."""
         event = SecurityEvent(
             timestamp=ts,
             event_type="logon",
@@ -112,7 +112,8 @@ class TestPidAlwaysPresent:
 
         row = emitter.emit_event.call_args[0][0]
         assert row["object"] == "USER_SESSION"
-        assert row["action"] == "OPEN"
+        assert row["action"] == "LOGIN"
+        assert row["logon_type"] == 7
         assert row["objectID"] == "session-1"
 
     def test_pid_none_becomes_negative_one(self, emitter, ts):
@@ -283,8 +284,40 @@ class TestSessionOutcomeRendering:
 
         rendered = emitter.emit_event.call_args[0][0]
         assert rendered["outcome"] == "failure"
+        assert rendered["session_lifecycle"] == "attempt_failed"
         assert rendered["status_code"] == "0xC000006D"
         assert rendered["sub_status"] == "0xC000006A"
+
+    def test_linux_failed_logon_omits_windows_ntstatus_fields(self, emitter, ts):
+        """Linux eCAR login failures should not carry Windows-only NTSTATUS details."""
+        host = HostContext(
+            hostname="LNX-01",
+            ip="10.0.0.30",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+            fqdn="lnx-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jdoe",
+                source_ip="10.0.0.20",
+                failure_status="0xC000006D",
+                failure_substatus="0xC000006A",
+            ),
+        )
+
+        emitter._render_failed_logon(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["outcome"] == "failure"
+        assert rendered["failure_reason"] == "bad_password"
+        assert "status_code" not in rendered
+        assert "sub_status" not in rendered
 
 
 class TestChronologicalOutput:
@@ -316,6 +349,35 @@ class TestChronologicalOutput:
             for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
         ]
         assert [row["timestamp_ms"] for row in rows] == sorted(row["timestamp_ms"] for row in rows)
+
+    def test_close_removes_semantic_duplicate_events(self, tmp_path, ts):
+        """UUID-only duplicate eCAR facts should collapse during final flush."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        base = {
+            "timestamp": ts,
+            "hostname": "ws01",
+            "object": "MODULE",
+            "action": "LOAD",
+            "pid": 1234,
+            "principal": "alice",
+            "file_path": r"C:\Windows\System32\msvcrt.dll",
+            "_host_fqdn": "ws01.example.org",
+        }
+
+        emitter.emit_event({**base, "id": "event-one", "objectID": "object-one"})
+        emitter.emit_event({**base, "id": "event-two", "objectID": "object-two"})
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert len(rows) == 1
 
     def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
         """eCAR output should not terminate a process before later same-process telemetry."""
@@ -455,6 +517,73 @@ class TestChronologicalOutput:
 
         assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
 
+    def test_inbound_flow_uses_destination_listener_pid(self, emitter, monkeypatch, ts):
+        """Inbound host observations should use the local listener PID when known."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        emitter._system_pids = {"WEB-EXT-01": {"apache2": 24118}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="WEB-EXT-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="web-ext-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="198.51.100.7",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == 24118
+
+    def test_rejected_inbound_flow_does_not_claim_listener_pid(self, emitter, monkeypatch, ts):
+        """Rejected inbound attempts should not be attributed to a server process."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        emitter._system_pids = {"WEB-EXT-01": {"apache2": 24118}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="WEB-EXT-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="web-ext-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="198.51.100.7",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=443,
+                protocol="tcp",
+                conn_state="REJ",
+                history="Sr",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == -1
+        assert emitted[0]["outcome"] == "failure"
+        assert emitted[0]["connection_state"] == "REJ"
+
     def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
         """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""
         fmt = Mock()
@@ -487,6 +616,93 @@ class TestChronologicalOutput:
             ("REGISTRY", "MODIFY"),
         ]
 
+    def test_close_moves_child_process_create_after_visible_parent(self, tmp_path, ts):
+        """Visible eCAR child PROCESS/CREATE rows should not precede parent creates."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "child-process",
+                "actorID": "parent-process",
+                "pid": 4904,
+                "ppid": 4896,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=7),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "parent-process",
+                "pid": 4896,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
+        child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
+        assert child_ms > parent_ms
+
+    def test_close_moves_child_process_create_after_parent_pid_without_actor_id(self, tmp_path, ts):
+        """Visible eCAR child creates should also respect ppid when actorID is absent."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "child-process",
+                "pid": 4324,
+                "ppid": 4300,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=7),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "parent-process",
+                "pid": 4300,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
+        child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
+        assert child_ms > parent_ms
+
 
 class TestTidAlwaysPresent:
     def test_tid_present_default(self, emitter, ts):
@@ -513,6 +729,36 @@ class TestTidAlwaysPresent:
         )
         record = json.loads(rendered)
         assert record["tid"] == 200
+
+    def test_process_create_derives_tid_when_context_has_pid(self, emitter, ts):
+        """Process-owned eCAR rows should avoid placeholder thread IDs when possible."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                process=ProcessContext(
+                    pid=4321,
+                    parent_pid=4,
+                    image=r"C:\Windows\System32\cmd.exe",
+                    command_line="cmd.exe",
+                    username="alice",
+                ),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        assert row["tid"] > 0
 
 
 class TestPpidOnlyOnProcess:

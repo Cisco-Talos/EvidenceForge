@@ -48,6 +48,7 @@ from typing import Any
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.utils.paths import sanitize_path_component
+from evidenceforge.utils.rng import _stable_seed
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,127 @@ def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     ):
         return value
     return [visible_ip if item == original_ip else item for item in value]
+
+
+def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: float) -> float:
+    """Return a deterministic signed per-sensor observation variation."""
+    seed = _stable_seed(f"zeek_sensor_observation:{hostname}:{uid}:{field}")
+    # Deterministic fraction in [-magnitude, +magnitude], avoiding an exact zero.
+    centered = ((seed % 2001) - 1000) / 1000.0
+    if centered == 0:
+        centered = 0.137
+    return centered * magnitude
+
+
+def _sensor_clock_skew_us(hostname: str) -> int:
+    """Return stable per-sensor clock skew in microseconds."""
+    seed = _stable_seed(f"zeek_sensor_clock_skew:{hostname}")
+    return (seed % 800_001) - 400_000
+
+
+def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
+    """Return per-flow capture timestamp variance for a sensor observation."""
+    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}")
+    # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
+    # all add small positive path delay. The stable per-sensor clock skew owns
+    # the sign of cross-sensor offsets, so identical paths do not flip earlier
+    # and later flow-by-flow like independent synthetic jitter.
+    return 5_000 + (seed % 75_001)
+
+
+def _jitter_numeric_observation(
+    render_data: dict[str, Any],
+    field: str,
+    hostname: str,
+    uid: Any,
+    magnitude: float,
+    *,
+    minimum: int | float = 0,
+) -> None:
+    """Apply deterministic per-sensor jitter to numeric Zeek observation fields."""
+    value = render_data.get(field)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return
+    if value <= 0:
+        return
+    fraction = _sensor_variation_fraction(hostname, uid, field, magnitude)
+    varied = value * (1.0 + fraction)
+    if isinstance(value, int):
+        varied = int(round(varied))
+    render_data[field] = max(type(value)(minimum), type(value)(varied))
+
+
+def _apply_sensor_observation_variance(
+    render_data: dict[str, Any],
+    hostname: str,
+    original_uid: Any,
+) -> None:
+    """Make multi-sensor Zeek rows look like independent tap observations.
+
+    The canonical event still owns the true connection tuple and protocol
+    facts. This only models source-native observation differences from packet
+    loss, snaplen, tap placement, and analyzer cutoffs.
+    """
+    # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
+    # cleanly. Keep this sparse and small so it reads as capture imperfection.
+    added_missed_bytes = False
+    if "missed_bytes" in render_data:
+        missed = render_data.get("missed_bytes") or 0
+        if isinstance(missed, int):
+            seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
+            if seed % 11 == 0:
+                render_data["missed_bytes"] = missed + 16 + (seed % 496)
+                added_missed_bytes = True
+    if added_missed_bytes:
+        for field in ("orig_pkts", "resp_pkts"):
+            _jitter_numeric_observation(
+                render_data,
+                field,
+                hostname,
+                original_uid,
+                0.018,
+                minimum=1,
+            )
+    _enforce_http_body_invariants(render_data)
+    _enforce_ip_byte_invariants(render_data)
+
+
+def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
+    """Keep conn.log byte counters compatible with same-transaction http.log facts."""
+    request_body = render_data.get("_http_request_body_len")
+    response_body = render_data.get("_http_response_body_len")
+    if isinstance(request_body, int) and request_body >= 0:
+        orig_bytes = render_data.get("orig_bytes")
+        if isinstance(orig_bytes, int) and orig_bytes < request_body:
+            render_data["orig_bytes"] = request_body
+    if isinstance(response_body, int) and response_body >= 0:
+        resp_bytes = render_data.get("resp_bytes")
+        if isinstance(resp_bytes, int) and resp_bytes < response_body:
+            render_data["resp_bytes"] = response_body
+
+
+def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
+    """Keep Zeek IP-byte counters physically possible after observation jitter."""
+    proto = str(render_data.get("proto") or "").lower()
+    header_bytes = {"tcp": 40, "udp": 28, "icmp": 28}.get(proto, 20)
+    max_header_bytes = {"udp": 68}.get(proto)
+    for side in ("orig", "resp"):
+        payload = render_data.get(f"{side}_bytes")
+        ip_bytes = render_data.get(f"{side}_ip_bytes")
+        packets = render_data.get(f"{side}_pkts")
+        if not isinstance(payload, int) or not isinstance(ip_bytes, int):
+            continue
+        if payload < 0 or ip_bytes < 0:
+            continue
+        packet_count = packets if isinstance(packets, int) and packets > 0 else 1
+        minimum_ip_bytes = payload + (header_bytes * packet_count)
+        if ip_bytes < minimum_ip_bytes:
+            render_data[f"{side}_ip_bytes"] = minimum_ip_bytes
+            ip_bytes = minimum_ip_bytes
+        if max_header_bytes is not None:
+            maximum_ip_bytes = payload + (max_header_bytes * packet_count)
+            if ip_bytes > maximum_ip_bytes:
+                render_data[f"{side}_ip_bytes"] = maximum_ip_bytes
 
 
 class _SingleZeekWriter:
@@ -284,6 +406,20 @@ class SensorMultiplexEmitter(LogEmitter):
             # Multiple sensors: each gets a deterministic unique UID
             # and potentially NAT-swapped IPs
             original_uid = event_data.get("uid")
+            if not original_uid:
+                for uid_list_field in ("conn_uids", "uids"):
+                    uid_values = event_data.get(uid_list_field)
+                    if isinstance(uid_values, list):
+                        original_uid = next(
+                            (
+                                uid
+                                for uid in uid_values
+                                if isinstance(uid, str) and uid.startswith("C")
+                            ),
+                            None,
+                        )
+                    if original_uid:
+                        break
             for i, hostname in enumerate(targets):
                 # Always copy before per-sensor timing and identifier derivation.
                 render_data = dict(event_data)
@@ -332,18 +468,12 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Directional propagation delay: farther sensors see packets later,
-                # but with per-event jitter so independent sensors do not have a
-                # perfectly fixed microsecond offset across every log stream.
+                # Sensors have stable clock skew plus per-flow capture timing
+                # variance. Keep the offset shared across Zeek log families for
+                # a flow, but avoid a fixed cross-sensor clone delay.
                 if i > 0:
-                    from datetime import datetime, timedelta
-
-                    from evidenceforge.utils.rng import _stable_seed
-
-                    sensor_delay_us = (
-                        (_stable_seed(f"sensor_delay_{hostname}") % 400)
-                        + 100
-                        + (_stable_seed(f"sensor_delay_jitter_{hostname}_{original_uid}") % 900)
+                    sensor_delay_us = _sensor_clock_skew_us(hostname) + _sensor_path_delay_us(
+                        hostname, original_uid
                     )
                     ts = render_data.get("ts")
                     if ts is not None:
@@ -351,19 +481,9 @@ class SensorMultiplexEmitter(LogEmitter):
                             render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                         elif isinstance(ts, (int, float)):
                             render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                    dur = render_data.get("duration")
-                    if (
-                        dur is not None
-                        and isinstance(dur, (int, float))
-                        and not render_data.get("_lock_duration")
-                    ):
-                        dur_jitter = (
-                            (_stable_seed(f"dur_jitter_{hostname}_{original_uid}") % 200) - 100
-                        ) / 1_000_000
-                        min_duration = render_data.get("_min_duration")
-                        if not isinstance(min_duration, (int, float)):
-                            min_duration = 0.0
-                        render_data["duration"] = max(min_duration, dur + dur_jitter)
+                    _apply_sensor_observation_variance(render_data, hostname, original_uid)
+                _enforce_http_body_invariants(render_data)
+                _enforce_ip_byte_invariants(render_data)
                 if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
