@@ -1985,6 +1985,7 @@ class ActivityGenerator:
             rng=rng,
         )
         event.ssl.cert_chain_fuids = [cert.fuid for cert in event.x509_chain]
+        self._ensure_tls_conn_covers_certificate_bytes(event)
 
         # OCSP response (cached/probabilistic; mostly good, with rare non-good statuses).
         # Zeek ocsp.log joins through a separate OCSP HTTP response file
@@ -2041,6 +2042,27 @@ class ActivityGenerator:
                 next_update=next_update,
             )
             self._emit_ocsp_http_response(event, cert_name=cert_name, ocsp=ocsp_ctx, rng=rng)
+
+    @staticmethod
+    def _ensure_tls_conn_covers_certificate_bytes(event: SecurityEvent) -> None:
+        """Keep Zeek SSL certificate file bytes within the same conn payload budget."""
+        net = event.network
+        if net is None or not event.x509_chain:
+            return
+
+        from evidenceforge.generation.activity.tls_realism import certificate_file_size
+
+        cert_bytes = sum(certificate_file_size(cert) for cert in event.x509_chain)
+        min_resp_bytes = cert_bytes + 280
+        if (net.resp_bytes or 0) >= min_resp_bytes:
+            return
+
+        net.resp_bytes = min_resp_bytes
+        if net.resp_pkts is not None:
+            net.resp_pkts = max(net.resp_pkts, max(1, (net.resp_bytes // 1460) + 1))
+        if net.resp_ip_bytes is not None:
+            packet_count = net.resp_pkts or max(1, (net.resp_bytes // 1460) + 1)
+            net.resp_ip_bytes = max(net.resp_ip_bytes, net.resp_bytes + (packet_count * 40))
 
     def _emit_ocsp_http_response(
         self,
@@ -3398,6 +3420,17 @@ class ActivityGenerator:
             process_username = service_process_account
             process_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[service_process_account]
             _integrity = "System"
+        session_end_time = self.state_manager.get_session_end_time(process_logon_id)
+        if (
+            session_end_time is not None
+            and time >= session_end_time
+            and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
+        ):
+            time = session_end_time - sample_timing_delta(
+                "windows.process_create_before_logoff",
+                seed_parts=(system.hostname, process_logon_id, process_name, command_line),
+            )
+            self.state_manager.set_current_time(time)
         session = self.state_manager.get_session(process_logon_id)
         if session is not None and time <= session.start_time:
             offset_ms = 100 + (

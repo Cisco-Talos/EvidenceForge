@@ -769,6 +769,27 @@ class TestProcessCreateMetadata:
         assert workstation_hashes != server_hashes
         assert SysmonEventEmitter._generate_hashes(image, workstation) == workstation_hashes
 
+    def test_hashes_follow_rendered_binary_identity(self):
+        """Identical rendered binary metadata should keep hashes stable across hosts."""
+        workstation = _win_host()
+        server = HostContext(
+            hostname="SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            domain="corp.local",
+            fqdn="SRV-01.corp.local",
+            netbios_domain="CORP",
+        )
+        image = r"C:\Windows\System32\MpCmdRun.exe"
+
+        assert SysmonEventEmitter._get_pe_metadata(image, workstation)[0] == "4.18.2211.5"
+        assert SysmonEventEmitter._get_pe_metadata(image, server)[0] == "4.18.2211.5"
+        assert SysmonEventEmitter._generate_hashes(
+            image, workstation
+        ) == SysmonEventEmitter._generate_hashes(image, server)
+
 
 class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""

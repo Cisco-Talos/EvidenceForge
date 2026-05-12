@@ -701,12 +701,15 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_hashes(cls, image: str, host: Any | str | None = None) -> str:
         """Generate deterministic fake file hashes from image path.
 
-        OS binaries are keyed by image path and host file version so different
-        Windows builds do not render the same hash with different metadata.
+        Hashes are keyed by rendered binary identity. That keeps identical
+        Image/FileVersion/OriginalFileName tuples stable across the fleet while
+        still allowing different Windows builds or app versions to differ.
         """
-        seed = image
-        if host is not None and not isinstance(host, str) and cls._is_windows_os_binary_path(image):
-            seed = f"{image}:{cls._host_windows_file_version(host)}"
+        normalized_image = image.replace("/", "\\").lower()
+        seed = normalized_image
+        if host is not None and not isinstance(host, str):
+            fv, _desc, prod, company, orig = cls._get_pe_metadata(image, host)
+            seed = f"{normalized_image}:{fv}:{prod}:{company}:{orig}"
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
         md5 = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest().upper()
         sha256 = hashlib.sha256(seed.encode(), usedforsecurity=False).hexdigest().upper()

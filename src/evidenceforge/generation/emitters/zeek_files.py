@@ -28,7 +28,10 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.network import _is_private_ip
-from evidenceforge.generation.activity.tls_realism import certificate_analyzer_delay_ms
+from evidenceforge.generation.activity.tls_realism import (
+    certificate_analyzer_delay_ms,
+    certificate_file_size,
+)
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
 
@@ -91,7 +94,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
 
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
         for depth, cert in enumerate(certificates):
-            size = _certificate_file_size(cert)
+            size = certificate_file_size(cert)
             cert_hashes = _certificate_file_hashes(cert.fingerprint)
             analyzer_delay_ms = certificate_analyzer_delay_ms(
                 zeek_uid=net.zeek_uid,
@@ -168,34 +171,6 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
         "sha1": fingerprint,
         "sha256": hashlib.sha256(seed.encode()).hexdigest(),
     }
-
-
-def _certificate_file_size(cert: Any) -> int:
-    """Return a stable file-analysis byte size for a rendered certificate."""
-    identity = "|".join(
-        [
-            str(getattr(cert, "fingerprint", "")),
-            str(getattr(cert, "certificate_subject", "")),
-            str(getattr(cert, "certificate_issuer", "")),
-            ",".join(str(name) for name in getattr(cert, "san_dns", []) or []),
-        ]
-    )
-    rng = hashlib.sha256(identity.encode()).digest()
-    key_overhead = int(getattr(cert, "certificate_key_length", 2048)) // 8
-    san_overhead = 18 * len(getattr(cert, "san_dns", []) or [])
-    ca_overhead = 220 if not getattr(cert, "host_cert", False) else 0
-    subject_overhead = min(180, len(str(getattr(cert, "certificate_subject", ""))) * 2)
-    issuer_overhead = min(220, len(str(getattr(cert, "certificate_issuer", ""))) * 2)
-    jitter = _stable_seed(f"zeek-cert-size:{identity}:{rng.hex()}") % 420
-    return (
-        720
-        + key_overhead
-        + san_overhead
-        + ca_overhead
-        + subject_overhead
-        + issuer_overhead
-        + jitter
-    )
 
 
 def _file_transfer_analyzer_timestamp(ts: datetime, zeek_uid: str, fuid: str) -> datetime:

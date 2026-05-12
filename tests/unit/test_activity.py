@@ -39,6 +39,7 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import _extract_image_from_command
+from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -1210,6 +1211,35 @@ class TestActivityGenerator:
         ][-1]
         assert termination_event.timestamp < logoff_time
         assert termination_event.auth.logon_id == logon_id
+
+    def test_process_create_after_ended_session_clamps_before_logoff(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Late process creation for a closed session should render before 4634."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        logoff_time = timestamp + timedelta(minutes=5)
+        activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id)
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            logoff_time + timedelta(minutes=20),
+            logon_id,
+            r"C:\Windows\System32\cmd.exe",
+            "cmd.exe /c whoami",
+        )
+
+        process_event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process
+            and call.args[0].process.command_line == "cmd.exe /c whoami"
+        ][-1]
+        assert process_event.timestamp < logoff_time
+        assert process_event.auth.logon_id == logon_id
 
     def test_generate_process_creates_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2720,6 +2750,31 @@ class TestActivityGenerator:
         assert net.resp_bytes > body_len
         assert net.resp_bytes != event.http.response_body_len
         assert net.duration is not None and net.duration >= 0.04
+
+    def test_tls_conn_resp_bytes_cover_certificate_file_bytes(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """TLS conn payload bytes should cover Zeek files.log certificate bytes."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=443,
+            service="ssl",
+            duration=0.1,
+            orig_bytes=200,
+            resp_bytes=100,
+            conn_state="SF",
+            hostname="example.com",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        cert_payload = sum(certificate_file_size(cert) for cert in event.x509_chain)
+        assert cert_payload > 0
+        assert event.network.resp_bytes >= cert_payload
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters

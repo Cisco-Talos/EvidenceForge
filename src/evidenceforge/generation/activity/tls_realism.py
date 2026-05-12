@@ -4,6 +4,7 @@
 """TLS realism configuration loader."""
 
 import fnmatch
+import hashlib
 import random
 from datetime import datetime
 from typing import Any
@@ -103,6 +104,34 @@ def certificate_analyzer_delay_ms(
         rng = random.Random(_stable_seed(f"tls_cert_chain_gap:{zeek_uid}:{fuid}:{depth}"))
         gap_ms += rng.randint(3, 45)
     return base_delay_ms + gap_ms
+
+
+def certificate_file_size(cert: object) -> int:
+    """Return a stable file-analysis byte size for a rendered certificate."""
+    identity = "|".join(
+        [
+            str(getattr(cert, "fingerprint", "")),
+            str(getattr(cert, "certificate_subject", "")),
+            str(getattr(cert, "certificate_issuer", "")),
+            ",".join(str(name) for name in getattr(cert, "san_dns", []) or []),
+        ]
+    )
+    rng = hashlib.sha256(identity.encode()).digest()
+    key_overhead = int(getattr(cert, "certificate_key_length", 2048)) // 8
+    san_overhead = 18 * len(getattr(cert, "san_dns", []) or [])
+    ca_overhead = 220 if not getattr(cert, "host_cert", False) else 0
+    subject_overhead = min(180, len(str(getattr(cert, "certificate_subject", ""))) * 2)
+    issuer_overhead = min(220, len(str(getattr(cert, "certificate_issuer", ""))) * 2)
+    jitter = _stable_seed(f"zeek-cert-size:{identity}:{rng.hex()}") % 420
+    return (
+        720
+        + key_overhead
+        + san_overhead
+        + ca_overhead
+        + subject_overhead
+        + issuer_overhead
+        + jitter
+    )
 
 
 def tls_destination_config() -> dict[str, Any]:

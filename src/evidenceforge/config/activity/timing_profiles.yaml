@@ -41,6 +41,11 @@ relationships:
     position: after
     min_ms: 125
     max_ms: 750
+  windows.process_create_before_logoff:
+    class: teardown
+    position: before
+    min_ms: 250
+    max_ms: 3000
   source.windows_wfp_connection:
     class: source_latency
     position: after
