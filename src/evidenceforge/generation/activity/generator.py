@@ -8737,8 +8737,12 @@ class ActivityGenerator:
         source_image: str,
         target_pid: int,
         target_image: str,
-    ) -> None:
-        """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+    ) -> bool:
+        """Generate Sysmon Event 8 (CreateRemoteThread) for process injection.
+
+        Returns:
+            True when evidence was emitted, False when lifecycle validation skipped it.
+        """
         # Entity lifecycle: validate target PID exists
         if not self.state_manager.validate_target_pid(system.hostname, target_pid):
             logger.debug(
@@ -8747,7 +8751,7 @@ class ActivityGenerator:
                 source_pid,
                 target_pid,
             )
-            return
+            return False
 
         from evidenceforge.events.contexts import ProcessContext
 
@@ -8771,7 +8775,7 @@ class ActivityGenerator:
                 source_pid,
                 target_image,
             )
-            return
+            return False
         target_proc = self.state_manager.get_process(system.hostname, target_pid)
         source_image = normalize_defender_platform_path(
             source_proc.image or source_image, system.hostname
@@ -8835,6 +8839,7 @@ class ActivityGenerator:
             edr=EdrContext(object_id=thread_obj_id, actor_id=source_obj_id),
         )
         self.dispatcher.dispatch(event)
+        return True
 
     def generate_process_access(
         self,
@@ -8846,7 +8851,7 @@ class ActivityGenerator:
         target_pid: int,
         target_image: str = r"C:\Windows\System32\lsass.exe",
         granted_access: str = "0x1010",
-    ) -> None:
+    ) -> bool:
         """Generate Sysmon Event 10 (ProcessAccess) for credential dumping detection.
 
         Emits when a process accesses another process's memory (e.g., mimikatz
@@ -8861,6 +8866,9 @@ class ActivityGenerator:
             target_pid: PID of the target process (typically lsass.exe)
             target_image: Full path of the target process image
             granted_access: Access mask (0x1010=VM_READ, 0x1FFFFF=ALL_ACCESS)
+
+        Returns:
+            True when evidence was emitted, False when lifecycle validation skipped it.
         """
         # Entity lifecycle: validate target PID exists
         if not self.state_manager.validate_target_pid(system.hostname, target_pid):
@@ -8870,7 +8878,7 @@ class ActivityGenerator:
                 source_pid,
                 target_pid,
             )
-            return
+            return False
 
         time = self._clamp_time_after_process_start(system, source_pid, time)
         source_proc = self.state_manager.get_process(system.hostname, source_pid)
@@ -8881,7 +8889,7 @@ class ActivityGenerator:
                 source_pid,
                 target_image,
             )
-            return
+            return False
         target_proc = self.state_manager.get_process(system.hostname, target_pid)
         source_image = normalize_defender_platform_path(
             source_proc.image or source_image, system.hostname
@@ -8932,6 +8940,7 @@ class ActivityGenerator:
             edr=EdrContext(object_id=target_obj_id, actor_id=source_obj_id),
         )
         self.dispatcher.dispatch(event)
+        return True
 
     def generate_image_load(
         self,
