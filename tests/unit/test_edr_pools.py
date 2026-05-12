@@ -216,6 +216,18 @@ class TestTemplateMaterialization:
 
         assert value == "10.10.2.20"
 
+    def test_materializes_defender_platform_with_product_version_shape(self):
+        import random
+
+        value = materialize_edr_template(
+            r"C:\ProgramData\Microsoft\Windows Defender\Platform\{version}\MpClient.dll",
+            random.Random(9),
+        )
+
+        assert r"\Platform\4.18." in value
+        assert "\\125.0\\" not in value
+        assert "\\2024.3\\" not in value
+
     def test_materializes_related_templates_with_shared_placeholders(self):
         import random
 

@@ -794,6 +794,29 @@ class TestRenderEvent22:
         assert "1.2.3.4;" in content
         assert "svchost.exe" in content
 
+    def test_dns_query_uses_source_latency_offset(self, emitter):
+        """Sysmon Event 22 should not render at the exact Zeek DNS packet timestamp."""
+        event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
+            ),
+            dns=DnsContext(
+                query="example.com", query_type="A", rcode="NOERROR", answers=["1.2.3.4"]
+            ),
+        )
+
+        emitter._render_sysmon_dns_query(event)
+
+        expected_delta = sample_timing_delta(
+            "source.sysmon_dns_query",
+            seed_parts=("WKS-01", "example.com", "A", event_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
+
     def test_nxdomain_query_status(self, emitter):
         event = SecurityEvent(
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),

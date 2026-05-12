@@ -369,6 +369,33 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
 
+    def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
+        """Security 4688 should not visibly create a child before its parent 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        child_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        parent_time = child_time + timedelta(seconds=1)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1070",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": parent_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x4",
+                "NewProcessId": "0x1070",
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
+
     def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
         """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
         base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

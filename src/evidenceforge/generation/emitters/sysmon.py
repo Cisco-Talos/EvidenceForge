@@ -1422,7 +1422,16 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
         dns = event.dns
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        render_time = event.timestamp + sample_timing_delta(
+            "source.sysmon_dns_query",
+            seed_parts=(
+                host.hostname,
+                dns.query if dns else "",
+                dns.query_type if dns else "",
+                event.timestamp,
+            ),
+        )
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         # DESIGN DECISION: svchost.exe is correct here. Windows DNS Client
         # service (dnscache, hosted by svchost.exe -k LocalService) proxies
@@ -1451,7 +1460,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 22,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,

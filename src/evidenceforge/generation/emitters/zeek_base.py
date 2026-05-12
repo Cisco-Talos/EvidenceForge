@@ -74,6 +74,17 @@ def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: f
     return centered * magnitude
 
 
+def _sensor_clock_skew_us(hostname: str) -> int:
+    """Return stable per-sensor clock skew in microseconds."""
+    seed = _stable_seed(f"zeek_sensor_clock_skew:{hostname}")
+    return (seed % 160_001) - 80_000
+
+
+def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
+    """Return small packet-path delay for a sensor observation."""
+    return _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}") % 900
+
+
 def _jitter_numeric_observation(
     render_data: dict[str, Any],
     field: str,
@@ -441,13 +452,13 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Directional propagation delay: farther sensors see packets later,
-                # but with per-event jitter so independent sensors do not have a
-                # perfectly fixed microsecond offset across every log stream.
+                # Sensors have mostly stable clock skew plus a sub-millisecond
+                # path delay. Avoid per-event multi-second positive jitter: two
+                # Zeek sensors observing the same packet should not look like one
+                # rendered a delayed synthetic clone.
                 if i > 0:
-                    sensor_delay_us = 10_000 + (
-                        _stable_seed(f"sensor_delay_observation:{hostname}:{original_uid}")
-                        % 1_800_000
+                    sensor_delay_us = _sensor_clock_skew_us(hostname) + _sensor_path_delay_us(
+                        hostname, original_uid
                     )
                     ts = render_data.get("ts")
                     if ts is not None:

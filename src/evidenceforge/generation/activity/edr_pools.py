@@ -135,6 +135,14 @@ def materialize_edr_template(
     host_ip: str = "",
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
+    version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
+    template_lower = template.lower()
+    if "windows defender\\platform" in template_lower:
+        version = rng.choice(["4.18.2301.6-0", "4.18.24010.12-0", "4.18.24030.9-0"])
+    elif "google\\chrome\\application" in template_lower:
+        version = rng.choice(["121.0.6167.185", "122.0.6261.129", "123.0.6312.86"])
+    elif "microsoft onedrive" in template_lower:
+        version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
         "host_ip": host_ip,
@@ -160,7 +168,7 @@ def materialize_edr_template(
                 "Microsoft-Windows-Client-Features",
             ]
         ),
-        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+        "version": version,
     }
 
     def _replace(match: re.Match[str]) -> str:
@@ -177,6 +185,14 @@ def materialize_edr_template_group(
     user: str = "SYSTEM",
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
+    version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
+    combined_lower = "\n".join(templates).lower()
+    if "windows defender\\platform" in combined_lower:
+        version = rng.choice(["4.18.2301.6-0", "4.18.24010.12-0", "4.18.24030.9-0"])
+    elif "google\\chrome\\application" in combined_lower:
+        version = rng.choice(["121.0.6167.185", "122.0.6261.129", "123.0.6312.86"])
+    elif "microsoft onedrive" in combined_lower:
+        version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
         "rand": f"{rng.randint(10000, 99999)}",
@@ -201,7 +217,7 @@ def materialize_edr_template_group(
                 "Microsoft-Windows-Client-Features",
             ]
         ),
-        "version": rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"]),
+        "version": version,
     }
 
     def _replace(match: re.Match[str]) -> str:

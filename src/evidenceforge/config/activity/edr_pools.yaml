@@ -188,7 +188,7 @@ registry_keys_hklm:
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "DynamicSiteName", "Default-First-Site-Name"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", "C:\\ProgramData\\Vendor\\Cache\\{doc}", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{guid}}}", "EndTimeHi", "DWORD (0x00000000)"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan {doc}", "Id", "{{{guid}}}"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan", "Id", "{{{guid}}}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e972-e325-11ce-bfc1-08002be10318}}\\{mru}", "DriverDesc", "Intel(R) Ethernet Connection"]
 
 dll_pool:

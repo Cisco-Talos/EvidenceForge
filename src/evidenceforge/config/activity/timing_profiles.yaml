@@ -49,8 +49,13 @@ relationships:
   source.sysmon_network_connection:
     class: source_latency
     position: after
-    min_ms: 12
-    max_ms: 90
+    min_ms: 35
+    max_ms: 750
+  source.sysmon_dns_query:
+    class: source_latency
+    position: after
+    min_ms: 25
+    max_ms: 420
   source.ecar_flow:
     class: source_latency
     position: after

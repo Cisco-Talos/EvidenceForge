@@ -2165,6 +2165,39 @@ class TestActivityGenerator:
         assert event.auth.logon_id == "0x3e7"
         assert event.process.logon_id == "0x3e7"
 
+    def test_system_process_termination_carries_process_start_time(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """System process termination should preserve start time for stable Sysmon GUIDs."""
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(start)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\gpupdate.exe",
+            command_line="gpupdate.exe /target:computer /force",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+
+        activity_gen.generate_system_process_termination(
+            system=test_system,
+            time=start + timedelta(seconds=2),
+            pid=pid,
+            process_name=r"C:\Windows\System32\gpupdate.exe",
+            parent_pid=4,
+            username="SYSTEM",
+        )
+
+        event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate"
+        ][-1]
+        assert event.process.start_time == start
+        assert event.process.logon_id == "0x3e7"
+
     def test_generate_explicit_credentials_uses_supplied_process_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

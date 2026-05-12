@@ -1334,6 +1334,7 @@ class WindowsEventEmitter(LogEmitter):
             self._spool_event_dicts_unlocked()
             self._event_dicts = list(self._iter_spooled_events_unlocked())
 
+        self._shift_process_creates_after_visible_parent()
         self._shift_process_terminations_after_dependents()
         self._shift_logoffs_after_dependents()
 
@@ -1436,6 +1437,34 @@ class WindowsEventEmitter(LogEmitter):
                     "windows.logoff_after_rendered_dependents",
                     seed_parts=(key[0], key[1], latest),
                 )
+
+    def _shift_process_creates_after_visible_parent(self) -> None:
+        """Prevent visible Security 4688 children from preceding parent 4688 rows."""
+        changed = True
+        while changed:
+            changed = False
+            process_create_times: dict[tuple[str, str], datetime] = {}
+            for event in self._event_dicts:
+                if event.get("EventID") != 4688:
+                    continue
+                ts = event.get("TimeCreated")
+                process_pid = str(event.get("NewProcessId") or "").lower()
+                computer = str(event.get("Computer", ""))
+                if isinstance(ts, datetime) and process_pid and process_pid not in {"0x0", "0x4"}:
+                    process_create_times[(computer, process_pid)] = ts
+
+            for event in self._event_dicts:
+                if event.get("EventID") != 4688:
+                    continue
+                ts = event.get("TimeCreated")
+                parent_pid = str(event.get("ProcessId") or "").lower()
+                computer = str(event.get("Computer", ""))
+                if not isinstance(ts, datetime) or parent_pid in {"", "0x0", "0x4", "-"}:
+                    continue
+                parent_time = process_create_times.get((computer, parent_pid))
+                if parent_time is not None and ts <= parent_time:
+                    event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
+                    changed = True
 
     def _shift_process_terminations_after_dependents(self) -> None:
         """Keep Security 4689 aligned with visible child-process lifecycle.

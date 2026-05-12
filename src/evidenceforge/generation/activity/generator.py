@@ -5952,18 +5952,40 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        running_proc = self.state_manager.get_process(system.hostname, pid)
+        if running_proc is not None:
+            process_name = running_proc.image
+            username = running_proc.username or username
+        process_logon_id = (
+            running_proc.logon_id
+            if running_proc is not None and running_proc.logon_id
+            else {"SYSTEM": "0x3e7", "LOCAL SERVICE": "0x3e5", "NETWORK SERVICE": "0x3e4"}.get(
+                username, "0x3e7"
+            )
+        )
+        sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
             src_host=self._build_host_context(system),
-            auth=AuthContext(username=username),
+            auth=AuthContext(
+                username=username,
+                user_sid=sid,
+                logon_id=process_logon_id,
+                subject_sid=sid,
+                subject_username=username,
+                subject_domain="NT AUTHORITY",
+                subject_logon_id=process_logon_id,
+            ),
             process=ProcessContext(
                 pid=pid,
                 parent_pid=parent_pid,
                 image=process_name,
                 command_line="",
                 username=username,
+                logon_id=process_logon_id,
+                start_time=running_proc.start_time if running_proc is not None else None,
             ),
             edr=EdrContext(object_id=proc_obj_id),
         )
@@ -6590,9 +6612,11 @@ class ActivityGenerator:
                 # Pick a source IP from another system for network logons
                 source_ip = None
                 if logon_type == 3 and hasattr(self, "_all_system_ips"):
-                    # ~30% of Type 3 logons are local services authenticating to themselves
+                    # ~30% of Type 3 logons are local services authenticating to themselves.
+                    # DC-side Kerberos and workstation 4624 records should still see a host
+                    # address, not loopback, for domain authentication activity.
                     if rng.random() < 0.30:
-                        source_ip = rng.choice([system.ip, "127.0.0.1"])
+                        source_ip = system.ip
                     else:
                         other_ips = [ip for ip in self._all_system_ips if ip != system.ip]
                         if other_ips:
