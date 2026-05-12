@@ -685,6 +685,44 @@ class TestWeirdProtocolConstraint:
             event.network.resp_ip_bytes - event.network.resp_bytes
         )
 
+    def test_inferred_tcp_servfail_dns_row_keeps_tcp_ip_overhead(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """TCP fallback DNS SERVFAIL accounting should retain TCP header overhead."""
+        from evidenceforge.generation.activity import generator as generator_module
+
+        class TcpOnlyOverheadRng:
+            def __init__(self) -> None:
+                self._rng = random.Random(42)
+
+            def choices(self, population, weights=None, *, cum_weights=None, k=1):
+                assert population != generator_module._UDP_OVERHEAD_VALUES
+                return self._rng.choices(population, weights=weights, cum_weights=cum_weights, k=k)
+
+            def __getattr__(self, name: str):
+                return getattr(self._rng, name)
+
+        state_manager.set_current_time(timestamp)
+        monkeypatch.setattr(generator_module, "_get_rng", TcpOnlyOverheadRng)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="tcp",
+            service="dns",
+            hostname="flaky.example.com",
+            orig_bytes=60,
+            resp_bytes=0,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.dns.rcode == "SERVFAIL"
+        assert event.network.conn_state == "SF"
+        assert event.network.resp_pkts >= 1
+        assert event.network.resp_ip_bytes > event.network.resp_bytes
+
     def test_dns_conn_duration_is_not_shorter_than_explicit_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
