@@ -4040,6 +4040,7 @@ class ActivityGenerator:
         hostname: str | None = None,
         proxy_bypass: bool = False,
         process_image: str | None = None,
+        preserve_dst_ip: bool = False,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -4065,6 +4066,8 @@ class ActivityGenerator:
             emit_dns: If True, emit a DNS lookup for dst_ip before the connection
             ids: Optional IdsContext for IDS alert correlation (Snort emitter)
             http: Optional HttpContext override (skips auto-generation)
+            preserve_dst_ip: Preserve caller-supplied dst_ip when explicit proxy egress
+                renders an authored hostname+IP pair
 
         Returns:
             Zeek UID (18-character string)
@@ -4108,9 +4111,22 @@ class ActivityGenerator:
             if not _is_private_ip(dst_ip):
                 hostname = _generate_random_hostname(_get_rng(), dst_ip)
 
+        proxy_routes = getattr(self, "_proxy_routes", {})
+        proxy_chain = proxy_routes.get(src_ip)
+        preserve_explicit_proxy_dst_ip = (
+            preserve_dst_ip
+            and hostname_was_explicit
+            and not proxy_bypass
+            and getattr(self, "_proxy_mode", "transparent") == "explicit"
+            and bool(proxy_chain)
+            and proto == "tcp"
+            and dst_port in (80, 443)
+        )
+
         if (
             hostname
             and hostname_was_explicit
+            and not preserve_explicit_proxy_dst_ip
             and not (service == "dns" and proto in ("udp", "tcp") and dst_port == 53)
         ):
             from evidenceforge.generation.activity.dns_registry import (
@@ -4178,8 +4194,6 @@ class ActivityGenerator:
             # or was explicitly configured to use that hostname.
             tls_hostname = ""
 
-        proxy_routes = getattr(self, "_proxy_routes", {})
-        proxy_chain = proxy_routes.get(src_ip)
         explicit_proxy = (
             not proxy_bypass
             and getattr(self, "_proxy_mode", "transparent") == "explicit"
@@ -4329,6 +4343,7 @@ class ActivityGenerator:
                 and "." in proxy_context.host
                 and not proxy_context.host.endswith(f".{ad_domain}")
                 and not proxy_context.host.endswith(".local")
+                and not preserve_explicit_proxy_dst_ip
             ):
                 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
