@@ -1916,10 +1916,10 @@ class TestActivityGenerator:
         assert event.network.initiating_pid == pid
         assert event.process.image.endswith("powershell.exe")
 
-    def test_generate_connection_does_not_carry_stale_process_pid_to_wfp(
+    def test_generate_connection_skips_wfp_for_stale_process_pid(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
-        """Storyline connections should not preserve a PID after process teardown."""
+        """Storyline connections should not turn stale process ownership into System."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -1939,10 +1939,40 @@ class TestActivityGenerator:
             hostname="service.provenance.test",
         )
 
-        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        assert event.event_type == "wfp_connection"
-        assert event.network.initiating_pid != 5156
-        assert event.process is None or not event.process.image.endswith("powershell.exe")
+        wfp_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        ]
+        assert not wfp_events
+
+    def test_generate_connection_skips_wfp_when_process_owner_unknown(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Ordinary Windows TCP flows should not fall back to PID 4/System."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="10.0.0.20",
+            time=timestamp,
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=200,
+            resp_bytes=500,
+            source_system=test_system,
+            hostname="service.provenance.test",
+        )
+
+        wfp_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        ]
+        assert not wfp_events
 
     def test_wfp_connection_skips_unresolved_non_system_pid(
         self, activity_gen, test_system, mock_emitters
@@ -2966,6 +2996,14 @@ def test_tls_key_metadata_follows_rsa_named_intermediates():
     assert generator_module._tls_key_for_certificate_name(
         "CN=Amazon RSA 2048 M01", "ecdsa", 256
     ) == ("rsa", 2048)
+
+
+def test_tcp_success_history_uses_varied_completed_flow_shapes():
+    """Explicit successful TCP connections should not collapse to one Zeek history."""
+    histories = {generator_module._tcp_success_history(random.Random(seed)) for seed in range(40)}
+
+    assert "ShADadfF" in histories
+    assert len(histories) > 1
 
 
 def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch):

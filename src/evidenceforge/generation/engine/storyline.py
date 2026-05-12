@@ -2082,6 +2082,7 @@ class StorylineMixin:
             interval_sec = _effective_rate_interval(effective_rate, count, rng)
             ua_fired = False
             last_rate_alert_ts = None
+            next_rate_alert_delay = rng.uniform(45.0, 95.0)
             _send_referrer_config = preset_data.get("send_referrer") if preset_data else None
 
             request_count = 0
@@ -2171,7 +2172,7 @@ class StorylineMixin:
                     fire_rate = False
                     if last_rate_alert_ts is None:
                         fire_rate = True
-                    elif (tick_time - last_rate_alert_ts).total_seconds() >= 60:
+                    elif (tick_time - last_rate_alert_ts).total_seconds() >= next_rate_alert_delay:
                         fire_rate = True
                     if fire_rate:
                         ids_ctx = IdsContext(
@@ -2182,6 +2183,7 @@ class StorylineMixin:
                             priority=ids_rate_def.get("priority", 2),
                         )
                         last_rate_alert_ts = tick_time
+                        next_rate_alert_delay = rng.uniform(45.0, 120.0)
 
                 conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(rng)
                 http_for_conn = http_ctx if conn_state == "SF" else None

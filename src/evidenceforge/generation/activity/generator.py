@@ -729,10 +729,24 @@ UDP_CONN_STATE_DISTRIBUTION = [
 # Pre-extract for random.choices — TCP (select full tuples, not just states)
 _TCP_CONN_ENTRIES = TCP_CONN_STATE_DISTRIBUTION
 _TCP_CONN_WEIGHTS = [s[1] for s in TCP_CONN_STATE_DISTRIBUTION]
+_TCP_SUCCESS_HISTORY_ENTRIES = [
+    (history, weight) for conn_state, weight, history in _TCP_CONN_ENTRIES if conn_state == "SF"
+]
+_TCP_SUCCESS_HISTORY_WEIGHTS = [weight for _history, weight in _TCP_SUCCESS_HISTORY_ENTRIES]
 
 # Pre-extract for random.choices — UDP
 _UDP_CONN_ENTRIES = UDP_CONN_STATE_DISTRIBUTION
 _UDP_CONN_WEIGHTS = [s[1] for s in UDP_CONN_STATE_DISTRIBUTION]
+
+
+def _tcp_success_history(rng: random.Random) -> str:
+    """Choose a plausible Zeek history string for a completed TCP connection."""
+    return rng.choices(
+        [history for history, _weight in _TCP_SUCCESS_HISTORY_ENTRIES],
+        weights=_TCP_SUCCESS_HISTORY_WEIGHTS,
+        k=1,
+    )[0]
+
 
 # Legacy aliases for backward compatibility
 CONN_STATE_DISTRIBUTION = TCP_CONN_STATE_DISTRIBUTION
@@ -4349,17 +4363,19 @@ class ActivityGenerator:
                     "OTH": "D",
                 }.get(conn_state, "Dd" if resp_bytes else "D")
             else:
-                history = {
-                    "REJ": "Sr",
-                    "S0": "S",
-                    "SF": "ShADadfF",
-                    "OTH": "Cc",
-                    "S2": "ShADadF",
-                    "S3": "ShADadf",
-                    "RSTO": "ShADaR",
-                    "RSTR": "ShADadR",
-                    "S1": "ShR",
-                }.get(conn_state, "ShADadfF")
+                if conn_state == "SF":
+                    history = _tcp_success_history(rng)
+                else:
+                    history = {
+                        "REJ": "Sr",
+                        "S0": "S",
+                        "OTH": "Cc",
+                        "S2": "ShADadF",
+                        "S3": "ShADadf",
+                        "RSTO": "ShADaR",
+                        "RSTR": "ShADadR",
+                        "S1": "ShR",
+                    }.get(conn_state, _tcp_success_history(rng))
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
@@ -5191,7 +5207,7 @@ class ActivityGenerator:
             and event.network.conn_state != "SF"
         ):
             event.network.conn_state = "SF"
-            event.network.history = "ShADadfF"
+            event.network.history = _tcp_success_history(rng)
             if event.network.duration is None:
                 event.network.duration = rng.uniform(0.01, 2.0)
 
@@ -5288,18 +5304,26 @@ class ActivityGenerator:
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
-        # Emit 5156 (WFP connection) on Windows source hosts
-        if source_system and _get_os_category(source_system.os) == "windows":
+        # Emit 5156 (WFP connection) on Windows source hosts when process ownership is known.
+        # Unknown ownership is not PID 4 by default; rendering it as System makes ordinary
+        # user/proxy flows look kernel-originated.
+        wfp_system = resolved_source_system or source_system
+        wfp_application = event.process.image if event.process is not None else None
+        if (
+            wfp_system
+            and _get_os_category(wfp_system.os) == "windows"
+            and (pid > 0 or wfp_application is not None)
+        ):
             self.generate_wfp_connection(
-                system=source_system,
+                system=wfp_system,
                 time=time,
                 src_ip=src_ip,
                 src_port=src_port,
                 dst_ip=dst_ip,
                 dst_port=dst_port,
                 protocol=proto,
-                pid=pid if pid > 0 else 4,
-                application=event.process.image if event.process is not None else None,
+                pid=pid,
+                application=wfp_application,
             )
 
         return uid
@@ -5455,7 +5479,7 @@ class ActivityGenerator:
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes,
                 conn_state="SF",
-                history="ShADadfF",
+                history=_tcp_success_history(_get_rng()),
                 orig_pkts=max(4, orig_bytes // 1460 + 1),
                 resp_pkts=max(4, resp_bytes // 1460 + 1),
                 orig_ip_bytes=orig_bytes + max(4, orig_bytes // 1460 + 1) * 40,
