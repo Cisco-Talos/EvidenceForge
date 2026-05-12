@@ -2994,6 +2994,171 @@ class TestActivityGenerator:
         assert any(event.event_type == "bash_command" for event in events)
         assert not any(event.event_type == "process_create" for event in events)
 
+    def test_generate_bash_command_does_not_emit_process_for_typo(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Unknown typo commands should not become fake /usr/bin process images."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "idd")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert any(event.event_type == "bash_command" for event in events)
+        assert not any(event.event_type == "process_create" for event in events)
+
+    def test_generate_bash_command_expands_alias_process_image(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Shell aliases should render the real executable image when process telemetry exists."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            "0xabc123",
+        )
+        session.session_shell_pid = bash_pid
+
+        activity_gen.generate_bash_command(test_user, linux, command_time, "ll /etc/shadow")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_events = [event for event in events if event.event_type == "process_create"]
+        assert process_events
+        assert process_events[-1].process.image == "/usr/bin/ls"
+        assert process_events[-1].process.command_line == "ls -la /etc/shadow"
+
+    def test_generate_bash_command_resolves_interpreter_image(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Interpreter commands should keep the interpreter as the process image."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            "0xabc123",
+        )
+        session.session_shell_pid = bash_pid
+
+        command = "python3 /tmp/pip-install-cache/setup.py install"
+        activity_gen.generate_bash_command(test_user, linux, command_time, command)
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_events = [event for event in events if event.event_type == "process_create"]
+        assert process_events
+        assert process_events[-1].process.image == "/usr/bin/python3"
+        assert process_events[-1].process.command_line == command
+
+    def test_generate_bash_command_can_skip_process_telemetry(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Storyline-owned Linux process events can emit history without duplicate processes."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "scp /tmp/data.tar.gz root@10.0.0.2:/tmp/data.tar.gz",
+            emit_process_telemetry=False,
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert any(event.event_type == "bash_command" for event in events)
+        assert not any(event.event_type == "process_create" for event in events)
+
     def test_generate_process_shifts_after_existing_session_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

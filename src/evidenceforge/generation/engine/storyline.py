@@ -933,7 +933,13 @@ class StorylineMixin:
                     time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
             if os_category == "linux":
-                self.activity_generator.generate_bash_command(actor, system, time, command_line)
+                self.activity_generator.generate_bash_command(
+                    actor,
+                    system,
+                    time,
+                    command_line,
+                    emit_process_telemetry=False,
+                )
 
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(

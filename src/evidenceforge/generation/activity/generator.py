@@ -212,6 +212,11 @@ _LINUX_COMMAND_IMAGE_OVERRIDES = {
     "wget": "/usr/bin/wget",
     "whoami": "/usr/bin/whoami",
 }
+_LINUX_ALIAS_COMMANDS = {
+    "ll": ("/usr/bin/ls", "ls -la"),
+    "la": ("/usr/bin/ls", "ls -A"),
+    "l": ("/usr/bin/ls", "ls -CF"),
+}
 _NMAP_PORT_SERVICES = {
     22: "ssh",
     80: "http",
@@ -1029,8 +1034,8 @@ def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
     return rng.uniform(0.045, 0.145)
 
 
-def _linux_command_image_from_shell(command: str) -> str | None:
-    """Infer the executable image for a Linux shell-history command."""
+def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
+    """Infer process image and command line for a Linux shell-history command."""
     first_stage = command.split("|", 1)[0].strip()
     if not first_stage:
         return None
@@ -1064,13 +1069,17 @@ def _linux_command_image_from_shell(command: str) -> str | None:
     executable = parts[index].rsplit("/", 1)[-1]
     if executable in _BASH_BUILTIN_COMMANDS:
         return None
+    alias = _LINUX_ALIAS_COMMANDS.get(executable)
+    if alias is not None:
+        image, command_line = alias
+        if index + 1 < len(parts):
+            command_line = f"{command_line} {shlex.join(parts[index + 1 :])}"
+        return image, command_line
     if parts[index].startswith("/"):
-        return parts[index]
+        return parts[index], command
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
     if mapped is not None:
-        return mapped
-    if executable.isidentifier() or "-" in executable:
-        return f"/usr/bin/{executable}"
+        return mapped, command
     return None
 
 
@@ -5791,7 +5800,13 @@ class ActivityGenerator:
         return uid if network_visible else ""
 
     def generate_bash_command(
-        self, user: User, system: System, time: datetime, activity_type_or_command: str = "default"
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        activity_type_or_command: str = "default",
+        *,
+        emit_process_telemetry: bool = True,
     ) -> datetime | None:
         """Generate bash command history entry via dispatch.
 
@@ -5804,6 +5819,9 @@ class ActivityGenerator:
             time: Command execution time
             activity_type_or_command: Either an activity type key (process_code, etc.)
                 or a direct command string (if it contains spaces or '/')
+            emit_process_telemetry: Whether direct shell commands may emit correlated
+                process lifecycle telemetry. Storyline process events set this to False
+                because the typed process event already owns the canonical process.
         """
         # Activity type pools: if the arg matches a known key, pick from pool.
         # Otherwise treat as a literal command (supports typos, direct strings, etc.)
@@ -5900,7 +5918,8 @@ class ActivityGenerator:
 
         time = self._schedule_bash_history_time(user, system, time, command)
         self._emit_bash_command_event(user, system, time, command)
-        self._maybe_emit_bash_process_telemetry(user, system, time, command)
+        if emit_process_telemetry:
+            self._maybe_emit_bash_process_telemetry(user, system, time, command)
         logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
         return time
 
@@ -5934,9 +5953,10 @@ class ActivityGenerator:
         """Emit process telemetry for interactive Linux shell commands when state supports it."""
         if _get_os_category(system.os) != "linux":
             return
-        image = _linux_command_image_from_shell(command)
-        if image is None:
+        process = _linux_command_process_from_shell(command)
+        if process is None:
             return
+        image, process_command_line = process
 
         sessions = [
             session
@@ -5955,6 +5975,8 @@ class ActivityGenerator:
             "ssh ",
             "nmap",
             "mysqldump",
+            "python ",
+            "python3 ",
             "tar ",
             "shred",
             "chmod ",
@@ -5979,12 +6001,12 @@ class ActivityGenerator:
             time=process_time,
             logon_id=session.logon_id,
             process_name=image,
-            command_line=command,
+            command_line=process_command_line,
             parent_pid=parent_pid,
             suppress_command_file_effect=True,
         )
         self._record_user_process(system, user, pid, image)
-        lifetime = _linux_foreground_lifetime(image, command)
+        lifetime = _linux_foreground_lifetime(image, process_command_line)
         if lifetime is not None:
             self.generate_process_termination(
                 user=user,

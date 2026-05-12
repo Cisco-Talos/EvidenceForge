@@ -507,9 +507,9 @@ def generate_temp_dir_execution(
         exe_path = exe_path.replace("{user}", user.username)
     else:
         temp_exes = [
-            ("/tmp/pip-install-cache/setup.py", "python3 /tmp/pip-install-cache/setup.py install"),
+            ("/usr/bin/python3", "python3 /tmp/pip-install-cache/setup.py install"),
             ("/tmp/go-build-cache/main", "/tmp/go-build-cache/main --test"),
-            ("/tmp/npm-postinstall.sh", "bash /tmp/npm-postinstall.sh"),
+            ("/bin/bash", "bash /tmp/npm-postinstall.sh"),
         ]
         exe_path, cmd = rng.choice(temp_exes)
 

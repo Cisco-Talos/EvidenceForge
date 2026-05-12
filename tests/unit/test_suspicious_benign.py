@@ -35,6 +35,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     generate_failed_logon_burst,
     generate_service_account_anomaly,
     generate_suspicious_cli,
+    generate_temp_dir_execution,
     generate_unusual_powershell,
     get_suspicious_event_count,
     pick_suspicious_pattern,
@@ -246,6 +247,30 @@ class TestGenerateAfterHoursAdmin:
         from datetime import timedelta
 
         assert result["time"] < current_hour + timedelta(hours=1)
+
+
+class TestGenerateTempDirExecution:
+    """Tests for temporary-directory execution noise."""
+
+    def test_linux_script_backed_commands_use_interpreter_images(self, users, current_hour):
+        """Linux script invocations should not render the script path as the process image."""
+        linux_systems = [
+            System(hostname="SRV-APP-01", ip="10.0.0.10", os="Ubuntu 22.04", type="server")
+        ]
+        observed: dict[str, str] = {}
+
+        for seed in range(100):
+            result = generate_temp_dir_execution(
+                random.Random(seed),
+                users,
+                linux_systems,
+                current_hour,
+            )
+            assert result is not None
+            observed[result["command_line"]] = result["process_name"]
+
+        assert observed["python3 /tmp/pip-install-cache/setup.py install"] == "/usr/bin/python3"
+        assert observed["bash /tmp/npm-postinstall.sh"] == "/bin/bash"
 
 
 class TestGenerateSuspiciousCli:
