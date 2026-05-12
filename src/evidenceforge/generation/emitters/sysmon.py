@@ -430,7 +430,9 @@ class SysmonEventEmitter(LogEmitter):
     }
 
     @classmethod
-    def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
+    def _get_pe_metadata(
+        cls, image_path: str, host: Any | None = None
+    ) -> tuple[str, str, str, str, str]:
         """Look up PE metadata for a Windows binary by image path or name.
 
         Checks the built-in OS binary table first, then falls back to the
@@ -440,11 +442,53 @@ class SysmonEventEmitter(LogEmitter):
         basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         result = cls._PE_METADATA.get(basename)
         if result:
-            return result
+            return cls._normalize_os_binary_metadata(image_path, result, host)
         # Fall back to application catalog for user-installed apps
         from evidenceforge.generation.activity.application_catalog import get_pe_metadata
 
-        return get_pe_metadata(basename)
+        result = get_pe_metadata(basename)
+        return cls._normalize_os_binary_metadata(image_path, result, host)
+
+    @classmethod
+    def _normalize_os_binary_metadata(
+        cls,
+        image_path: str,
+        metadata: tuple[str, str, str, str, str],
+        host: Any | None,
+    ) -> tuple[str, str, str, str, str]:
+        """Keep Microsoft OS binary file versions consistent for the host OS."""
+        fv, desc, prod, company, orig = metadata
+        if not host:
+            return metadata
+        if company != "Microsoft Corporation" or prod not in {
+            "Microsoft Windows",
+            "Microsoft Windows Operating System",
+        }:
+            return metadata
+        if not cls._is_windows_os_binary_path(image_path):
+            return metadata
+        return cls._host_windows_file_version(host), desc, prod, company, orig
+
+    @staticmethod
+    def _is_windows_os_binary_path(image_path: str) -> bool:
+        image_lower = image_path.replace("/", "\\").lower()
+        return (
+            "\\windows\\system32\\" in image_lower
+            or "\\windows\\syswow64\\" in image_lower
+            or image_lower.startswith("c:\\windows\\")
+        )
+
+    @staticmethod
+    def _host_windows_file_version(host: Any) -> str:
+        os_name = str(getattr(host, "os", "") or "").lower()
+        system_type = str(getattr(host, "system_type", "") or "").lower()
+        if "windows 11" in os_name:
+            return "10.0.22621.1"
+        if "server" in os_name or system_type in {"server", "domain_controller"}:
+            if "2019" in os_name:
+                return "10.0.17763.1"
+            return "10.0.20348.1"
+        return "10.0.19041.1"
 
     def _get_sysmon_thread_id(self, hostname: str) -> int:
         """Return a ThreadID from a small reused pool for this host.
@@ -727,7 +771,7 @@ class SysmonEventEmitter(LogEmitter):
             "CurrentDirectory": proc.current_directory or self._default_current_directory(proc),
         }
         # Populate PE metadata from known binary lookup
-        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image)
+        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image, host)
         event_data["FileVersion"] = fv
         event_data["Description"] = desc
         event_data["Product"] = prod
@@ -1210,7 +1254,7 @@ class SysmonEventEmitter(LogEmitter):
         )
 
         # PE metadata for the loaded DLL
-        fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
+        fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded, host)
         hashes = self._generate_hashes(il.image_loaded, host.hostname)
         signature_status = il.signature_status if il.signed else "Unavailable"
 
@@ -1295,9 +1339,10 @@ class SysmonEventEmitter(LogEmitter):
             host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
         )
 
-        # Route to Event 12 or 13 based on action
+        # Route value operations to Event 13. Sysmon Event 12 is key create/delete;
+        # Event 14 would be value rename, and value deletes are not modeled separately.
         action = reg.action
-        if action == "modify":
+        if reg.value or action == "modify":
             event_id = 13
             event_type = "SetValue"
         elif action == "delete":

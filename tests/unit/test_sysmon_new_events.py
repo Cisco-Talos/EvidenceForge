@@ -646,6 +646,80 @@ class TestRenderEventRegistry:
         assert "<EventID>12</EventID>" in content
         assert "DeleteKey" in content
 
+    def test_value_delete_context_renders_event13(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\regedit.exe",
+                command_line="regedit",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\HideFileExt",
+                value="DWORD (0x00000001)",
+                action="delete",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>13</EventID>" in content
+        assert "SetValue" in content
+        assert "HideFileExt" in content
+        assert "DWORD (0x00000001)" in content
+
+
+class TestProcessCreateMetadata:
+    """Test host-specific Sysmon process metadata rendering."""
+
+    def test_windows_os_binary_versions_are_consistent_per_host(self, emitter):
+        host = _win_host()
+        first = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(username="admin", logon_id="0x123"),
+            process=ProcessContext(
+                pid=4100,
+                parent_pid=500,
+                image=r"C:\Windows\System32\gpresult.exe",
+                command_line="gpresult /r",
+                username="admin",
+                logon_id="0x123",
+                start_time=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            ),
+        )
+        second = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(username="admin", logon_id="0x123"),
+            process=ProcessContext(
+                pid=4101,
+                parent_pid=500,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="admin",
+                logon_id="0x123",
+                start_time=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
+            ),
+        )
+
+        emitter.emit(first)
+        emitter.emit(second)
+        emitter.close()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert content.count('<Data Name="FileVersion">10.0.19041.1</Data>') == 2
+        assert "10.0.20348.1" not in content
+
 
 class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""

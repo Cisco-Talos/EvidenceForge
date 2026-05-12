@@ -164,6 +164,37 @@ class TestActivityGenerator:
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
 
+    def test_generate_scheduled_task_builds_full_task_xml(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """Scheduled task creation should carry source-native Task Scheduler XML."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        activity_gen.generate_scheduled_task(
+            test_user,
+            test_system,
+            timestamp,
+            task_name=r"\Microsoft\Windows\Updater",
+            task_content=(
+                r"<Actions><Exec><Command>C:\Windows\Temp\payload.exe --sync</Command>"
+                r"</Exec></Actions>"
+            ),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        task_content = event.scheduled_task.task_content
+        assert (
+            '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+            in task_content
+        )
+        assert "<RegistrationInfo>" in task_content
+        assert "<Triggers>" in task_content
+        assert "<Principals>" in task_content
+        assert "<Settings>" in task_content
+        assert '<Actions Context="Author">' in task_content
+        assert r"<Command>C:\Windows\Temp\payload.exe</Command>" in task_content
+        assert "<Arguments>--sync</Arguments>" in task_content
+
     def test_generate_logon_existing_session_renders_canonical_start_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

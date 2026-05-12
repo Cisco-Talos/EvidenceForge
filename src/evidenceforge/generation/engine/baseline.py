@@ -4059,8 +4059,9 @@ class BaselineMixin:
                     if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
                         _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
                     _target = f"{_key}\\{_vname}"
-                    # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
-                    _reg_action = "delete" if rng.random() < 0.10 else "modify"
+                    # Sysmon value writes are Event 13. Event 12 is reserved for key-only
+                    # create/delete contexts, not the value-name pools used here.
+                    _reg_action = "modify"
                     self.activity_generator.dispatcher.dispatch(
                         SecurityEvent(
                             timestamp=_reg_ts,

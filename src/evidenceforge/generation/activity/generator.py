@@ -3464,8 +3464,9 @@ class ActivityGenerator:
                 )
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
-                # 85% SetValue (Event 13), 15% DeleteValue (Event 12)
-                reg_action = "delete" if rng.random() < 0.15 else "modify"
+                # Sysmon value writes are Event 13. Key create/delete events need key-only
+                # contexts, not the value-name pools used for ambient registry noise.
+                reg_action = "modify"
                 self.dispatcher.dispatch(
                     SecurityEvent(
                         timestamp=time + timedelta(milliseconds=rng.randint(120, 950)),
@@ -7681,15 +7682,23 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ScheduledTaskContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        host = self._build_host_context(system)
+        task_content = self._normalize_scheduled_task_content(
+            task_name=task_name,
+            task_content=task_content,
+            actor=user,
+            host=host,
+            time=time,
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type=f"scheduled_task_{action}",
-            src_host=self._build_host_context(system),
+            src_host=host,
             auth=AuthContext(
                 username=user.username,
                 subject_sid=self._get_sid(user.username),
                 subject_username=user.username,
-                subject_domain=self._build_host_context(system).netbios_domain,
+                subject_domain=host.netbios_domain,
                 subject_logon_id=self._get_user_logon_id(user.username, system.hostname, time),
                 reporting_pid=reporting_pid,
             ),
@@ -7699,6 +7708,161 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def _normalize_scheduled_task_content(
+        self,
+        *,
+        task_name: str,
+        task_content: str,
+        actor: User,
+        host: HostContext,
+        time: datetime,
+    ) -> str:
+        """Return a full Task Scheduler XML definition for Security 4698 events."""
+        if self._is_complete_task_xml(task_content):
+            return task_content
+
+        command, arguments = self._extract_scheduled_task_command(task_content, task_name)
+        return self._build_scheduled_task_xml(
+            task_name=task_name,
+            command=command,
+            arguments=arguments,
+            actor=actor,
+            host=host,
+            time=time,
+        )
+
+    @staticmethod
+    def _is_complete_task_xml(task_content: str) -> bool:
+        """Detect user-supplied full Task Scheduler XML that should be preserved."""
+        stripped = task_content.lstrip()
+        if not stripped.startswith(("<?xml", "<Task")):
+            return False
+        return all(
+            marker in task_content
+            for marker in (
+                "<RegistrationInfo>",
+                "<Principals>",
+                "<Settings>",
+                "<Actions",
+            )
+        )
+
+    @classmethod
+    def _extract_scheduled_task_command(cls, task_content: str, task_name: str) -> tuple[str, str]:
+        """Extract a command/arguments pair from command text or minimal task XML."""
+        import re
+        from html import unescape
+
+        command = ""
+        arguments = ""
+        command_match = re.search(
+            r"<Command>(?P<command>.*?)</Command>", task_content, flags=re.IGNORECASE | re.DOTALL
+        )
+        args_match = re.search(
+            r"<Arguments>(?P<args>.*?)</Arguments>", task_content, flags=re.IGNORECASE | re.DOTALL
+        )
+        if command_match:
+            command = unescape(command_match.group("command")).strip()
+        else:
+            command = task_content.strip()
+        if args_match:
+            arguments = unescape(args_match.group("args")).strip()
+
+        if not command:
+            task_label = task_name.rsplit("\\", 1)[-1] or task_name
+            return r"C:\Windows\System32\cmd.exe", f'/c "{task_label}"'
+
+        split_command, split_args = cls._split_scheduled_task_command(command)
+        if split_args and not arguments:
+            arguments = split_args
+        return split_command, arguments
+
+    @staticmethod
+    def _split_scheduled_task_command(command: str) -> tuple[str, str]:
+        """Split a Task Scheduler command line into Command and Arguments fields."""
+        import re
+
+        stripped = command.strip()
+        quoted = re.match(r'^"(?P<exe>[^"]+?\.exe)"\s*(?P<args>.*)$', stripped, re.IGNORECASE)
+        if quoted:
+            return quoted.group("exe"), quoted.group("args").strip()
+
+        windows_path = re.match(
+            r"^(?P<exe>[A-Za-z]:\\.*?\.exe)\s*(?P<args>.*)$", stripped, re.IGNORECASE
+        )
+        if windows_path:
+            return windows_path.group("exe"), windows_path.group("args").strip()
+
+        executable = re.match(r"^(?P<exe>\S+?\.exe)\s*(?P<args>.*)$", stripped, re.IGNORECASE)
+        if executable:
+            return executable.group("exe"), executable.group("args").strip()
+
+        return stripped, ""
+
+    @staticmethod
+    def _build_scheduled_task_xml(
+        *,
+        task_name: str,
+        command: str,
+        arguments: str,
+        actor: User,
+        host: HostContext,
+        time: datetime,
+    ) -> str:
+        """Build source-native Task Scheduler XML for Windows Security 4698."""
+        from xml.sax.saxutils import escape as xml_escape
+
+        task_path = task_name if task_name.startswith("\\") else f"\\{task_name}"
+        author = (
+            f"{host.netbios_domain}\\{actor.username}" if host.netbios_domain else actor.username
+        )
+        start_boundary = (
+            time.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        )
+        command_xml = xml_escape(command)
+        arguments_xml = xml_escape(arguments)
+        arguments_line = f"\n      <Arguments>{arguments_xml}</Arguments>" if arguments else ""
+        return (
+            '<?xml version="1.0" encoding="UTF-16"?>\n'
+            '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+            "  <RegistrationInfo>\n"
+            f"    <Date>{start_boundary}</Date>\n"
+            f"    <Author>{xml_escape(author)}</Author>\n"
+            f"    <URI>{xml_escape(task_path)}</URI>\n"
+            "  </RegistrationInfo>\n"
+            "  <Triggers>\n"
+            "    <TimeTrigger>\n"
+            f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+            "      <Enabled>true</Enabled>\n"
+            "    </TimeTrigger>\n"
+            "  </Triggers>\n"
+            "  <Principals>\n"
+            '    <Principal id="Author">\n'
+            f"      <UserId>{xml_escape(author)}</UserId>\n"
+            "      <LogonType>Password</LogonType>\n"
+            "      <RunLevel>LeastPrivilege</RunLevel>\n"
+            "    </Principal>\n"
+            "  </Principals>\n"
+            "  <Settings>\n"
+            "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n"
+            "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n"
+            "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\n"
+            "    <AllowHardTerminate>true</AllowHardTerminate>\n"
+            "    <StartWhenAvailable>false</StartWhenAvailable>\n"
+            "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\n"
+            "    <Enabled>true</Enabled>\n"
+            "    <Hidden>false</Hidden>\n"
+            "    <ExecutionTimeLimit>PT72H</ExecutionTimeLimit>\n"
+            "    <Priority>7</Priority>\n"
+            "  </Settings>\n"
+            '  <Actions Context="Author">\n'
+            "    <Exec>\n"
+            f"      <Command>{command_xml}</Command>{arguments_line}\n"
+            "    </Exec>\n"
+            "  </Actions>\n"
+            "</Task>"
+        )
 
     def generate_group_membership_change(
         self,
