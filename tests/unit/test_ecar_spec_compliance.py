@@ -625,6 +625,49 @@ class TestChronologicalOutput:
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
 
+    def test_close_moves_child_process_create_after_parent_pid_without_actor_id(self, tmp_path, ts):
+        """Visible eCAR child creates should also respect ppid when actorID is absent."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "child-process",
+                "pid": 4324,
+                "ppid": 4300,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=7),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "parent-process",
+                "pid": 4300,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
+        child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
+        assert child_ms > parent_ms
+
 
 class TestTidAlwaysPresent:
     def test_tid_present_default(self, emitter, ts):

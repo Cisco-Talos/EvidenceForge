@@ -294,6 +294,28 @@ class TestPermitRecords:
 
         assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
 
+    def test_same_interface_deny_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
+        """ASA should not mirror same-interface internal denies by default."""
+        event = _make_connection_event(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            dst_port=88,
+            protocol="tcp",
+        )
+        event.firewall = FirewallContext(
+            action="deny",
+            msg_id=106023,
+            connection_id=0,
+            src_interface="",
+            dst_interface="",
+            access_group="inside_access_in",
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
+
     def test_syn_timeout_requires_handshake_only_connection(self, asa_emitter, tmp_path):
         """SYN Timeout should not be used for connections with payload bytes."""
         event = _make_connection_event(

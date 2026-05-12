@@ -310,6 +310,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             fw_hostname = sensor_hostname or "fw01"
 
             if is_deny:
+                if src_iface == dst_iface and event.nat is None:
+                    continue
                 if self._should_suppress_outside_private_deny(
                     net, src_iface, dst_iface, sensor_hostname
                 ):

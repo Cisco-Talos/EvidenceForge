@@ -60,6 +60,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.proxy_user_agents import (
+    normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
@@ -1448,6 +1449,13 @@ class ActivityGenerator:
                     hostname=proxy_hostname,
                     domain_tags=domain_tags,
                 )
+        user_agent = normalize_proxy_user_agent_for_os(
+            rng,
+            source_system,
+            user_agent,
+            hostname=proxy_hostname,
+            domain_tags=domain_tags,
+        )
 
         proxy_cacheable = proxy_method in {"GET", "HEAD"}
         if http is not None:
@@ -2647,10 +2655,10 @@ class ActivityGenerator:
                 process_pid=failed_profile["process_pid"],
                 process_name=failed_profile["process_name"],
                 workstation_name=failed_profile["workstation_name"],
-                subject_sid=self._get_sid("SYSTEM"),
-                subject_username="SYSTEM",
-                subject_domain="NT AUTHORITY",
-                subject_logon_id="0x3e7",
+                subject_sid="S-1-0-0",
+                subject_username="-",
+                subject_domain="-",
+                subject_logon_id="0x0",
             ),
             edr=EdrContext(object_id=str(uuid.uuid4())),
         )
@@ -4882,6 +4890,13 @@ class ActivityGenerator:
                 )
                 if domain_user_agent:
                     user_agent = domain_user_agent
+                user_agent = normalize_proxy_user_agent_for_os(
+                    rng,
+                    source_system,
+                    user_agent,
+                    hostname=proxy_hostname,
+                    domain_tags=domain_tags,
+                )
                 cache_roll = rng.random()
                 if event.http is not None:
                     if cache_roll < 0.30 and event.http.status_code < 400:

@@ -137,6 +137,55 @@ def _pick_domain_override_agent(
     return None
 
 
+def _ua_looks_windows(user_agent: str) -> bool:
+    ua = user_agent.lower()
+    return any(token in ua for token in ("windows nt", "win64", "wow64", "trident/", "edg/"))
+
+
+def _ua_looks_linux(user_agent: str) -> bool:
+    ua = user_agent.lower()
+    return "x11; linux" in ua or "ubuntu;" in ua or "linux x86_64" in ua
+
+
+def normalize_proxy_user_agent_for_os(
+    rng: random.Random,
+    source_system: "System | None",
+    user_agent: str,
+    *,
+    hostname: str | None = None,
+    domain_tags: list[str] | None = None,
+) -> str:
+    """Replace browser User-Agents that contradict the source host OS."""
+    if source_system is None or not user_agent:
+        return user_agent
+    os_category = _get_os_category(source_system.os)
+    if os_category == "linux" and _ua_looks_windows(user_agent):
+        linux_pool = _pool(load_proxy_user_agents(), "workstation", "linux")
+        return (
+            rng.choice(linux_pool)
+            if linux_pool
+            else pick_proxy_user_agent(
+                rng,
+                source_system,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+        )
+    if os_category == "windows" and _ua_looks_linux(user_agent):
+        windows_pool = _pool(load_proxy_user_agents(), "workstation", "windows")
+        return (
+            rng.choice(windows_pool)
+            if windows_pool
+            else pick_proxy_user_agent(
+                rng,
+                source_system,
+                hostname=hostname,
+                domain_tags=domain_tags,
+            )
+        )
+    return user_agent
+
+
 def pick_proxy_domain_user_agent(
     rng: random.Random,
     source_system: "System | None",

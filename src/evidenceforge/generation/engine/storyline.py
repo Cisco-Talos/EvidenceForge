@@ -1641,6 +1641,7 @@ class StorylineMixin:
                     "mac": mac,
                     "lease_time": lease_time,
                     "last_renewal": time.timestamp(),
+                    "server_addr": dhcp_server,
                     "system": system,
                 }
             malicious_event["mac_address"] = mac

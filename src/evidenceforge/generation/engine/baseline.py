@@ -40,6 +40,7 @@ from typing import Any
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
+    load_create_remote_thread_noise_config,
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
 )
@@ -3832,6 +3833,7 @@ class BaselineMixin:
                         system=dhcp_state["system"],
                         time=renewal_ts,
                         mac=dhcp_state["mac"],
+                        server_addr=dhcp_state.get("server_addr", "10.0.0.1"),
                         lease_time=lease_time,
                         uid=generate_zeek_uid("C"),
                         msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
@@ -4210,8 +4212,11 @@ class BaselineMixin:
                     for p in load_create_remote_thread_patterns()
                     if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
                 ]
-                if valid_crt:
-                    num_crt = rng.randint(1, 3)
+                noise_cfg = load_create_remote_thread_noise_config()
+                probability = float(noise_cfg.get("probability_per_host_hour", 0.08))
+                max_events = int(noise_cfg.get("max_events_per_hour", 1))
+                if valid_crt and max_events > 0 and rng.random() < probability:
+                    num_crt = rng.randint(1, max_events)
                     for _ in range(num_crt):
                         pattern = pick_create_remote_thread_pattern(valid_crt, rng)
                         src_key = pattern["source_pid_key"]
@@ -4986,13 +4991,27 @@ class BaselineMixin:
                     )[0]
                     # Format placeholders vary by daemon
                     if app == "dhclient":
-                        renewal = rng.choice([1800, 3600, 3600, 7200, 14400, 43200])
-                        jitter = int(renewal * 0.05)
-                        renewal += rng.randint(-jitter, jitter)
-                        msg = rng.choice(msgs).format(ip=system.ip, renewal=renewal)
+                        dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
+                        if not dhcp_state:
+                            continue
+                        lease_time = float(dhcp_state.get("lease_time", 3600.0))
+                        elapsed = max(0.0, current_hour.timestamp() - dhcp_state["last_renewal"])
+                        renewal = max(60, int((lease_time / 2) - elapsed))
+                        server_addr = str(dhcp_state.get("server_addr") or "10.0.0.1")
+                        msg = rng.choice(msgs).format(
+                            ip=system.ip,
+                            server=server_addr,
+                            renewal=renewal,
+                        )
                     elif app == "NetworkManager":
                         # NM uses monotonic kernel uptime seconds in [brackets]
                         msg = rng.choice(msgs).format(uptime)
+                    elif app == "systemd-resolved":
+                        dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
+                        msg = rng.choice(msgs).format(
+                            rng.randint(100000, 999999),
+                            dns_server=dns_server,
+                        )
                     else:
                         msg = rng.choice(msgs).format(rng.randint(100000, 999999))
                     # Map syslog app names to sys_pids keys for persistent daemons.

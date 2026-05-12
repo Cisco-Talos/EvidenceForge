@@ -449,6 +449,34 @@ class SysmonEventEmitter(LogEmitter):
         result = get_pe_metadata(basename)
         return cls._normalize_os_binary_metadata(image_path, result, host)
 
+    @staticmethod
+    def _signed_module_metadata(
+        image_path: str,
+        signature: str,
+    ) -> tuple[str, str, str, str, str]:
+        """Return plausible version metadata for signed DLLs missing catalog data."""
+        basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        normalized_path = image_path.replace("/", "\\").lower()
+        signature_lower = signature.lower()
+        if "\\windows\\" in normalized_path or "microsoft" in signature_lower:
+            return (
+                "10.0.19041.1",
+                f"{basename} system library",
+                "Microsoft Windows Operating System",
+                "Microsoft Corporation",
+                basename,
+            )
+        if "cisco" in normalized_path or "cisco" in signature_lower:
+            return (
+                "5.1.8.42",
+                f"{basename} module",
+                "Cisco Secure Client",
+                "Cisco Systems, Inc.",
+                basename,
+            )
+        company = signature.strip() or "Verified Publisher"
+        return ("1.0.0.0", f"{basename} module", company, company, basename)
+
     @classmethod
     def _normalize_os_binary_metadata(
         cls,
@@ -1253,6 +1281,11 @@ class SysmonEventEmitter(LogEmitter):
 
         # PE metadata for the loaded DLL
         fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded, host)
+        if il.signed and (fv, desc, prod, company, orig) == ("-", "-", "-", "-", "-"):
+            fv, desc, prod, company, orig = self._signed_module_metadata(
+                il.image_loaded,
+                il.signature,
+            )
         hashes = self._generate_hashes(il.image_loaded, host.hostname)
         signature_status = il.signature_status if il.signed else "Unavailable"
 

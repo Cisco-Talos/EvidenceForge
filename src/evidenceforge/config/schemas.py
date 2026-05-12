@@ -960,6 +960,13 @@ class RemoteThreadStartLocationEntry(BaseModel, extra="forbid"):
         return v
 
 
+class CreateRemoteThreadNoiseConfig(BaseModel, extra="forbid"):
+    """Rate controls for benign Sysmon Event 8 baseline noise."""
+
+    probability_per_host_hour: float = Field(ge=0.0, le=1.0)
+    max_events_per_hour: int = Field(ge=0, le=5)
+
+
 # --- Traffic Profile Connection ---
 
 

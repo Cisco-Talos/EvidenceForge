@@ -4,6 +4,7 @@
 """Tests for User-Agent OS-awareness in proxy URI templates."""
 
 import random
+from types import SimpleNamespace
 
 import yaml
 
@@ -145,6 +146,22 @@ class TestProxyUriOsFiltering:
         assert is_browser_like_proxy_domain("archive.ubuntu.com") is False
         assert is_browser_like_proxy_domain("www.bing.com") is True
         assert is_browser_like_proxy_domain("unknown.example.test") is True
+
+    def test_proxy_user_agent_normalization_replaces_windows_browser_for_linux(self):
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            normalize_proxy_user_agent_for_os,
+        )
+
+        system = SimpleNamespace(os="Ubuntu 22.04", type="workstation", roles=[])
+        ua = normalize_proxy_user_agent_for_os(
+            random.Random(42),
+            system,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            hostname="www.example.com",
+        )
+
+        assert "Windows NT" not in ua
+        assert any(token in ua for token in ("Linux", "curl", "Wget", "python-requests"))
 
     def test_connect_user_agent_uses_domain_override(self):
         """CONNECT proxy entries should still use destination-specific service UAs."""

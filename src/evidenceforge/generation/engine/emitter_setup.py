@@ -322,11 +322,15 @@ class EmitterSetupMixin:
             ts = base_time + timedelta(seconds=offset)
             uid = generate_zeek_uid("C")
             lease_time = float(rng.choice([3600, 7200, 14400, 86400]))
+            infra_ips = getattr(self, "_infra_ips", {})
+            dhcp_servers = infra_ips.get("dc") or infra_ips.get("dns") or ["10.0.0.1"]
+            dhcp_server = dhcp_servers[0] if isinstance(dhcp_servers, list) else dhcp_servers
             self.state_manager.set_current_time(ts)
             self.activity_generator.generate_dhcp_lease(
                 system=system,
                 time=ts,
                 mac=mac,
+                server_addr=dhcp_server,
                 lease_time=lease_time,
                 uid=uid,
             )
@@ -335,6 +339,7 @@ class EmitterSetupMixin:
                 "mac": mac,
                 "lease_time": lease_time,
                 "last_renewal": ts.timestamp(),
+                "server_addr": dhcp_server,
                 "system": system,
             }
 

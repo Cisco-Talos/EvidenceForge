@@ -1414,6 +1414,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         ConnectionEntry,
+        CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
         DnsEntry,
         DnsTunnelRttConfig,
@@ -1520,6 +1521,18 @@ def validate_config() -> ValidationResult:
             "create_remote_thread_patterns.yaml start_locations",
         )
     )
+    try:
+        CreateRemoteThreadNoiseConfig.model_validate(
+            create_remote_thread_config.get("baseline_noise", {})
+        )
+    except Exception as exc:  # noqa: BLE001
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "create_remote_thread_patterns.yaml baseline_noise",
+                f"invalid baseline_noise config: {exc}",
+            )
+        )
 
     from evidenceforge.generation.activity.edr_pools import load_edr_pools
 

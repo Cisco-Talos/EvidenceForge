@@ -562,6 +562,34 @@ class TestRenderEvent7:
         assert '<Data Name="SignatureStatus">Unavailable</Data>' in content
         assert '<Data Name="SignatureStatus">Valid</Data>' not in content
 
+    def test_signed_event7_populates_vendor_metadata_when_catalog_missing(self, emitter):
+        """Signed DLL loads should not render all PE metadata fields as '-'."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\Cisco\Secure Client\cscan.dll",
+                signed=True,
+                signature="Cisco Systems, Inc.",
+                signature_status="Valid",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="Company">Cisco Systems, Inc.</Data>' in content
+        assert '<Data Name="FileVersion">-</Data>' not in content
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""

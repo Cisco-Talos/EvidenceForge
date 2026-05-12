@@ -668,6 +668,7 @@ class EcarEmitter(HostMultiplexEmitter):
         while changed:
             changed = False
             create_times: dict[str, int] = {}
+            create_times_by_pid: dict[int, int] = {}
             for record in records:
                 if (
                     record is None
@@ -678,6 +679,15 @@ class EcarEmitter(HostMultiplexEmitter):
                 object_id = record.get("objectID")
                 if object_id:
                     create_times[str(object_id)] = int(record.get("timestamp_ms", 0))
+                try:
+                    pid = int(record.get("pid", -1))
+                except (TypeError, ValueError):
+                    pid = -1
+                if pid > 0:
+                    create_times_by_pid[pid] = max(
+                        create_times_by_pid.get(pid, 0),
+                        int(record.get("timestamp_ms", 0)),
+                    )
 
             for record in records:
                 if (
@@ -687,9 +697,13 @@ class EcarEmitter(HostMultiplexEmitter):
                 ):
                     continue
                 parent_id = record.get("actorID")
-                if not parent_id:
-                    continue
-                parent_ms = create_times.get(str(parent_id))
+                parent_ms = create_times.get(str(parent_id)) if parent_id else None
+                if parent_ms is None:
+                    try:
+                        parent_pid = int(record.get("ppid", -1))
+                    except (TypeError, ValueError):
+                        parent_pid = -1
+                    parent_ms = create_times_by_pid.get(parent_pid)
                 timestamp_ms = int(record.get("timestamp_ms", 0))
                 if parent_ms is not None and timestamp_ms <= parent_ms:
                     record["timestamp_ms"] = parent_ms + 1

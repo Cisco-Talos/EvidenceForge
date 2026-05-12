@@ -54,8 +54,8 @@ programs:
 
   - app: dhclient
     messages:
-      - "DHCPREQUEST for {ip} on ens160 to 10.0.0.1 port 67"
-      - "DHCPACK of {ip} from 10.0.0.1"
+      - "DHCPREQUEST for {ip} on ens160 to {server} port 67"
+      - "DHCPACK of {ip} from {server}"
       - "bound to {ip} -- renewal in {renewal} seconds."
 
   - app: polkitd
@@ -87,8 +87,8 @@ programs:
   - app: systemd-resolved
     distro: ubuntu
     messages:
-      - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server 10.0.0.1."
-      - "Grace period over, resuming full feature set for DNS server 10.0.0.1."
+      - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server {dns_server}."
+      - "Grace period over, resuming full feature set for DNS server {dns_server}."
       - "Positive Trust Anchors: . IN DS 20326"
 
   - app: thermald
