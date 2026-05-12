@@ -36,6 +36,7 @@ import random
 from datetime import timedelta
 
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.network_params import load_network_params, public_ntp_ips
 from evidenceforge.generation.emitters import (
     BashHistoryEmitter,
@@ -601,6 +602,7 @@ class EmitterSetupMixin:
         hn = system.hostname
 
         def _c(parent, image, cmd, user):
+            image = normalize_defender_platform_path(image, hn)
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
         # PID 4 is always the Windows System process (parent of smss.exe).

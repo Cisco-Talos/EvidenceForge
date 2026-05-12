@@ -134,6 +134,20 @@ class TestSystemProcessProtection:
                 f"Seeded system process '{role}' (PID {pid}) was terminated"
             )
 
+    def test_seeded_defender_processes_use_host_platform_version(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Seeded Defender process paths should not mix versioned and unversioned roots."""
+        _, pids = self._seed_and_get_pids(state_manager, mock_emitters, win_system)
+
+        msmpeng = state_manager.get_process(win_system.hostname, pids["msmpeng"])
+        mpcmdrun = state_manager.get_process(win_system.hostname, pids["mpcmdrun"])
+
+        assert msmpeng is not None
+        assert mpcmdrun is not None
+        assert r"\Windows Defender\Platform\4.18." in msmpeng.image
+        assert mpcmdrun.image.rsplit("\\", 1)[0] == msmpeng.image.rsplit("\\", 1)[0]
+
     def test_all_seeded_linux_pids_survive_termination(
         self, state_manager, mock_emitters, linux_system
     ):

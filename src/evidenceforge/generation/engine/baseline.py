@@ -4095,6 +4095,8 @@ class BaselineMixin:
                         _reg_image = r"C:\Windows\System32\svchost.exe"
                         _reg_user = "SYSTEM"
                     _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
+                    if _reg_proc is not None:
+                        _reg_image = _reg_proc.image
                     if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
                         _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
                     _target = f"{_key}\\{_vname}"
@@ -4325,6 +4327,7 @@ class BaselineMixin:
                                         path,
                                         rng,
                                         system.assigned_user or "SYSTEM",
+                                        host_key=system.hostname,
                                     ),
                                     "signed": not any(
                                         vendor in path

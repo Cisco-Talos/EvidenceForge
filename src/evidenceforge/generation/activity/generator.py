@@ -59,6 +59,7 @@ from evidenceforge.events.contexts import (
     RemoteThreadContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
@@ -2607,6 +2608,9 @@ class ActivityGenerator:
             dc_system: Domain controller to also emit 4625/4776 on (optional)
         """
         local_logon = logon_type in (2, 5, 7, 11)
+        if source_ip == system.ip:
+            source_ip = None
+            local_logon = True
         if source_ip is None:
             source_ip = "-" if local_logon else system.ip
         auth_source_ip = "-" if local_logon else source_ip
@@ -3157,6 +3161,7 @@ class ActivityGenerator:
             command_line = (
                 r"C:\Windows\PSEXESVC.exe" if "accepteula" in command_line.lower() else command_line
             )
+        process_name = normalize_defender_platform_path(process_name, system.hostname)
         if _exe_lower in _HIGH_INTEGRITY_EXES:
             _integrity = "High"
         else:
@@ -3233,6 +3238,7 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
         # Phase 1: Allocate IDs from StateManager
+        process_name = normalize_defender_platform_path(process_name, system.hostname)
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
@@ -3489,6 +3495,7 @@ class ActivityGenerator:
                     (_key, _vname, _details),
                     rng,
                     _template_user,
+                    host_key=system.hostname,
                 )
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
@@ -8323,6 +8330,16 @@ class ActivityGenerator:
                 target_image,
             )
             return
+        target_proc = self.state_manager.get_process(system.hostname, target_pid)
+        source_image = normalize_defender_platform_path(
+            source_proc.image or source_image, system.hostname
+        )
+        if target_proc is not None:
+            target_image = normalize_defender_platform_path(
+                target_proc.image or target_image, system.hostname
+            )
+        else:
+            target_image = normalize_defender_platform_path(target_image, system.hostname)
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
@@ -8418,6 +8435,16 @@ class ActivityGenerator:
                 target_image,
             )
             return
+        target_proc = self.state_manager.get_process(system.hostname, target_pid)
+        source_image = normalize_defender_platform_path(
+            source_proc.image or source_image, system.hostname
+        )
+        if target_proc is not None:
+            target_image = normalize_defender_platform_path(
+                target_proc.image or target_image, system.hostname
+            )
+        else:
+            target_image = normalize_defender_platform_path(target_image, system.hostname)
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
@@ -8483,6 +8510,8 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
 
+        image = normalize_defender_platform_path(image, system.hostname)
+        dll_path = normalize_defender_platform_path(dll_path, system.hostname)
         time = self._clamp_time_after_process_start(system, pid, time)
         proc = self.state_manager.get_process(system.hostname, pid)
         if proc is None:

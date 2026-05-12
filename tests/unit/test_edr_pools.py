@@ -7,6 +7,7 @@ import random
 
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
+    defender_platform_version,
     get_dll_pool,
     get_file_paths,
     get_registry_keys_hkcu,
@@ -14,6 +15,7 @@ from evidenceforge.generation.activity.edr_pools import (
     load_edr_pools,
     materialize_edr_template,
     materialize_edr_template_group,
+    normalize_defender_platform_path,
     select_file_side_effect,
 )
 
@@ -222,11 +224,30 @@ class TestTemplateMaterialization:
         value = materialize_edr_template(
             r"C:\ProgramData\Microsoft\Windows Defender\Platform\{version}\MpClient.dll",
             random.Random(9),
+            host_key="WS-01",
         )
 
-        assert r"\Platform\4.18." in value
+        assert rf"\Platform\{defender_platform_version('WS-01')}\MpClient.dll" in value
         assert "\\125.0\\" not in value
         assert "\\2024.3\\" not in value
+
+    def test_normalizes_defender_platform_version_per_host(self):
+        version = defender_platform_version("WS-01")
+
+        assert (
+            normalize_defender_platform_path(
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform\MpClient.dll",
+                "WS-01",
+            )
+            == rf"C:\ProgramData\Microsoft\Windows Defender\Platform\{version}\MpClient.dll"
+        )
+        assert (
+            normalize_defender_platform_path(
+                r"C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MpClient.dll",
+                "WS-01",
+            )
+            == rf"C:\ProgramData\Microsoft\Windows Defender\Platform\{version}\MpClient.dll"
+        )
 
     def test_materializes_related_templates_with_shared_placeholders(self):
         import random

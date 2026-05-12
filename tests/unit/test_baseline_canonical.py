@@ -530,6 +530,27 @@ class TestSyslogContext:
         assert event.syslog.app_name == "login"
         assert "from -" not in event.syslog.message
 
+    def test_self_sourced_linux_failed_logon_renders_local_auth(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """A Linux host should not render sshd as connecting from its own host IP."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_failed_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.10.2",
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert event.syslog.app_name == "login"
+        assert "from 10.0.10.2" not in event.syslog.message
+
     def test_generate_syslog_event_helper(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
