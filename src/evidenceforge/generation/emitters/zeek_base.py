@@ -184,6 +184,8 @@ def _apply_sensor_observation_variance(
             0.024,
             minimum=0,
         )
+    _enforce_http_body_invariants(render_data)
+    _enforce_ip_byte_invariants(render_data)
     if all(render_data.get(field) == original_observation[field] for field in clone_fields):
         duration = render_data.get("duration")
         if (
