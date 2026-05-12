@@ -646,3 +646,57 @@ class TestValidateConfig:
             and "cron.hourly" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_nonpositive_extra_syslog_weight(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "sudo",
+                    "transient": True,
+                    "weight": 0,
+                    "messages": ["admin : TTY=pts/0 ; USER=root ; COMMAND=/usr/bin/id"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and "weight" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
+        from evidenceforge.generation.activity import windows_auth_realism
+
+        real_loader = windows_auth_realism.load_windows_auth_realism
+
+        def load_invalid_windows_auth_realism():
+            data = real_loader()
+            special_privileges = dict(data["special_privileges"])
+            probabilities = dict(special_privileges.get("emission_probabilities", {}))
+            probabilities["service_account"] = 1.5
+            special_privileges["emission_probabilities"] = probabilities
+            return {**data, "special_privileges": special_privileges}
+
+        monkeypatch.setattr(
+            windows_auth_realism,
+            "load_windows_auth_realism",
+            load_invalid_windows_auth_realism,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "windows_auth_realism.yaml"
+            and "emission_probabilities" in issue.message
+            for issue in result.issues
+        )

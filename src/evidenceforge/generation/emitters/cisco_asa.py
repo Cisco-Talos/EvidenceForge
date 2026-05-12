@@ -365,11 +365,19 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if protocol == "icmp":
             msg_id = 302020
             icmp_type = net.dst_port if net.dst_port else 8  # Default echo request
+            if direction == "inbound":
+                foreign_iface, foreign_ip = src_iface, net.src_ip
+                global_iface, global_ip = dst_iface, net.dst_ip
+                local_iface, local_ip = dst_iface, net.dst_ip
+            else:
+                foreign_iface, foreign_ip = dst_iface, net.dst_ip
+                global_iface, global_ip = src_iface, net.src_ip
+                local_iface, local_ip = src_iface, net.src_ip
             message = (
                 f"Built {direction} ICMP connection for faddr "
-                f"{dst_iface}:{net.dst_ip}/{icmp_type} "
-                f"gaddr {src_iface}:{net.src_ip}/0 "
-                f"laddr {src_iface}:{net.src_ip}/0"
+                f"{foreign_iface}:{foreign_ip}/{icmp_type} "
+                f"gaddr {global_iface}:{global_ip}/0 "
+                f"laddr {local_iface}:{local_ip}/0"
             )
         else:
             msg_id = 302013 if protocol == "tcp" else 302015
@@ -434,11 +442,20 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if protocol == "icmp":
             msg_id = 302021
             icmp_type = net.dst_port if net.dst_port else 8
+            direction = "inbound" if src_iface == "outside" else "outbound"
+            if direction == "inbound":
+                foreign_iface, foreign_ip = src_iface, net.src_ip
+                global_iface, global_ip = dst_iface, net.dst_ip
+                local_iface, local_ip = dst_iface, net.dst_ip
+            else:
+                foreign_iface, foreign_ip = dst_iface, net.dst_ip
+                global_iface, global_ip = src_iface, net.src_ip
+                local_iface, local_ip = src_iface, net.src_ip
             message = (
                 f"Teardown ICMP connection for faddr "
-                f"{dst_iface}:{net.dst_ip}/{icmp_type} "
-                f"gaddr {src_iface}:{net.src_ip}/0 "
-                f"laddr {src_iface}:{net.src_ip}/0"
+                f"{foreign_iface}:{foreign_ip}/{icmp_type} "
+                f"gaddr {global_iface}:{global_ip}/0 "
+                f"laddr {local_iface}:{local_ip}/0"
             )
         else:
             msg_id = 302014 if protocol == "tcp" else 302016

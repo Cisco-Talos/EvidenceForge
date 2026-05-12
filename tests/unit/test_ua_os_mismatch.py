@@ -114,6 +114,12 @@ class TestProxyUriOsFiltering:
             "crl.microsoft.com": {"application/pkix-crl"},
             "settings-win.data.microsoft.com": {"application/json"},
             "update.googleapis.com": {"application/json", "application/octet-stream"},
+            "packages.microsoft.com": {
+                "application/vnd.debian.binary-package",
+                "application/x-gzip",
+                "text/plain",
+            },
+            "archive.ubuntu.com": {"application/x-gzip", "text/plain"},
         }
         for host, allowed_types in infra_domains.items():
             path, content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
@@ -135,6 +141,8 @@ class TestProxyUriOsFiltering:
         assert is_browser_like_proxy_domain("crl.microsoft.com") is False
         assert is_browser_like_proxy_domain("settings-win.data.microsoft.com") is False
         assert is_browser_like_proxy_domain("update.googleapis.com") is False
+        assert is_browser_like_proxy_domain("packages.microsoft.com") is False
+        assert is_browser_like_proxy_domain("archive.ubuntu.com") is False
         assert is_browser_like_proxy_domain("www.bing.com") is True
         assert is_browser_like_proxy_domain("unknown.example.test") is True
 

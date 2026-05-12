@@ -41,8 +41,13 @@ programs:
   - app: sudo
     transient: true
     roles: [web_server, forward_proxy]
+    weight: 1
     messages:
       - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/bin/cat /etc/shadow"
+      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/head /etc/shadow"
+      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/tail /var/log/auth.log"
+      - "nginx : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/find /root -maxdepth 1"
+      - "apache : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/id"
 
   - app: dhclient
     messages:

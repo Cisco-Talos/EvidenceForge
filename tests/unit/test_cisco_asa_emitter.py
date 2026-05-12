@@ -337,6 +337,28 @@ class TestPermitRecords:
         assert "Built outbound ICMP connection" in lines[0]
         assert "%ASA-6-302021:" in lines[1]
 
+    def test_inbound_icmp_keeps_foreign_and_local_addresses_directional(
+        self, asa_emitter, tmp_path
+    ):
+        """Inbound ICMP faddr is the outside source; gaddr/laddr are local destination."""
+        event = _make_connection_event(
+            protocol="icmp",
+            src_ip="203.0.113.50",
+            src_port=0,
+            dst_ip="172.16.0.5",
+            dst_port=8,
+            duration=0.5,
+        )
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        built_line = next(line for line in output.splitlines() if "%ASA-6-302020:" in line)
+        assert "Built inbound ICMP connection" in built_line
+        assert "faddr outside:203.0.113.50/8" in built_line
+        assert "gaddr dmz:172.16.0.5/0" in built_line
+        assert "laddr dmz:172.16.0.5/0" in built_line
+
     def test_inbound_direction_for_external_source(self, asa_emitter, tmp_path):
         """External source -> internal destination should be 'inbound'."""
         event = _make_connection_event(

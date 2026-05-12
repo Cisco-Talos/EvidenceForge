@@ -44,7 +44,7 @@ def filter_syslog_messages(
     programs: list[dict[str, Any]],
     is_rhel_like: bool,
     host_roles: list[str] | None,
-) -> list[tuple[str, list[str]]]:
+) -> list[tuple[str, list[str], int]]:
     """Filter syslog programs by distro and host roles.
 
     Args:
@@ -53,7 +53,7 @@ def filter_syslog_messages(
         host_roles: List of roles assigned to the host, or None.
 
     Returns:
-        List of (app_name, messages) tuples matching the host context.
+        List of (app_name, messages, weight) tuples matching the host context.
     """
     result = []
     for entry in programs:
@@ -68,5 +68,5 @@ def filter_syslog_messages(
             if not host_roles or not any(r in host_roles for r in required_roles):
                 continue
 
-        result.append((entry["app"], entry["messages"]))
+        result.append((entry["app"], entry["messages"], int(entry.get("weight", 10))))
     return result

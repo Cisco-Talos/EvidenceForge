@@ -2282,7 +2282,7 @@ class ActivityGenerator:
 
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
-        elevated = self._should_elevate(user)
+        elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
         )
@@ -8621,30 +8621,59 @@ class ActivityGenerator:
     # Personas that represent admin/operator roles (get elevated privileges)
     _ADMIN_PERSONAS = {"sysadmin", "security_analyst", "help_desk"}
 
-    def _should_elevate(self, user: User) -> bool:
-        """Determine if a logon should generate 4672 (Special Privileges).
-
-        Role-based: admins ~80%, machine/service accounts always. Regular
-        users do not randomly receive 4672 unless the scenario marks them as
-        privileged via persona or group membership.
-        """
-        rng = _get_rng()
+    def _special_privilege_profile_name(
+        self,
+        user: User,
+        logon_type: int,
+        hostname: str,
+    ) -> str:
+        """Classify a logon for 4672 emission and privilege-list selection."""
         username = user.username
-        # Machine accounts always elevated
+        if username in ("LOCAL SERVICE", "NETWORK SERVICE"):
+            return "service_account"
+        if username == "SYSTEM":
+            return "system_account"
         if username.endswith("$"):
-            return True
-        # System service accounts always elevated
-        if username in ("SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"):
-            return True
-        # Admin personas: ~80% elevated
-        persona = getattr(user, "persona", None)
-        if persona and str(persona) in self._ADMIN_PERSONAS:
-            return rng.random() < 0.80
+            return "machine_account"
+        if logon_type == 5:
+            return "service_account"
+
+        persona = str(getattr(user, "persona", "") or "")
         admin_group_terms = ("admin", "operator", "account operator", "server operator")
         groups = [str(group).lower() for group in getattr(user, "groups", [])]
-        if any(any(term in group for term in admin_group_terms) for group in groups):
-            return rng.random() < 0.80
-        return False
+        is_admin = persona in self._ADMIN_PERSONAS or any(
+            any(term in group for term in admin_group_terms) for group in groups
+        )
+        if is_admin:
+            return "domain_admin" if "dc" in hostname.lower() else "workstation_admin"
+        return "regular_user"
+
+    def _should_elevate(
+        self,
+        user: User,
+        logon_type: int = 0,
+        hostname: str = "",
+    ) -> bool:
+        """Determine if a logon should generate 4672 (Special Privileges).
+
+        Role-based and data-driven: privileged accounts receive 4672 according
+        to source-native account-class probabilities. Regular users do not
+        randomly receive 4672 unless the scenario marks them as privileged via
+        persona or group membership.
+        """
+        rng = _get_rng()
+        profile_name = self._special_privilege_profile_name(user, logon_type, hostname)
+        if profile_name == "regular_user":
+            return False
+        config = special_privileges_config().get("emission_probabilities", {})
+        probabilities = config if isinstance(config, dict) else {}
+        default_probability = 0.0 if profile_name == "regular_user" else 0.5
+        try:
+            probability = float(probabilities.get(profile_name, default_probability))
+        except (TypeError, ValueError):
+            probability = default_probability
+        probability = max(0.0, min(probability, 1.0))
+        return rng.random() < probability
 
     def _select_auth_package(self, logon_type: int) -> dict[str, str]:
         """Select auth package, LogonProcessName, and LogonGuid based on logon type.
@@ -8717,18 +8746,13 @@ class ActivityGenerator:
         hostname: str,
     ) -> str:
         """Return a source-native 4672 privilege list for this elevated session."""
-        username = user.username
-        if username in ("LOCAL SERVICE", "NETWORK SERVICE"):
+        profile_name = self._special_privilege_profile_name(user, logon_type, hostname)
+        if profile_name == "service_account":
             profile_name = "service_account"
-        elif username == "SYSTEM" or username.endswith("$") or logon_type == 5:
+        elif profile_name in {"system_account", "machine_account"}:
             profile_name = "domain_admin"
-        else:
-            persona = str(getattr(user, "persona", "") or "")
-            profile_name = (
-                "domain_admin" if persona in self._ADMIN_PERSONAS else "uac_elevated_user"
-            )
-            if profile_name == "domain_admin" and "dc" not in hostname.lower():
-                profile_name = "workstation_admin"
+        elif profile_name == "regular_user":
+            profile_name = "uac_elevated_user"
 
         profiles = special_privileges_config().get("profiles", {})
         profile = profiles.get(profile_name, {}) if isinstance(profiles, dict) else {}
@@ -8969,6 +8993,45 @@ class ActivityGenerator:
                     return session.explorer_pid
         return None
 
+    def _windows_explorer_parent_pid(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str = "",
+    ) -> int:
+        """Return the Windows logon-chain parent for explorer.exe.
+
+        Explorer is the interactive shell. It is created by userinit/winlogon,
+        not by arbitrary user applications that happen to be alive in the same
+        session.
+        """
+        sessions = self.state_manager.get_sessions_for_user(user.username)
+        for session in sessions:
+            if session.system != system.hostname:
+                continue
+            if logon_id and session.logon_id != logon_id:
+                continue
+            if session.explorer_pid is None:
+                continue
+            explorer = self.state_manager.get_process(system.hostname, session.explorer_pid)
+            if explorer is None:
+                continue
+            parent_pid = explorer.parent_pid
+            if parent_pid and self._is_pid_active_at(system, parent_pid, time):
+                return parent_pid
+            if session.session_winlogon_pid and self._is_pid_active_at(
+                system, session.session_winlogon_pid, time
+            ):
+                return session.session_winlogon_pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for role in ("userinit", "winlogon", "services", "wininit"):
+            pid = sys_pids.get(role)
+            if pid and self._is_pid_active_at(system, pid, time):
+                return pid
+        return sys_pids.get("winlogon", sys_pids.get("services", 4))
+
     def _select_parent_pid(
         self, system: System, user: User, process_name: str, time: datetime | None = None
     ) -> int:
@@ -9001,6 +9064,7 @@ class ActivityGenerator:
                 if "\\" in process_name
                 else process_name.lower()
             )
+            effective_time = time or self.state_manager.state.current_time
 
             # Check if the user's active session on this system is a network
             # logon (type 3). Network logons never spawn explorer.exe — processes
@@ -9026,6 +9090,11 @@ class ActivityGenerator:
                     return shells[-1][0]
                 return sys_pids.get(
                     "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+
+            if exe_name == "explorer.exe":
+                return self._windows_explorer_parent_pid(
+                    system, user, effective_time, active_session.logon_id if active_session else ""
                 )
 
             # Prefer session-specific explorer PID over system-wide default
@@ -9173,6 +9242,9 @@ class ActivityGenerator:
                 "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
             )
 
+        if os_cat == "windows" and exe_name == "explorer.exe":
+            return self._windows_explorer_parent_pid(system, user, time, logon_id)
+
         # Look up valid parents from spawn rules
         if os_cat == "windows":
             reverse = get_reverse_index_windows()
@@ -9270,6 +9342,10 @@ class ActivityGenerator:
             return parent_pid
         parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
         parent_image = (parent_proc.image if parent_proc is not None else "").lower()
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if os_category == "windows" and process_exe == "explorer.exe":
+            return self._windows_explorer_parent_pid(system, user, time, logon_id)
+
         if os_category == "windows":
             if (
                 parent_pid != 4

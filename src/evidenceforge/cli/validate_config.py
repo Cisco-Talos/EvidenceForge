@@ -672,6 +672,9 @@ def validate_config() -> ValidationResult:
         "software_update": {
             "application/json",
             "application/octet-stream",
+            "application/vnd.debian.binary-package",
+            "application/x-gzip",
+            "text/plain",
         },
         "telemetry": {"application/json"},
     }

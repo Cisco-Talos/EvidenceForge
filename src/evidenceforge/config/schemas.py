@@ -127,6 +127,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     distro: str | None = None
     roles: list[str] | None = None
     transient: bool | None = None
+    weight: int = Field(default=10, gt=0)
 
 
 # --- TLS Issuers ---
@@ -779,7 +780,19 @@ class WindowsSpecialPrivilegesProfile(BaseModel, extra="forbid"):
 class WindowsSpecialPrivilegesConfig(BaseModel, extra="forbid"):
     """Windows 4672 privilege profile config."""
 
+    emission_probabilities: dict[str, float] = Field(default_factory=dict)
     profiles: dict[str, WindowsSpecialPrivilegesProfile]
+
+    @field_validator("emission_probabilities")
+    @classmethod
+    def probabilities_are_unit_interval(cls, v: dict[str, float]) -> dict[str, float]:
+        for profile_name, probability in v.items():
+            if probability < 0.0 or probability > 1.0:
+                raise ValueError(
+                    f"special_privileges.emission_probabilities.{profile_name} "
+                    "must be between 0.0 and 1.0"
+                )
+        return v
 
     @field_validator("profiles")
     @classmethod

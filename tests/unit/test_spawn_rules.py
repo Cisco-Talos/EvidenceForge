@@ -158,6 +158,61 @@ class TestWindowsProcessTreeRealism:
             f"GUI app parent should be explorer, got {parent_proc.image}"
         )
 
+    def test_explorer_process_cannot_parent_from_browser_renderer(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """explorer.exe should stay anchored to the logon chain, not browser children."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC))
+        firefox_pid = state_manager.create_process(
+            win_system.hostname,
+            session.explorer_pid,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe"',
+            user.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC))
+        renderer_pid = state_manager.create_process(
+            win_system.hostname,
+            firefox_pid,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc',
+            user.username,
+            "Low",
+            logon_id=logon_id,
+        )
+
+        created_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            r"C:\Windows\explorer.exe",
+            parent_pid=renderer_pid,
+        )
+
+        created_proc = state_manager.get_process(win_system.hostname, created_pid)
+        assert created_proc is not None
+        parent_proc = state_manager.get_process(win_system.hostname, created_proc.parent_pid)
+        assert parent_proc is not None
+        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].lower()
+        assert parent_exe in {"userinit.exe", "winlogon.exe", "services.exe"}, (
+            f"explorer.exe parent should come from the logon chain, got {parent_proc.image}"
+        )
+
     def test_system_process_gets_services_parent(
         self, state_manager, mock_emitters, win_system, user
     ):

@@ -4925,7 +4925,11 @@ class BaselineMixin:
                     filtered = filter_syslog_messages(_all_programs, is_rhel_like, system.roles)
                     if not filtered:
                         continue
-                    app, msgs = rng.choice(filtered)
+                    app, msgs, _entry_weight = rng.choices(
+                        filtered,
+                        weights=[weight for _app, _messages, weight in filtered],
+                        k=1,
+                    )[0]
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         renewal = rng.choice([1800, 3600, 3600, 7200, 14400, 43200])

@@ -159,6 +159,7 @@ programs:
     distro: ubuntu                    # Optional: restrict to distro
     roles: [web_server]              # Optional: restrict to host roles (any match)
     transient: true                   # Optional: true if process forks per invocation
+    weight: 5                         # Optional: relative selection weight (default 10)
 ```
 
 ### Field Reference
@@ -170,6 +171,7 @@ programs:
 | `distro` | string | no | Restrict to `ubuntu` (excluded on RHEL-like) |
 | `roles` | list[string] | no | Required host roles (any match includes the entry) |
 | `transient` | bool | no | If `true`, uses random PID per invocation |
+| `weight` | integer | no | Relative selection weight; lower values make rare messages less frequent |
 
 ---
 
@@ -267,6 +269,10 @@ failed_logon:
         port: 445
         weight: 85
   special_privileges:
+    emission_probabilities:
+      service_account: 0.35
+      domain_admin: 0.55
+      workstation_admin: 0.50
     profiles:
       domain_admin:
         privileges: [SeSecurityPrivilege, SeBackupPrivilege, SeRestorePrivilege, SeDebugPrivilege]
@@ -275,7 +281,7 @@ failed_logon:
 
 The lock/unlock gap applies when a generated 4801 unlock would otherwise occur too soon after the previous 4800 lock for the same user, host, and LogonID. Overlays can increase or decrease the value, but `eforge validate-config` requires at least 60 seconds.
 
-Failed-logon profiles control source-native Windows 4625 fields and DC-side validation evidence. Local interactive failures should remain workstation-local (`User32`/`Negotiate` with no source IP); network failures choose weighted NTLM/Negotiate profiles, a weighted validation path (`4776`, `4771`, or both), and companion network ports for sensor-visible failed-auth attempts. Remote auth companion connections must be established or reset after payload, never SYN-only. Special-privilege profiles control the 4672 `PrivilegeList` for service accounts, domain admins, workstation admins, and UAC-elevated users. Run `eforge validate-config` after overlay changes; probabilities must be between 0 and 1, weights/ports must be positive, validation paths must emit at least one DC-side event, and privilege names must use `Se*Privilege` names.
+Failed-logon profiles control source-native Windows 4625 fields and DC-side validation evidence. Local interactive failures should remain workstation-local (`User32`/`Negotiate` with no source IP); network failures choose weighted NTLM/Negotiate profiles, a weighted validation path (`4776`, `4771`, or both), and companion network ports for sensor-visible failed-auth attempts. Remote auth companion connections must be established or reset after payload, never SYN-only. Special-privilege emission probabilities control how often each account class gets a companion 4672, and profiles control the `PrivilegeList` for service accounts, domain admins, workstation admins, and UAC-elevated users. Run `eforge validate-config` after overlay changes; probabilities must be between 0 and 1, weights/ports must be positive, validation paths must emit at least one DC-side event, and privilege names must use `Se*Privilege` names.
 
 ---
 
