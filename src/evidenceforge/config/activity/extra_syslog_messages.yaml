@@ -17,8 +17,9 @@
 programs:
   - app: NetworkManager
     messages:
-      - "<info>  [{}] dhcp4 (ens160): state changed bound -> bound"
-      - "<info>  [{}] device (ens160): state change: activated -> activated"
+      - "<info>  [{}] dhcp4 (ens160): state changed renew -> bound"
+      - "<info>  [{}] device (ens160): state change: disconnected -> prepare"
+      - "<info>  [{}] device (ens160): state change: ip-config -> activated"
       - "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL"
 
   - app: dbus-daemon

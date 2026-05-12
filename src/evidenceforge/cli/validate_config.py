@@ -1638,6 +1638,22 @@ def validate_config() -> ValidationResult:
                             ),
                         )
                     )
+                if app == "NetworkManager" and "state change:" in message:
+                    transition = message.split("state change:", 1)[1].strip()
+                    transition = transition.split("{", 1)[0].strip()
+                    if "->" in transition:
+                        before, after = [part.strip() for part in transition.split("->", 1)]
+                        if before and after and before == after:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "extra_syslog_messages.yaml",
+                                    (
+                                        "NetworkManager state transition must change states, "
+                                        f'got "{message}"'
+                                    ),
+                                )
+                            )
 
     # systemd_schedules.yaml
     from evidenceforge.generation.engine.baseline import _load_systemd_schedules

@@ -1606,7 +1606,8 @@ class TestActivityGenerator:
         assert event.auth.subject_sid == "S-1-5-18"
         assert event.auth.subject_username == "SYSTEM"
         assert event.auth.subject_domain == "NT AUTHORITY"
-        assert event.auth.subject_logon_id == service_logon_id
+        assert event.auth.subject_logon_id == "0x3e7"
+        assert service_logon_id != event.auth.subject_logon_id
 
     def test_log_cleared_can_inherit_causative_process_logon_id(
         self, activity_gen, test_system, mock_emitters
@@ -1631,6 +1632,32 @@ class TestActivityGenerator:
         assert event.event_type == "log_cleared"
         assert event.auth.subject_username == "jsmith"
         assert event.auth.subject_logon_id == "0xabc123"
+
+    def test_kerberos_preauth_failed_preserves_missing_source_ip(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """4771 should not render missing source IP as invalid ::ffff:-."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._dc_systems = {
+            "DC-01": System(
+                hostname="DC-01",
+                ip="10.0.0.10",
+                os="Windows Server 2019",
+                type="domain_controller",
+            )
+        }
+
+        activity_gen.generate_kerberos_preauth_failed(
+            test_user.username,
+            "-",
+            "DC-01",
+            timestamp,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "kerberos_preauth_failed"
+        assert event.kerberos.source_ip == "-"
 
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters

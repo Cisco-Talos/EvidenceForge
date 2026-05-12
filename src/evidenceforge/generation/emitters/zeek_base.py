@@ -160,6 +160,8 @@ def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
 
 def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
     """Keep Zeek IP-byte counters physically possible after observation jitter."""
+    proto = str(render_data.get("proto") or "").lower()
+    header_bytes = {"tcp": 40, "udp": 28, "icmp": 28}.get(proto, 20)
     for side in ("orig", "resp"):
         payload = render_data.get(f"{side}_bytes")
         ip_bytes = render_data.get(f"{side}_ip_bytes")
@@ -169,7 +171,7 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
         if payload < 0 or ip_bytes < 0:
             continue
         packet_count = packets if isinstance(packets, int) and packets > 0 else 1
-        minimum_ip_bytes = payload + (20 * packet_count)
+        minimum_ip_bytes = payload + (header_bytes * packet_count)
         if ip_bytes < minimum_ip_bytes:
             render_data[f"{side}_ip_bytes"] = minimum_ip_bytes
 

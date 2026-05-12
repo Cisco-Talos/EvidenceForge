@@ -7960,7 +7960,13 @@ class ActivityGenerator:
                 ticket_options=failure_fields["ticket_options"],
                 ticket_status=status,
                 pre_auth_type=failure_fields["pre_auth_type"],
-                source_ip=f"::ffff:{source_ip}" if ":" not in source_ip else source_ip,
+                source_ip=(
+                    "-"
+                    if source_ip in {"", "-"}
+                    else f"::ffff:{source_ip}"
+                    if ":" not in source_ip
+                    else source_ip
+                ),
                 source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
                 reporting_pid=reporting_pid,
             ),
@@ -8051,6 +8057,8 @@ class ActivityGenerator:
         subject_logon_id: str | None = None,
     ) -> None:
         """Generate security log cleared event (1102) on target system."""
+        if user.username in _SYSTEM_ACCOUNT_LOGON_IDS:
+            subject_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[user.username]
         subject_logon_id = subject_logon_id or self._get_subject_logon_id(
             user.username, system.hostname, time
         )

@@ -155,7 +155,7 @@ Additional syslog program messages for baseline diversity. These supplement the 
 programs:
   - app: NetworkManager              # Syslog app_name
     messages:                         # List of message templates
-      - "<info> [{}] device (ens160): state change: activated -> activated"
+      - "<info> [{}] device (ens160): state change: ip-config -> activated"
     distro: ubuntu                    # Optional: restrict to distro
     roles: [web_server]              # Optional: restrict to host roles (any match)
     transient: true                   # Optional: true if process forks per invocation

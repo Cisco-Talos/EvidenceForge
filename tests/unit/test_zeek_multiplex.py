@@ -121,8 +121,8 @@ class TestPerSensorDirectoryRouting:
                 )
             )
             for row in (core, dmz):
-                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
-                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (40 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (40 * row["resp_pkts"])
 
     def test_sensor_timestamp_offsets_vary_by_flow(self):
         """Cross-sensor timestamps should not collapse into one fixed offset band."""

@@ -695,6 +695,32 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_networkmanager_same_state_transition(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "NetworkManager",
+                    "messages": [
+                        "<info>  [{}] device (ens160): state change: activated -> activated"
+                    ],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and "NetworkManager state transition must change states" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 
