@@ -62,8 +62,15 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         ft = event.file_transfer
         sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
         if ft is not None:
+            file_ts, file_duration = _bounded_file_transfer_observation(
+                event.timestamp,
+                net.duration,
+                net.zeek_uid,
+                ft.fuid,
+                ft.duration,
+            )
             event_data: dict[str, Any] = {
-                "ts": _file_transfer_analyzer_timestamp(event.timestamp, net.zeek_uid, ft.fuid),
+                "ts": file_ts,
                 "fuid": ft.fuid,
                 "tx_hosts": [net.src_ip] if ft.is_orig else [net.dst_ip],
                 "rx_hosts": [net.dst_ip] if ft.is_orig else [net.src_ip],
@@ -75,7 +82,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "filename": ft.filename or None,
                 "analyzers": ft.analyzers if ft.analyzers else None,
                 "mime_type": ft.mime_type or None,
-                "duration": ft.duration,
+                "duration": file_duration,
                 "local_orig": ft.local_orig,
                 "is_orig": ft.is_orig,
                 "seen_bytes": ft.seen_bytes,
@@ -177,3 +184,29 @@ def _file_transfer_analyzer_timestamp(ts: datetime, zeek_uid: str, fuid: str) ->
     """Return a deterministic files.log analysis time after the conn start."""
     delay_ms = 25 + (_stable_seed(f"zeek-file-delay:{zeek_uid}:{fuid}") % 225)
     return ts + timedelta(milliseconds=delay_ms)
+
+
+def _bounded_file_transfer_observation(
+    conn_ts: datetime,
+    conn_duration: float | None,
+    zeek_uid: str,
+    fuid: str,
+    file_duration: float,
+) -> tuple[datetime, float]:
+    """Keep files.log observation timing inside the owning conn.log interval."""
+    file_ts = _file_transfer_analyzer_timestamp(conn_ts, zeek_uid, fuid)
+    if conn_duration is None or conn_duration <= 0:
+        return file_ts, file_duration
+
+    epsilon = 0.001
+    conn_end = conn_ts + timedelta(seconds=conn_duration)
+    max_duration = max(0.0, conn_duration - epsilon)
+    bounded_duration = min(max(0.0, file_duration), max_duration)
+    latest_start = conn_end - timedelta(seconds=bounded_duration + epsilon)
+    if file_ts > latest_start:
+        file_ts = latest_start
+    if file_ts < conn_ts:
+        file_ts = conn_ts
+    if file_ts + timedelta(seconds=bounded_duration) > conn_end:
+        bounded_duration = max(0.0, (conn_end - file_ts).total_seconds() - epsilon)
+    return file_ts, bounded_duration

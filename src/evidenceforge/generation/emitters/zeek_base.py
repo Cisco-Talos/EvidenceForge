@@ -481,26 +481,6 @@ class SensorMultiplexEmitter(LogEmitter):
                             render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                         elif isinstance(ts, (int, float)):
                             render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                    dur = render_data.get("duration")
-                    if (
-                        dur is not None
-                        and isinstance(dur, (int, float))
-                        and not render_data.get("_lock_duration")
-                    ):
-                        min_duration = render_data.get("_min_duration")
-                        if not isinstance(min_duration, (int, float)):
-                            min_duration = 0.0
-                        dur_fraction = _sensor_variation_fraction(
-                            hostname,
-                            original_uid,
-                            "duration",
-                            0.025,
-                        )
-                        if dur >= 0.01:
-                            varied_duration = dur * (1.0 + dur_fraction)
-                        else:
-                            varied_duration = dur + dur_fraction / 1000.0
-                        render_data["duration"] = max(min_duration, varied_duration)
                     _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)

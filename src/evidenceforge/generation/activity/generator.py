@@ -1357,6 +1357,7 @@ class ActivityGenerator:
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
+        self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -3672,26 +3673,33 @@ class ActivityGenerator:
             dll_profiles = get_dlls_for_process(_exe_lower)
             dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
             module_delay_ms = rng.randint(120, 1500)
-            self.dispatcher.dispatch(
-                SecurityEvent(
-                    timestamp=time + timedelta(milliseconds=module_delay_ms),
-                    event_type="image_load",
-                    src_host=host_ctx,
-                    auth=auth_ctx,
-                    process=ProcessContext(
-                        pid=pid,
-                        parent_pid=parent_pid,
-                        image=process_name,
-                        command_line=command_line,
-                        username=process_username,
-                        logon_id=process_logon_id,
-                        start_time=running_proc.start_time if running_proc is not None else None,
-                    ),
-                    image_load=ImageLoadContext(image_loaded=dll_path),
-                    edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
-                    storyline_origin=from_storyline,
+            process_start = running_proc.start_time if running_proc is not None else None
+            if dll_path and self._mark_loaded_module(
+                system.hostname,
+                pid,
+                process_start,
+                dll_path,
+            ):
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time + timedelta(milliseconds=module_delay_ms),
+                        event_type="image_load",
+                        src_host=host_ctx,
+                        auth=auth_ctx,
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=process_name,
+                            command_line=command_line,
+                            username=process_username,
+                            logon_id=process_logon_id,
+                            start_time=process_start,
+                        ),
+                        image_load=ImageLoadContext(image_loaded=dll_path),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        storyline_origin=from_storyline,
+                    )
                 )
-            )
         # Only emit registry events for processes that realistically modify registry
         # (services, shells, installers) — NOT command-line recon tools like net.exe/dsquery.exe
         _REGISTRY_WRITERS = {
@@ -7577,6 +7585,19 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
         subject = self._account_subject_fields(user.username, system, subject_logon_id)
+        if process_pid <= 0 and process_name:
+            process_time = time - timedelta(seconds=1)
+            scenario_start = getattr(self, "_scenario_start_time", None)
+            if scenario_start is not None and ensure_utc(process_time) < ensure_utc(scenario_start):
+                process_time = time - timedelta(milliseconds=500)
+            process_pid = self.generate_process(
+                user,
+                system,
+                process_time,
+                subject_logon_id,
+                process_name,
+                ntpath.basename(process_name),
+            )
         network_source_ip = source_ip or self._explicit_credentials_source_ip(system, target_server)
         network_source_port = source_port
         if network_source_ip not in {"", "-"} and network_source_port <= 0:
@@ -8898,6 +8919,14 @@ class ActivityGenerator:
                 dll_path,
             )
             return
+        if not self._mark_loaded_module(system.hostname, pid, proc.start_time, dll_path):
+            logger.debug(
+                "Skipping duplicate image load for process instance: %s pid=%s dll=%s",
+                system.hostname,
+                pid,
+                dll_path,
+            )
+            return
         self.state_manager.update_process_activity_time(system.hostname, pid, time)
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
@@ -8922,6 +8951,21 @@ class ActivityGenerator:
             edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
         )
         self.dispatcher.dispatch(event)
+
+    def _mark_loaded_module(
+        self,
+        hostname: str,
+        pid: int,
+        process_start: datetime | None,
+        dll_path: str,
+    ) -> bool:
+        """Return False when this process instance already loaded the module."""
+        process_start_key = process_start.isoformat() if process_start is not None else ""
+        module_key = (hostname, pid, process_start_key, dll_path.lower())
+        if module_key in self._loaded_modules_by_process:
+            return False
+        self._loaded_modules_by_process.add(module_key)
+        return True
 
     def generate_account_changed(
         self,

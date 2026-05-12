@@ -2074,6 +2074,20 @@ class TestActivityGenerator:
         assert event.process.image.endswith("firefox.exe")
         assert event.timestamp > timestamp
         assert event.edr.actor_id
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=30),
+            event.process.pid,
+            event.process.image,
+            event.image_load.image_loaded,
+        )
+        module_events_after_replay = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "image_load"
+        ]
+        assert len(module_events_after_replay) == len(module_events)
 
     def test_image_load_skips_ended_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2103,6 +2117,47 @@ class TestActivityGenerator:
         )
 
         assert not mock_emitters["windows_event_security"].emit.called
+
+    def test_image_load_skips_duplicate_module_for_process_instance(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A process should not repeatedly report the same loaded module instance."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\taskhostw.exe",
+            command_line="taskhostw.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            pid,
+            r"C:\Windows\System32\taskhostw.exe",
+            r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+        )
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(hours=2),
+            pid,
+            r"C:\Windows\System32\taskhostw.exe",
+            r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+        )
+
+        module_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "image_load"
+        ]
+        assert len(module_events) == 1
 
     def test_process_termination_waits_for_recorded_dependent_activity(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2530,6 +2585,32 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "explicit_credentials"
         assert event.auth.process_pid == 4242
+
+    def test_generate_explicit_credentials_creates_named_caller_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A named 4648 caller process should not render with ProcessId=0x0."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.process_pid == process.process.pid
+        assert explicit.auth.process_pid > 0
+        assert process.timestamp < explicit.timestamp
 
     def test_generate_explicit_credentials_bootstraps_subject_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

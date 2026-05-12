@@ -112,6 +112,7 @@ class TestPerSensorDirectoryRouting:
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert core["orig_pkts"] == dmz["orig_pkts"] == 52
             assert core["resp_pkts"] == dmz["resp_pkts"] == 74
+            assert core["duration"] == dmz["duration"] == 12.5
             assert core["orig_ip_bytes"] == dmz["orig_ip_bytes"]
             assert core["resp_ip_bytes"] == dmz["resp_ip_bytes"]
             for row in (core, dmz):

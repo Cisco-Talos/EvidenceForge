@@ -251,6 +251,40 @@ class TestFilesUidCorrelation:
             assert "uid" not in data
             assert "id.orig_h" not in data
 
+    def test_file_transfer_timestamp_stays_within_parent_connection(self):
+        """files.log observations should not begin after the owning conn closes."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CConnUID12345678",
+                    duration=0.08,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FFileUID12345678",
+                    source="SMB",
+                    duration=0.06,
+                    seen_bytes=4096,
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            data = json.loads(output.read_text().splitlines()[0])
+
+        assert data["ts"] >= event.timestamp.timestamp()
+        assert data["ts"] + data["duration"] <= event.timestamp.timestamp() + 0.08
+
     def test_same_certificate_fingerprint_keeps_file_hashes(self):
         """Repeated observations of the same cert bytes should keep all hashes stable."""
         fmt = load_format("zeek_files")
