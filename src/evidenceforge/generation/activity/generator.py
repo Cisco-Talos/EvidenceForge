@@ -1862,7 +1862,10 @@ class ActivityGenerator:
         from evidenceforge.generation.activity.tls_realism import pick_ocsp_responder
 
         issuer_name = tls_event.x509.certificate_issuer if tls_event.x509 else ""
-        responder = pick_ocsp_responder(issuer_name, rng)
+        responder = pick_ocsp_responder(
+            issuer_name,
+            random.Random(_stable_seed(f"ocsp_responder:{issuer_name}:{ocsp.serial_number}")),
+        )
         responder_ip = resolve_domain_ip(responder, src_host=net.src_ip)
         ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp.id}")).randint(900, 2500)
         ocsp_time = tls_event.timestamp + timedelta(
@@ -1870,8 +1873,9 @@ class ActivityGenerator:
         )
         uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
         source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
+        source_os = str(getattr(source_system, "os", "") or "")
         user_agent = pick_proxy_user_agent(
-            random.Random(_stable_seed(f"ocsp_user_agent:{ocsp.id}:{responder}:{net.src_ip}")),
+            random.Random(_stable_seed(f"ocsp_user_agent:{responder}:{net.src_ip}:{source_os}")),
             source_system,
             hostname=responder,
         )
@@ -7922,9 +7926,7 @@ class ActivityGenerator:
         from xml.sax.saxutils import escape as xml_escape
 
         task_path = task_name if task_name.startswith("\\") else f"\\{task_name}"
-        author = (
-            f"{host.netbios_domain}\\{actor.username}" if host.netbios_domain else actor.username
-        )
+        author = ActivityGenerator._scheduled_task_principal(actor.username, host)
         start_boundary = (
             time.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         )
@@ -7971,6 +7973,21 @@ class ActivityGenerator:
             "  </Actions>\n"
             "</Task>"
         )
+
+    @staticmethod
+    def _scheduled_task_principal(username: str, host: HostContext) -> str:
+        """Return a source-native Task Scheduler principal for local and domain users."""
+        normalized = username.strip()
+        upper = normalized.upper()
+        if "\\" in normalized:
+            return normalized
+        if upper in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"}:
+            return f"NT AUTHORITY\\{upper}"
+        if normalized.endswith("$"):
+            return normalized
+        if host.netbios_domain:
+            return f"{host.netbios_domain}\\{normalized}"
+        return normalized
 
     def generate_group_membership_change(
         self,

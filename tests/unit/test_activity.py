@@ -972,6 +972,26 @@ class TestActivityGenerator:
         assert event.auth.username == "SYSTEM"
         assert event.auth.target_domain == "NT AUTHORITY"
 
+    def test_scheduled_task_system_principal_uses_nt_authority(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Generated task XML should not render local SYSTEM as an AD-domain principal."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        system_user = User(username="SYSTEM", full_name="System", email="system@example.local")
+
+        activity_gen.generate_scheduled_task(
+            user=system_user,
+            system=test_system,
+            time=timestamp,
+            task_name=r"\Microsoft\Windows\UpdateCheck",
+            task_content=r"C:\Windows\System32\cmd.exe /c whoami",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in event.scheduled_task.task_content
+        assert "<UserId>CORP\\SYSTEM</UserId>" not in event.scheduled_task.task_content
+
     def test_kerberos_krbtgt_service_ticket_uses_domain_rid_502(
         self, activity_gen, state_manager, mock_emitters
     ):

@@ -697,15 +697,16 @@ class SysmonEventEmitter(LogEmitter):
         # Remaining segments: deterministic filler for uniqueness
         return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
-    @staticmethod
-    def _generate_hashes(image: str, hostname: str) -> str:
+    @classmethod
+    def _generate_hashes(cls, image: str, host: Any | str | None = None) -> str:
         """Generate deterministic fake file hashes from image path.
 
-        Hashes are keyed on image path only (not hostname) so the same
-        binary produces identical hashes across all hosts — matching
-        real Windows behavior for identical OS builds.
+        OS binaries are keyed by image path and host file version so different
+        Windows builds do not render the same hash with different metadata.
         """
         seed = image
+        if host is not None and not isinstance(host, str) and cls._is_windows_os_binary_path(image):
+            seed = f"{image}:{cls._host_windows_file_version(host)}"
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
         md5 = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest().upper()
         sha256 = hashlib.sha256(seed.encode(), usedforsecurity=False).hexdigest().upper()
@@ -787,7 +788,7 @@ class SysmonEventEmitter(LogEmitter):
             "LogonId": logon_id,
             "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,
-            "Hashes": self._generate_hashes(proc.image, host.hostname),
+            "Hashes": self._generate_hashes(proc.image, host),
             "ParentProcessGuid": parent_guid,
             "ParentProcessId": proc.parent_pid,
             "ParentImage": proc.parent_image or "-",
@@ -1286,7 +1287,7 @@ class SysmonEventEmitter(LogEmitter):
                 il.image_loaded,
                 il.signature,
             )
-        hashes = self._generate_hashes(il.image_loaded, host.hostname)
+        hashes = self._generate_hashes(il.image_loaded, host)
         signature_status = il.signature_status if il.signed else "Unavailable"
 
         event_data = {

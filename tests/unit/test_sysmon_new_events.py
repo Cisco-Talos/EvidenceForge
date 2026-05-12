@@ -748,6 +748,27 @@ class TestProcessCreateMetadata:
         assert content.count('<Data Name="FileVersion">10.0.19041.1</Data>') == 2
         assert "10.0.20348.1" not in content
 
+    def test_os_binary_hashes_follow_host_file_version(self):
+        """The same OS binary path on different Windows builds should not share hashes."""
+        workstation = _win_host()
+        server = HostContext(
+            hostname="SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            domain="corp.local",
+            fqdn="SRV-01.corp.local",
+            netbios_domain="CORP",
+        )
+        image = r"C:\Windows\System32\cmd.exe"
+
+        workstation_hashes = SysmonEventEmitter._generate_hashes(image, workstation)
+        server_hashes = SysmonEventEmitter._generate_hashes(image, server)
+
+        assert workstation_hashes != server_hashes
+        assert SysmonEventEmitter._generate_hashes(image, workstation) == workstation_hashes
+
 
 class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""

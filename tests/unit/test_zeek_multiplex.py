@@ -123,8 +123,8 @@ class TestPerSensorDirectoryRouting:
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
 
-    def test_second_sensor_observation_varies_http_body_lengths(self):
-        """HTTP analyzer rows should not be byte-for-byte clones across sensors."""
+    def test_second_sensor_observation_preserves_http_body_lengths(self):
+        """HTTP body sizes are transaction facts, not per-sensor packet-counter jitter."""
         fmt = load_format("zeek_http")
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
@@ -158,10 +158,46 @@ class TestPerSensorDirectoryRouting:
             assert core["uri"] == dmz["uri"]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
-            assert (
-                core["request_body_len"] != dmz["request_body_len"]
-                or core["response_body_len"] != dmz["response_body_len"]
+            assert core["request_body_len"] == dmz["request_body_len"] == 1024
+            assert core["response_body_len"] == dmz["response_body_len"] == 65536
+
+    def test_conn_observation_clamps_to_http_body_floors(self):
+        """Per-sensor conn jitter must not make conn bytes smaller than http body bytes."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestBodyFloor12",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "duration": 0.25,
+                    "orig_bytes": 900,
+                    "resp_bytes": 63_000,
+                    "orig_pkts": 8,
+                    "resp_pkts": 60,
+                    "orig_ip_bytes": 1060,
+                    "resp_ip_bytes": 64_200,
+                    "conn_state": "SF",
+                    "_http_request_body_len": 1024,
+                    "_http_response_body_len": 65536,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
             )
+            emitter.close()
+
+            for sensor in ("core", "dmz"):
+                row = json.loads((base / sensor / "conn.json").read_text().splitlines()[0])
+                assert row["orig_bytes"] >= 1024
+                assert row["resp_bytes"] >= 65536
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
 
     def test_single_sensor_single_subdir(self):
         """Single sensor creates a single subdirectory."""

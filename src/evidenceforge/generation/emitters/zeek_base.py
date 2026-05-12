@@ -118,9 +118,6 @@ def _apply_sensor_observation_variance(
             0.018,
             minimum=1,
         )
-    for field in ("request_body_len", "response_body_len"):
-        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.025)
-
     # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
     # cleanly. Keep this sparse and small so it reads as capture imperfection.
     if "missed_bytes" in render_data:
@@ -129,7 +126,22 @@ def _apply_sensor_observation_variance(
             seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
             if seed % 11 == 0:
                 render_data["missed_bytes"] = missed + 16 + (seed % 496)
+    _enforce_http_body_invariants(render_data)
     _enforce_ip_byte_invariants(render_data)
+
+
+def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:
+    """Keep conn.log byte counters compatible with same-transaction http.log facts."""
+    request_body = render_data.get("_http_request_body_len")
+    response_body = render_data.get("_http_response_body_len")
+    if isinstance(request_body, int) and request_body >= 0:
+        orig_bytes = render_data.get("orig_bytes")
+        if isinstance(orig_bytes, int) and orig_bytes < request_body:
+            render_data["orig_bytes"] = request_body
+    if isinstance(response_body, int) and response_body >= 0:
+        resp_bytes = render_data.get("resp_bytes")
+        if isinstance(resp_bytes, int) and resp_bytes < response_body:
+            render_data["resp_bytes"] = response_body
 
 
 def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
@@ -466,6 +478,8 @@ class SensorMultiplexEmitter(LogEmitter):
                             varied_duration = dur + dur_fraction / 1000.0
                         render_data["duration"] = max(min_duration, varied_duration)
                     _apply_sensor_observation_variance(render_data, hostname, original_uid)
+                _enforce_http_body_invariants(render_data)
+                _enforce_ip_byte_invariants(render_data)
                 if original_uid:
                     # Derive a deterministic UID for this sensor
                     render_data["uid"] = self._derive_sensor_uid(original_uid, hostname)
