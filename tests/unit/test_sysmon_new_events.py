@@ -1062,6 +1062,27 @@ class TestTemplateCompleteness:
         required_empty = [f for f in empty if f not in optional]
         assert required_empty == [], f"Empty required fields in Event 22: {required_empty}"
 
+    def test_sysmon_events_default_rule_name_to_dash(self, emitter):
+        """Sysmon RuleName should be consistently populated when no rule matched."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="admin"),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd",
+                username="admin",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert '<Data Name="RuleName">-</Data>' in content
+        assert '<Data Name="RuleName"></Data>' not in content
+
 
 # ── Tests for expert review fixes ──────────────────────────────────────
 
