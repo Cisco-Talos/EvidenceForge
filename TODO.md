@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Retargeted and merged PR fixes #138-#141 into `dev`, then reworked PR #137 against current `dev` so Windows event spool hardening preserves all current emitter fixup passes before merge.
 - [x] Remediate Windows singleton PID path traversal telemetry suppression — canonicalize Windows singleton paths with ntpath before seeded PID reuse and cover traversal variants with a unit test.
 - [x] Fix DNS tunnel label payload accounting so sequence metadata does not truncate counted exfiltration bytes.
 - [x] Fix actor-scoped LogonID inheritance for typed `log_cleared` storyline events.
@@ -44,6 +45,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.
 - [x] Harden beacon URL host extraction against malformed bracketed authorities so invalid evaluator input cannot disable causality scoring.

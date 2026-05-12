@@ -400,6 +400,73 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
 
+    def test_spooled_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
+        """Spooled 4634 fixups should run without materializing all events."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logoff_time + timedelta(seconds=10)
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+            },
+            {
+                "EventID": 4689,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_logoffs_after_dependents_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
+        )
+        assert events[1]["EventID"] == 4634
+        assert events[1]["TimeCreated"] == process_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
+    def test_spooled_process_termination_shifted_after_visible_child_create(
+        self, format_def, temp_output
+    ):
+        """Spooled Security 4689 fixups should preserve lifecycle ordering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        child_time = terminate_time + timedelta(seconds=15)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x116c",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x116c",
+                "NewProcessId": "0x2200",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_terminations_after_dependents_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_child",
+            seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
+        )
+        termination = next(event for event in events if event["EventID"] == 4689)
+        assert termination["TimeCreated"] == child_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
     def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
         """Security 4688 should not visibly create a child before its parent 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -426,6 +493,38 @@ class TestWindowsEventEmitter:
         emitter._shift_process_creates_after_visible_parent()
 
         assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
+
+    def test_spooled_process_create_shifted_after_visible_parent_create(
+        self, format_def, temp_output
+    ):
+        """Spooled Security 4688 fixups should preserve parent-before-child ordering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        child_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        parent_time = child_time + timedelta(seconds=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1070",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": parent_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x4",
+                "NewProcessId": "0x1070",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_creates_after_visible_parent_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        child = next(event for event in events if event["NewProcessId"] == "0x1084")
+        assert child["TimeCreated"] == parent_time + timedelta(milliseconds=1)
+        emitter._cleanup_spool_unlocked()
 
     def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
         """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
@@ -552,6 +651,79 @@ class TestWindowsEventEmitter:
         assert content.count("<EventID>4624</EventID>") == 10
         assert emitter._spooled_count == 0
         assert len(emitter._event_dicts) == 0
+
+    def test_windows_spool_preserves_sentinel_prefixed_raw_strings(self, format_def, temp_output):
+        """Spool decoding should not parse attacker-controlled strings as datetimes."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        emitter.emit_event(
+            {
+                "EventID": 4624,
+                "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+                "Computer": "WIN-TEST-01",
+                "Channel": "Security",
+                "Level": 0,
+                "ExecutionProcessID": 4,
+                "ExecutionThreadID": 100,
+                "TargetUserName": "__dt__:not-a-date",
+                "TargetDomainName": "CORP",
+                "TargetLogonId": "0x000001",
+                "LogonType": 2,
+                "WorkstationName": "WIN-TEST-01",
+                "IpAddress": "192.168.1.100",
+                "LogonProcessName": "User32",
+                "AuthenticationPackageName": "Negotiate",
+            }
+        )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "__dt__:not-a-date" in content
+        assert content.count("<EventID>4624</EventID>") == 1
+
+    def test_windows_spooled_flush_uses_streaming_fixups(self, format_def, temp_output):
+        """Final spooled rendering should not fall back to list-based event fixups."""
+
+        class GuardedWindowsEventEmitter(WindowsEventEmitter):
+            def _shift_process_creates_after_visible_parent(self) -> None:
+                raise AssertionError("spooled flush must not materialize list-based create fixups")
+
+            def _shift_process_terminations_after_dependents(self) -> None:
+                raise AssertionError("spooled flush must not materialize list-based process fixups")
+
+            def _shift_logoffs_after_dependents(self) -> None:
+                raise AssertionError("spooled flush must not materialize list-based logoff fixups")
+
+            def _suppress_duplicate_lock_unlock_transitions(self) -> None:
+                raise AssertionError("spooled flush must not materialize list-based lock fixups")
+
+        emitter = GuardedWindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        for idx in range(3):
+            emitter.emit_event(
+                {
+                    "EventID": 4624,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, idx, tzinfo=UTC),
+                    "Computer": "WIN-TEST-01",
+                    "Channel": "Security",
+                    "Level": 0,
+                    "ExecutionProcessID": 4,
+                    "ExecutionThreadID": 100,
+                    "TargetUserName": f"user{idx}",
+                    "TargetDomainName": "CORP",
+                    "TargetLogonId": f"0x{idx:06x}",
+                    "LogonType": 2,
+                    "WorkstationName": "WIN-TEST-01",
+                    "IpAddress": "192.168.1.100",
+                    "LogonProcessName": "User32",
+                    "AuthenticationPackageName": "Negotiate",
+                }
+            )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert content.count("<EventID>4624</EventID>") == 3
 
     def test_threaded_windows_barrier_spools_buffer_to_bound_memory(self, format_def, temp_output):
         """Threaded Windows barrier flush should release in-memory event dicts."""
@@ -1429,6 +1601,62 @@ class TestWindowsEventEmitter:
             (4800, base),
             (4801, base + timedelta(minutes=20)),
         ]
+
+    def test_spooled_duplicate_lock_unlock_state_transitions_are_suppressed(
+        self, format_def, temp_output
+    ):
+        """Spooled 4800/4801 fixups should preserve the session state machine."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = "WKS-01.corp.local"
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4801,
+                "TimeCreated": base + timedelta(minutes=30),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4800,
+                "TimeCreated": base,
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4800,
+                "TimeCreated": base + timedelta(minutes=10),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4801,
+                "TimeCreated": base + timedelta(minutes=20),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": base + timedelta(minutes=30, milliseconds=50),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "LogonType": 7,
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        remaining = [(event["EventID"], event["TimeCreated"]) for event in events]
+        assert remaining == [
+            (4800, base),
+            (4801, base + timedelta(minutes=20)),
+        ]
+        emitter._cleanup_spool_unlocked()
 
     def test_emit_service_installed(self, format_def, temp_output):
         """Test emitting 4697 (service installed)."""
