@@ -5201,8 +5201,18 @@ class BaselineMixin:
                         dst_ip = ext_ip
                         source_system = local_sys
                     else:
+                        if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                            public_target = (
+                                self.dispatcher.visibility_engine.get_public_inbound_address(
+                                    local_sys.ip
+                                )
+                            )
+                            if public_target is None:
+                                continue
+                        else:
+                            public_target = inbound_vips.get(local_sys.ip, local_sys.ip)
                         src_ip = ext_ip
-                        dst_ip = inbound_vips.get(local_sys.ip, local_sys.ip)
+                        dst_ip = public_target
                         source_system = None
                     dns_ctx = None
                     if (

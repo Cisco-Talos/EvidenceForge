@@ -9729,6 +9729,24 @@ class ActivityGenerator:
         proc = self.state_manager.get_process(hostname, parent_pid)
         return proc.start_time if proc else None
 
+    def _parent_process_matches_logon(
+        self,
+        *,
+        hostname: str,
+        parent_pid: int,
+        logon_id: str,
+        os_category: str,
+    ) -> bool:
+        """Return whether a parent process can source-native spawn this session's child."""
+        if os_category != "windows" or not logon_id:
+            return True
+        parent_proc = self.state_manager.get_process(hostname, parent_pid)
+        if parent_proc is None or not parent_proc.logon_id:
+            return True
+        if parent_proc.username in _SYSTEM_ACCOUNTS or parent_proc.username.endswith("$"):
+            return True
+        return parent_proc.logon_id == logon_id
+
     def _get_session_explorer_pid(
         self, system: System, user: User, time: datetime | None = None
     ) -> int | None:
@@ -9787,7 +9805,12 @@ class ActivityGenerator:
         return sys_pids.get("winlogon", sys_pids.get("services", 4))
 
     def _select_parent_pid(
-        self, system: System, user: User, process_name: str, time: datetime | None = None
+        self,
+        system: System,
+        user: User,
+        process_name: str,
+        time: datetime | None = None,
+        logon_id: str = "",
     ) -> int:
         """Select a realistic parent PID based on process type and history.
 
@@ -9806,6 +9829,13 @@ class ActivityGenerator:
         # Filter history to only include still-running processes
         alive_history = []
         for pid, name in history:
+            if not self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=pid,
+                logon_id=logon_id,
+                os_category=os_cat,
+            ):
+                continue
             if time is not None:
                 if self._is_pid_active_at(system, pid, time):
                     alive_history.append((pid, name))
@@ -9824,11 +9854,17 @@ class ActivityGenerator:
             # logon (type 3). Network logons never spawn explorer.exe — processes
             # are parented by svchost.exe or services.exe instead.
             sessions = self.state_manager.get_sessions_for_user(user.username)
-            active_session = (
-                next((s for s in sessions if s.system == system.hostname), None)
-                if sessions
-                else None
-            )
+            if logon_id and sessions:
+                active_session = next(
+                    (s for s in sessions if s.system == system.hostname and s.logon_id == logon_id),
+                    None,
+                )
+            else:
+                active_session = (
+                    next((s for s in sessions if s.system == system.hostname), None)
+                    if sessions
+                    else None
+                )
             is_network_logon = active_session and active_session.logon_type == 3
 
             if is_network_logon:
@@ -9975,6 +10011,13 @@ class ActivityGenerator:
             for pid, name in history:
                 if not self._is_pid_active_at(system, pid, time):
                     continue
+                if not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=pid,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    continue
                 hist_exe = (
                     name.rsplit("\\", 1)[-1].lower()
                     if "\\" in name
@@ -10020,7 +10063,7 @@ class ActivityGenerator:
 
         if not possible_parents:
             # No rules for this exe — fall back to legacy logic
-            return self._select_parent_pid(system, user, process_name, time=time)
+            return self._select_parent_pid(system, user, process_name, time=time, logon_id=logon_id)
 
         # Check alive_history for a matching parent
         key = (system.hostname, user.username)
@@ -10028,6 +10071,13 @@ class ActivityGenerator:
         alive_parents = []
         for pid, name in history:
             if not self._is_pid_active_at(system, pid, time):
+                continue
+            if not self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=pid,
+                logon_id=logon_id,
+                os_category=os_cat,
+            ):
                 continue
             hist_exe = (
                 name.rsplit("\\", 1)[-1].lower()
@@ -10105,6 +10155,12 @@ class ActivityGenerator:
                 parent_pid != 4
                 and parent_image not in {"system", "ntoskrnl.exe"}
                 and self._is_pid_active_at(system, parent_pid, time)
+                and self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=parent_pid,
+                    logon_id=logon_id,
+                    os_category=os_category,
+                )
             ):
                 return parent_pid
         elif parent_proc is not None and self._is_pid_active_at(system, parent_pid, time):

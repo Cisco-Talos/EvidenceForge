@@ -1691,9 +1691,27 @@ class StorylineMixin:
         elif spec.type == "port_scan":
             import ipaddress
 
+            # Use source_ip override if specified, otherwise use system IP
+            scan_src_ip = spec.source_ip or system.ip
+            is_external_scan = (
+                not _is_private_ip(scan_src_ip)
+                and hasattr(self, "dispatcher")
+                and self.dispatcher.visibility_engine
+            )
+
             # Resolve target IPs
             if spec.target_ips:
-                resolved_targets = list(spec.target_ips)
+                resolved_targets = []
+                for target_ip in spec.target_ips:
+                    if is_external_scan:
+                        public_target = (
+                            self.dispatcher.visibility_engine.get_public_inbound_address(target_ip)
+                        )
+                        if public_target is None:
+                            continue
+                        resolved_targets.append(public_target)
+                    else:
+                        resolved_targets.append(target_ip)
             elif spec.target_segment and self.scenario.environment.network:
                 seg = next(
                     (
@@ -1704,8 +1722,24 @@ class StorylineMixin:
                     None,
                 )
                 if seg:
-                    net = ipaddress.ip_network(seg.cidr, strict=False)
-                    all_hosts = [str(h) for h in net.hosts()]
+                    if is_external_scan:
+                        segment_systems = [
+                            candidate
+                            for candidate in self.scenario.environment.systems
+                            if candidate.hostname in (seg.systems or [])
+                        ]
+                        all_hosts = []
+                        for candidate in segment_systems:
+                            public_target = (
+                                self.dispatcher.visibility_engine.get_public_inbound_address(
+                                    candidate.ip
+                                )
+                            )
+                            if public_target:
+                                all_hosts.append(public_target)
+                    else:
+                        net = ipaddress.ip_network(seg.cidr, strict=False)
+                        all_hosts = [str(h) for h in net.hosts()]
                     count = min(spec.target_count, len(all_hosts))
                     resolved_targets = rng.sample(all_hosts, count)
                 else:
@@ -1715,9 +1749,6 @@ class StorylineMixin:
 
             # Determine conn_state from firewall drop_mode
             conn_state = self._get_firewall_deny_conn_state()
-
-            # Use source_ip override if specified, otherwise use system IP
-            scan_src_ip = spec.source_ip or system.ip
 
             # Resolve interfaces
             src_iface = self._resolve_firewall_interface(scan_src_ip)
