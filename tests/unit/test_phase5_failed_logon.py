@@ -105,14 +105,17 @@ class TestFailedLogonWindows:
         sessions = state_manager.get_sessions_for_user("alice.smith")
         assert len(sessions) == 0
 
-    def test_subject_is_system(
+    def test_subject_is_null_for_failed_logon(
         self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
     ):
         state_manager.set_current_time(timestamp)
         activity_gen.generate_failed_logon(test_user, win_system, timestamp)
 
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
-        assert event.auth.subject_sid == "S-1-5-18"
+        assert event.auth.subject_sid == "S-1-0-0"
+        assert event.auth.subject_username == "-"
+        assert event.auth.subject_domain == "-"
+        assert event.auth.subject_logon_id == "0x0"
 
 
 class TestFailedLogonLinux:

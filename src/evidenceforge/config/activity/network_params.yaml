@@ -85,3 +85,12 @@ dns_tunnel_response_templates:
   - "cdn={token}"
   - "cache={token}"
   - "ok-{token}"
+  - "edge-{token}"
+  - "ack.{token}"
+  - "r={token};ttl=30"
+
+dns_tunnel_rcode_weights:
+  NOERROR: 92
+  NXDOMAIN: 5
+  SERVFAIL: 2
+  REFUSED: 1

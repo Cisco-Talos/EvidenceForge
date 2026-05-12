@@ -431,7 +431,7 @@ class TestProcessAccessAfterRemoteThread:
         assert ev.kwargs["granted_access"] == "0x1FFFFF"
         assert ev.kwargs["source_pid"] == 1234
         assert ev.kwargs["target_pid"] == 636
-        assert ev.timing.position == "after"
+        assert ev.timing.position == "before"
         assert ev.timing.min_ms == 1
         assert ev.timing.max_ms == 75
 

@@ -31,6 +31,7 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -45,6 +46,18 @@ _ECAR_SORT_PRIORITY = {
     ("PROCESS", "OPEN"): 9,
     ("PROCESS", "TERMINATE"): 10,
     ("USER_SESSION", "LOGOUT"): 11,
+}
+
+_INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
+    22: ("sshd",),
+    80: ("nginx", "apache2", "httpd"),
+    443: ("nginx", "apache2", "httpd"),
+    445: ("smbd", "lanmanserver"),
+    1433: ("sqlservr",),
+    3306: ("mysqld",),
+    3389: ("svchost_termservice", "svchost_netsvcs"),
+    5432: ("postgres",),
+    8080: ("squid", "nginx", "apache2", "httpd"),
 }
 
 
@@ -154,18 +167,26 @@ class EcarEmitter(HostMultiplexEmitter):
             if event.edr.tid != -1:
                 event_data["tid"] = event.edr.tid
 
+    @staticmethod
+    def _stable_tid(hostname: str, pid: int, timestamp: datetime, salt: str) -> int:
+        """Return a plausible source thread ID for process-owned eCAR events."""
+        if pid <= 0:
+            return -1
+        bucket_ms = int(timestamp.timestamp() * 1000)
+        return 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
+
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
-        action = "OPEN" if event.auth.logon_type == 7 else "LOGIN"
         event_data = {
             "timestamp": event.timestamp,
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
-            "action": action,
+            "action": "LOGIN",
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "success",
+            "logon_type": event.auth.logon_type,
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
@@ -186,7 +207,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
-        """Render eCAR USER_SESSION/LOGIN with failure_reason (logged on dst_host)."""
+        """Render eCAR failed USER_SESSION/LOGIN attempt on dst_host."""
         host = event.dst_host
         event_data = {
             "timestamp": event.timestamp,
@@ -196,11 +217,13 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "failure",
+            "session_lifecycle": "attempt_failed",
             "failure_reason": "bad_password",
-            "status_code": event.auth.failure_status,
-            "sub_status": event.auth.failure_substatus,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") == "windows":
+            event_data["status_code"] = event.auth.failure_status
+            event_data["sub_status"] = event.auth.failure_substatus
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -224,6 +247,10 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc.parent_image:
             event_data["parent_image_path"] = proc.parent_image
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), proc.pid, event_ts, "process_create"),
+        )
         self.emit_event(event_data)
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
@@ -241,6 +268,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), proc.pid, event.timestamp, "process_terminate"),
+        )
         self.emit_event(event_data)
 
     def _render_file_event(self, event: SecurityEvent) -> None:
@@ -264,6 +295,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "file"),
+        )
         self.emit_event(event_data)
 
     def _render_registry_event(self, event: SecurityEvent) -> None:
@@ -282,6 +317,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "_host_fqdn": self._host_fqdn(host),
         }
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "registry"),
+        )
         self.emit_event(event_data)
 
     def _render_module_event(self, event: SecurityEvent) -> None:
@@ -306,6 +345,10 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc:
             event_data["image_path"] = proc.image
         self._apply_edr_context(event_data, event)
+        event_data.setdefault(
+            "tid",
+            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "module"),
+        )
         self.emit_event(event_data)
 
     def _render_connection(self, event: SecurityEvent) -> None:
@@ -353,6 +396,8 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # INBOUND FLOW on destination host (if destination is internal/known)
         if event.dst_host:
+            listener_observed = self._inbound_listener_observed(event)
+            inbound_pid = self._resolve_inbound_service_pid(event) if listener_observed else -1
             event_ts = event.timestamp + sample_timing_delta(
                 "source.ecar_flow",
                 seed_parts=(
@@ -376,7 +421,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 "object": "FLOW",
                 "action": "CONNECT",
                 "direction": "INBOUND",
-                "pid": -1,  # Destination doesn't know the initiating PID
+                "pid": inbound_pid,
                 "src_ip": net.src_ip,
                 "src_port": net.src_port,
                 "dst_ip": dst_ip,
@@ -384,8 +429,42 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.dst_host),
             }
+            if not listener_observed:
+                event_data["outcome"] = "failure"
+                event_data["connection_state"] = net.conn_state
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    @staticmethod
+    def _inbound_listener_observed(event: SecurityEvent) -> bool:
+        """Return whether destination EDR should attribute the flow to a listener process."""
+        net = event.network
+        if net is None:
+            return False
+        if net.protocol.lower() != "tcp":
+            return True
+        if net.conn_state in {"REJ", "S0"}:
+            return False
+        history = net.history or ""
+        if not net.conn_state and not history:
+            return True
+        # No responder handshake/data/reset marker means the connection never
+        # progressed far enough for an application listener to own it.
+        return any(marker in history for marker in ("h", "a", "d", "r", "f"))
+
+    def _resolve_inbound_service_pid(self, event: SecurityEvent) -> int:
+        """Resolve destination-local listener PID for host-observed inbound flows."""
+        net = event.network
+        host = event.dst_host
+        if net is None or host is None:
+            return -1
+
+        system_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+        for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(net.dst_port, ()):
+            pid = system_pids.get(candidate)
+            if pid and pid > 0:
+                return pid
+        return -1
 
     def _render_create_remote_thread(self, event: SecurityEvent) -> None:
         """Render eCAR THREAD/REMOTE_CREATE event (logged on src_host).
@@ -625,6 +704,97 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(line)
         return normalized
 
+    @classmethod
+    def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
+        """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        changed = True
+        while changed:
+            changed = False
+            create_times: dict[str, int] = {}
+            create_times_by_pid: dict[int, int] = {}
+            for record in records:
+                if (
+                    record is None
+                    or record.get("object") != "PROCESS"
+                    or record.get("action") != "CREATE"
+                ):
+                    continue
+                object_id = record.get("objectID")
+                if object_id:
+                    create_times[str(object_id)] = int(record.get("timestamp_ms", 0))
+                try:
+                    pid = int(record.get("pid", -1))
+                except (TypeError, ValueError):
+                    pid = -1
+                if pid > 0:
+                    create_times_by_pid[pid] = max(
+                        create_times_by_pid.get(pid, 0),
+                        int(record.get("timestamp_ms", 0)),
+                    )
+
+            for record in records:
+                if (
+                    record is None
+                    or record.get("object") != "PROCESS"
+                    or record.get("action") != "CREATE"
+                ):
+                    continue
+                parent_id = record.get("actorID")
+                parent_ms = create_times.get(str(parent_id)) if parent_id else None
+                if parent_ms is None:
+                    try:
+                        parent_pid = int(record.get("ppid", -1))
+                    except (TypeError, ValueError):
+                        parent_pid = -1
+                    parent_ms = create_times_by_pid.get(parent_pid)
+                timestamp_ms = int(record.get("timestamp_ms", 0))
+                if parent_ms is not None and timestamp_ms <= parent_ms:
+                    record["timestamp_ms"] = parent_ms + 1
+                    changed = True
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+            else:
+                normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
+    @staticmethod
+    def _semantic_dedup_key(record: dict[str, Any]) -> str:
+        """Return an eCAR semantic identity that ignores generated UUID fields."""
+        comparable = {
+            key: value for key, value in record.items() if key not in {"id", "objectID", "actorID"}
+        }
+        props = comparable.get("properties")
+        if isinstance(props, dict):
+            comparable["properties"] = {key: props[key] for key in sorted(props)}
+        return json.dumps(comparable, sort_keys=True, separators=(",", ":"))
+
+    def _deduplicate_semantic_events(self, lines: list[str]) -> list[str]:
+        """Drop exact duplicate eCAR facts emitted with fresh UUID wrappers."""
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                deduped.append(line)
+                continue
+            key = self._semantic_dedup_key(record)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(line)
+        return deduped
+
     def flush(self, force: bool = False) -> None:
         """Flush per-host eCAR records after final lifecycle normalization."""
         if force:
@@ -632,7 +802,9 @@ class EcarEmitter(HostMultiplexEmitter):
                 writers = list(self._writers.values())
             for writer in writers:
                 with writer._lock:
+                    writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
+                    writer.buffer = self._deduplicate_semantic_events(writer.buffer)
         super().flush(force=force)
 
     # Property keys that belong in the eCAR properties map.
@@ -653,6 +825,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_value",
         "failure_reason",
         "outcome",
+        "session_lifecycle",
         "status_code",
         "sub_status",
         "src_pid",

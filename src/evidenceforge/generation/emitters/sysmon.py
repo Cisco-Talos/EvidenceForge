@@ -37,6 +37,7 @@ from typing import Any
 
 from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
@@ -429,7 +430,9 @@ class SysmonEventEmitter(LogEmitter):
     }
 
     @classmethod
-    def _get_pe_metadata(cls, image_path: str) -> tuple[str, str, str, str, str]:
+    def _get_pe_metadata(
+        cls, image_path: str, host: Any | None = None
+    ) -> tuple[str, str, str, str, str]:
         """Look up PE metadata for a Windows binary by image path or name.
 
         Checks the built-in OS binary table first, then falls back to the
@@ -439,11 +442,81 @@ class SysmonEventEmitter(LogEmitter):
         basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         result = cls._PE_METADATA.get(basename)
         if result:
-            return result
+            return cls._normalize_os_binary_metadata(image_path, result, host)
         # Fall back to application catalog for user-installed apps
         from evidenceforge.generation.activity.application_catalog import get_pe_metadata
 
-        return get_pe_metadata(basename)
+        result = get_pe_metadata(basename)
+        return cls._normalize_os_binary_metadata(image_path, result, host)
+
+    @staticmethod
+    def _signed_module_metadata(
+        image_path: str,
+        signature: str,
+    ) -> tuple[str, str, str, str, str]:
+        """Return plausible version metadata for signed DLLs missing catalog data."""
+        basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+        normalized_path = image_path.replace("/", "\\").lower()
+        signature_lower = signature.lower()
+        if "\\windows\\" in normalized_path or "microsoft" in signature_lower:
+            return (
+                "10.0.19041.1",
+                f"{basename} system library",
+                "Microsoft Windows Operating System",
+                "Microsoft Corporation",
+                basename,
+            )
+        if "cisco" in normalized_path or "cisco" in signature_lower:
+            return (
+                "5.1.8.42",
+                f"{basename} module",
+                "Cisco Secure Client",
+                "Cisco Systems, Inc.",
+                basename,
+            )
+        company = signature.strip() or "Verified Publisher"
+        return ("1.0.0.0", f"{basename} module", company, company, basename)
+
+    @classmethod
+    def _normalize_os_binary_metadata(
+        cls,
+        image_path: str,
+        metadata: tuple[str, str, str, str, str],
+        host: Any | None,
+    ) -> tuple[str, str, str, str, str]:
+        """Keep Microsoft OS binary file versions consistent for the host OS."""
+        fv, desc, prod, company, orig = metadata
+        if not host:
+            return metadata
+        if company != "Microsoft Corporation" or prod not in {
+            "Microsoft Windows",
+            "Microsoft Windows Operating System",
+        }:
+            return metadata
+        if not cls._is_windows_os_binary_path(image_path):
+            return metadata
+        return cls._host_windows_file_version(host), desc, prod, company, orig
+
+    @staticmethod
+    def _is_windows_os_binary_path(image_path: str) -> bool:
+        image_lower = image_path.replace("/", "\\").lower()
+        return (
+            "\\windows\\system32\\" in image_lower
+            or "\\windows\\syswow64\\" in image_lower
+            or image_lower.startswith("c:\\windows\\")
+        )
+
+    @staticmethod
+    def _host_windows_file_version(host: Any) -> str:
+        os_name = str(getattr(host, "os", "") or "").lower()
+        system_type = str(getattr(host, "system_type", "") or "").lower()
+        if "windows 11" in os_name:
+            return "10.0.22621.1"
+        if "server" in os_name or system_type in {"server", "domain_controller"}:
+            if "2019" in os_name:
+                return "10.0.17763.1"
+            return "10.0.20348.1"
+        return "10.0.19041.1"
 
     def _get_sysmon_thread_id(self, hostname: str) -> int:
         """Return a ThreadID from a small reused pool for this host.
@@ -586,6 +659,8 @@ class SysmonEventEmitter(LogEmitter):
         Windows always reports SYSTEM, LOCAL SERVICE, and NETWORK SERVICE
         under 'NT AUTHORITY', never under the AD domain name.
         """
+        if "\\" in username:
+            return username
         domain = _subject_domain(username, netbios_domain)
         return f"{domain}\\{username}"
 
@@ -599,24 +674,22 @@ class SysmonEventEmitter(LogEmitter):
         The first DWORD is a stable machine-specific value (same for all
         processes on a given host), matching real Sysmon behavior.
 
-        The second segment XORs the process timestamp with the host boot
-        time so that the same absolute creation time produces different
-        GUIDs on hosts with different boot times — matching real Sysmon
-        behavior where the timestamp segment is boot-relative.
+        The timestamp segments use the process creation timestamp so the GUID
+        does not expose synthetic boot-relative low counters. Host boot time is
+        still included in the stable hash material for per-host uniqueness.
         """
         # Machine-specific first DWORD (stable across all processes on this host)
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
 
-        # Second segment: boot-relative timestamp for per-host uniqueness
+        # Second/third segments: source-native-looking process creation time.
         unix_ts = int(timestamp.timestamp())
         boot_time = getattr(self, "_host_boot_times", {}).get(hostname)
-        if boot_time:
-            unix_ts ^= int(boot_time.timestamp())
         hex_ts = f"{unix_ts:08x}"
 
-        seed = f"{hostname}:{pid}:{unix_ts}"
+        boot_seed = int(boot_time.timestamp()) if boot_time else 0
+        seed = f"{hostname}:{pid}:{unix_ts}:{boot_seed}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
         # Third segment: source-native-looking deterministic sequence. Avoid
         # directly exposing the PID in the GUID shape while preserving stable
@@ -626,15 +699,26 @@ class SysmonEventEmitter(LogEmitter):
         # Remaining segments: deterministic filler for uniqueness
         return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
 
-    @staticmethod
-    def _generate_hashes(image: str, hostname: str) -> str:
+    @classmethod
+    def _generate_hashes(
+        cls,
+        image: str,
+        host: Any | str | None = None,
+        rendered_identity: tuple[Any, ...] | None = None,
+    ) -> str:
         """Generate deterministic fake file hashes from image path.
 
-        Hashes are keyed on image path only (not hostname) so the same
-        binary produces identical hashes across all hosts — matching
-        real Windows behavior for identical OS builds.
+        Hashes are keyed by rendered binary identity. That keeps identical
+        Image/FileVersion/OriginalFileName tuples stable across the fleet while
+        still allowing different Windows builds or app versions to differ.
         """
-        seed = image
+        normalized_image = image.replace("/", "\\").lower()
+        seed = normalized_image
+        if rendered_identity is not None:
+            seed = f"{normalized_image}:{':'.join(str(part) for part in rendered_identity)}"
+        elif host is not None and not isinstance(host, str):
+            fv, _desc, prod, company, orig = cls._get_pe_metadata(image, host)
+            seed = f"{normalized_image}:{fv}:{prod}:{company}:{orig}"
         sha1 = hashlib.sha1(seed.encode(), usedforsecurity=False).hexdigest().upper()
         md5 = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest().upper()
         sha256 = hashlib.sha256(seed.encode(), usedforsecurity=False).hexdigest().upper()
@@ -716,22 +800,37 @@ class SysmonEventEmitter(LogEmitter):
             "LogonId": logon_id,
             "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,
-            "Hashes": self._generate_hashes(proc.image, host.hostname),
+            "Hashes": self._generate_hashes(proc.image, host),
             "ParentProcessGuid": parent_guid,
             "ParentProcessId": proc.parent_pid,
             "ParentImage": proc.parent_image or "-",
             "ParentCommandLine": proc.parent_command_line
             if hasattr(proc, "parent_command_line") and proc.parent_command_line
             else "-",
+            "CurrentDirectory": proc.current_directory or self._default_current_directory(proc),
         }
         # Populate PE metadata from known binary lookup
-        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image)
+        fv, desc, prod, company, orig = self._get_pe_metadata(proc.image, host)
         event_data["FileVersion"] = fv
         event_data["Description"] = desc
         event_data["Product"] = prod
         event_data["Company"] = company
         event_data["OriginalFileName"] = orig
         self.emit_event(event_data)
+
+    @staticmethod
+    def _default_current_directory(proc: ProcessContext) -> str:
+        """Fallback for older ProcessContext callers that do not set a working directory."""
+        image = proc.image.replace("/", "\\")
+        image_lower = image.lower()
+        username = proc.username.split("\\")[-1]
+        if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE"} or username.endswith("$"):
+            return "C:\\Windows\\System32\\"
+        if "\\windows\\system32\\" in image_lower or "\\windows\\syswow64\\" in image_lower:
+            return "C:\\Windows\\System32\\"
+        if "\\" in image:
+            return image.rsplit("\\", 1)[0] + "\\"
+        return f"C:\\Users\\{username}\\"
 
     @staticmethod
     def _source_offset(
@@ -899,6 +998,11 @@ class SysmonEventEmitter(LogEmitter):
         # 0x1FFFFF = PROCESS_ALL_ACCESS
         # 0x1438 = typical mimikatz access mask
         granted_access = access.granted_access if access else "0x1010"
+        target_user = (
+            self._format_user(access.target_user, host.netbios_domain)
+            if access and access.target_user
+            else "NT AUTHORITY\\SYSTEM"
+        )
 
         event_data = {
             "EventID": 10,
@@ -917,7 +1021,7 @@ class SysmonEventEmitter(LogEmitter):
             "TargetProcessGUID": target_guid,
             "TargetProcessId": target_pid,
             "TargetImage": target_image,
-            "TargetUser": access.target_user if access else "NT AUTHORITY\\SYSTEM",
+            "TargetUser": target_user,
             "GrantedAccess": granted_access,
             "CallTrace": access.call_trace
             if access and access.call_trace
@@ -1194,9 +1298,26 @@ class SysmonEventEmitter(LogEmitter):
         )
 
         # PE metadata for the loaded DLL
-        fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded)
-        hashes = self._generate_hashes(il.image_loaded, host.hostname)
+        fv, desc, prod, company, orig = self._get_pe_metadata(il.image_loaded, host)
+        if il.signed and (fv, desc, prod, company, orig) == ("-", "-", "-", "-", "-"):
+            fv, desc, prod, company, orig = self._signed_module_metadata(
+                il.image_loaded,
+                il.signature,
+            )
         signature_status = il.signature_status if il.signed else "Unavailable"
+        hashes = self._generate_hashes(
+            il.image_loaded,
+            host,
+            rendered_identity=(
+                fv,
+                desc,
+                prod,
+                company,
+                orig,
+                il.signature if il.signed else "-",
+                signature_status,
+            ),
+        )
 
         event_data = {
             "EventID": 7,
@@ -1278,10 +1399,17 @@ class SysmonEventEmitter(LogEmitter):
         process_guid = self._get_stable_process_guid(
             host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
         )
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc and proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
 
-        # Route to Event 12 or 13 based on action
+        # Route value operations to Event 13. Sysmon Event 12 is key create/delete;
+        # Event 14 would be value rename, and value deletes are not modeled separately.
         action = reg.action
-        if action == "modify":
+        if reg.value or action == "modify":
             event_id = 13
             event_type = "SetValue"
         elif action == "delete":
@@ -1306,6 +1434,7 @@ class SysmonEventEmitter(LogEmitter):
             "ProcessGuid": process_guid,
             "ProcessId": pid,
             "Image": image,
+            "User": user,
             "EventType": event_type,
             "TargetObject": reg.key,
         }
@@ -1322,7 +1451,16 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
         dns = event.dns
 
-        utc_time = event.timestamp.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        render_time = event.timestamp + sample_timing_delta(
+            "source.sysmon_dns_query",
+            seed_parts=(
+                host.hostname,
+                dns.query if dns else "",
+                dns.query_type if dns else "",
+                event.timestamp,
+            ),
+        )
+        utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
         # DESIGN DECISION: svchost.exe is correct here. Windows DNS Client
         # service (dnscache, hosted by svchost.exe -k LocalService) proxies
@@ -1351,7 +1489,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 22,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -1457,7 +1595,7 @@ class SysmonEventEmitter(LogEmitter):
                 event_data = self._event_queue.get(timeout=0.1)
                 with self._file_lock:
                     self._event_dicts.append(event_data)
-                    if len(self._event_dicts) >= self.buffer_size:
+                    if not self.threaded and len(self._event_dicts) >= self.buffer_size:
                         self._flush_unlocked()
                 self._event_queue.task_done()
             except Empty:
@@ -1517,31 +1655,64 @@ class SysmonEventEmitter(LogEmitter):
 
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Sysmon Event 1 children from preceding their parent Event 1."""
-        changed = True
-        while changed:
+        process_create_events: dict[tuple[str, str], dict[str, Any]] = {}
+        parent_keys: dict[tuple[str, str], tuple[str, str]] = {}
+
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            computer = str(event.get("Computer", ""))
+            key = (computer, str(guid))
+            process_create_events[key] = event
+            parent_guid = event.get("ParentProcessGuid")
+            if parent_guid:
+                parent_keys[key] = (computer, str(parent_guid))
+
+        if not process_create_events:
+            return
+
+        cyclic_keys: set[tuple[str, str]] = set()
+        for key in process_create_events:
+            path: list[tuple[str, str]] = []
+            seen: set[tuple[str, str]] = set()
+            current: tuple[str, str] | None = key
+            while current is not None:
+                if current in seen:
+                    cyclic_keys.update(path[path.index(current) :])
+                    break
+                if current in cyclic_keys:
+                    break
+                seen.add(current)
+                path.append(current)
+                parent_key = parent_keys.get(current)
+                current = parent_key if parent_key in process_create_events else None
+
+        max_passes = len(process_create_events)
+        for _ in range(max_passes):
             changed = False
             process_create_times: dict[tuple[str, str], datetime] = {}
-            for event in self._event_dicts:
-                if event.get("EventID") != 1:
-                    continue
+            for key, event in process_create_events.items():
                 ts = event.get("TimeCreated")
-                guid = event.get("ProcessGuid")
-                computer = str(event.get("Computer", ""))
-                if isinstance(ts, datetime) and guid:
-                    process_create_times[(computer, str(guid))] = ts
+                if isinstance(ts, datetime):
+                    process_create_times[key] = ts
 
-            for event in self._event_dicts:
-                if event.get("EventID") != 1:
+            for key, event in process_create_events.items():
+                if key in cyclic_keys:
                     continue
                 ts = event.get("TimeCreated")
-                parent_guid = event.get("ParentProcessGuid")
-                computer = str(event.get("Computer", ""))
-                if not isinstance(ts, datetime) or not parent_guid:
+                parent_key = parent_keys.get(key)
+                if not isinstance(ts, datetime) or parent_key is None or parent_key in cyclic_keys:
                     continue
-                parent_time = process_create_times.get((computer, str(parent_guid)))
+                parent_time = process_create_times.get(parent_key)
                 if parent_time is not None and ts <= parent_time:
                     event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
                     changed = True
+            if not changed:
+                break
 
     def _shift_followons_after_process_create(self) -> None:
         """Prevent same-ProcessGuid Sysmon follow-ons from preceding Event 1."""
@@ -1595,7 +1766,11 @@ class SysmonEventEmitter(LogEmitter):
             if isinstance(ts, datetime) and latest is not None and ts <= latest:
                 event["TimeCreated"] = latest + timedelta(milliseconds=1)
 
-    def flush(self) -> None:
+    def flush(self, force: bool = False) -> None:
+        if not self.threaded:
+            force = True
+        if not force:
+            return
         with self._file_lock:
             self._flush_unlocked()
         with self._host_writers_lock:
@@ -1604,9 +1779,11 @@ class SysmonEventEmitter(LogEmitter):
 
     def close(self) -> None:
         if self.threaded:
+            self.barrier_flush()
             self.stop_thread()
         else:
-            self.flush()
+            self.flush(force=True)
+        self.flush(force=True)
         footer = self.format_def.output.footer_template or ""
         for writer in self._host_writers.values():
             writer.flush()

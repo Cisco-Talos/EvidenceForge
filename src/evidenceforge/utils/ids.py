@@ -22,9 +22,10 @@
 
 """Utility functions for generating log-specific identifiers."""
 
+import random
 import string
 
-from evidenceforge.utils.rng import _get_rng
+from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 # Base62 alphabet (used by Zeek for UIDs)
 BASE62_CHARS = string.ascii_uppercase + string.ascii_lowercase + string.digits
@@ -67,6 +68,19 @@ def generate_zeek_uid(prefix: str = "C") -> str:
     # Real Zeek UIDs vary in length (17-19 chars total including prefix).
     # Weight distribution based on observed real Zeek traffic.
     rng = _get_rng()
+    length = rng.choices([17, 18, 19], weights=[10, 60, 30], k=1)[0]
+    uid = prefix + "".join(rng.choices(BASE62_CHARS, k=length - 1))
+    while _has_synthetic_marker(uid):
+        uid = prefix + "".join(rng.choices(BASE62_CHARS, k=length - 1))
+    return uid
+
+
+def generate_stable_zeek_uid(prefix: str, seed: str) -> str:
+    """Generate a deterministic Zeek UID with the same shape as runtime UIDs."""
+    if len(prefix) != 1:
+        raise ValueError(f"Prefix must be a single character, got: {prefix}")
+
+    rng = random.Random(_stable_seed(f"zeek_uid:{prefix}:{seed}"))
     length = rng.choices([17, 18, 19], weights=[10, 60, 30], k=1)[0]
     uid = prefix + "".join(rng.choices(BASE62_CHARS, k=length - 1))
     while _has_synthetic_marker(uid):

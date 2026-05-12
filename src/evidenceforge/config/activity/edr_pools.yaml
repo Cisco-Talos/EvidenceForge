@@ -176,9 +176,7 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Channels\\Microsoft-Windows-Sysmon/Operational", "Enabled", "DWORD (0x00000001)"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\EventLog\\Application", "MaxSize", "DWORD (0x01400000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Real-Time Protection", "DisableRealtimeMonitoring", "DWORD (0x00000000)"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest", "UseLogonCredential", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders", "Common Startup", "C:\\ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"]
-  - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\DNS\\Parameters", "ListenAddresses", "10.10.2.10"]
   - ["HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging", "DWORD (0x00000002)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\{package}~31bf3856ad364e35~amd64~~10.0.19041.{small}", "CurrentState", "DWORD (0x00000070)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{hex}\\InstallProperties", "DisplayVersion", "{version}"]
@@ -186,12 +184,11 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe", "Path", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe", "Path", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Acrobat.exe", "Path", "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\WinSCP.exe", "Path", "C:\\Program Files (x86)\\WinSCP\\WinSCP.exe"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\{{{guid}}}", "DhcpIPAddress", "{host_ip}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Services\\Netlogon\\Parameters", "DynamicSiteName", "Default-First-Site-Name"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows Defender\\Exclusions\\Paths", "C:\\ProgramData\\Vendor\\Cache\\{doc}", "DWORD (0x00000000)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Group Policy\\State\\Machine\\Extension-List\\{{{guid}}}", "EndTimeHi", "DWORD (0x00000000)"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan {doc}", "Id", "{{{guid}}}"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache\\Tree\\Microsoft\\Windows\\UpdateOrchestrator\\Schedule Scan", "Id", "{{{guid}}}"]
   - ["HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{{4d36e972-e325-11ce-bfc1-08002be10318}}\\{mru}", "DriverDesc", "Intel(R) Ethernet Connection"]
 
 dll_pool:

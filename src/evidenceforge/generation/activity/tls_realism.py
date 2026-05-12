@@ -4,11 +4,14 @@
 """TLS realism configuration loader."""
 
 import fnmatch
+import hashlib
 import random
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "tls_realism.yaml"
@@ -76,6 +79,73 @@ def pick_ocsp_responder(issuer_name: str, rng: random.Random) -> str:
 def certificate_chain_config() -> dict[str, Any]:
     """Return TLS certificate chain behavior config."""
     return load_tls_realism().get("certificate_chains", {})
+
+
+def certificate_analyzer_delay_ms(
+    *,
+    zeek_uid: str,
+    event_timestamp: datetime,
+    fuid: str,
+    position: int,
+) -> int:
+    """Return a deterministic, non-uniform Zeek TLS certificate analyzer offset."""
+    del fuid
+    base_delay_ms = ssl_analyzer_delay_ms(zeek_uid=zeek_uid, event_timestamp=event_timestamp)
+    base_delay_ms += int(
+        sample_timing_delta(
+            "source.zeek_x509_analyzer",
+            seed_parts=(zeek_uid, event_timestamp),
+        ).total_seconds()
+        * 1000
+    )
+    if position <= 0:
+        return base_delay_ms
+
+    gap_ms = 0
+    for depth in range(1, position + 1):
+        gap_seed = f"tls_cert_chain_gap:{zeek_uid}:{event_timestamp.isoformat()}:{depth}"
+        rng = random.Random(_stable_seed(gap_seed))
+        gap_ms += rng.randint(3, 45)
+    return base_delay_ms + gap_ms
+
+
+def ssl_analyzer_delay_ms(*, zeek_uid: str, event_timestamp: datetime) -> int:
+    """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
+    return int(
+        sample_timing_delta(
+            "source.zeek_ssl_analyzer",
+            seed_parts=(zeek_uid, event_timestamp),
+        ).total_seconds()
+        * 1000
+    )
+
+
+def certificate_file_size(cert: object) -> int:
+    """Return a stable file-analysis byte size for a rendered certificate."""
+    identity = "|".join(
+        [
+            str(getattr(cert, "fingerprint", "")),
+            str(getattr(cert, "certificate_subject", "")),
+            str(getattr(cert, "certificate_issuer", "")),
+            ",".join(str(name) for name in getattr(cert, "san_dns", []) or []),
+        ]
+    )
+    rng = hashlib.sha256(identity.encode()).digest()
+    key_overhead = int(getattr(cert, "certificate_key_length", 2048)) // 8
+    san_overhead = 18 * len(getattr(cert, "san_dns", []) or [])
+    ca_overhead = 220 if not getattr(cert, "host_cert", False) else 0
+    subject_overhead = min(180, len(str(getattr(cert, "certificate_subject", ""))) * 2)
+    issuer_overhead = min(220, len(str(getattr(cert, "certificate_issuer", ""))) * 2)
+    jitter = _stable_seed(f"zeek-cert-size:{identity}:{rng.hex()}") % 420
+    return (
+        720
+        + key_overhead
+        + san_overhead
+        + ca_overhead
+        + subject_overhead
+        + issuer_overhead
+        + jitter
+    )
 
 
 def tls_destination_config() -> dict[str, Any]:

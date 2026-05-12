@@ -311,8 +311,31 @@ class TestLogoffLinux:
         assert event.syslog is None
 
 
+class TestLinuxLogonSyslog:
+    """Test source-native Linux SSH auth syslog generation."""
+
+    def test_self_sourced_linux_remote_logon_does_not_emit_accepted_password(
+        self, activity_gen, test_user, linux_system, timestamp, mock_emitters
+    ):
+        """Linux sshd auth logs should not claim a host accepted SSH from itself."""
+        activity_gen.generate_logon(
+            test_user,
+            linux_system,
+            timestamp,
+            logon_type=10,
+            source_ip=linux_system.ip,
+        )
+
+        syslog_events = [
+            call.args[0]
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call.args[0].syslog is not None
+        ]
+        assert not any("Accepted password" in event.syslog.message for event in syslog_events)
+
+
 class TestLogoffNoEcar:
-    """Test logoff when eCAR is not available."""
+    """Test logoff when eCAR emitter is not present."""
 
     def test_logoff_without_ecar_emitter(self, state_manager, timestamp):
         """Logoff works when eCAR emitter is not present."""

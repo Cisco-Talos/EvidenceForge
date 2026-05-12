@@ -24,7 +24,7 @@
 
 import json
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -38,6 +38,7 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
@@ -255,7 +256,7 @@ class TestSslUidCorrelation:
                 ),
                 x509=X509Context(
                     fuid="Fabcdef1234567890",
-                    fingerprint="a" * 64,
+                    fingerprint="a" * 40,
                     certificate_serial="01",
                     certificate_subject="CN=example.com",
                     certificate_issuer="CN=Example CA",
@@ -278,7 +279,8 @@ class TestSslUidCorrelation:
             assert files_data["fuid"] == x509_data["id"]
             assert files_data["source"] == "SSL"
             assert files_data["analyzers"] == ["X509"]
-            assert files_data["sha256"] == x509_data["fingerprint"]
+            assert files_data["sha1"] == x509_data["fingerprint"]
+            assert files_data["sha256"] != x509_data["fingerprint"]
             assert files_data["md5"] != files_data["sha256"][:32]
             assert files_data["sha1"] != files_data["sha256"][:40]
             assert len(files_data["md5"]) == 32
@@ -325,6 +327,93 @@ class TestSslUidCorrelation:
             files_data = json.loads((out_dir / "zeek-dmz" / "files.json").read_text())
             assert files_data["tx_hosts"] == ["10.10.3.10"]
             assert files_data["rx_hosts"] == ["185.70.41.45"]
+
+    def test_file_transfer_analysis_time_follows_connection_start(self):
+        """SMB files.log rows should not predate the referenced connection."""
+        files_fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            event = SecurityEvent(
+                timestamp=event_time,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.20",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Fabcdef1234567890",
+                    source="SMB",
+                    filename="report.xlsx",
+                    mime_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    seen_bytes=8192,
+                    total_bytes=8192,
+                ),
+            )
+
+            files_emitter.emit(event)
+            files_emitter.close()
+
+            files_data = json.loads((out_dir / "files.json").read_text())
+            assert files_data["conn_uids"] == ["CMySpecificUID123"]
+            assert files_data["ts"] > event_time.timestamp()
+
+    def test_file_transfer_analysis_time_follows_multisensor_connection_start(self):
+        """Per-sensor files.log delay should share the referenced conn timing basis."""
+        conn_fmt = load_format("zeek_conn")
+        files_fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            event = SecurityEvent(
+                timestamp=event_time,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.20",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                    conn_state="SF",
+                    history="ShADadfF",
+                    orig_bytes=1024,
+                    resp_bytes=8192,
+                    orig_pkts=4,
+                    orig_ip_bytes=1104,
+                    resp_pkts=12,
+                    resp_ip_bytes=8432,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Fabcdef1234567890",
+                    source="SMB",
+                    filename="report.xlsx",
+                    seen_bytes=8192,
+                    total_bytes=8192,
+                ),
+            )
+            event._sensor_hostnames_by_format = {
+                "zeek_conn": ["core", "dmz"],
+                "zeek_files": ["core", "dmz"],
+            }
+
+            conn_emitter.emit(event)
+            files_emitter.emit(event)
+            conn_emitter.close()
+            files_emitter.close()
+
+            for sensor in ("core", "dmz"):
+                conn_row = json.loads((out_dir / sensor / "conn.json").read_text())
+                files_row = json.loads((out_dir / sensor / "files.json").read_text())
+                assert files_row["conn_uids"] == [conn_row["uid"]]
+                assert files_row["ts"] > conn_row["ts"]
 
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
@@ -397,6 +486,52 @@ class TestSslUidCorrelation:
             assert rows[0]["ts"] < rows[1]["ts"]
             assert rows_by_id["Fleaf12345678901"]["basic_constraints.ca"] is False
             assert rows_by_id["Fintermediate123"]["basic_constraints.ca"] is True
+
+    def test_x509_chain_depth_spacing_is_not_constant_across_connections(self):
+        """Certificate-chain rows should not always use the same depth offset."""
+        x509_fmt = load_format("zeek_x509")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        gaps: list[float] = []
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            for idx in range(6):
+                leaf = X509Context(
+                    fuid=f"Fleaf{idx}2345678901",
+                    fingerprint=f"leaf-{idx}",
+                    certificate_subject=f"CN=leaf{idx}.example.com",
+                    certificate_issuer="CN=Example Intermediate CA",
+                )
+                intermediate = X509Context(
+                    fuid=f"Fint{idx}23456789012",
+                    fingerprint=f"intermediate-{idx}",
+                    certificate_subject="CN=Example Intermediate CA",
+                    certificate_issuer="CN=Example Root CA",
+                    basic_constraints_ca=True,
+                    host_cert=False,
+                )
+                event = SecurityEvent(
+                    timestamp=base_ts + timedelta(seconds=idx),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        zeek_uid=f"CUID{idx}",
+                    ),
+                    x509=leaf,
+                    x509_chain=[leaf, intermediate],
+                )
+                x509_emitter.emit(event)
+            x509_emitter.close()
+
+            rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
+
+        for leaf_row, intermediate_row in zip(rows[0::2], rows[1::2], strict=True):
+            gaps.append(round(intermediate_row["ts"] - leaf_row["ts"], 3))
+        assert len(set(gaps)) > 1
 
     def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):
         """SSL, x509, and OCSP analyzer records should not share the conn timestamp."""
@@ -476,8 +611,20 @@ class TestSslUidCorrelation:
             ]
 
         conn_ts = base_ts.timestamp()
-        assert conn_ts < ssl_ts < conn_ts + 0.1
-        assert ssl_ts < x509_ts < conn_ts + 0.7
+        ssl_window = get_timing_window(
+            "source.zeek_ssl_analyzer",
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        x509_window = get_timing_window(
+            "source.zeek_x509_analyzer",
+            default_min_ms=0,
+            default_max_ms=0,
+            default_position="after",
+        )
+        assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000)
+        assert ssl_ts < x509_ts <= conn_ts + ((ssl_window.max_ms + x509_window.max_ms) / 1000)
         assert x509_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
         assert "uid" not in ocsp_row
@@ -492,6 +639,37 @@ class TestSslUidCorrelation:
         assert "uid" not in ocsp_file_row
         assert "id.orig_h" not in ocsp_file_row
         assert ocsp_file_row["mime_type"] == "application/ocsp-response"
+
+    def test_revoked_ocsp_status_renders_revocation_metadata(self):
+        """Revoked OCSP rows should include source-native revocation details."""
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "ocsp.json"
+            emitter = ZeekOcspEmitter(ocsp_fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="revoked",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                    revoketime=1705000000.0,
+                    revokereason="keyCompromise",
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            row = json.loads(output.read_text().splitlines()[0])
+
+        assert row["certStatus"] == "revoked"
+        assert row["revoketime"] == 1705000000.0
+        assert row["revokereason"] == "keyCompromise"
 
     def test_tls_conn_duration_contains_ssl_analyzer_offset(self):
         """Zeek conn duration for completed TLS should contain ssl/x509 analyzer evidence."""

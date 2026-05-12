@@ -198,6 +198,18 @@ _QUERY_PARAMS = {
         'process where "WorkingSetSize>100000000" get Name,ProcessId,WorkingSetSize',
         "cpu get LoadPercentage,NumberOfCores /format:list",
     ],
+    "ad_user_pattern": ["a*", "m*", "svc_*", "*admin*", "*sql*", "j*", "l*"],
+    "ad_group_pattern": [
+        "Domain Admins",
+        "Enterprise Admins",
+        "Backup Operators",
+        "Help Desk",
+        "VPN Users",
+        "SQL Admins",
+    ],
+    "ad_computer_pattern": ["WS-*", "SRV-*", "DC-*", "*-01", "APP-*", "DB-*"],
+    "ad_limit": ["25", "50", "100", "200"],
+    "ad_stalepwd_days": ["45", "60", "90", "120", "180"],
 }
 
 _QUERY_PARAMS_LINUX = {

