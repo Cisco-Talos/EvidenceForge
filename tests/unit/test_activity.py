@@ -548,6 +548,42 @@ class TestActivityGenerator:
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
 
+    def test_generate_rdp_session_does_not_self_source_target(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP evidence should choose a real remote workstation if the planned source is self."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_system = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, source_system.ip: source_system}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_rdp_session(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=test_system.ip,
+        )
+
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 10
+        )
+        assert network_event.network.src_ip == source_system.ip
+        assert logon_event.auth.source_ip == source_system.ip
+        assert logon_event.src_host.hostname == source_system.hostname
+
     def test_generate_rdp_session_updates_preallocated_session_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

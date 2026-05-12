@@ -417,8 +417,13 @@ def _dns_payload_accounting(
         normalized_resp = 0
     else:
         answer_bytes = sum(len(str(answer).encode("utf-8", errors="ignore")) for answer in answers)
-        response_floor = max(70, query_floor + answer_bytes + 12)
-        response_ceiling = 1500 if query_type in {"TXT", "NULL"} else 512
+        answer_overhead = 18 * max(1, len(answers))
+        response_floor = max(70, query_floor + answer_bytes + answer_overhead + 12)
+        if query_type in {"TXT", "NULL"}:
+            response_slack = max(48, min(240, answer_bytes // 2 + 64))
+            response_ceiling = max(response_floor, min(1232, response_floor + response_slack))
+        else:
+            response_ceiling = max(response_floor, min(512, response_floor + 96))
         normalized_resp = min(max(resp_bytes or 0, response_floor), response_ceiling)
 
     normalized_duration = duration
@@ -2285,8 +2290,12 @@ class ActivityGenerator:
                     source_port=source_port or 0,
                     session_kind=session_kind,
                 )
-            elif source_port is not None:
-                self.state_manager.update_session_metadata(logon_id, source_port=source_port)
+            else:
+                self.state_manager.update_session_metadata(
+                    logon_id,
+                    source_ip=auth_source_ip,
+                    source_port=source_port or 0,
+                )
             if (
                 existing_session is not None
                 and logon_type != 7
@@ -4556,8 +4565,8 @@ class ActivityGenerator:
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
-            orig_pkts = history.count("D")
-            resp_pkts = history.count("d")
+            orig_pkts = max(history.count("D"), math.ceil((orig_bytes or 0) / 1232))
+            resp_pkts = max(history.count("d"), math.ceil((resp_bytes or 0) / 1232))
             if orig_pkts > 0 and orig_bytes:
                 orig_bytes = max(orig_bytes, orig_pkts * 28)
             if resp_pkts > 0 and resp_bytes:
@@ -7494,6 +7503,25 @@ class ActivityGenerator:
         """
         rng = _get_rng()
         user = self._coerce_windows_rdp_user_from_existing_session(user, target_system, source_ip)
+        if source_ip == target_system.ip:
+            ip_to_system = getattr(self, "_ip_to_system", {})
+            candidates = sorted(
+                {
+                    candidate.hostname: candidate
+                    for candidate in ip_to_system.values()
+                    if candidate.ip != target_system.ip
+                    and _get_os_category(candidate.os) == "windows"
+                    and (candidate.type or "workstation").lower() == "workstation"
+                }.values(),
+                key=lambda candidate: candidate.hostname,
+            )
+            preferred = [
+                candidate for candidate in candidates if candidate.assigned_user == user.username
+            ]
+            if preferred or candidates:
+                source_system = rng.choice(preferred or candidates)
+                source_ip = source_system.ip
+                source_pid = -1
         src_port = self._allocate_ephemeral_port(
             source_ip,
             target_system.ip,
@@ -7546,6 +7574,7 @@ class ActivityGenerator:
                 logon_id,
                 username=user.username,
                 start_time=logon_time,
+                source_ip=source_ip,
                 source_port=src_port,
                 session_kind="rdp",
             )
@@ -8646,6 +8675,32 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+        dispatcher_emitters = getattr(self.dispatcher, "emitters", {})
+        if "syslog" in dispatcher_emitters and _get_os_category(system.os) == "linux":
+            dhclient_pid = 500 + (_stable_seed(f"dhclient:{system.hostname}") % 59000)
+            renewal = max(60, int(lease_time / 2))
+            if is_initial_acquisition:
+                messages = [
+                    "DHCPDISCOVER on eth0 to 255.255.255.255 port 67 interval 3",
+                    f"DHCPOFFER of {system.ip} from {server_addr}",
+                    f"DHCPREQUEST for {system.ip} on eth0 to {server_addr} port 67",
+                    f"DHCPACK of {system.ip} from {server_addr}",
+                    f"bound to {system.ip} -- renewal in {renewal} seconds.",
+                ]
+            else:
+                messages = [
+                    f"DHCPREQUEST for {system.ip} on eth0 to {server_addr} port 67",
+                    f"DHCPACK of {system.ip} from {server_addr}",
+                    f"bound to {system.ip} -- renewal in {renewal} seconds.",
+                ]
+            for idx, message in enumerate(messages):
+                self.generate_syslog_event(
+                    system=system,
+                    time=time + timedelta(milliseconds=idx * 120),
+                    app_name="dhclient",
+                    message=message,
+                    pid=dhclient_pid,
+                )
 
     def generate_anonymous_logon(
         self,

@@ -661,6 +661,35 @@ class TestDhcpLease:
         dhcp_events = [e for e in all_calls if e.event_type == "dhcp_lease"]
         assert dhcp_events[-1].dhcp.domain == "corp.local"
 
+    def test_generate_dhcp_lease_emits_canonical_syslog_timeline(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """dhclient syslog renewal messages should come from the same lease event."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
+            lease_time=7200.0,
+            msg_types=["REQUEST", "ACK"],
+        )
+
+        syslog_messages = [
+            call[0][0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call[0][0].event_type == "syslog"
+            and call[0][0].syslog is not None
+            and call[0][0].syslog.app_name == "dhclient"
+        ]
+        assert syslog_messages == [
+            "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
+            "DHCPACK of 10.0.10.2 from 10.0.0.1",
+            "bound to 10.0.10.2 -- renewal in 3600 seconds.",
+        ]
+
 
 class TestAnonymousLogon:
     """Anonymous logon events dispatch without creating sessions."""

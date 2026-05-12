@@ -239,6 +239,7 @@ class StateManager:
         *,
         username: str | None = None,
         start_time: datetime | None = None,
+        source_ip: str | None = None,
         source_port: int | None = None,
         session_kind: str | None = None,
         transport_pid: int | None = None,
@@ -253,6 +254,8 @@ class StateManager:
                 session.username = username
             if start_time is not None:
                 session.start_time = ensure_utc(start_time)
+            if source_ip is not None:
+                session.source_ip = source_ip
             if source_port is not None:
                 session.source_port = source_port
             if session_kind is not None:

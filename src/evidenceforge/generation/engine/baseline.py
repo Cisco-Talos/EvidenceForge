@@ -5009,18 +5009,9 @@ class BaselineMixin:
                     )[0]
                     # Format placeholders vary by daemon
                     if app == "dhclient":
-                        dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
-                        if not dhcp_state:
-                            continue
-                        lease_time = float(dhcp_state.get("lease_time", 3600.0))
-                        elapsed = max(0.0, current_hour.timestamp() - dhcp_state["last_renewal"])
-                        renewal = max(60, int((lease_time / 2) - elapsed))
-                        server_addr = str(dhcp_state.get("server_addr") or "10.0.0.1")
-                        msg = rng.choice(msgs).format(
-                            ip=system.ip,
-                            server=server_addr,
-                            renewal=renewal,
-                        )
+                        # DHCP syslog must be tied to the canonical lease
+                        # transaction; generic noise can contradict Zeek DHCP.
+                        continue
                     elif app == "NetworkManager":
                         # NM uses monotonic kernel uptime seconds in [brackets]
                         msg = rng.choice(msgs).format(uptime)

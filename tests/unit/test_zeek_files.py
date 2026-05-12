@@ -100,6 +100,60 @@ class TestFilesFormatAccuracy:
             assert data["is_orig"] is False
             assert data["timedout"] is False
 
+    def test_local_orig_follows_transmitting_host(self):
+        """Zeek files.local_orig describes the file transmitter, not the connection originator."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "fuid": "FExternalCert123",
+                    "tx_hosts": ["91.189.91.39"],
+                    "rx_hosts": ["10.10.3.20"],
+                    "conn_uids": ["CExternalCert123"],
+                    "source": "SSL",
+                    "depth": 0,
+                    "analyzers": ["X509"],
+                    "mime_type": "application/pkix-cert",
+                    "duration": None,
+                    "local_orig": True,
+                    "is_orig": False,
+                    "seen_bytes": 1024,
+                    "total_bytes": 1024,
+                    "missing_bytes": 0,
+                    "overflow_bytes": 0,
+                    "timedout": False,
+                }
+            )
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+                    "fuid": "FLocalServerCert",
+                    "tx_hosts": ["10.10.3.10"],
+                    "rx_hosts": ["113.160.39.29"],
+                    "conn_uids": ["CLocalServerCert"],
+                    "source": "SSL",
+                    "depth": 0,
+                    "analyzers": ["X509"],
+                    "mime_type": "application/pkix-cert",
+                    "duration": None,
+                    "local_orig": False,
+                    "is_orig": False,
+                    "seen_bytes": 1024,
+                    "total_bytes": 1024,
+                    "missing_bytes": 0,
+                    "overflow_bytes": 0,
+                    "timedout": False,
+                }
+            )
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+            assert rows[0]["local_orig"] is False
+            assert rows[1]["local_orig"] is True
+
     def test_fuid_has_f_prefix(self):
         """fuid should start with 'F' prefix."""
         from evidenceforge.utils.ids import generate_zeek_uid

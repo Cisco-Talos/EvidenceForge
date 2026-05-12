@@ -530,6 +530,36 @@ class TestWeirdProtocolConstraint:
         assert event.network.orig_bytes > 0
         assert event.network.orig_ip_bytes > event.network.orig_bytes
 
+    def test_dns_txt_accounting_matches_visible_answer_size(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Tiny TXT answers should not imply oversized single-packet DNS responses."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="abcd1234.exfil.example.com",
+                query_type="TXT",
+                qtype=16,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["cache=56f09cfc"],
+                rtt=0.12,
+            ),
+            resp_bytes=2000,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.resp_bytes < 300
+        assert event.network.resp_pkts == 1
+        assert event.network.resp_ip_bytes <= 1500
+
     def test_dns_conn_duration_uses_rtt(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
