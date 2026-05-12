@@ -327,18 +327,26 @@ def select_file_side_effect(
         if not paths or not actions:
             return None
         action = str(rng.choice(actions)).lower()
-        path = materialize_edr_template(str(rng.choice(paths)), rng, user=user)
+        path_templates = list(paths)
+        path = materialize_edr_template(str(rng.choice(path_templates)), rng, user=user)
         if (
             exe in {"bash", "sh"}
             and user.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}
             and path.endswith("/.bash_history")
         ):
-            non_history_paths = [
-                candidate for candidate in paths if not str(candidate).endswith("/.bash_history")
-            ]
+            non_history_paths = _exclude_paths(path_templates, ("/.bash_history",))
             if not non_history_paths:
                 return None
             path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
+        if os_category == "windows" and _is_windows_powershell_history_path(path):
+            if not _allows_psreadline_history(exe, command_line, user):
+                non_history_paths = _exclude_paths(
+                    path_templates,
+                    ("\\PowerShell\\PSReadLine\\ConsoleHost_history.txt",),
+                )
+                if not non_history_paths:
+                    return None
+                path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
         return action, path
@@ -360,7 +368,7 @@ def _select_command_semantic_file_effect(
     if exe == "mysqldump":
         match = re.search(r">\s*(?P<path>\S+)", command_line)
         if match:
-            return "create", match.group("path")
+            return "create", _clean_extracted_path(match.group("path"))
 
     if exe in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"} and "compress-archive" in (
         command_lower
@@ -371,7 +379,9 @@ def _select_command_semantic_file_effect(
             flags=re.IGNORECASE,
         )
         if match:
-            return "create", match.group("sq") or match.group("dq") or match.group("bare")
+            return "create", _clean_extracted_path(
+                match.group("sq") or match.group("dq") or match.group("bare")
+            )
 
     if exe == "gzip":
         try:
@@ -380,7 +390,7 @@ def _select_command_semantic_file_effect(
             parts = command_line.split()
         operands = [part for part in parts[1:] if not part.startswith("-")]
         if operands:
-            return "create", f"{operands[-1]}.gz"
+            return "create", f"{_clean_extracted_path(operands[-1])}.gz"
 
     if exe in {"tar", "zip"}:
         try:
@@ -389,8 +399,45 @@ def _select_command_semantic_file_effect(
             parts = command_line.split()
         for idx, part in enumerate(parts):
             if part in {"-f", "--file"} and idx + 1 < len(parts):
-                return "create", parts[idx + 1]
+                return "create", _clean_extracted_path(parts[idx + 1])
             if part.endswith((".tar", ".tar.gz", ".tgz", ".zip")):
-                return "create", part
+                return "create", _clean_extracted_path(part)
 
     return None
+
+
+def _clean_extracted_path(path: str) -> str:
+    """Trim command-shell quoting artifacts from a path captured by syntax."""
+    return path.strip().strip("\"'")
+
+
+def _exclude_paths(paths: list[Any], suffixes: tuple[str, ...]) -> list[Any]:
+    """Return path templates that do not end with any forbidden suffix."""
+    normalized_suffixes = tuple(suffix.replace("/", "\\").lower() for suffix in suffixes)
+    return [
+        candidate
+        for candidate in paths
+        if not str(candidate).replace("/", "\\").lower().endswith(normalized_suffixes)
+    ]
+
+
+def _is_windows_powershell_history_path(path: str) -> bool:
+    normalized = path.replace("/", "\\").lower()
+    return normalized.endswith("\\powershell\\psreadline\\consolehost_history.txt")
+
+
+def _allows_psreadline_history(exe: str, command_line: str, user: str) -> bool:
+    """Return whether a Windows process can realistically write PSReadLine history."""
+    if exe not in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"}:
+        return False
+    if user.lower() in {"system", "local service", "network service"}:
+        return False
+    command_lower = command_line.lower()
+    noninteractive_markers = (
+        "-command",
+        "-encodedcommand",
+        "-enc",
+        "-file",
+        "-noninteractive",
+    )
+    return not any(marker in command_lower for marker in noninteractive_markers)

@@ -366,6 +366,49 @@ class TestFileSideEffectRealism:
 
         assert effect == ("create", r"C:\ProgramData\Microsoft\health-cache.zip")
 
+    def test_powershell_compress_archive_strips_outer_command_quote(self):
+        effect = select_file_side_effect(
+            "powershell.exe",
+            (
+                r'powershell.exe -NoProfile -Command "Compress-Archive '
+                r"-Path \\FILE-SRV-01\Finance\Q1\*,\\FILE-SRV-01\Patients\Exports\* "
+                r'-DestinationPath C:\ProgramData\Microsoft\health-cache.zip"'
+            ),
+            "windows",
+            random.Random(7),
+            user="svc_sqlreader",
+        )
+
+        assert effect == ("create", r"C:\ProgramData\Microsoft\health-cache.zip")
+
+    def test_cmd_does_not_write_powershell_history_artifact(self):
+        effects = {
+            select_file_side_effect(
+                "cmd.exe",
+                "cmd.exe /c whoami && hostname",
+                "windows",
+                random.Random(seed),
+                user="aisha.johnson",
+            )
+            for seed in range(30)
+        }
+
+        assert all(effect is None or "PSReadLine" not in effect[1] for effect in effects)
+
+    def test_noninteractive_powershell_does_not_write_psreadline_artifact(self):
+        effects = {
+            select_file_side_effect(
+                "powershell.exe",
+                "powershell.exe -NoProfile -EncodedCommand SQBFAFgA",
+                "windows",
+                random.Random(seed),
+                user="SYSTEM",
+            )
+            for seed in range(30)
+        }
+
+        assert all(effect is None or "PSReadLine" not in effect[1] for effect in effects)
+
     def test_noninteractive_web_shell_does_not_write_bash_history_artifact(self):
         effects = {
             select_file_side_effect(
