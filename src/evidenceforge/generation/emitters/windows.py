@@ -1418,7 +1418,7 @@ class WindowsEventEmitter(LogEmitter):
             computer = str(event.get("Computer", ""))
             if event_id == 4634:
                 logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
-                if logon_id and not event.get("_storyline_origin"):
+                if logon_id:
                     logoffs.append(((computer, logon_id), event))
                 continue
             if event_id not in {4688, 4689, 4801}:

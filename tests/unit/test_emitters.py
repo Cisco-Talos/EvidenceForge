@@ -339,6 +339,37 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
 
+    def test_storyline_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
+        """Storyline logoffs still need source-native ordering against rendered dependents."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logoff_time + timedelta(seconds=10)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "_storyline_origin": True,
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+                "NewProcessName": "C:\\Windows\\System32\\dsquery.exe",
+            },
+        ]
+
+        emitter._shift_logoffs_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
+
     def test_process_termination_shifted_after_visible_child_create(self, format_def, temp_output):
         """Security 4689 should not visibly terminate a parent before later child 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
