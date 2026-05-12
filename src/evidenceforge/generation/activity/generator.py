@@ -4136,12 +4136,7 @@ class ActivityGenerator:
         # routing and DNS expansion. Some callers provide only port/protocol;
         # explicit proxy semantics still need to catch 80/443 before a
         # client-side origin DNS lookup is emitted.
-        if (
-            proto == "tcp"
-            and dst_port in (80, 443)
-            and service not in ("http", "ssl")
-            and not is_tcp_probe
-        ):
+        if proto == "tcp" and dst_port in (80, 443) and service is None and not is_tcp_probe:
             service = "http" if dst_port == 80 else "ssl"
 
         if (
@@ -4854,10 +4849,10 @@ class ActivityGenerator:
             overhead = 28
         else:
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-        # IP bytes = payload + (packets * header overhead). Handshake-only states
-        # have 0 payload bytes but still have packet-level IP bytes from SYN/SYN-ACK.
-        orig_ip_bytes = ((orig_bytes or 0) + orig_pkts * overhead) if orig_pkts else None
-        resp_ip_bytes = ((resp_bytes or 0) + resp_pkts * overhead) if resp_pkts else None
+        # IP bytes = payload + (packets * header overhead). Zeek emits count
+        # fields as zero when a side has no packets; it does not drop the field.
+        orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
+        resp_ip_bytes = (resp_bytes or 0) + resp_pkts * overhead
 
         ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
 
@@ -4910,8 +4905,8 @@ class ActivityGenerator:
             service = _PORT_SERVICE[dst_port]
         if (
             proto == "tcp"
-            and conn_state in {"S0", "REJ", "SH", "SHR"}
-            and service in {"http", "ssl"}
+            and conn_state in {"S0", "REJ", "S1", "SH", "SHR"}
+            and service != "dns"
             and http is None
         ):
             service = ""

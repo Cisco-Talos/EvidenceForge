@@ -1289,6 +1289,11 @@ class StorylineMixin:
             elif source_ip == system.ip:
                 src_sys = system
             story_pid, story_image = self._last_storyline_process_for_system(src_sys)
+            if story_pid > 0 and src_sys is not None and service in {"ssl", "https"}:
+                story_proc = self.state_manager.get_process(src_sys.hostname, story_pid)
+                story_command = story_proc.command_line if story_proc is not None else ""
+                if self._command_contains_raw_tcp_endpoint(story_command, dst_ip, dst_port):
+                    service = ""
             # Only use explicit hostname from scenario.  Do NOT fall back to
             # Hostname resolution for storyline connections:
             # - Explicit hostname → use it, emit DNS
@@ -2929,6 +2934,17 @@ class StorylineMixin:
     def _http_url_search_texts(command_line: str) -> list[str]:
         """Return raw and decoded command strings to scan for embedded URLs."""
         texts = [command_line]
+        shell_b64_match = re.search(
+            r"(?i)(?:echo|printf)\s+['\"]?([A-Za-z0-9+/=]{16,})['\"]?\s*\|\s*base64\s+-d",
+            command_line,
+        )
+        if shell_b64_match:
+            try:
+                decoded = base64.b64decode(shell_b64_match.group(1), validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                decoded = ""
+            if decoded and decoded not in texts:
+                texts.append(decoded)
         encoded_match = re.search(
             r"(?i)(?:-|/)(?:encodedcommand|enc|e)\s+([A-Za-z0-9+/=]+)",
             command_line,
@@ -2950,6 +2966,12 @@ class StorylineMixin:
             if decoded and decoded not in texts:
                 texts.append(decoded)
         return texts
+
+    @staticmethod
+    def _command_contains_raw_tcp_endpoint(command_line: str, dst_ip: str, dst_port: int) -> bool:
+        """Return true when a command uses bash /dev/tcp for this endpoint."""
+        endpoint = f"/dev/tcp/{dst_ip}/{dst_port}"
+        return any(endpoint in text for text in StorylineMixin._http_url_search_texts(command_line))
 
     @staticmethod
     def _parse_http_url_target(http_url: str) -> tuple[str, int] | None:

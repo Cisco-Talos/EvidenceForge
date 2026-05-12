@@ -930,6 +930,48 @@ class TestHttpContextPopulation:
         event = events[-1]
         assert event.http is None
 
+    def test_syn_only_tcp_connection_has_no_analyzer_service(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.10",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=1433,
+            proto="tcp",
+            service="mssql",
+            conn_state="S0",
+        )
+
+        event = events[-1]
+        assert event.network.conn_state == "S0"
+        assert event.network.service == ""
+        assert event.network.orig_bytes == 0
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
+        assert event.network.resp_ip_bytes == 0
+
+    def test_empty_service_suppresses_port_based_tls_inference(self, activity_gen):
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="203.0.113.10",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="",
+            conn_state="SF",
+            duration=2.0,
+            orig_bytes=620,
+            resp_bytes=1840,
+            hostname="",
+        )
+
+        event = events[-1]
+        assert event.network.service == ""
+        assert event.ssl is None
+
     def test_caller_provided_http_forces_conn_accounting_consistency(self, activity_gen):
         gen, events = activity_gen
 

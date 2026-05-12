@@ -385,6 +385,58 @@ class TestFilesUidCorrelation:
 
         assert file_row["ts"] > ssl_row["ts"]
 
+    def test_certificate_file_timestamps_follow_chain_depth_order(self):
+        """Certificate file observations should preserve TLS chain order."""
+        fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            leaf = X509Context(
+                fuid="FLeafCert123456",
+                fingerprint="b" * 40,
+                certificate_subject="CN=updates.example.test",
+                certificate_issuer="CN=Example Intermediate",
+                host_cert=True,
+            )
+            intermediate = X509Context(
+                fuid="FInterCert12345",
+                fingerprint="c" * 40,
+                certificate_subject="CN=Example Intermediate",
+                certificate_issuer="CN=Example Root",
+                host_cert=False,
+            )
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="CChainUID123456",
+                    duration=2.0,
+                ),
+                ssl=SslContext(
+                    server_name="updates.example.test",
+                    cert_chain_fuids=[leaf.fuid, intermediate.fuid],
+                ),
+                x509=leaf,
+                x509_chain=[leaf, intermediate],
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+
+        by_depth = {row["depth"]: row for row in rows}
+        assert by_depth[0]["fuid"] == leaf.fuid
+        assert by_depth[1]["fuid"] == intermediate.fuid
+        assert by_depth[0]["ts"] < by_depth[1]["ts"]
+
     def test_same_certificate_fingerprint_keeps_file_hashes(self):
         """Repeated observations of the same cert bytes should keep all hashes stable."""
         fmt = load_format("zeek_files")

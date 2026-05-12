@@ -60,6 +60,18 @@ class TestCatalogLoading:
                 templates = platform.get("command_templates", [])
                 assert len(templates) > 0, f"{app['id']} {os_cat} has no command_templates"
 
+    def test_browser_entry_commands_are_user_launches_not_renderer_children(self):
+        """Browser renderer/content processes belong under children, not app launch commands."""
+        data = load_catalog()
+        browser_ids = {"chrome", "firefox", "edge"}
+        child_markers = ("--type=renderer", "--type=gpu-process", "-contentproc")
+        for app in data["applications"]:
+            if app["id"] not in browser_ids:
+                continue
+            windows = app.get("platforms", {}).get("windows", {})
+            for template in windows.get("command_templates", []):
+                assert not any(marker in template for marker in child_markers)
+
 
 class TestPersonaFiltering:
     """Tests for persona-based application filtering (P1-2)."""

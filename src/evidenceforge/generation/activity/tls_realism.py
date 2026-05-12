@@ -93,7 +93,7 @@ def certificate_analyzer_delay_ms(
     base_delay_ms += int(
         sample_timing_delta(
             "source.zeek_x509_analyzer",
-            seed_parts=(zeek_uid, event_timestamp, fuid),
+            seed_parts=(zeek_uid, event_timestamp),
         ).total_seconds()
         * 1000
     )

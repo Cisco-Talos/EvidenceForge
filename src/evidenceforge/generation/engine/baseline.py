@@ -4869,7 +4869,9 @@ class BaselineMixin:
                     # per-session sshd[pid]; bounded-window orphan records are
                     # modeled by occasional missing closes near the window edge,
                     # not by inventing unrelated close PIDs.
-                    _key_rng = random.Random(_stable_seed(f"ssh_client_key:{ip}:{system.hostname}"))
+                    _key_rng = random.Random(
+                        _stable_seed(f"ssh_client_key:{ip}:{system.hostname}:{ssh_user}")
+                    )
                     key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
                     key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
                     if rng.random() < 0.7:

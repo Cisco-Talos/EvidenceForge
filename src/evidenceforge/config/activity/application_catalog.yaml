@@ -33,7 +33,6 @@ applications:
           original_filename: "chrome.exe"
         command_templates:
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument {internal_url}'
-          - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --lang=en-US'
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --no-startup-window /prefetch:8'
         children:
           - '"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --enable-features=NetworkService'
@@ -70,7 +69,6 @@ applications:
           company: "Mozilla Corporation"
           original_filename: "firefox.exe"
         command_templates:
-          - '"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc --channel={small_int}.0.1'
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -new-window {internal_url}'
           - '"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url {internal_url}'
         children:
@@ -184,7 +182,6 @@ applications:
           original_filename: "msedge.exe"
         command_templates:
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --single-argument {internal_url}'
-          - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer --lang=en-US'
         children:
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=renderer'
           - '"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --type=gpu-process'
