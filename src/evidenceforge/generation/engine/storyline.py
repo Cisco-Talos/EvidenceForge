@@ -461,6 +461,81 @@ class StorylineMixin:
         self._last_storyline_image = image
         self._last_storyline_system = system.hostname
 
+    def _record_storyline_service_install(
+        self,
+        system: System,
+        service_name: str,
+        service_file_name: str,
+        service_account: str,
+        time: datetime,
+    ) -> None:
+        """Remember installed storyline services for later service-backed beacons."""
+        if not service_file_name:
+            return
+        if not hasattr(self, "_last_storyline_service_by_system"):
+            self._last_storyline_service_by_system: dict[str, dict[str, Any]] = {}
+        self._last_storyline_service_by_system[system.hostname] = {
+            "service_name": service_name,
+            "service_file_name": service_file_name,
+            "service_account": service_account,
+            "installed_at": time,
+        }
+
+    def _ensure_storyline_service_process_for_beacon(
+        self,
+        actor: User,
+        system: System | None,
+        time: datetime,
+    ) -> tuple[int, str | None]:
+        """Create or reuse a storyline service process to own service-backed beacons."""
+        if system is None or _get_os_category(system.os) != "windows":
+            return -1, None
+        services = getattr(self, "_last_storyline_service_by_system", {})
+        service = services.get(system.hostname)
+        if not service:
+            return -1, None
+        service_file_name = str(service.get("service_file_name") or "")
+        if not service_file_name:
+            return -1, None
+
+        image_lower = service_file_name.lower()
+        running = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(system.hostname)
+            if proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+        ]
+        if running:
+            proc = max(running, key=lambda candidate: candidate.start_time)
+            self.activity_generator._record_user_process(system, actor, proc.pid, proc.image)
+            self._record_last_storyline_process(system, proc.pid, proc.image)
+            return proc.pid, proc.image
+
+        installed_at = service.get("installed_at")
+        process_time = time - timedelta(seconds=45)
+        if isinstance(installed_at, datetime):
+            process_time = max(process_time, installed_at + timedelta(seconds=1))
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+
+        parent_pid = self.activity_generator._get_system_pid(system.hostname, "services", 0x2BC)
+        pid = self.activity_generator.generate_process(
+            user=actor,
+            system=system,
+            time=process_time,
+            logon_id="0x3e7",
+            process_name=service_file_name,
+            command_line=service_file_name,
+            parent_pid=parent_pid,
+            ensure_file_event=False,
+            from_storyline=True,
+            suppress_command_file_effect=True,
+        )
+        self.activity_generator._record_user_process(system, actor, pid, service_file_name)
+        self._record_last_storyline_process(system, pid, service_file_name)
+        return pid, service_file_name
+
     def _record_storyline_logon(self, actor: User, system: System, logon_id: str) -> None:
         """Record the latest storyline-created session by actor and target host."""
         if not hasattr(self, "_last_storyline_logon_by_actor_system"):
@@ -1512,6 +1587,13 @@ class StorylineMixin:
                 service_file_name=spec.service_file_name,
                 service_account=spec.service_account,
             )
+            self._record_storyline_service_install(
+                system=system,
+                service_name=spec.service_name,
+                service_file_name=spec.service_file_name,
+                service_account=spec.service_account,
+                time=time,
+            )
             malicious_event["service_name"] = spec.service_name
             if spec.service_file_name:
                 malicious_event["service_file_name"] = spec.service_file_name
@@ -1937,6 +2019,12 @@ class StorylineMixin:
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
+                if story_pid <= 0:
+                    story_pid, story_image = self._ensure_storyline_service_process_for_beacon(
+                        actor,
+                        src_sys,
+                        tick_time,
+                    )
                 if spec.action == "deny":
                     proxy_chain = getattr(self.activity_generator, "_proxy_routes", {}).get(
                         beacon_src_ip

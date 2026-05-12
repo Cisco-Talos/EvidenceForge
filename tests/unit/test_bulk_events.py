@@ -355,6 +355,79 @@ class TestIterPeriodicTicks:
         assert engine.activity_generator.generate_connection.call_count == 5
         assert malicious_event["attempt_count"] == 5
 
+    def test_service_backed_beacon_uses_installed_service_process(self, monkeypatch):
+        """A SYSTEM beacon after service persistence should not fall back to svchost."""
+        from unittest.mock import Mock
+
+        from evidenceforge.generation.engine import storyline
+
+        start = datetime(2026, 4, 16, 16, 30, 0, tzinfo=UTC)
+        system = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2019",
+            type="server",
+            roles=["domain_controller"],
+        )
+        actor = User(username="SYSTEM", full_name="SYSTEM", email="system@example.com")
+
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.state_manager = Mock()
+        engine.state_manager.get_processes_on_system.return_value = []
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {system.ip: system}
+        engine.activity_generator._proxy_routes = {}
+        engine.activity_generator._proxy_mode = "transparent"
+        engine.activity_generator._get_system_pid.return_value = 700
+        engine.activity_generator.generate_process.return_value = 4242
+
+        engine._record_storyline_service_install(
+            system=system,
+            service_name="HealthMonitorSvc",
+            service_file_name=r"C:\Windows\System32\HealthMonitorSvc.exe",
+            service_account="LocalSystem",
+            time=start - timedelta(minutes=10),
+        )
+        monkeypatch.setattr(storyline, "_iter_periodic_ticks", Mock(return_value=iter([start])))
+
+        spec = BeaconEventSpec(
+            dst_ip="45.33.32.30",
+            dst_port=443,
+            hostname="cdn-assets-update.com",
+            service="http",
+            method="GET",
+            uri="/api/v2/checkin",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+            ),
+            interval="10m",
+            count=1,
+            action="allow",
+            jitter=0.0,
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=start,
+            activity="Allowed HTTPS beacon from DC-01",
+            explicit_types={"beacon"},
+        )
+
+        engine.activity_generator.generate_process.assert_called_once()
+        process_kwargs = engine.activity_generator.generate_process.call_args.kwargs
+        assert process_kwargs["process_name"] == r"C:\Windows\System32\HealthMonitorSvc.exe"
+        assert process_kwargs["parent_pid"] == 700
+        assert process_kwargs["logon_id"] == "0x3e7"
+
+        connection_kwargs = engine.activity_generator.generate_connection.call_args.kwargs
+        assert connection_kwargs["pid"] == 4242
+        assert connection_kwargs["process_image"] == r"C:\Windows\System32\HealthMonitorSvc.exe"
+
 
 class TestEffectiveRateInterval:
     def test_count_based_rate_stays_exact(self):
