@@ -411,6 +411,47 @@ class TestSysmonEventEmitter:
         assert match is not None
         assert int(match.group(1)) > 0
 
+    def test_process_create_renders_current_directory_from_context(self, format_def, tmp_path):
+        """Sysmon Event 1 should preserve the process working directory."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE",
+                command_line='WINWORD.EXE /n "Vendor Proposal.docx"',
+                username="jsmith",
+                logon_id="0xabc123",
+                current_directory="C:\\Users\\jsmith\\Documents\\",
+            ),
+            auth=AuthContext(username="jsmith", logon_id="0xabc123", logon_type=2),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
+        assert '<Data Name="CurrentDirectory">C:\\Users\\jsmith\\Documents\\</Data>' in content
+
     def test_process_create_parent_guid_uses_context_parent_start_time(self, format_def, tmp_path):
         """ParentProcessGuid should not be recomputed from a later reused parent PID."""
         from evidenceforge.events.base import SecurityEvent

@@ -65,6 +65,21 @@ domains:
       - "application/json"
     methods: ["POST", "GET", "POST"]
 
+  packages.microsoft.com:
+    domain_class: software_update
+    referrer_policy: none
+    paths:
+      - "/config/ubuntu/22.04/packages-microsoft-prod.deb"
+      - "/ubuntu/22.04/prod/dists/jammy/InRelease"
+      - "/ubuntu/22.04/prod/dists/jammy/main/binary-amd64/Packages.gz"
+      - "/repos/edge/pool/main/m/microsoft-edge-stable/microsoft-edge-stable_amd64.deb"
+    content_types:
+      - "application/vnd.debian.binary-package"
+      - "text/plain"
+      - "application/x-gzip"
+      - "application/vnd.debian.binary-package"
+    methods: ["GET"]
+
   # --- Certificate / OCSP / CRL ---
   crl.microsoft.com:
     domain_class: crl
@@ -560,12 +575,16 @@ domains:
 
   # --- Linux background ---
   changelogs.ubuntu.com:
+    domain_class: software_update
+    referrer_policy: none
     paths:
       - "/meta-release-lts"
     content_type: "text/plain"
     methods: ["GET"]
 
   security.ubuntu.com:
+    domain_class: software_update
+    referrer_policy: none
     paths:
       - "/ubuntu/dists/jammy-security/InRelease"
       - "/ubuntu/dists/jammy-security/main/binary-amd64/Packages.gz"
@@ -573,6 +592,8 @@ domains:
     methods: ["GET"]
 
   archive.ubuntu.com:
+    domain_class: software_update
+    referrer_policy: none
     paths:
       - "/ubuntu/dists/jammy/InRelease"
       - "/ubuntu/dists/jammy-updates/InRelease"

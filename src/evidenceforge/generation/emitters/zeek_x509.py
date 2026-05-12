@@ -25,7 +25,7 @@
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.tls_realism import certificate_analyzer_delay_ms
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 
@@ -50,18 +50,17 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
-        base_delay_ms = int(
-            sample_timing_delta(
-                "source.zeek_x509_analyzer",
-                seed_parts=(
-                    event.network.zeek_uid if event.network is not None else "",
-                    event.timestamp,
-                ),
-            ).total_seconds()
-            * 1000
-        )
         for position, x509 in enumerate(certificates):
-            self._emit_certificate(event, x509, analyzer_delay_ms=base_delay_ms + position * 8)
+            self._emit_certificate(
+                event,
+                x509,
+                analyzer_delay_ms=certificate_analyzer_delay_ms(
+                    zeek_uid=event.network.zeek_uid if event.network is not None else "",
+                    event_timestamp=event.timestamp,
+                    fuid=x509.fuid,
+                    position=position,
+                ),
+            )
 
     def _emit_certificate(
         self,

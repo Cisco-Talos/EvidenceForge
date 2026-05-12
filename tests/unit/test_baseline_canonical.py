@@ -26,13 +26,15 @@ Verifies that baseline activities dispatch through SecurityEvent to
 multiple emitters, producing correlated cross-source records.
 """
 
-from datetime import UTC, datetime
+import random
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.engine.baseline import _materialize_registry_value_for_time
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -200,6 +202,34 @@ class TestIdsAlertCorrelation:
         assert event.ssl is not None
         assert event.x509 is not None
         assert event.network.duration >= 0.8
+
+
+class TestForegroundProcessTermination:
+    def test_suspicious_short_command_gets_near_runtime_termination(self):
+        """Suspicious-noise foreground commands should not wait for hourly stale cleanup."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        engine = object.__new__(type("FakeEngine", (BaselineMixin,), {}))
+        engine.activity_generator = Mock()
+        user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.com")
+        system = System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")
+        start_time = datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+
+        engine._schedule_foreground_process_termination(
+            user=user,
+            system=system,
+            start_time=start_time,
+            pid=4242,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery user -limit 0",
+            logon_id="0x1234",
+            rng=Mock(uniform=Mock(return_value=3.5)),
+        )
+
+        engine.activity_generator.generate_process_termination.assert_called_once()
+        kwargs = engine.activity_generator.generate_process_termination.call_args.kwargs
+        assert kwargs["time"] == start_time + timedelta(seconds=3.5)
+        assert kwargs["pid"] == 4242
 
 
 class TestWebAccessCorrelation:
@@ -480,6 +510,47 @@ class TestSyslogContext:
         assert "Failed password" in event.syslog.message
         assert event.syslog.severity == 4  # Warning level
 
+    def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Local Linux auth failures should not render impossible sshd 'from - port' text."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_failed_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=2,
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert event.syslog.app_name == "login"
+        assert "from -" not in event.syslog.message
+
+    def test_self_sourced_linux_failed_logon_renders_local_auth(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """A Linux host should not render sshd as connecting from its own host IP."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+        activity_gen.generate_failed_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.10.2",
+        )
+
+        syslog = mock_emitters["syslog"]
+        assert syslog.emit.called
+        event = syslog.emit.call_args[0][0]
+        assert event.syslog is not None
+        assert event.syslog.app_name == "login"
+        assert "from 10.0.10.2" not in event.syslog.message
+
     def test_generate_syslog_event_helper(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -563,6 +634,8 @@ class TestDhcpLease:
         assert len(dhcp_events) >= 1
         assert dhcp_events[0].dhcp is not None
         assert dhcp_events[0].dhcp.mac == "00:50:56:ab:cd:ef"
+        assert dhcp_events[0].dhcp.client_addr == "0.0.0.0"
+        assert dhcp_events[0].dhcp.assigned_addr == "10.0.10.2"
         assert dhcp_events[0].network.duration == dhcp_events[0].dhcp.duration
 
     def test_generate_dhcp_lease_uses_ad_domain_when_unspecified(
@@ -587,6 +660,35 @@ class TestDhcpLease:
         ]
         dhcp_events = [e for e in all_calls if e.event_type == "dhcp_lease"]
         assert dhcp_events[-1].dhcp.domain == "corp.local"
+
+    def test_generate_dhcp_lease_emits_canonical_syslog_timeline(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """dhclient syslog renewal messages should come from the same lease event."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
+            lease_time=7200.0,
+            msg_types=["REQUEST", "ACK"],
+        )
+
+        syslog_messages = [
+            call[0][0].syslog.message
+            for call in mock_emitters["syslog"].emit.call_args_list
+            if call[0][0].event_type == "syslog"
+            and call[0][0].syslog is not None
+            and call[0][0].syslog.app_name == "dhclient"
+        ]
+        assert syslog_messages == [
+            "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
+            "DHCPACK of 10.0.10.2 from 10.0.0.1",
+            "bound to 10.0.10.2 -- renewal in 3600 seconds.",
+        ]
 
 
 class TestAnonymousLogon:
@@ -695,6 +797,44 @@ class TestBaselineSshTiming:
         assert "duration=ssh_duration" in source
         assert 'conn_state="SF"' in source
         assert "max(1.0, ssh_duration)" in source
+
+    def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
+        """Generic syslog SSH churn should not blanket every Linux host."""
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert 'source_roll < 0.34 and sys_type == "server"' in source
+        assert "ssh_roster = self._get_server_ssh_users(system)" in source
+        assert "ssh_usernames = [user.username for user in ssh_roster]" in source
+
+
+class TestBaselineRegistryRealism:
+    """Regression tests for ambient registry-noise distribution."""
+
+    def test_office_reading_location_datetime_is_before_event_time(self):
+        """Office reading-location values should describe prior document access."""
+        event_time = datetime(2024, 3, 18, 12, 4, 53, tzinfo=UTC)
+        value = _materialize_registry_value_for_time(
+            r"HKCU\Software\Microsoft\Office\16.0\Word\Reading Locations\Document 7\Datetime",
+            "2024-03-18T13:21:00",
+            event_time,
+            random.Random(7),
+        )
+
+        assert datetime.fromisoformat(value).replace(tzinfo=UTC) < event_time
+
+    def test_registry_noise_prefers_dynamic_pools_and_filters_repeated_tells(self):
+        import inspect
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        source = inspect.getsource(BaselineMixin)
+        assert "_reg_count = rng.randint(18, 42)" in source
+        assert "Office\\\\16.0\\\\Word\\\\Reading Locations\\\\Document 1" in source
+        assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
+        assert "Services\\\\EventLog\\\\Application" in source
 
 
 class TestSensorStartup:

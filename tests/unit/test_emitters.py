@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, HostContext, NetworkContext
+from evidenceforge.events.contexts import AuthContext, DhcpContext, HostContext, NetworkContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -339,6 +339,37 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
 
+    def test_storyline_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
+        """Storyline logoffs still need source-native ordering against rendered dependents."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        logoff_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_time = logoff_time + timedelta(seconds=10)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4634,
+                "TimeCreated": logoff_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "_storyline_origin": True,
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+                "NewProcessName": "C:\\Windows\\System32\\dsquery.exe",
+            },
+        ]
+
+        emitter._shift_logoffs_after_dependents()
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_rendered_dependents",
+            seed_parts=("WIN-TEST-01.corp.local", "0xabc123", process_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time + expected_delta
+
     def test_process_termination_shifted_after_visible_child_create(self, format_def, temp_output):
         """Security 4689 should not visibly terminate a parent before later child 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -368,6 +399,33 @@ class TestWindowsEventEmitter:
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
         assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
+
+    def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
+        """Security 4688 should not visibly create a child before its parent 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        child_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        parent_time = child_time + timedelta(seconds=1)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": child_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1070",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": parent_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x4",
+                "NewProcessId": "0x1070",
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
 
     def test_windows_time_created_spreads_large_same_timestamp_clusters(self):
         """Dense same-host Windows/Sysmon timestamp ties should not compress into microseconds."""
@@ -611,6 +669,56 @@ class TestWindowsEventEmitter:
         timestamps = re.findall(r'SystemTime="([^"]+)"', content)
         assert timestamps == sorted(timestamps)
         assert len(set(timestamps)) == len(timestamps)
+
+    def test_event_record_ids_preserve_rendered_time_order_for_storyline_events(
+        self, format_def, temp_output
+    ):
+        """RecordID order should not move backward in rendered SystemTime."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        base = {
+            "Computer": "WIN-TEST-01",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 4,
+            "ExecutionThreadID": 100,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x123",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "10.0.0.10",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+
+        for idx in range(3):
+            emitter.emit_event(
+                {
+                    **base,
+                    "EventID": 4624,
+                    "TimeCreated": datetime(2024, 1, 15, 10, 30, 17, 361258, tzinfo=UTC),
+                    "ExecutionThreadID": 100 + idx,
+                    "TargetUserName": f"user{idx}",
+                    "_storyline_origin": True,
+                }
+            )
+
+        emitter.close()
+
+        content = temp_output.read_text()
+        rows = list(
+            zip(
+                re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content),
+                re.findall(r'SystemTime="([^"]+)"', content),
+                strict=True,
+            )
+        )
+
+        assert [int(record_id) for record_id, _ in rows] == sorted(
+            int(record_id) for record_id, _ in rows
+        )
+        assert [timestamp for _, timestamp in rows] == sorted(timestamp for _, timestamp in rows)
+        assert len({timestamp for _, timestamp in rows}) == len(rows)
 
     def test_failed_logon_keywords_and_task(self, format_def, temp_output):
         """Test that 4625 uses Audit Failure keywords and correct task ID."""
@@ -1114,6 +1222,7 @@ class TestWindowsEventEmitter:
         assert "Microsoft-Windows-Eventlog" in content
         assert "LogFileCleared" in content
         assert "UserData" in content
+        assert '<Security UserID="S-1-5-21-123-456-789-1001"/>' in content
         assert "<SubjectUserName>admin01</SubjectUserName>" in content
         assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0
@@ -1176,9 +1285,10 @@ class TestWindowsEventEmitter:
             int(value) for value in re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content)
         ]
         assert len(record_ids) == 3
-        assert record_ids[0] < record_ids[1]
-        assert record_ids[2] < record_ids[1]
-        assert record_ids[2] <= 20
+        assert record_ids[1] < record_ids[0]
+        assert record_ids[1] <= 20
+        assert record_ids[2] > record_ids[1]
+        assert record_ids[2] <= 25
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):
         """Test emitting 4800 (workstation locked) with populated EventData fields."""
@@ -1268,6 +1378,57 @@ class TestWindowsEventEmitter:
         session_lines = [line for line in content.splitlines() if 'Data Name="SessionId"' in line]
         assert len(session_lines) == 2
         assert session_lines[0] == session_lines[1]
+
+    def test_duplicate_lock_unlock_state_transitions_are_suppressed(self, format_def, temp_output):
+        """Security 4800/4801 should alternate chronologically for a session."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = "WKS-01.corp.local"
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4801,
+                "TimeCreated": base + timedelta(minutes=30),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4800,
+                "TimeCreated": base,
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4800,
+                "TimeCreated": base + timedelta(minutes=10),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4801,
+                "TimeCreated": base + timedelta(minutes=20),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": base + timedelta(minutes=30, milliseconds=50),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "LogonType": 7,
+            },
+        ]
+
+        emitter._suppress_duplicate_lock_unlock_transitions()
+
+        remaining = [(event["EventID"], event["TimeCreated"]) for event in emitter._event_dicts]
+        assert remaining == [
+            (4800, base),
+            (4801, base + timedelta(minutes=20)),
+        ]
 
     def test_emit_service_installed(self, format_def, temp_output):
         """Test emitting 4697 (service installed)."""
@@ -1702,6 +1863,78 @@ class TestZeekEmitter:
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
         print(f"{'=' * 80}\n")
+
+    def test_emit_icmp_uses_zeek_type_code_ports(self, format_def, temp_output):
+        """ICMP conn rows should render type/code semantics, not all-zero ports."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 5, 654321, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=0,
+                dst_ip="8.8.8.8",
+                dst_port=0,
+                protocol="icmp",
+                zeek_uid="CTestIcmp123456",
+                duration=0.04,
+                orig_bytes=64,
+                resp_bytes=64,
+                conn_state="OTH",
+                history="-",
+                orig_pkts=1,
+                orig_ip_bytes=92,
+                resp_pkts=1,
+                resp_ip_bytes=92,
+                ip_proto=1,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["proto"] == "icmp"
+        assert conn["id.orig_p"] == 8
+        assert conn["id.resp_p"] == 0
+        assert conn["conn_state"] == "SF"
+        assert conn["history"] == "Dd"
+
+    def test_dhcp_discover_renders_unassigned_client_tuple(self, format_def, temp_output):
+        """Initial DHCP acquisition should not render the assigned lease as originator."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="dhcp_lease",
+            network=NetworkContext(
+                src_ip="10.0.10.2",
+                src_port=68,
+                dst_ip="10.0.10.1",
+                dst_port=67,
+                protocol="udp",
+                service="dhcp",
+                zeek_uid="CTestDhcpDiscover",
+                conn_state="SF",
+                history="DdDd",
+                link_local=True,
+            ),
+            dhcp=DhcpContext(
+                client_addr="0.0.0.0",
+                server_addr="10.0.10.1",
+                assigned_addr="10.0.10.2",
+                mac="00:50:56:ab:cd:ef",
+                host_name="LNX-01",
+                msg_types=["DISCOVER", "OFFER", "REQUEST", "ACK"],
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["id.orig_h"] == "0.0.0.0"
+        assert conn["id.resp_h"] == "255.255.255.255"
+        assert conn["uid"] == "CTestDhcpDiscover"
 
     def test_emit_incomplete_connection(self, format_def, temp_output):
         """Test emitting an incomplete connection (no established state)."""

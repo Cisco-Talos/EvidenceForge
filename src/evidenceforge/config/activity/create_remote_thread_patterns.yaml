@@ -7,6 +7,10 @@
 # Override via .eforge/config/activity/create_remote_thread_patterns.yaml — the
 # baseline_pairs list is extended by overlay entries.
 
+baseline_noise:
+  probability_per_host_hour: 0.08
+  max_events_per_hour: 1
+
 baseline_pairs:
   - source_pid_key: msmpeng
     source_image: 'C:\ProgramData\Microsoft\Windows Defender\Platform\4.18.2301.6-0\MsMpEng.exe'

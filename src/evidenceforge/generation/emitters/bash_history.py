@@ -51,6 +51,7 @@ _CLEAR_PATTERNS = [
     re.compile(r"cat\s+/dev/null\s*>\s*~/\.bash_history"),
     re.compile(r"truncate\s+-s\s+0\s+.*\.bash_history"),
     re.compile(r"rm\s+((-[rf]+\s+)?.*)?\.bash_history"),
+    re.compile(r"shred\s+.*(-u|--remove).*\.bash_history"),
 ]
 
 

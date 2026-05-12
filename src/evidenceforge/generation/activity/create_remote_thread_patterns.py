@@ -21,6 +21,11 @@ def _merge_create_remote_thread_patterns(default: dict, overlay: dict) -> dict:
             default.get("baseline_pairs", []),
             overlay["baseline_pairs"],
         )
+    if "baseline_noise" in overlay:
+        result["baseline_noise"] = {
+            **dict(default.get("baseline_noise", {})),
+            **dict(overlay.get("baseline_noise") or {}),
+        }
     if "start_locations" in overlay:
         start_locations = dict(default.get("start_locations", {}))
         for exe_name, locations in (overlay.get("start_locations") or {}).items():
@@ -56,6 +61,12 @@ def load_create_remote_thread_config() -> dict[str, Any]:
 def load_create_remote_thread_patterns() -> list[dict[str, Any]]:
     """Load benign CreateRemoteThread baseline patterns, merged with overlay if present."""
     return load_create_remote_thread_config().get("baseline_pairs", [])
+
+
+def load_create_remote_thread_noise_config() -> dict[str, Any]:
+    """Load benign Event 8 baseline noise rate controls."""
+    config = load_create_remote_thread_config().get("baseline_noise", {})
+    return config if isinstance(config, dict) else {}
 
 
 def pick_create_remote_thread_pattern(

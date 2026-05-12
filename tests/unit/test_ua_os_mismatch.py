@@ -4,6 +4,8 @@
 """Tests for User-Agent OS-awareness in proxy URI templates."""
 
 import random
+from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import yaml
 
@@ -114,6 +116,12 @@ class TestProxyUriOsFiltering:
             "crl.microsoft.com": {"application/pkix-crl"},
             "settings-win.data.microsoft.com": {"application/json"},
             "update.googleapis.com": {"application/json", "application/octet-stream"},
+            "packages.microsoft.com": {
+                "application/vnd.debian.binary-package",
+                "application/x-gzip",
+                "text/plain",
+            },
+            "archive.ubuntu.com": {"application/x-gzip", "text/plain"},
         }
         for host, allowed_types in infra_domains.items():
             path, content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
@@ -135,8 +143,74 @@ class TestProxyUriOsFiltering:
         assert is_browser_like_proxy_domain("crl.microsoft.com") is False
         assert is_browser_like_proxy_domain("settings-win.data.microsoft.com") is False
         assert is_browser_like_proxy_domain("update.googleapis.com") is False
+        assert is_browser_like_proxy_domain("packages.microsoft.com") is False
+        assert is_browser_like_proxy_domain("archive.ubuntu.com") is False
         assert is_browser_like_proxy_domain("www.bing.com") is True
         assert is_browser_like_proxy_domain("unknown.example.test") is True
+
+    def test_proxy_user_agent_normalization_replaces_windows_browser_for_linux(self):
+        from evidenceforge.generation.activity.proxy_user_agents import (
+            normalize_proxy_user_agent_for_os,
+        )
+
+        system = SimpleNamespace(os="Ubuntu 22.04", type="workstation", roles=[])
+        ua = normalize_proxy_user_agent_for_os(
+            random.Random(42),
+            system,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            hostname="www.example.com",
+        )
+
+        assert "Windows NT" not in ua
+        assert any(token in ua for token in ("Linux", "curl", "Wget", "python-requests"))
+
+    def test_generate_connection_infers_source_system_for_proxy_user_agent(self):
+        from unittest.mock import Mock
+
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System
+
+        state = StateManager()
+        generator = ActivityGenerator(state, {"zeek_conn": Mock(), "proxy_access": Mock()})
+        rogue = System(
+            hostname="ROGUE-LAPTOP",
+            ip="10.10.1.99",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        generator._ip_to_system = {rogue.ip: rogue}
+        generator._proxy_routes = {rogue.ip: [proxy]}
+        generator._proxy_mode = "explicit"
+        generator._proxy_listener_port = 8080
+        ts = datetime(2024, 1, 15, 10, 0, tzinfo=UTC)
+        state.set_current_time(ts)
+
+        generator.generate_connection(
+            src_ip=rogue.ip,
+            dst_ip="151.101.0.223",
+            time=ts,
+            dst_port=443,
+            service="ssl",
+            duration=1.0,
+            orig_bytes=300,
+            resp_bytes=1200,
+            hostname="pypi.org",
+        )
+
+        event = next(
+            call.args[0]
+            for call in generator.dispatcher.emitters["proxy_access"].emit.call_args_list
+            if call.args[0].proxy is not None
+        )
+        assert "Windows NT" not in event.proxy.user_agent
+        assert "Edg/" not in event.proxy.user_agent
 
     def test_connect_user_agent_uses_domain_override(self):
         """CONNECT proxy entries should still use destination-specific service UAs."""
@@ -165,6 +239,7 @@ class TestProxyUriOsFiltering:
         )
 
         assert "Google" in update_ua
+        assert "Darwin" not in update_ua
         assert "Windows-Update-Agent" not in update_ua
 
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):

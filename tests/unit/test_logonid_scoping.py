@@ -360,6 +360,87 @@ class TestLogonIdSystemScoping:
         assert malicious_event["target_process"] == r"C:\Windows\System32\lsass.exe"
         assert malicious_event["skipped_reason"] == "no_live_source_process"
 
+    def test_storyline_process_access_with_missing_target_is_marked_skipped(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed process_access should not claim evidence when target PID validation skips."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        state_manager.set_current_time(datetime(2024, 3, 15, 10, 29, 0, tzinfo=UTC))
+        pid = state_manager.create_process(
+            "WKS-A",
+            4,
+            r"C:\Windows\Temp\procdump64.exe",
+            r"C:\Windows\Temp\procdump64.exe -ma custom.exe",
+            attacker.username,
+            "High",
+            logon_id="0x12345",
+        )
+        engine._record_last_storyline_process(
+            system_a,
+            pid,
+            r"C:\Windows\Temp\procdump64.exe",
+        )
+        engine.activity_generator.generate_process_access = Mock(return_value=False)
+
+        spec = Mock()
+        spec.type = "process_access"
+        spec.target_process = "custom.exe"
+        spec.access_mask = "0x1010"
+
+        malicious_event = engine._execute_typed_event(
+            spec=spec,
+            actor=attacker,
+            system=system_a,
+            time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+            activity="Dump credentials",
+            explicit_types={"process_access"},
+        )
+
+        engine.activity_generator.generate_process_access.assert_called_once()
+        assert malicious_event["target_process"] == r"C:\Windows\System32\custom.exe"
+        assert malicious_event["skipped_reason"] == "no_live_target_process"
+
+    def test_storyline_create_remote_thread_with_missing_target_is_marked_skipped(
+        self, state_manager, mock_emitters, system_a, attacker
+    ):
+        """Typed create_remote_thread should not claim evidence when target PID validation skips."""
+        engine = self._build_engine(state_manager, mock_emitters, [system_a], [attacker])
+        state_manager.set_current_time(datetime(2024, 3, 15, 10, 29, 0, tzinfo=UTC))
+        pid = state_manager.create_process(
+            "WKS-A",
+            4,
+            r"C:\Windows\Temp\injector.exe",
+            r"C:\Windows\Temp\injector.exe custom.exe",
+            attacker.username,
+            "High",
+            logon_id="0x12345",
+        )
+        engine._record_last_storyline_process(
+            system_a,
+            pid,
+            r"C:\Windows\Temp\injector.exe",
+        )
+        engine.activity_generator.generate_create_remote_thread = Mock(return_value=False)
+        engine.activity_generator._expand_and_emit = Mock()
+
+        spec = Mock()
+        spec.type = "create_remote_thread"
+        spec.target_process = "custom.exe"
+
+        malicious_event = engine._execute_typed_event(
+            spec=spec,
+            actor=attacker,
+            system=system_a,
+            time=datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC),
+            activity="Inject into custom process",
+            explicit_types={"create_remote_thread"},
+        )
+
+        engine.activity_generator.generate_create_remote_thread.assert_called_once()
+        engine.activity_generator._expand_and_emit.assert_not_called()
+        assert malicious_event["target_process"] == r"C:\Windows\System32\custom.exe"
+        assert malicious_event["skipped_reason"] == "no_live_target_process"
+
     def test_storyline_process_termination_is_deferred_until_step_end(
         self, state_manager, mock_emitters, system_a, attacker
     ):

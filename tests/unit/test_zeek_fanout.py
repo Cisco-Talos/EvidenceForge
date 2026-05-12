@@ -177,6 +177,9 @@ class TestDhcpFanOut:
             assert dhcp_row["uids"] == [conn_row["uid"]]
             assert dhcp_row["domain"] == "corp.local"
             assert dhcp_row["mac"] == "00:50:56:ab:cd:ef"
+            assert dhcp_row["server_addr"] == "10.0.0.1"
+            assert dhcp_row["assigned_addr"] == "10.0.10.50"
+            assert dhcp_row["lease_time"] == 3600.0
 
 
 class TestHttpFilesFanOut:
