@@ -1036,6 +1036,54 @@ class TestActivityGenerator:
         assert events[0].timestamp == timestamp
         assert events[1].timestamp >= timestamp + timedelta(seconds=45)
 
+    def test_linux_process_activity_uses_scheduled_bash_time(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Correlated Linux process and bash-history artifacts should share shell timing."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        scheduled_time = timestamp + timedelta(seconds=75)
+        state_manager.set_current_time(timestamp)
+        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = scheduled_time
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: ("/usr/bin/git", "git pull origin fix/memory-leak"),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        process_event = next(
+            event
+            for event in emitted
+            if event.event_type == "process_create"
+            and event.process
+            and event.process.command_line == "git pull origin fix/memory-leak"
+        )
+        bash_event = next(
+            event
+            for event in emitted
+            if event.event_type == "bash_command"
+            and event.shell
+            and event.shell.command == "git pull origin fix/memory-leak"
+        )
+        assert process_event.timestamp == scheduled_time
+        assert bash_event.timestamp == scheduled_time
+
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

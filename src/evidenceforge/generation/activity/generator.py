@@ -5626,7 +5626,7 @@ class ActivityGenerator:
 
     def generate_bash_command(
         self, user: User, system: System, time: datetime, activity_type_or_command: str = "default"
-    ) -> None:
+    ) -> datetime | None:
         """Generate bash command history entry via dispatch.
 
         Builds a SecurityEvent with ShellContext and dispatches.
@@ -5639,8 +5639,6 @@ class ActivityGenerator:
             activity_type_or_command: Either an activity type key (process_code, etc.)
                 or a direct command string (if it contains spaces or '/')
         """
-        from evidenceforge.events.contexts import ShellContext
-
         # Activity type pools: if the arg matches a known key, pick from pool.
         # Otherwise treat as a literal command (supports typos, direct strings, etc.)
         _activity_type_commands = {
@@ -5732,9 +5730,23 @@ class ActivityGenerator:
                 user.username,
                 system.hostname,
             )
-            return
+            return None
 
         time = self._schedule_bash_history_time(user, system, time, command)
+        self._emit_bash_command_event(user, system, time, command)
+        logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
+        return time
+
+    def _emit_bash_command_event(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        command: str,
+    ) -> None:
+        """Dispatch a bash-history event at an already scheduled command time."""
+        from evidenceforge.events.contexts import ShellContext
+
         event = SecurityEvent(
             timestamp=time,
             event_type="bash_command",
@@ -5744,7 +5756,6 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
-        logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
 
     def _schedule_bash_history_time(
         self,
@@ -6757,17 +6768,26 @@ class ActivityGenerator:
                 if result:
                     process_name, command_line = result
                     command_line = _parameterize_command(rng, command_line, username=user.username)
-                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    process_time = time
+                    if os_category == "linux":
+                        process_time = self._schedule_bash_history_time(
+                            user, system, time, command_line
+                        )
+                    parent_pid = self._resolve_parent(
+                        system, user, process_time, logon_id, process_name
+                    )
                     pid = self.generate_process(
                         user,
                         system,
-                        time,
+                        process_time,
                         logon_id,
                         process_name,
                         command_line,
                         parent_pid=parent_pid,
                     )
                     self._record_user_process(system, user, pid, process_name)
+                    if active_session:
+                        active_session.last_activity_time = process_time
 
                     # Spawn child/utility processes for apps that have them
                     if activity_type == "process_user_apps":
@@ -6782,7 +6802,7 @@ class ActivityGenerator:
                         if child_entries:
                             num_children = rng.randint(1, min(3, len(child_entries)))
                             for entry in rng.sample(child_entries, num_children):
-                                child_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
+                                child_time = process_time + timedelta(seconds=rng.uniform(0.5, 3.0))
                                 child_image = entry["image"]
                                 child_cmd = entry["command_line"]
                                 if "{username}" in child_image:
@@ -6802,7 +6822,7 @@ class ActivityGenerator:
                     # Emit correlated network connection for network-active apps
                     # (tight PID+timestamp coupling alongside profile-driven volume)
                     self._emit_process_network_correlation(
-                        system, process_name, command_line, time, pid, rng
+                        system, process_name, command_line, process_time, pid, rng
                     )
 
                     # Also generate bash history for Linux processes from the same
@@ -6819,13 +6839,13 @@ class ActivityGenerator:
                                 logon_id=logon_id,
                             )
                     elif os_category == "linux":
-                        self.generate_bash_command(user, system, time, command_line)
+                        self._emit_bash_command_event(user, system, process_time, command_line)
                         lifetime = _linux_foreground_lifetime(process_name, command_line)
                         if lifetime is not None:
                             self.generate_process_termination(
                                 user=user,
                                 system=system,
-                                time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                                time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
                                 pid=pid,
                                 process_name=process_name,
                                 logon_id=logon_id,
@@ -6863,24 +6883,31 @@ class ActivityGenerator:
                     rng = _get_rng()
                     process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])
                     command_line = _parameterize_command(rng, command_line, username=user.username)
-                    parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
+                    process_time = self._schedule_bash_history_time(
+                        user, system, time, command_line
+                    )
+                    parent_pid = self._resolve_parent(
+                        system, user, process_time, logon_id, process_name
+                    )
                     pid = self.generate_process(
                         user,
                         system,
-                        time,
+                        process_time,
                         logon_id,
                         process_name,
                         command_line,
                         parent_pid=parent_pid,
                     )
                     self._record_user_process(system, user, pid, process_name)
-                    self.generate_bash_command(user, system, time, command_line)
+                    if active_session:
+                        active_session.last_activity_time = process_time
+                    self._emit_bash_command_event(user, system, process_time, command_line)
                     lifetime = _linux_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
                         self.generate_process_termination(
                             user=user,
                             system=system,
-                            time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                            time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
                             pid=pid,
                             process_name=process_name,
                             logon_id=logon_id,

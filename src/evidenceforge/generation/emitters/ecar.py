@@ -396,7 +396,8 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # INBOUND FLOW on destination host (if destination is internal/known)
         if event.dst_host:
-            inbound_pid = self._resolve_inbound_service_pid(event)
+            listener_observed = self._inbound_listener_observed(event)
+            inbound_pid = self._resolve_inbound_service_pid(event) if listener_observed else -1
             event_ts = event.timestamp + sample_timing_delta(
                 "source.ecar_flow",
                 seed_parts=(
@@ -428,8 +429,28 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.dst_host),
             }
+            if not listener_observed:
+                event_data["outcome"] = "failure"
+                event_data["connection_state"] = net.conn_state
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    @staticmethod
+    def _inbound_listener_observed(event: SecurityEvent) -> bool:
+        """Return whether destination EDR should attribute the flow to a listener process."""
+        net = event.network
+        if net is None:
+            return False
+        if net.protocol.lower() != "tcp":
+            return True
+        if net.conn_state in {"REJ", "S0"}:
+            return False
+        history = net.history or ""
+        if not net.conn_state and not history:
+            return True
+        # No responder handshake/data/reset marker means the connection never
+        # progressed far enough for an application listener to own it.
+        return any(marker in history for marker in ("h", "a", "d", "r", "f"))
 
     def _resolve_inbound_service_pid(self, event: SecurityEvent) -> int:
         """Resolve destination-local listener PID for host-observed inbound flows."""
