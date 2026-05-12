@@ -1505,7 +1505,7 @@ class StorylineMixin:
                     target_name.replace(".exe", ""),
                     0x27C,  # 636 default
                 )
-                self.activity_generator.generate_create_remote_thread(
+                evidence_emitted = self.activity_generator.generate_create_remote_thread(
                     user=actor,
                     system=system,
                     time=time,
@@ -1514,9 +1514,12 @@ class StorylineMixin:
                     target_pid=target_pid,
                     target_image=target_image,
                 )
+                malicious_event["target_process"] = target_image
+                if not evidence_emitted:
+                    malicious_event["skipped_reason"] = "no_live_target_process"
                 # Emit ProcessAccess via causal expansion engine (or legacy fallback)
                 # when targeting lsass.exe — primary credential-dumping detection signal
-                if "lsass" in target_name:
+                elif "lsass" in target_name:
                     self.activity_generator._expand_and_emit(
                         "create_remote_thread",
                         time,
@@ -1527,7 +1530,6 @@ class StorylineMixin:
                         target_pid=target_pid,
                         target_image=target_image,
                     )
-                malicious_event["target_process"] = target_image
 
         elif spec.type == "process_access":
             source_pid, source_image = self._last_storyline_process_for_system(system)
@@ -1550,7 +1552,7 @@ class StorylineMixin:
                     target_name.replace(".exe", ""),
                     0x27C,
                 )
-                self.activity_generator.generate_process_access(
+                evidence_emitted = self.activity_generator.generate_process_access(
                     user=actor,
                     system=system,
                     time=time,
@@ -1561,6 +1563,8 @@ class StorylineMixin:
                     granted_access=spec.access_mask,
                 )
                 malicious_event["target_process"] = target_image
+                if not evidence_emitted:
+                    malicious_event["skipped_reason"] = "no_live_target_process"
 
         elif spec.type == "dhcp_lease":
             ip_hash = _stable_seed(f"mac_{spec.requested_ip or system.ip}")

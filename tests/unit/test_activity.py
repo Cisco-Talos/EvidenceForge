@@ -1536,7 +1536,7 @@ class TestActivityGenerator:
         source_obj_id = state_manager.get_process_object_id(test_system.hostname, source_pid)
         target_obj_id = state_manager.get_process_object_id(test_system.hostname, target_pid)
 
-        activity_gen.generate_create_remote_thread(
+        emitted = activity_gen.generate_create_remote_thread(
             test_user,
             test_system,
             timestamp,
@@ -1546,6 +1546,7 @@ class TestActivityGenerator:
             target_image=r"C:\Windows\System32\lsass.exe",
         )
 
+        assert emitted is True
         event = [
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -1575,7 +1576,7 @@ class TestActivityGenerator:
             logon_id="0xabc",
         )
 
-        activity_gen.generate_create_remote_thread(
+        emitted = activity_gen.generate_create_remote_thread(
             test_user,
             test_system,
             timestamp,
@@ -1585,6 +1586,7 @@ class TestActivityGenerator:
             target_image=r"C:\Windows\System32\lsass.exe",
         )
 
+        assert emitted is False
         assert not [
             call[0][0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list
