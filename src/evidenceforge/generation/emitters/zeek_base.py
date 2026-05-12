@@ -123,23 +123,26 @@ def _apply_sensor_observation_variance(
     facts. This only models source-native observation differences from packet
     loss, snaplen, tap placement, and analyzer cutoffs.
     """
-    for field in ("orig_pkts", "resp_pkts"):
-        _jitter_numeric_observation(
-            render_data,
-            field,
-            hostname,
-            original_uid,
-            0.018,
-            minimum=1,
-        )
     # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
     # cleanly. Keep this sparse and small so it reads as capture imperfection.
+    added_missed_bytes = False
     if "missed_bytes" in render_data:
         missed = render_data.get("missed_bytes") or 0
         if isinstance(missed, int):
             seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
             if seed % 11 == 0:
                 render_data["missed_bytes"] = missed + 16 + (seed % 496)
+                added_missed_bytes = True
+    if added_missed_bytes:
+        for field in ("orig_pkts", "resp_pkts"):
+            _jitter_numeric_observation(
+                render_data,
+                field,
+                hostname,
+                original_uid,
+                0.018,
+                minimum=1,
+            )
     _enforce_http_body_invariants(render_data)
     _enforce_ip_byte_invariants(render_data)
 

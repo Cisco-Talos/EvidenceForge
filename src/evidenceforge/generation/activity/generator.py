@@ -33,6 +33,7 @@ import logging
 import math
 import ntpath
 import random
+import re
 import shlex
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -1098,6 +1099,34 @@ def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
 
 
+def _proxy_request_allows_cache_hit(
+    *,
+    method: str,
+    url: str,
+    content_type: str,
+    domain_tags: list[str] | tuple[str, ...],
+) -> bool:
+    """Return whether a proxy request can plausibly be served from cache."""
+    if method.upper() not in {"GET", "HEAD"}:
+        return False
+    url_l = url.lower()
+    content_l = content_type.lower()
+    if any(tag in {"c2", "malware", "beacon", "command-control"} for tag in domain_tags):
+        return False
+    if any(marker in url_l for marker in ("/api/", "/checkin", "/beacon", "/task", "/gate")):
+        return False
+    if content_l in {"application/json", "application/octet-stream"}:
+        return False
+    return content_l.startswith(("image/", "font/")) or content_l in {
+        "application/javascript",
+        "text/css",
+    }
+
+
+_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]+ \d{4}\]")
+_APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d+)\]")
+
+
 def _tls_san_dns_names(cert_name: str) -> list[str]:
     """Build DNS SANs without wildcarding public suffixes."""
     from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
@@ -1387,6 +1416,11 @@ class ActivityGenerator:
         exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         normalized_username = username.upper().split("\\")[-1]
         if (
+            normalized_username in _SYSTEM_ACCOUNT_LOGON_IDS
+            and exe_name not in _WINDOWS_USER_SESSION_PROCESSES
+        ):
+            return normalized_username, _SYSTEM_ACCOUNT_LOGON_IDS[normalized_username]
+        if (
             exe_name not in _WINDOWS_USER_SESSION_PROCESSES
             or normalized_username not in _SYSTEM_ACCOUNTS
         ):
@@ -1620,20 +1654,21 @@ class ActivityGenerator:
             domain_tags=domain_tags,
         )
 
-        proxy_cacheable = proxy_method in {"GET", "HEAD"}
+        proxy_cacheable = _proxy_request_allows_cache_hit(
+            method=proxy_method,
+            url=url,
+            content_type=proxy_content_type,
+            domain_tags=domain_tags,
+        )
         if http is not None:
             from evidenceforge.generation.activity.http_content import infer_mime_type_from_path
 
             response_mime = proxy_content_type or infer_mime_type_from_path(url)
-            proxy_cacheable = proxy_cacheable and (
-                response_mime.startswith(("image/", "font/"))
-                or response_mime
-                in {
-                    "application/javascript",
-                    "text/css",
-                    "application/json",
-                    "application/octet-stream",
-                }
+            proxy_cacheable = _proxy_request_allows_cache_hit(
+                method=proxy_method,
+                url=url,
+                content_type=response_mime,
+                domain_tags=domain_tags,
             )
 
         cache_roll = rng.random()
@@ -4932,7 +4967,13 @@ class ActivityGenerator:
                 event.network.resp_bytes = 0
                 event.network.resp_pkts = 0
                 event.network.resp_ip_bytes = None
-        elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and hostname:
+        elif (
+            service == "dns"
+            and proto in ("udp", "tcp")
+            and dst_port == 53
+            and hostname
+            and not is_fw_deny
+        ):
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
             event.dns = DnsContext(
                 query=dns_query,
@@ -5106,12 +5147,18 @@ class ActivityGenerator:
                     domain_tags=domain_tags,
                 )
                 cache_roll = rng.random()
+                proxy_cacheable = _proxy_request_allows_cache_hit(
+                    method=proxy_method,
+                    url=url,
+                    content_type=proxy_content_type,
+                    domain_tags=domain_tags,
+                )
                 if event.http is not None:
-                    if cache_roll < 0.30 and event.http.status_code < 400:
+                    if proxy_cacheable and cache_roll < 0.30 and event.http.status_code < 400:
                         cache_result = "HIT"
                     else:
                         cache_result = "MISS"
-                elif cache_roll < 0.30:
+                elif proxy_cacheable and cache_roll < 0.30:
                     cache_result = "HIT"
                 elif cache_roll < 0.95:
                     cache_result = "MISS"
@@ -7608,6 +7655,9 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Generate workstation lock event (4800)."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != system.hostname or session.start_time > time:
+            return
         if not hasattr(self, "_last_workstation_lock_time"):
             self._last_workstation_lock_time = {}
         lock_key = (system.hostname, user.username, logon_id)
@@ -7637,6 +7687,9 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Generate workstation unlock event (4801 + 4624 type 7)."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != system.hostname or session.start_time > time:
+            return
         lock_key = (system.hostname, user.username, logon_id)
         lock_time = getattr(self, "_last_workstation_lock_time", {}).get(lock_key)
         if lock_time is not None:
@@ -9055,7 +9108,10 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import RawContext
 
+        fields = dict(fields)
         host_ctx = self._build_host_context(system) if system else None
+        if target_format == "syslog" and str(fields.get("app_name", "")).startswith("apache"):
+            fields = self._normalize_apache_raw_syslog(time, fields, system)
         # Inject timestamp if not provided (format templates need it for rendering)
         if "timestamp" not in fields:
             fields["timestamp"] = time
@@ -9073,6 +9129,73 @@ class ActivityGenerator:
             raw=RawContext(target_format=target_format, fields=fields),
         )
         self.dispatcher.dispatch(event)
+
+    def _normalize_apache_raw_syslog(
+        self,
+        time: datetime,
+        fields: dict[str, Any],
+        system: "System | None",
+    ) -> dict[str, Any]:
+        """Align Apache raw syslog fragments with canonical event time/tuple context."""
+        message = str(fields.get("message", ""))
+        if not message:
+            return fields
+
+        apache_time = ensure_utc(time).strftime("%a %b %d %H:%M:%S.%f %Y")
+        message = _APACHE_EMBEDDED_TS_RE.sub(f"[{apache_time}]", message, count=1)
+
+        client_match = _APACHE_CLIENT_RE.search(message)
+        if client_match and system is not None:
+            client_ip = client_match.group("ip")
+            recent_port = self._recent_source_port_for_connection(
+                client_ip,
+                system.ip,
+                dst_port=443,
+                proto="tcp",
+                reference_time=time,
+            )
+            if recent_port is not None:
+                message = _APACHE_CLIENT_RE.sub(
+                    f"[client {client_ip}:{recent_port}]",
+                    message,
+                    count=1,
+                )
+
+        fields["message"] = message
+        return fields
+
+    def _recent_source_port_for_connection(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        *,
+        dst_port: int,
+        proto: str,
+        reference_time: datetime,
+    ) -> int | None:
+        """Return a recent remembered source port for a canonical network tuple."""
+        ref_epoch = reference_time.timestamp()
+        candidates: list[tuple[float, int]] = []
+        for (
+            remembered_src,
+            remembered_port,
+            remembered_dst,
+            remembered_dst_port,
+            remembered_proto,
+        ), seen_at in self._recent_connection_tuples.items():
+            if (
+                remembered_src == src_ip
+                and remembered_dst == dst_ip
+                and remembered_dst_port == dst_port
+                and remembered_proto == proto
+                and seen_at <= ref_epoch
+                and ref_epoch - seen_at <= 1800
+            ):
+                candidates.append((seen_at, remembered_port))
+        if not candidates:
+            return None
+        candidates.sort(reverse=True)
+        return candidates[0][1]
 
     def generate_sensor_startup(
         self,

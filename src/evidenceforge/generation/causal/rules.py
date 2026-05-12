@@ -176,16 +176,17 @@ class DnsBeforeConnection(ExpansionRule):
 
 @dataclass
 class ProcessAccessAfterRemoteThread(ExpansionRule):
-    """Emit Sysmon Event 10 (ProcessAccess) after CreateRemoteThread targeting lsass.
+    """Emit Sysmon Event 10 (ProcessAccess) before CreateRemoteThread targeting lsass.
 
     When a process injects into lsass.exe via CreateRemoteThread (Sysmon Event 8),
-    a corresponding ProcessAccess event (Sysmon Event 10) is the primary detection
-    signal for credential dumping. This rule centralizes the lsass check that was
-    previously inline in StorylineMixin._execute_typed_event().
+    it must first obtain a handle to the target process. Sysmon Event 10 is the
+    primary detection signal for that credential-dumping prerequisite. This rule
+    centralizes the lsass check that was previously inline in
+    StorylineMixin._execute_typed_event().
     """
 
     name: str = field(default="process_access_after_remote_thread")
-    description: str = field(default="Emit ProcessAccess after CreateRemoteThread targeting lsass")
+    description: str = field(default="Emit ProcessAccess before CreateRemoteThread targeting lsass")
     priority: int = field(default=40)
 
     def matches(self, event_type: str, ctx: ExpansionContext) -> bool:
@@ -213,7 +214,7 @@ class ProcessAccessAfterRemoteThread(ExpansionRule):
                     "process.remote_thread_lsass_access",
                     default_min_ms=1,
                     default_max_ms=75,
-                    default_position="after",
+                    default_position="before",
                 ),
                 description="ProcessAccess for lsass credential dumping detection",
             )

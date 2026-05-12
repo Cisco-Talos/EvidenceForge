@@ -23,7 +23,7 @@ relationships:
     max_ms: 350
   process.remote_thread_lsass_access:
     class: source_latency
-    position: after
+    position: before
     min_ms: 1
     max_ms: 75
   windows.audit_from_admin_command:

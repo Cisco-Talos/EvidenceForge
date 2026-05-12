@@ -71,8 +71,8 @@ class TestPerSensorDirectoryRouting:
             assert line1["uid"].startswith("C")
             assert line2["uid"].startswith("C")
 
-    def test_second_sensor_observation_varies_conn_counters(self):
-        """Multi-sensor conn rows keep tuple truth but do not clone observation counters."""
+    def test_second_sensor_observation_preserves_lossless_packetization(self):
+        """Lossless multi-sensor rows keep canonical packet counts and bytes."""
         fmt = load_format("zeek_conn")
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
@@ -110,16 +110,10 @@ class TestPerSensorDirectoryRouting:
             assert abs(core["ts"] - dmz["ts"]) <= 1.5
             assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
-            assert any(
-                core[field] != dmz[field]
-                for field in (
-                    "duration",
-                    "orig_pkts",
-                    "resp_pkts",
-                    "orig_ip_bytes",
-                    "resp_ip_bytes",
-                )
-            )
+            assert core["orig_pkts"] == dmz["orig_pkts"] == 52
+            assert core["resp_pkts"] == dmz["resp_pkts"] == 74
+            assert core["orig_ip_bytes"] == dmz["orig_ip_bytes"]
+            assert core["resp_ip_bytes"] == dmz["resp_ip_bytes"]
             for row in (core, dmz):
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (40 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (40 * row["resp_pkts"])

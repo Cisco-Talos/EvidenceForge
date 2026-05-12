@@ -29,7 +29,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext
+from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
@@ -1691,6 +1691,67 @@ class TestActivityGenerator:
         assert event.process.token_elevation == "%%1936"
         assert event.process.mandatory_label == "S-1-16-16384"
 
+    def test_system_process_create_uses_well_known_logon_id(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """SYSTEM-owned process telemetry should use LocalSystem's canonical LogonID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        system_user = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.com",
+            enabled=True,
+        )
+
+        activity_gen.generate_process(
+            system_user,
+            test_system,
+            timestamp,
+            "0xb7adae1d",
+            r"C:\Windows\System32\net.exe",
+            r'net group "Domain Admins" aisha.johnson /add /domain',
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        event = process_events[-1]
+        assert event.auth.username == "SYSTEM"
+        assert event.auth.logon_id == "0x3e7"
+        assert event.process.logon_id == "0x3e7"
+
+    def test_workstation_unlock_skips_ended_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A visible logoff should prevent later unlock reuse of the same LogonID."""
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logoff_time = start + timedelta(minutes=20)
+        unlock_time = start + timedelta(minutes=22)
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            start,
+            logon_type=2,
+            source_ip="-",
+        )
+        activity_gen.generate_workstation_lock(
+            test_user, test_system, start + timedelta(minutes=5), logon_id
+        )
+        activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_workstation_unlock(test_user, test_system, unlock_time, logon_id)
+
+        emitted_types = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "workstation_unlocked" not in emitted_types
+        assert "logon" not in emitted_types
+
     def test_credential_dump_command_uses_high_integrity_token(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -2307,6 +2368,43 @@ class TestActivityGenerator:
         assert event.network.initiating_pid == resolver_pid
         assert event.process.pid == resolver_pid
         assert event.process.image.endswith("svchost.exe")
+
+    def test_firewall_denied_dns_does_not_fabricate_response(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Denied DNS traffic should not produce contradictory DNS response evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip="10.0.0.53",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            hostname="dc01.example.local",
+            conn_state="S0",
+            firewall=FirewallContext(
+                action="deny",
+                msg_id=106023,
+                connection_id=0,
+                src_interface="inside",
+                dst_interface="outside",
+            ),
+        )
+
+        events = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        event = events[-1]
+        assert event.firewall.action == "deny"
+        assert event.network.conn_state == "S0"
+        assert event.network.resp_bytes == 0
+        assert event.dns is None
 
     def test_system_process_termination_defaults_logon_id_to_system(
         self, activity_gen, test_system, state_manager, mock_emitters
