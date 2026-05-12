@@ -39,7 +39,10 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import _extract_image_from_command
-from evidenceforge.generation.activity.tls_realism import certificate_file_size
+from evidenceforge.generation.activity.tls_realism import (
+    certificate_analyzer_delay_ms,
+    certificate_file_size,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -2950,6 +2953,16 @@ class TestActivityGenerator:
         cert_payload = sum(certificate_file_size(cert) for cert in event.x509_chain)
         assert cert_payload > 0
         assert event.network.resp_bytes >= cert_payload
+        max_cert_delay_ms = max(
+            certificate_analyzer_delay_ms(
+                zeek_uid=event.network.zeek_uid,
+                event_timestamp=event.timestamp,
+                fuid=cert.fuid,
+                position=idx,
+            )
+            for idx, cert in enumerate(event.x509_chain)
+        )
+        assert event.network.duration >= (max_cert_delay_ms / 1000.0)
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters
@@ -3887,7 +3900,7 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
     assert event.ssl is not None
     assert event.ssl.established is False
     assert event.network.conn_state in {"S1", "SH"}
-    assert event.network.orig_bytes == 0
-    assert event.network.resp_bytes == 0
+    assert 0 < event.network.orig_bytes < 1200
+    assert 0 <= event.network.resp_bytes < 55000
     assert event.network.orig_pkts <= 2
     assert event.network.resp_pkts <= 2

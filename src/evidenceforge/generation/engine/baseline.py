@@ -4731,6 +4731,16 @@ class BaselineMixin:
                 source_roll = rng.random()
                 if source_roll < 0.25:
                     if is_dmz and rng.random() < 0.85:
+                        inbound_dst_ip = system.ip
+                        if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                            public_target = (
+                                self.dispatcher.visibility_engine.get_public_inbound_address(
+                                    system.ip
+                                )
+                            )
+                            if public_target is None:
+                                continue
+                            inbound_dst_ip = public_target
                         src_ip = rng.choices(
                             self._external_scanner_ips,
                             weights=self._external_scanner_weights,
@@ -4750,7 +4760,7 @@ class BaselineMixin:
 
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
-                            dst_ip=system.ip,
+                            dst_ip=inbound_dst_ip,
                             time=ts,
                             dst_port=dpt,
                             proto="tcp",

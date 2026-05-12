@@ -1891,13 +1891,13 @@ class ActivityGenerator:
         if not ssl_established:
             net.conn_state = rng.choice(["S1", "SH"])
             net.history = "Sh" if net.conn_state == "SH" else "ShR"
-            net.resp_bytes = 0
-            net.orig_bytes = 0
+            net.orig_bytes = rng.randint(90, 260)
+            net.resp_bytes = rng.randint(40, 180) if net.conn_state == "S1" else 0
             net.orig_pkts = max(1, sum(1 for char in net.history if char.isupper()))
             net.resp_pkts = sum(1 for char in net.history if char.islower())
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-            net.orig_ip_bytes = net.orig_pkts * overhead
-            net.resp_ip_bytes = net.resp_pkts * overhead if net.resp_pkts else None
+            net.orig_ip_bytes = net.orig_bytes + net.orig_pkts * overhead
+            net.resp_ip_bytes = net.resp_bytes + net.resp_pkts * overhead if net.resp_pkts else None
             if net.duration is not None:
                 net.duration = rng.uniform(0.0, 0.5)
             return
@@ -2068,24 +2068,38 @@ class ActivityGenerator:
 
     @staticmethod
     def _ensure_tls_conn_covers_certificate_bytes(event: SecurityEvent) -> None:
-        """Keep Zeek SSL certificate file bytes within the same conn payload budget."""
+        """Keep Zeek SSL certificate file evidence within the same conn budget."""
         net = event.network
         if net is None or not event.x509_chain:
             return
 
-        from evidenceforge.generation.activity.tls_realism import certificate_file_size
+        from evidenceforge.generation.activity.tls_realism import (
+            certificate_analyzer_delay_ms,
+            certificate_file_size,
+        )
 
         cert_bytes = sum(certificate_file_size(cert) for cert in event.x509_chain)
         min_resp_bytes = cert_bytes + 280
-        if (net.resp_bytes or 0) >= min_resp_bytes:
-            return
+        if (net.resp_bytes or 0) < min_resp_bytes:
+            net.resp_bytes = min_resp_bytes
+            if net.resp_pkts is not None:
+                net.resp_pkts = max(net.resp_pkts, max(1, (net.resp_bytes // 1460) + 1))
+            if net.resp_ip_bytes is not None:
+                packet_count = net.resp_pkts or max(1, (net.resp_bytes // 1460) + 1)
+                net.resp_ip_bytes = max(net.resp_ip_bytes, net.resp_bytes + (packet_count * 40))
 
-        net.resp_bytes = min_resp_bytes
-        if net.resp_pkts is not None:
-            net.resp_pkts = max(net.resp_pkts, max(1, (net.resp_bytes // 1460) + 1))
-        if net.resp_ip_bytes is not None:
-            packet_count = net.resp_pkts or max(1, (net.resp_bytes // 1460) + 1)
-            net.resp_ip_bytes = max(net.resp_ip_bytes, net.resp_bytes + (packet_count * 40))
+        max_cert_delay = max(
+            certificate_analyzer_delay_ms(
+                zeek_uid=net.zeek_uid,
+                event_timestamp=event.timestamp,
+                fuid=cert.fuid,
+                position=idx,
+            )
+            for idx, cert in enumerate(event.x509_chain)
+        )
+        min_duration = (max_cert_delay / 1000.0) + 0.005
+        if net.duration is None or net.duration < min_duration:
+            net.duration = min_duration
 
     def _emit_ocsp_http_response(
         self,
