@@ -204,6 +204,57 @@ class TestActivityGenerator:
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
 
+    def test_repeated_one_shot_cli_processes_get_human_scale_spacing(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Repeated dsquery launches should not collapse into sub-millisecond bursts."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp - timedelta(minutes=10),
+            logon_type=2,
+        )
+
+        first_pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery.exe user -samid testuser",
+            parent_pid=4,
+        )
+        second_pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(milliseconds=1),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery.exe user -samid testuser",
+            parent_pid=4,
+        )
+        third_pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(milliseconds=2),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line='dsquery.exe group -samid "*admin*" -limit 50',
+            parent_pid=4,
+        )
+
+        first_proc = state_manager.get_process(test_system.hostname, first_pid)
+        second_proc = state_manager.get_process(test_system.hostname, second_pid)
+        third_proc = state_manager.get_process(test_system.hostname, third_pid)
+
+        assert first_proc is not None
+        assert second_proc is not None
+        assert third_proc is not None
+        assert (second_proc.start_time - first_proc.start_time).total_seconds() >= 18.0
+        assert (third_proc.start_time - second_proc.start_time).total_seconds() >= 2.5
+
     def test_generate_scheduled_task_builds_full_task_xml(
         self, activity_gen, test_user, test_system, mock_emitters
     ):

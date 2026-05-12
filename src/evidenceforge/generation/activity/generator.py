@@ -307,6 +307,20 @@ _WINDOWS_USER_SESSION_PROCESSES = {
     "shellexperiencehost.exe",
     "applicationframehost.exe",
 }
+_WINDOWS_ONE_SHOT_CLI_EXES = {
+    "dsquery.exe",
+    "gpresult.exe",
+    "gpupdate.exe",
+    "ipconfig.exe",
+    "net.exe",
+    "net1.exe",
+    "nltest.exe",
+    "quser.exe",
+    "qwinsta.exe",
+    "tasklist.exe",
+    "whoami.exe",
+    "wmic.exe",
+}
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -1388,6 +1402,10 @@ class ActivityGenerator:
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
         self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
+        self._last_one_shot_cli_launch_by_exe: dict[tuple[str, str, str, str], datetime] = {}
+        self._last_one_shot_cli_launch_by_command: dict[
+            tuple[str, str, str, str, str], datetime
+        ] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -1796,6 +1814,160 @@ class ActivityGenerator:
             referrer=proxy_referrer,
             proxy_fqdn=self._proxy_fqdn(proxy_sys),
         )
+
+    def _explicit_proxy_client_process_hint(
+        self,
+        *,
+        user_agent: str,
+        hostname: str,
+        dst_port: int,
+        proxy_sys: System,
+    ) -> tuple[str, str] | None:
+        """Map user-owned proxy User-Agents to the process that owns the socket."""
+        ua = (user_agent or "").lower()
+        if not ua:
+            return None
+
+        scheme = "https" if dst_port == 443 else "http"
+        target_url = f"{scheme}://{hostname}/" if hostname else f"{scheme}://"
+        proxy_url = (
+            f"http://{self._proxy_fqdn(proxy_sys)}:{getattr(self, '_proxy_listener_port', 8080)}"
+        )
+
+        if "firefox/" in ua:
+            image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+            return image, f'"{image}" -osint -url {target_url}'
+        if "edg/" in ua or "edge/" in ua:
+            image = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            return image, f'"{image}" --single-argument {target_url}'
+        if "chrome/" in ua and "google update" not in ua:
+            image = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            return image, f'"{image}" --single-argument {target_url}'
+        if "trident/" in ua or "msie " in ua:
+            image = r"C:\Program Files\Internet Explorer\iexplore.exe"
+            return image, f'"{image}" {target_url}'
+        if ua.startswith("curl/") or " curl/" in ua:
+            image = r"C:\Windows\System32\curl.exe"
+            return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
+        if "powershell" in ua or "invoke-webrequest" in ua:
+            image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            return image, (
+                f'powershell.exe -NoProfile -Command "Invoke-WebRequest '
+                f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
+            )
+        return None
+
+    def _select_explicit_proxy_client_session(
+        self,
+        source_system: System,
+        time: datetime,
+    ) -> tuple[User, Any] | None:
+        """Pick the user session most likely to own a user-mode proxy request."""
+        known_users = getattr(self, "_users_by_username", {})
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_on_system(source_system.hostname)
+            if session.username in known_users
+            and session.username not in _SYSTEM_ACCOUNTS
+            and not session.username.endswith("$")
+            and session.logon_type in {2, 7, 10, 11}
+            and _session_started_by(session, time)
+        ]
+        if not sessions:
+            return None
+
+        assigned_user = getattr(source_system, "assigned_user", None)
+        if assigned_user:
+            assigned_sessions = [
+                session for session in sessions if session.username == assigned_user
+            ]
+            if assigned_sessions:
+                sessions = assigned_sessions
+
+        session = max(sessions, key=lambda candidate: candidate.start_time)
+        return known_users[session.username], session
+
+    def _ensure_explicit_proxy_client_process(
+        self,
+        *,
+        source_system: System | None,
+        time: datetime,
+        proxy_context: ProxyContext,
+        proxy_sys: System,
+        dst_port: int,
+    ) -> tuple[int, str | None]:
+        """Create or reuse the process that source-natively owns a proxy client socket."""
+        if source_system is None or _get_os_category(source_system.os) != "windows":
+            return -1, None
+
+        hint = self._explicit_proxy_client_process_hint(
+            user_agent=proxy_context.user_agent,
+            hostname=proxy_context.host,
+            dst_port=dst_port,
+            proxy_sys=proxy_sys,
+        )
+        if hint is None:
+            return -1, None
+
+        image, command_line = hint
+        session_info = self._select_explicit_proxy_client_session(source_system, time)
+        if session_info is None:
+            return -1, None
+        user, session = session_info
+
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(source_system.hostname)
+            if proc.username == user.username
+            and proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(
+                source_system.hostname,
+                proc.pid,
+                time,
+            )
+            return proc.pid, proc.image
+
+        process_rng = random.Random(
+            _stable_seed(
+                "explicit_proxy_client_process:"
+                f"{source_system.hostname}:{user.username}:{image}:{proxy_context.host}"
+            )
+        )
+        lead_seconds = process_rng.uniform(12.0, 240.0)
+        process_time = time - timedelta(seconds=lead_seconds)
+        min_process_time = session.start_time + timedelta(milliseconds=500)
+        if process_time < min_process_time:
+            process_time = min_process_time
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+
+        parent_pid = self._select_parent_pid(
+            source_system,
+            user,
+            image,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        pid = self.generate_process(
+            user=user,
+            system=source_system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
+        self._record_user_process(source_system, user, pid, image)
+        self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+        self.state_manager.set_current_time(time)
+        return pid, image
 
     def _attach_ssl_context(
         self,
@@ -2841,7 +3013,42 @@ class ActivityGenerator:
             time=tgt_time,
         )
 
-        _svc_template = rng.choices(_KERBEROS_SVC_VALUES, weights=_KERBEROS_SVC_WEIGHTS, k=1)[0]
+        role_names = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
+        service_names = {
+            str(service).lower() for service in (getattr(system, "services", []) or [])
+        }
+        hostname_lower = system.hostname.lower()
+        if "file_server" in role_names or "file" in hostname_lower or "smb" in service_names:
+            service_dist = (
+                ("cifs/{hostname}", 70),
+                ("host/{hostname}", 25),
+                ("ldap/{hostname}", 5),
+            )
+        elif "web_server" in role_names or any("http" in service for service in service_names):
+            service_dist = (
+                ("http/{hostname}", 65),
+                ("host/{hostname}", 30),
+                ("cifs/{hostname}", 5),
+            )
+        elif "dns_server" in role_names or "dns" in service_names:
+            service_dist = (
+                ("DNS/{hostname}", 55),
+                ("host/{hostname}", 35),
+                ("cifs/{hostname}", 10),
+            )
+        else:
+            service_dist = (
+                ("cifs/{hostname}", 45),
+                ("host/{hostname}", 35),
+                ("ldap/{hostname}", 10),
+                ("http/{hostname}", 5),
+                ("DNS/{hostname}", 5),
+            )
+        _svc_template = rng.choices(
+            [entry[0] for entry in service_dist],
+            weights=[entry[1] for entry in service_dist],
+            k=1,
+        )[0]
         service_name = _svc_template.format(
             hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
         )
@@ -3373,6 +3580,59 @@ class ActivityGenerator:
 
         return profile_dir + "\\"
 
+    def _space_one_shot_cli_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> datetime:
+        """Avoid machine-impossible bursts of repeated one-shot admin commands."""
+        if _get_os_category(system.os) != "windows":
+            return time
+
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
+            return time
+
+        normalized_command = " ".join(command_line.lower().split())
+        exe_key = (system.hostname, username, logon_id, exe_name)
+        command_key = (*exe_key, normalized_command)
+        adjusted_time = time
+
+        command_last = self._last_one_shot_cli_launch_by_command.get(command_key)
+        if command_last is not None:
+            min_gap = timedelta(
+                seconds=random.Random(
+                    _stable_seed(
+                        f"one_shot_cli_same_command:{system.hostname}:{username}:"
+                        f"{exe_name}:{normalized_command}:{command_last.isoformat()}"
+                    )
+                ).uniform(18.0, 75.0)
+            )
+            if adjusted_time < command_last + min_gap:
+                adjusted_time = command_last + min_gap
+
+        exe_last = self._last_one_shot_cli_launch_by_exe.get(exe_key)
+        if exe_last is not None:
+            min_gap = timedelta(
+                seconds=random.Random(
+                    _stable_seed(
+                        f"one_shot_cli_same_exe:{system.hostname}:{username}:"
+                        f"{exe_name}:{exe_last.isoformat()}"
+                    )
+                ).uniform(2.5, 9.0)
+            )
+            if adjusted_time < exe_last + min_gap:
+                adjusted_time = exe_last + min_gap
+
+        self._last_one_shot_cli_launch_by_exe[exe_key] = adjusted_time
+        self._last_one_shot_cli_launch_by_command[command_key] = adjusted_time
+        return adjusted_time
+
     def generate_process(
         self,
         user: User,
@@ -3496,6 +3756,18 @@ class ActivityGenerator:
             )
             time = session.start_time + timedelta(milliseconds=offset_ms)
             self.state_manager.set_current_time(time)
+        if not from_storyline:
+            spaced_time = self._space_one_shot_cli_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if spaced_time != time:
+                time = spaced_time
+                self.state_manager.set_current_time(time)
         if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
             _integrity = "Medium"
         if _get_os_category(system.os) == "windows":
@@ -4444,6 +4716,19 @@ class ActivityGenerator:
                     int(client_duration * 1000),
                 )
 
+            client_pid = pid
+            client_process_image = process_image
+            if client_pid <= 0:
+                client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+                    source_system=source_system,
+                    time=time,
+                    proxy_context=proxy_context,
+                    proxy_sys=proxy_sys,
+                    dst_port=dst_port,
+                )
+                if owned_process_image:
+                    client_process_image = owned_process_image
+
             client_uid = self.generate_connection(
                 src_ip=src_ip,
                 dst_ip=proxy_sys.ip,
@@ -4456,14 +4741,14 @@ class ActivityGenerator:
                 resp_bytes=client_resp_bytes,
                 src_port=src_port,
                 emit_dns=False,
-                pid=pid,
+                pid=client_pid,
                 source_system=source_system,
                 conn_state=conn_state or "SF",
                 http=client_http,
                 proxy=proxy_context,
                 hostname=self._proxy_fqdn(proxy_sys),
                 proxy_bypass=True,
-                process_image=process_image,
+                process_image=client_process_image,
             )
 
             proxy_terminal_failures = {"DENIED", "AUTH_REQUIRED", "GATEWAY_ERROR"}
