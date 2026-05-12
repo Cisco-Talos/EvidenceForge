@@ -77,12 +77,17 @@ def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: f
 def _sensor_clock_skew_us(hostname: str) -> int:
     """Return stable per-sensor clock skew in microseconds."""
     seed = _stable_seed(f"zeek_sensor_clock_skew:{hostname}")
-    return (seed % 160_001) - 80_000
+    return (seed % 800_001) - 400_000
 
 
 def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
-    """Return small packet-path delay for a sensor observation."""
-    return _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}") % 900
+    """Return per-flow capture timestamp variance for a sensor observation."""
+    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}")
+    # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
+    # all perturb when one sensor reports an otherwise identical packet stream.
+    # Keep this deterministic per sensor+UID so conn/http/ssl/files rows for a
+    # flow remain internally correlated within a sensor.
+    return (seed % 1_100_001) - 250_000
 
 
 def _jitter_numeric_observation(
@@ -452,10 +457,9 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Sensors have mostly stable clock skew plus a sub-millisecond
-                # path delay. Avoid per-event multi-second positive jitter: two
-                # Zeek sensors observing the same packet should not look like one
-                # rendered a delayed synthetic clone.
+                # Sensors have stable clock skew plus per-flow capture timing
+                # variance. Keep the offset shared across Zeek log families for
+                # a flow, but avoid a fixed cross-sensor clone delay.
                 if i > 0:
                     sensor_delay_us = _sensor_clock_skew_us(hostname) + _sensor_path_delay_us(
                         hostname, original_uid

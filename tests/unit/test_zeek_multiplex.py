@@ -107,7 +107,7 @@ class TestPerSensorDirectoryRouting:
                 assert core[field] == dmz[field]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
-            assert abs(core["ts"] - dmz["ts"]) <= 0.081
+            assert abs(core["ts"] - dmz["ts"]) <= 1.5
             assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert any(
@@ -123,6 +123,51 @@ class TestPerSensorDirectoryRouting:
             for row in (core, dmz):
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_sensor_timestamp_offsets_vary_by_flow(self):
+        """Cross-sensor timestamps should not collapse into one fixed offset band."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+            ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+            for idx in range(40):
+                emitter.emit_event(
+                    {
+                        "ts": ts,
+                        "uid": f"CTestSpread{idx:06d}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 50000 + idx,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "duration": 1.0,
+                        "orig_bytes": 1000,
+                        "resp_bytes": 4000,
+                        "orig_pkts": 5,
+                        "resp_pkts": 7,
+                        "conn_state": "SF",
+                        "_sensor_hostnames": ["core", "dmz"],
+                    }
+                )
+            emitter.close()
+
+            core_rows = [
+                json.loads(line) for line in (base / "core" / "conn.json").read_text().splitlines()
+            ]
+            dmz_rows = [
+                json.loads(line) for line in (base / "dmz" / "conn.json").read_text().splitlines()
+            ]
+            core_by_port = {row["id.orig_p"]: row for row in core_rows}
+            dmz_by_port = {row["id.orig_p"]: row for row in dmz_rows}
+            offsets = [
+                round(dmz_by_port[port]["ts"] - core_by_port[port]["ts"], 6)
+                for port in sorted(core_by_port)
+            ]
+
+            assert max(offsets) - min(offsets) > 0.25
+            assert len(set(offsets)) > 30
 
     def test_second_sensor_observation_preserves_http_body_lengths(self):
         """HTTP body sizes are transaction facts, not per-sensor packet-counter jitter."""
