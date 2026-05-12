@@ -44,6 +44,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.
 - [x] Harden beacon URL host extraction against malformed bracketed authorities so invalid evaluator input cannot disable causality scoring.
 - [x] Fix missing target PID skips so storyline ground truth does not claim create_remote_thread/process_access evidence when generation emits no evidence.
 - [x] Fix Cisco ASA connection ID normalization to avoid repeated full-file rewrites during emitter barrier flushes by deferring whole-file normalization to final close.
