@@ -369,6 +369,20 @@ class SensorMultiplexEmitter(LogEmitter):
             # Multiple sensors: each gets a deterministic unique UID
             # and potentially NAT-swapped IPs
             original_uid = event_data.get("uid")
+            if not original_uid:
+                for uid_list_field in ("conn_uids", "uids"):
+                    uid_values = event_data.get(uid_list_field)
+                    if isinstance(uid_values, list):
+                        original_uid = next(
+                            (
+                                uid
+                                for uid in uid_values
+                                if isinstance(uid, str) and uid.startswith("C")
+                            ),
+                            None,
+                        )
+                    if original_uid:
+                        break
             for i, hostname in enumerate(targets):
                 # Always copy before per-sensor timing and identifier derivation.
                 render_data = dict(event_data)

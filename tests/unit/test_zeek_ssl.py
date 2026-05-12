@@ -362,6 +362,58 @@ class TestSslUidCorrelation:
             assert files_data["conn_uids"] == ["CMySpecificUID123"]
             assert files_data["ts"] > event_time.timestamp()
 
+    def test_file_transfer_analysis_time_follows_multisensor_connection_start(self):
+        """Per-sensor files.log delay should share the referenced conn timing basis."""
+        conn_fmt = load_format("zeek_conn")
+        files_fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            event = SecurityEvent(
+                timestamp=event_time,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.20",
+                    dst_port=445,
+                    protocol="tcp",
+                    zeek_uid="CMySpecificUID123",
+                    conn_state="SF",
+                    history="ShADadfF",
+                    orig_bytes=1024,
+                    resp_bytes=8192,
+                    orig_pkts=4,
+                    orig_ip_bytes=1104,
+                    resp_pkts=12,
+                    resp_ip_bytes=8432,
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Fabcdef1234567890",
+                    source="SMB",
+                    filename="report.xlsx",
+                    seen_bytes=8192,
+                    total_bytes=8192,
+                ),
+            )
+            event._sensor_hostnames_by_format = {
+                "zeek_conn": ["core", "dmz"],
+                "zeek_files": ["core", "dmz"],
+            }
+
+            conn_emitter.emit(event)
+            files_emitter.emit(event)
+            conn_emitter.close()
+            files_emitter.close()
+
+            for sensor in ("core", "dmz"):
+                conn_row = json.loads((out_dir / sensor / "conn.json").read_text())
+                files_row = json.loads((out_dir / sensor / "files.json").read_text())
+                assert files_row["conn_uids"] == [conn_row["uid"]]
+                assert files_row["ts"] > conn_row["ts"]
+
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
         x509_fmt = load_format("zeek_x509")
