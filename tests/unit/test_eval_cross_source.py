@@ -638,6 +638,18 @@ class TestBeaconProxyMatcher:
         fields = {"host": "api.evil.example.com", "status_code": 200}
         assert scorer._beacon_dst_matches(fields, "evil.example.com")
 
+    def test_beacon_allow_proxy_rejects_malformed_url_authority(self):
+        """Malformed bracketed URL authorities should not crash causality scoring."""
+        scorer = CrossSourceScorer()
+        fields = {"url": "http://[::::]/x", "status_code": 200}
+        assert not scorer._beacon_dst_matches(fields, "evil.example.com")
+
+    def test_beacon_allow_http_rejects_malformed_uri_authority(self):
+        """Malformed schemeless URI authorities should be ignored as non-matches."""
+        scorer = CrossSourceScorer()
+        fields = {"uri": "//[evil]/x", "status_code": 200}
+        assert not scorer._beacon_dst_matches(fields, "evil.example.com")
+
     def test_beacon_deny_proxy_403_counts_as_deny(self):
         """proxy_access record with status_code 403 should match beacon deny."""
         from evidenceforge.evaluation.storyline import ResolvedEvent

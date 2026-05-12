@@ -41,6 +41,24 @@ from evidenceforge.config import (
 
 VALID_RISK_PROFILES = frozenset({"low", "medium", "high"})
 VALID_BROWSING_INTENSITIES = frozenset({"light", "normal", "heavy"})
+WINDOWS_BOOT_ONLY_PROCESS_EXES = frozenset(
+    {
+        "smss.exe",
+        "csrss.exe",
+        "wininit.exe",
+        "services.exe",
+        "lsass.exe",
+        "winlogon.exe",
+    }
+)
+RECURRING_SYSLOG_STARTUP_PATTERNS = frozenset(
+    {
+        "started daemon",
+        "daemon started",
+        "daemon start",
+        "] start",
+    }
+)
 
 REQUIRED_PERSONA_FIELDS = frozenset(
     {
@@ -535,6 +553,14 @@ def validate_config() -> ValidationResult:
                     f"Signature {sid} has invalid proto {proto!r}",
                 )
             )
+        if "baseline_fp_allowed" in sig and not isinstance(sig["baseline_fp_allowed"], bool):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} baseline_fp_allowed must be a boolean",
+                )
+            )
         templates = sig.get("dns_query_templates")
         if templates is not None:
             if proto not in {"udp", "tcp"} or sig.get("dst_port") != 53:
@@ -646,6 +672,9 @@ def validate_config() -> ValidationResult:
         "software_update": {
             "application/json",
             "application/octet-stream",
+            "application/vnd.debian.binary-package",
+            "application/x-gzip",
+            "text/plain",
         },
         "telemetry": {"application/json"},
     }
@@ -1385,6 +1414,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.config.schemas import (
         ApplicationEntry,
         ConnectionEntry,
+        CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
         DnsEntry,
         DnsTunnelRttConfig,
@@ -1443,6 +1473,22 @@ def validate_config() -> ValidationResult:
                         f"system_processes.yaml (system_binaries.{os_name})",
                     )
                 )
+        for role_name, role_entries in sys_proc_data.get("system_services", {}).items():
+            if not isinstance(role_entries, list):
+                continue
+            for entry in role_entries:
+                if not isinstance(entry, dict):
+                    continue
+                image = str(entry.get("image") or "")
+                exe = image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if exe in WINDOWS_BOOT_ONLY_PROCESS_EXES:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "system_processes.yaml",
+                            f'Boot-only Windows process "{exe}" must be seeded at boot, not emitted as recurring system_services.{role_name}',
+                        )
+                    )
 
     # process_network_map.yaml
     if isinstance(process_net_data, list):
@@ -1475,6 +1521,18 @@ def validate_config() -> ValidationResult:
             "create_remote_thread_patterns.yaml start_locations",
         )
     )
+    try:
+        CreateRemoteThreadNoiseConfig.model_validate(
+            create_remote_thread_config.get("baseline_noise", {})
+        )
+    except Exception as exc:  # noqa: BLE001
+        result.issues.append(
+            Issue(
+                "ERROR",
+                "create_remote_thread_patterns.yaml baseline_noise",
+                f"invalid baseline_noise config: {exc}",
+            )
+        )
 
     from evidenceforge.generation.activity.edr_pools import load_edr_pools
 
@@ -1550,6 +1608,52 @@ def validate_config() -> ValidationResult:
     syslog_data = load_extra_syslog_messages()
     if syslog_data:
         _SCHEMA_CHECKS.append((syslog_data, SyslogProgramEntry, "extra_syslog_messages.yaml"))
+        for entry in syslog_data:
+            if not isinstance(entry, dict):
+                continue
+            app = str(entry.get("app") or "<unknown>")
+            for message in entry.get("messages", []):
+                if not isinstance(message, str):
+                    continue
+                message_lower = message.lower()
+                if not entry.get("transient") and any(
+                    pattern in message_lower for pattern in RECURRING_SYSLOG_STARTUP_PATTERNS
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            f'Persistent app "{app}" has recurring startup banner "{message}"',
+                        )
+                    )
+                if "cron.hourly" in message_lower:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            (
+                                f'App "{app}" has schedule-native cron.hourly message '
+                                f'"{message}"; use systemd_schedules.yaml or a '
+                                "dedicated schedule-aware generator instead"
+                            ),
+                        )
+                    )
+                if app == "NetworkManager" and "state change:" in message:
+                    transition = message.split("state change:", 1)[1].strip()
+                    transition = transition.split("{", 1)[0].strip()
+                    if "->" in transition:
+                        before, after = [part.strip() for part in transition.split("->", 1)]
+                        if before and after and before == after:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "extra_syslog_messages.yaml",
+                                    (
+                                        "NetworkManager state transition must change states, "
+                                        f'got "{message}"'
+                                    ),
+                                )
+                            )
 
     # systemd_schedules.yaml
     from evidenceforge.generation.engine.baseline import _load_systemd_schedules
@@ -1597,6 +1701,46 @@ def validate_config() -> ValidationResult:
                             f"entry {idx} must be a string containing '{{token}}'",
                         )
                     )
+        rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
+        allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
+        if not isinstance(rcode_weights, dict) or not rcode_weights:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_rcode_weights)",
+                    "dns_tunnel_rcode_weights must be a non-empty mapping",
+                )
+            )
+        else:
+            total_weight = 0.0
+            for rcode, weight in rcode_weights.items():
+                if str(rcode).upper() not in allowed_rcodes:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_rcode_weights)",
+                            f"unsupported rcode '{rcode}'",
+                        )
+                    )
+                    continue
+                if not isinstance(weight, int | float) or weight <= 0:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_rcode_weights)",
+                            f"weight for '{rcode}' must be a positive number",
+                        )
+                    )
+                    continue
+                total_weight += float(weight)
+            if total_weight <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_rcode_weights)",
+                        "at least one response code must have positive weight",
+                    )
+                )
 
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:
@@ -1610,6 +1754,16 @@ def validate_config() -> ValidationResult:
                 "proxy_user_agents.yaml (domain_overrides)",
             )
         )
+    for proxy_scope in ("workstation", "server"):
+        package_managers = proxy_ua_data.get(proxy_scope, {}).get("package_managers", {})
+        if isinstance(package_managers, dict):
+            _SCHEMA_CHECKS.append(
+                (
+                    list(package_managers.values()),
+                    ProxyUserAgentOverrideEntry,
+                    f"proxy_user_agents.yaml ({proxy_scope}.package_managers)",
+                )
+            )
 
     # Run all schema validations
     for entries, schema, file_name in _SCHEMA_CHECKS:

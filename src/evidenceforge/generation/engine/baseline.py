@@ -40,6 +40,7 @@ from typing import Any
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
+    load_create_remote_thread_noise_config,
     load_create_remote_thread_patterns,
     pick_create_remote_thread_pattern,
 )
@@ -47,7 +48,9 @@ from evidenceforge.generation.activity.generator import (
     _dns_base_ttl,
     _dns_is_internal_name,
     _dns_rtt,
+    _linux_foreground_lifetime,
     _linux_uid_for_user,
+    _windows_foreground_lifetime,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.ids_signatures import (
@@ -87,6 +90,17 @@ def _session_started_by(session: Any, time: datetime) -> bool:
         session_start = session_start.astimezone(UTC)
     activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
     return session_start <= activity_time
+
+
+def _eligible_for_hourly_module_load(proc: Any, time: datetime) -> bool:
+    """Return whether broad hourly DLL noise may attach to a process at ``time``."""
+    if "\\" not in proc.image or proc.start_time > time:
+        return False
+    lifetime = _windows_foreground_lifetime(proc.image, proc.command_line)
+    if lifetime is None:
+        return True
+    max_follow_on = proc.start_time + timedelta(seconds=lifetime[1] + 5.0)
+    return time <= max_follow_on
 
 
 def _session_logoff_time(
@@ -352,6 +366,21 @@ def _registry_writer_candidates(
     return [candidate for candidate in candidates if candidate is not None]
 
 
+def _materialize_registry_value_for_time(
+    target: str,
+    value: str,
+    event_time: datetime,
+    rng: random.Random,
+) -> str:
+    """Adjust time-like registry values so they cannot point after the event."""
+    if "\\Office\\16.0\\Word\\Reading Locations\\" not in target or not target.endswith(
+        "\\Datetime"
+    ):
+        return value
+    prior_time = event_time - timedelta(minutes=rng.randint(2, 180), seconds=rng.randint(0, 59))
+    return prior_time.strftime("%Y-%m-%dT%H:%M:%S")
+
+
 # Synthetic SYSTEM user for baseline Event 8/10 generation
 _SYSTEM_USER = User(
     username="SYSTEM",
@@ -508,6 +537,73 @@ class BaselineMixin:
 
     # Make PERSONA_CLUSTER_CONFIG accessible as class attribute
     PERSONA_CLUSTER_CONFIG = PERSONA_CLUSTER_CONFIG
+
+    def _storyline_account_lifecycle(self) -> dict[str, tuple[datetime | None, datetime | None]]:
+        """Return storyline-created/deleted account lifecycle bounds by username."""
+        cached = getattr(self, "_storyline_account_lifecycle_cache", None)
+        if cached is not None:
+            return cached
+
+        created: dict[str, datetime] = {}
+        deleted: dict[str, datetime] = {}
+        for entry in getattr(self.scenario, "storyline", []):
+            event_time = self._parse_storyline_time(entry.time)
+            for spec in getattr(entry, "events", []):
+                event_type = getattr(spec, "type", "")
+                username = getattr(spec, "target_username", "")
+                if not username:
+                    continue
+                key = username.lower()
+                if event_type == "account_created":
+                    created[key] = min(created.get(key, event_time), event_time)
+                elif event_type == "account_deleted":
+                    deleted[key] = min(deleted.get(key, event_time), event_time)
+
+        lifecycle = {
+            key: (created.get(key), deleted.get(key)) for key in set(created) | set(deleted)
+        }
+        self._storyline_account_lifecycle_cache = lifecycle
+        return lifecycle
+
+    def _service_account_available_at(self, username: str, when: datetime) -> bool:
+        """Return whether baseline may use a service account at a given time."""
+        created, deleted = self._storyline_account_lifecycle().get(
+            username.lower(),
+            (None, None),
+        )
+        if created is not None and when < created:
+            return False
+        if deleted is not None and when >= deleted:
+            return False
+        return True
+
+    def _schedule_foreground_process_termination(
+        self,
+        *,
+        user: User,
+        system: Any,
+        start_time: datetime,
+        pid: int,
+        process_name: str,
+        command_line: str,
+        logon_id: str,
+        rng: random.Random,
+    ) -> None:
+        """Terminate bounded foreground commands near their observed runtime."""
+        if _get_os_category(system.os) == "windows":
+            lifetime = _windows_foreground_lifetime(process_name, command_line)
+        else:
+            lifetime = _linux_foreground_lifetime(process_name, command_line)
+        if lifetime is None:
+            return
+        self.activity_generator.generate_process_termination(
+            user=user,
+            system=system,
+            time=start_time + timedelta(seconds=rng.uniform(*lifetime)),
+            pid=pid,
+            process_name=process_name,
+            logon_id=logon_id,
+        )
 
     def _resolve_traffic_rate(self, traffic_type: str) -> tuple[int, int]:
         """Get (lo, hi) rate for a traffic type — scenario override > config default."""
@@ -1467,18 +1563,34 @@ class BaselineMixin:
                     )
 
             elif pattern_type == "suspicious_cli":
-                result = generate_suspicious_cli(rng, enabled_users, systems, current_hour)
+                result = generate_suspicious_cli(
+                    rng,
+                    enabled_users,
+                    systems,
+                    current_hour,
+                    self.scenario.environment.domain or "corp.local",
+                )
                 if result:
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
                     )
-                    self.activity_generator.generate_process(
+                    pid = self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
                         time=result["time"],
                         logon_id=logon_id,
                         process_name=result["process_name"],
                         command_line=result["command_line"],
+                    )
+                    self._schedule_foreground_process_termination(
+                        user=result["user"],
+                        system=result["system"],
+                        start_time=result["time"],
+                        pid=pid,
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
+                        logon_id=logon_id,
+                        rng=rng,
                     )
 
             elif pattern_type == "failed_logon_burst":
@@ -1614,19 +1726,38 @@ class BaselineMixin:
                     if pattern_type == "temp_dir_execution"
                     else generate_unusual_powershell
                 )
-                result = gen_fn(rng, enabled_users, systems, current_hour)
+                if pattern_type == "unusual_powershell":
+                    result = gen_fn(
+                        rng,
+                        enabled_users,
+                        systems,
+                        current_hour,
+                        self.scenario.environment.domain or "corp.local",
+                    )
+                else:
+                    result = gen_fn(rng, enabled_users, systems, current_hour)
                 if result:
                     self.state_manager.set_current_time(result["time"])
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
                     )
-                    self.activity_generator.generate_process(
+                    pid = self.activity_generator.generate_process(
                         user=result["user"],
                         system=result["system"],
                         time=result["time"],
                         logon_id=logon_id,
                         process_name=result["process_name"],
                         command_line=result["command_line"],
+                    )
+                    self._schedule_foreground_process_termination(
+                        user=result["user"],
+                        system=result["system"],
+                        start_time=result["time"],
+                        pid=pid,
+                        process_name=result["process_name"],
+                        command_line=result["command_line"],
+                        logon_id=logon_id,
+                        rng=rng,
                     )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
@@ -3702,6 +3833,7 @@ class BaselineMixin:
                         system=dhcp_state["system"],
                         time=renewal_ts,
                         mac=dhcp_state["mac"],
+                        server_addr=dhcp_state.get("server_addr", "10.0.0.1"),
                         lease_time=lease_time,
                         uid=generate_zeek_uid("C"),
                         msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
@@ -3902,7 +4034,7 @@ class BaselineMixin:
 
                 _REG_KEYS_HKCU = get_registry_keys_hkcu()
                 _REG_KEYS_HKLM = get_registry_keys_hklm()
-                _reg_count = rng.randint(50, 120)
+                _reg_count = rng.randint(18, 42)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
                 # Only emit HKCU on workstations with a logged-in user;
@@ -3914,20 +4046,55 @@ class BaselineMixin:
                 for _ri in range(_reg_count):
                     _reg_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     if rng.random() < _hkcu_rate:
-                        _key, _vname, _details = rng.choice(_REG_KEYS_HKCU)
+                        dynamic_hkcu = [entry for entry in _REG_KEYS_HKCU if "{" in entry[0]]
+                        static_hkcu = [
+                            entry
+                            for entry in _REG_KEYS_HKCU
+                            if "{" not in entry[0]
+                            and "Office\\16.0\\Word\\Reading Locations\\Document 1" not in entry[0]
+                        ]
+                        pool = dynamic_hkcu if dynamic_hkcu and rng.random() < 0.80 else static_hkcu
+                        _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKCU)
                     else:
                         dynamic_hklm = [entry for entry in _REG_KEYS_HKLM if "{" in entry[0]]
-                        static_hklm = [entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]]
-                        pool = dynamic_hklm if dynamic_hklm and rng.random() < 0.65 else static_hklm
+                        noisy_static_hklm = [
+                            entry
+                            for entry in _REG_KEYS_HKLM
+                            if "{" not in entry[0]
+                            and "Windows NT\\CurrentVersion\\Winlogon" not in entry[0]
+                            and "Services\\EventLog\\Application" not in entry[0]
+                        ]
+                        rare_static_hklm = [
+                            entry for entry in _REG_KEYS_HKLM if "{" not in entry[0]
+                        ]
+                        if dynamic_hklm and rng.random() < 0.85:
+                            pool = dynamic_hklm
+                        elif rng.random() < 0.95:
+                            pool = noisy_static_hklm
+                        else:
+                            pool = rare_static_hklm
                         _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
                     _template_user = system.assigned_user or "SYSTEM"
-                    _key = materialize_edr_template(_key, rng, _template_user)
-                    _vname = materialize_edr_template(_vname, rng, _template_user)
+                    _key = materialize_edr_template(
+                        _key,
+                        rng,
+                        _template_user,
+                        host_ip=system.ip,
+                        host_key=system.hostname,
+                    )
+                    _vname = materialize_edr_template(
+                        _vname,
+                        rng,
+                        _template_user,
+                        host_ip=system.ip,
+                        host_key=system.hostname,
+                    )
                     _details = materialize_edr_template(
                         _details,
                         rng,
                         _template_user,
                         host_ip=system.ip,
+                        host_key=system.hostname,
                     )
                     writer_candidates = _registry_writer_candidates(
                         _key,
@@ -3941,11 +4108,20 @@ class BaselineMixin:
                         _reg_image = r"C:\Windows\System32\svchost.exe"
                         _reg_user = "SYSTEM"
                     _reg_proc = self.state_manager.get_process(system.hostname, _reg_pid)
+                    if _reg_proc is not None:
+                        _reg_image = _reg_proc.image
                     if _reg_proc and _reg_proc.start_time and _reg_ts <= _reg_proc.start_time:
                         _reg_ts = _reg_proc.start_time + timedelta(milliseconds=1)
                     _target = f"{_key}\\{_vname}"
-                    # 90% SetValue (Event 13), 10% DeleteValue (Event 12)
-                    _reg_action = "delete" if rng.random() < 0.10 else "modify"
+                    _details = _materialize_registry_value_for_time(
+                        _target,
+                        _details,
+                        _reg_ts,
+                        rng,
+                    )
+                    # Sysmon value writes are Event 13. Event 12 is reserved for key-only
+                    # create/delete contexts, not the value-name pools used here.
+                    _reg_action = "modify"
                     self.activity_generator.dispatcher.dispatch(
                         SecurityEvent(
                             timestamp=_reg_ts,
@@ -4008,6 +4184,8 @@ class BaselineMixin:
                         target_sys = rng.choice(servers) if servers else None
                         if target_sys and target_sys.hostname != system.hostname:
                             svc_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+                            if not self._service_account_available_at(svc_name, svc_ts):
+                                continue
                             self.state_manager.set_current_time(svc_ts)
                             self.activity_generator.generate_explicit_credentials(
                                 user=_SYSTEM_USER,
@@ -4033,14 +4211,29 @@ class BaselineMixin:
                         self.state_manager.set_current_time(gpo_ts)
                         # Group Policy refresh runs as SYSTEM but does not normally
                         # create a 4648 explicit-credential audit for SYSTEM->SYSTEM.
-                        self.activity_generator.generate_system_process(
+                        gpupdate_image = r"C:\Windows\System32\gpupdate.exe"
+                        gpupdate_command = r"gpupdate.exe /target:computer /force"
+                        parent_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                        gpupdate_pid = self.activity_generator.generate_system_process(
                             system=system,
                             time=gpo_ts,
-                            process_name=r"C:\Windows\System32\gpupdate.exe",
-                            command_line=r"gpupdate.exe /target:computer /force",
-                            parent_pid=sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4)),
+                            process_name=gpupdate_image,
+                            command_line=gpupdate_command,
+                            parent_pid=parent_pid,
                             username="SYSTEM",
                         )
+                        lifetime = _windows_foreground_lifetime(gpupdate_image, gpupdate_command)
+                        if lifetime is not None:
+                            end_ts = gpo_ts + timedelta(seconds=rng.uniform(*lifetime))
+                            self.state_manager.set_current_time(end_ts)
+                            self.activity_generator.generate_system_process_termination(
+                                system=system,
+                                time=end_ts,
+                                pid=gpupdate_pid,
+                                process_name=gpupdate_image,
+                                parent_pid=parent_pid,
+                                username="SYSTEM",
+                            )
 
             # Sysmon Event 8 (CreateRemoteThread) baseline noise — Windows only
             if os_cat == "windows" and "windows_event_sysmon" in self.emitters:
@@ -4049,8 +4242,11 @@ class BaselineMixin:
                     for p in load_create_remote_thread_patterns()
                     if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
                 ]
-                if valid_crt:
-                    num_crt = rng.randint(1, 3)
+                noise_cfg = load_create_remote_thread_noise_config()
+                probability = float(noise_cfg.get("probability_per_host_hour", 0.08))
+                max_events = int(noise_cfg.get("max_events_per_hour", 1))
+                if valid_crt and max_events > 0 and rng.random() < probability:
+                    num_crt = rng.randint(1, max_events)
                     for _ in range(num_crt):
                         pattern = pick_create_remote_thread_pattern(valid_crt, rng)
                         src_key = pattern["source_pid_key"]
@@ -4119,11 +4315,18 @@ class BaselineMixin:
                 )
 
                 running = self.state_manager.get_processes_on_system(system.hostname)
-                win_procs = [(p.pid, p.image) for p in running if "\\" in p.image]
-                if win_procs:
+                if running:
                     generic_dll_pool = get_dll_pool()
                     num_dll = rng.randint(20, 45)
                     for _ in range(num_dll):
+                        offset = rng.uniform(0, 3599)
+                        ts = current_hour + timedelta(seconds=offset)
+                        win_procs: list[tuple[int, str]] = []
+                        for proc in running:
+                            if _eligible_for_hourly_module_load(proc, ts):
+                                win_procs.append((proc.pid, proc.image))
+                        if not win_procs:
+                            continue
                         proc_pid, proc_image = rng.choice(win_procs)
                         exe_name = proc_image.rsplit("\\", 1)[-1]
                         profiled_dlls = get_dlls_for_process(exe_name)
@@ -4137,6 +4340,7 @@ class BaselineMixin:
                                         path,
                                         rng,
                                         system.assigned_user or "SYSTEM",
+                                        host_key=system.hostname,
                                     ),
                                     "signed": not any(
                                         vendor in path
@@ -4149,8 +4353,6 @@ class BaselineMixin:
                         if not dll_pool:
                             continue
                         dll = rng.choice(dll_pool)
-                        offset = rng.uniform(0, 3599)
-                        ts = current_hour + timedelta(seconds=offset)
                         self.state_manager.set_current_time(ts)
                         self.activity_generator.generate_image_load(
                             user=_SYSTEM_USER,
@@ -4490,6 +4692,7 @@ class BaselineMixin:
                 continue
 
             sys_pids = self._system_pids.get(system.hostname, {})
+            sys_type = (system.type or "workstation").lower()
             is_dmz = "dmz" in system.hostname.lower() or "web" in system.hostname.lower()
             is_rhel_like = any(
                 d in system.os.lower() for d in ("centos", "rhel", "red hat", "rocky", "alma")
@@ -4528,6 +4731,16 @@ class BaselineMixin:
                 source_roll = rng.random()
                 if source_roll < 0.25:
                     if is_dmz and rng.random() < 0.85:
+                        inbound_dst_ip = system.ip
+                        if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                            public_target = (
+                                self.dispatcher.visibility_engine.get_public_inbound_address(
+                                    system.ip
+                                )
+                            )
+                            if public_target is None:
+                                continue
+                            inbound_dst_ip = public_target
                         src_ip = rng.choices(
                             self._external_scanner_ips,
                             weights=self._external_scanner_weights,
@@ -4547,7 +4760,7 @@ class BaselineMixin:
 
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
-                            dst_ip=system.ip,
+                            dst_ip=inbound_dst_ip,
                             time=ts,
                             dst_port=dpt,
                             proto="tcp",
@@ -4588,13 +4801,11 @@ class BaselineMixin:
                                 facility=0,
                                 severity=5,
                             )
-                elif source_roll < 0.45:
+                elif source_roll < 0.32:
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
                     session_users = ["root", "admin"]
-                    if has_web_role:
-                        session_users.append("www-data")
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
@@ -4613,7 +4824,7 @@ class BaselineMixin:
                             message=f"Removed session {sid}.",
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                         )
-                elif source_roll < 0.53:
+                elif source_roll < 0.34 and sys_type == "server":
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -4650,60 +4861,70 @@ class BaselineMixin:
                         conn_state="SF",
                     )
                     sshd_pid = rng.randint(5000, 60000)
-                    ssh_user = rng.choice(
-                        ["admin", "root", "ubuntu"] if not is_rhel_like else ["admin", "root"]
-                    )
-                    # Generate login + disconnect sequence (realistic sshd log)
-                    if rng.random() < 0.5:
-                        # Login sequence: connection → auth → session open
-                        _key_rng = random.Random(
-                            _stable_seed(f"ssh_client_key:{ip}:{system.hostname}")
-                        )
-                        key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
-                        key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
-                        if rng.random() < 0.7:
-                            # Key-based auth (70%)
-                            auth_msg = f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: {key_type} {key_hash}"
-                        else:
-                            # Password auth (30%)
-                            auth_msg = (
-                                f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                            )
-                        ssh_sid = self.state_manager.next_linux_logind_session_id(
-                            system.hostname, rng, ts
-                        )
-                        login_msgs = [
-                            (
-                                "sshd",
-                                sshd_pid,
-                                f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
-                            ),
-                            ("sshd", sshd_pid, auth_msg),
-                            (
-                                "sshd",
-                                sshd_pid,
-                                f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
-                            ),
-                            (
-                                "systemd-logind",
-                                sys_pids.get("logind", 456),
-                                f"New session {ssh_sid} of user {ssh_user}.",
-                            ),
-                        ]
-                        _msg_offset = rng.randint(10, 50)
-                        for app, pid_val, lm in login_msgs:
-                            self.activity_generator.generate_syslog_event(
-                                system=system,
-                                time=ts + timedelta(milliseconds=_msg_offset),
-                                app_name=app,
-                                message=lm,
-                                pid=pid_val,
-                                facility=10,
-                            )
-                            _msg_offset += rng.randint(1, 50)
+                    ssh_roster = self._get_server_ssh_users(system)
+                    ssh_usernames = [user.username for user in ssh_roster]
+                    if ssh_usernames:
+                        fallback_users = ["admin", "root"]
+                        if not is_rhel_like:
+                            fallback_users.append("ubuntu")
+                        ssh_user = rng.choices(
+                            ssh_usernames + fallback_users,
+                            weights=([20] * len(ssh_usernames)) + [3, 1, 1][: len(fallback_users)],
+                            k=1,
+                        )[0]
                     else:
-                        # Disconnect sequence
-                        disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
+                        ssh_user = rng.choice(["admin", "root"] if is_rhel_like else ["admin"])
+                    # Generate a stateful SSH lifecycle. Real sshd logs keep
+                    # connection, auth, pam open, and pam close on the same
+                    # per-session sshd[pid]; bounded-window orphan records are
+                    # modeled by occasional missing closes near the window edge,
+                    # not by inventing unrelated close PIDs.
+                    _key_rng = random.Random(
+                        _stable_seed(f"ssh_client_key:{ip}:{system.hostname}:{ssh_user}")
+                    )
+                    key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
+                    key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
+                    if rng.random() < 0.7:
+                        auth_msg = (
+                            f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: "
+                            f"{key_type} {key_hash}"
+                        )
+                    else:
+                        auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
+                    ssh_sid = self.state_manager.next_linux_logind_session_id(
+                        system.hostname, rng, ts
+                    )
+                    login_msgs = [
+                        (
+                            "sshd",
+                            sshd_pid,
+                            f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
+                        ),
+                        ("sshd", sshd_pid, auth_msg),
+                        (
+                            "sshd",
+                            sshd_pid,
+                            f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
+                        ),
+                        (
+                            "systemd-logind",
+                            sys_pids.get("logind", 456),
+                            f"New session {ssh_sid} of user {ssh_user}.",
+                        ),
+                    ]
+                    _msg_offset = rng.randint(10, 50)
+                    for app, pid_val, lm in login_msgs:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(milliseconds=_msg_offset),
+                            app_name=app,
+                            message=lm,
+                            pid=pid_val,
+                            facility=10,
+                        )
+                        _msg_offset += rng.randint(1, 50)
+                    disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
+                    if disconnect_time < self.end_time and rng.random() < 0.92:
                         self.activity_generator.generate_syslog_event(
                             system=system,
                             time=disconnect_time,
@@ -4712,7 +4933,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.68:
+                elif source_roll < 0.39:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     self.activity_generator.generate_syslog_event(
@@ -4728,7 +4949,7 @@ class BaselineMixin:
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.76:
+                elif source_roll < 0.47:
                     if not has_ntp_client:
                         continue
                     if is_rhel_like:
@@ -4768,7 +4989,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.94:
+                elif source_roll < 0.59:
                     # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
@@ -4777,7 +4998,9 @@ class BaselineMixin:
                     # Journal size grows monotonically during uptime (logs accumulate)
                     jkey = f"_journald_size_{system.hostname}"
                     prev_size = getattr(self, jkey, max_size * 0.1)
-                    size = min(prev_size + rng.uniform(0.5, 8.0), max_size - 1)
+                    size = prev_size + rng.uniform(0.5, 8.0)
+                    if size > max_size * rng.uniform(0.72, 0.9):
+                        size = rng.uniform(max_size * 0.18, max_size * 0.55)
                     setattr(self, jkey, size)
                     free = max_size - size
                     path = (
@@ -4804,16 +5027,25 @@ class BaselineMixin:
                     filtered = filter_syslog_messages(_all_programs, is_rhel_like, system.roles)
                     if not filtered:
                         continue
-                    app, msgs = rng.choice(filtered)
+                    app, msgs, _entry_weight = rng.choices(
+                        filtered,
+                        weights=[weight for _app, _messages, weight in filtered],
+                        k=1,
+                    )[0]
                     # Format placeholders vary by daemon
                     if app == "dhclient":
-                        renewal = rng.choice([1800, 3600, 3600, 7200, 14400, 43200])
-                        jitter = int(renewal * 0.05)
-                        renewal += rng.randint(-jitter, jitter)
-                        msg = rng.choice(msgs).format(ip=system.ip, renewal=renewal)
+                        # DHCP syslog must be tied to the canonical lease
+                        # transaction; generic noise can contradict Zeek DHCP.
+                        continue
                     elif app == "NetworkManager":
                         # NM uses monotonic kernel uptime seconds in [brackets]
                         msg = rng.choice(msgs).format(uptime)
+                    elif app == "systemd-resolved":
+                        dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
+                        msg = rng.choice(msgs).format(
+                            rng.randint(100000, 999999),
+                            dns_server=dns_server,
+                        )
                     else:
                         msg = rng.choice(msgs).format(rng.randint(100000, 999999))
                     # Map syslog app names to sys_pids keys for persistent daemons.
@@ -4953,6 +5185,7 @@ class BaselineMixin:
                     ]
                     if not _filtered:
                         _filtered = _pool
+                    _filtered = [s for s in _filtered if s.get("baseline_fp_allowed", True)]
                     _filtered = [
                         s
                         for s in _filtered
@@ -4978,8 +5211,18 @@ class BaselineMixin:
                         dst_ip = ext_ip
                         source_system = local_sys
                     else:
+                        if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
+                            public_target = (
+                                self.dispatcher.visibility_engine.get_public_inbound_address(
+                                    local_sys.ip
+                                )
+                            )
+                            if public_target is None:
+                                continue
+                        else:
+                            public_target = inbound_vips.get(local_sys.ip, local_sys.ip)
                         src_ip = ext_ip
-                        dst_ip = inbound_vips.get(local_sys.ip, local_sys.ip)
+                        dst_ip = public_target
                         source_system = None
                     dns_ctx = None
                     if (
@@ -5110,14 +5353,15 @@ class BaselineMixin:
                     else:
                         ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
                     from evidenceforge.generation.activity.http_content import (
+                        is_stable_resource_path,
                         response_size_for_mime,
                         response_size_for_status,
                     )
 
                     resp_bytes = (
-                        response_size_for_mime(rng, mime)
-                        if status == 200
-                        else response_size_for_status(status, http_host, path)
+                        response_size_for_status(status, http_host, path)
+                        if status != 200 or is_stable_resource_path(path)
+                        else response_size_for_mime(rng, mime)
                     )
                     ua_rng = random.Random(
                         _stable_seed(f"web_client_ua:{client_ip}:{sys_obj.hostname}")

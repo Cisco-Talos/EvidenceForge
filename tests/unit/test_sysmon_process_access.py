@@ -111,7 +111,7 @@ class TestSysmonProcessAccess:
         source_pid, target_pid = _create_test_processes(
             state_manager, windows_system, test_user, source_image
         )
-        activity_gen.generate_process_access(
+        emitted = activity_gen.generate_process_access(
             user=test_user,
             system=windows_system,
             time=ts,
@@ -122,6 +122,7 @@ class TestSysmonProcessAccess:
             granted_access="0x1010",
         )
 
+        assert emitted is True
         emitter = mock_emitters["windows_event_sysmon"]
         assert emitter.emit.call_count == 1
         event = emitter.emit.call_args[0][0]
@@ -147,7 +148,7 @@ class TestSysmonProcessAccess:
             integrity_level="High",
         )
 
-        activity_gen.generate_process_access(
+        emitted = activity_gen.generate_process_access(
             user=test_user,
             system=windows_system,
             time=ts,
@@ -156,6 +157,7 @@ class TestSysmonProcessAccess:
             target_pid=99999,
         )
 
+        assert emitted is False
         assert mock_emitters["windows_event_sysmon"].emit.call_count == 0
         assert mock_emitters["ecar"].emit.call_count == 0
         assert state_manager.get_process_object_id(windows_system.hostname, 99999) == ""

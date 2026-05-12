@@ -179,28 +179,56 @@ def _special_privilege_fallback(username: str) -> str:
     )
 
 
-_DT_PREFIX = "__dt__:"
+_SPOOL_FIELDS_KEY = "fields"
+_SPOOL_VALUE_TYPE_KEY = "type"
+_SPOOL_VALUE_KEY = "value"
+_SPOOL_DATETIME_TYPE = "datetime"
+_SPOOL_JSON_TYPE = "json"
 
 
-def _spool_encode(event: dict) -> str:
-    def default(obj: object) -> str:
-        if isinstance(obj, datetime):
-            return _DT_PREFIX + obj.isoformat()
-        raise TypeError(f"not serializable: {type(obj)}")
+def _spool_encode(event: dict[str, Any]) -> str:
+    """Encode a Windows event dictionary for the on-disk spool.
 
-    return json.dumps(event, default=default)
+    The wrapper keeps datetime metadata out of attacker-controlled string values.
+    Raw Windows fields such as TargetUserName may contain any string, including
+    legacy sentinel prefixes, without being interpreted during decode.
+    """
+    fields: dict[str, dict[str, Any]] = {}
+    for key, value in event.items():
+        if isinstance(value, datetime):
+            fields[key] = {
+                _SPOOL_VALUE_TYPE_KEY: _SPOOL_DATETIME_TYPE,
+                _SPOOL_VALUE_KEY: value.isoformat(),
+            }
+        else:
+            fields[key] = {_SPOOL_VALUE_TYPE_KEY: _SPOOL_JSON_TYPE, _SPOOL_VALUE_KEY: value}
+    return json.dumps({_SPOOL_FIELDS_KEY: fields})
 
 
-def _spool_decode(payload: str) -> dict:
-    def object_hook(d: dict) -> dict:
-        return {
-            k: datetime.fromisoformat(v[len(_DT_PREFIX) :]).replace(tzinfo=UTC)
-            if isinstance(v, str) and v.startswith(_DT_PREFIX)
-            else v
-            for k, v in d.items()
-        }
+def _spool_decode(payload: str) -> dict[str, Any]:
+    """Decode a Windows event dictionary from the on-disk spool."""
+    decoded = json.loads(payload)
+    if not isinstance(decoded, dict):
+        raise ValueError("Windows spool payload must decode to an object")
+    fields = decoded.get(_SPOOL_FIELDS_KEY)
+    if not isinstance(fields, dict):
+        raise ValueError("Windows spool payload is missing fields object")
 
-    return json.loads(payload, object_hook=object_hook)
+    event: dict[str, Any] = {}
+    for key, wrapped in fields.items():
+        if not isinstance(key, str) or not isinstance(wrapped, dict):
+            raise ValueError("Windows spool field entries must be keyed objects")
+        value_type = wrapped.get(_SPOOL_VALUE_TYPE_KEY)
+        value = wrapped.get(_SPOOL_VALUE_KEY)
+        if value_type == _SPOOL_DATETIME_TYPE:
+            if not isinstance(value, str):
+                raise ValueError("Windows spool datetime value must be a string")
+            event[key] = datetime.fromisoformat(value).replace(tzinfo=UTC)
+        elif value_type == _SPOOL_JSON_TYPE:
+            event[key] = value
+        else:
+            raise ValueError(f"unknown Windows spool field type: {value_type!r}")
+    return event
 
 
 class WindowsEventEmitter(LogEmitter):
@@ -1183,6 +1211,7 @@ class WindowsEventEmitter(LogEmitter):
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
+        self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._current_storyline_origin: bool = False
         self._spool_path: Path | None = None
@@ -1314,6 +1343,186 @@ class WindowsEventEmitter(LogEmitter):
         for (payload,) in cursor:
             yield _spool_decode(payload)
 
+    def _iter_spooled_rows_unlocked(self, *, ordered: bool = False):
+        """Yield row IDs and decoded Windows events while holding _file_lock."""
+        if self._spool_conn is None:
+            return
+        query = "SELECT rowid, payload FROM events"
+        if ordered:
+            query += " ORDER BY sort_key, sequence"
+        cursor = self._spool_conn.execute(query)
+        for rowid, payload in cursor:
+            yield int(rowid), _spool_decode(payload)
+
+    def _update_spooled_events_unlocked(self, updates: list[tuple[str, str, int]]) -> None:
+        """Persist encoded payload and sort-key updates for spooled Windows events."""
+        if not updates or self._spool_conn is None:
+            return
+        self._spool_conn.executemany(
+            "UPDATE events SET payload = ?, sort_key = ? WHERE rowid = ?", updates
+        )
+        self._spool_conn.commit()
+
+    def _delete_spooled_events_unlocked(self, rowids: set[int]) -> None:
+        """Delete spooled Windows events by row ID."""
+        if not rowids or self._spool_conn is None:
+            return
+        self._spool_conn.executemany(
+            "DELETE FROM events WHERE rowid = ?", [(rowid,) for rowid in rowids]
+        )
+        self._spool_conn.commit()
+        self._spooled_count = max(0, self._spooled_count - len(rowids))
+
+    def _shift_spooled_process_creates_after_visible_parent_unlocked(self) -> None:
+        """Prevent spooled Security 4688 children from preceding parent 4688 rows."""
+        max_passes = max(1, self._spooled_count)
+        for _ in range(max_passes):
+            process_create_times: dict[tuple[str, str], datetime] = {}
+            for _, event in self._iter_spooled_rows_unlocked():
+                if event.get("EventID") != 4688:
+                    continue
+                ts = event.get("TimeCreated")
+                process_pid = str(event.get("NewProcessId") or "").lower()
+                computer = str(event.get("Computer", ""))
+                if isinstance(ts, datetime) and process_pid and process_pid not in {"0x0", "0x4"}:
+                    process_create_times[(computer, process_pid)] = ts
+
+            changed = False
+            updates: list[tuple[str, str, int]] = []
+            for rowid, event in self._iter_spooled_rows_unlocked():
+                if event.get("EventID") != 4688:
+                    continue
+                ts = event.get("TimeCreated")
+                parent_pid = str(event.get("ProcessId") or "").lower()
+                computer = str(event.get("Computer", ""))
+                if not isinstance(ts, datetime) or parent_pid in {"", "0x0", "0x4", "-"}:
+                    continue
+                parent_time = process_create_times.get((computer, parent_pid))
+                if parent_time is not None and ts <= parent_time:
+                    event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
+                    updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                    changed = True
+                    if len(updates) >= 1000:
+                        self._update_spooled_events_unlocked(updates)
+                        updates.clear()
+            self._update_spooled_events_unlocked(updates)
+            if not changed:
+                break
+
+    def _shift_spooled_logoffs_after_dependents_unlocked(self) -> None:
+        """Prevent spooled 4634 records from preceding same-session dependents."""
+        latest_dependent: dict[tuple[str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            if event.get("EventID") not in {4688, 4689, 4801}:
+                continue
+            logon_id = str(event.get("SubjectLogonId") or event.get("TargetLogonId") or "")
+            if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+                continue
+            key = (str(event.get("Computer", "")), logon_id)
+            latest_dependent[key] = max(ts, latest_dependent.get(key, ts))
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime) or event.get("EventID") != 4634:
+                continue
+            logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
+            key = (str(event.get("Computer", "")), logon_id)
+            latest = latest_dependent.get(key)
+            if logon_id and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + sample_timing_delta(
+                    "windows.logoff_after_rendered_dependents",
+                    seed_parts=(key[0], key[1], latest),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
+    def _shift_spooled_process_terminations_after_dependents_unlocked(self) -> None:
+        """Keep spooled Security 4689 events after visible child-process lifecycle."""
+        latest_child_create: dict[tuple[str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+                continue
+            parent_pid = str(event.get("ProcessId") or "")
+            if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                key = (str(event.get("Computer", "")), parent_pid.lower())
+                latest_child_create[key] = max(ts, latest_child_create.get(key, ts))
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime) or event.get("EventID") != 4689:
+                continue
+            process_pid = str(event.get("ProcessId") or "")
+            key = (str(event.get("Computer", "")), process_pid.lower())
+            latest = latest_child_create.get(key)
+            if process_pid and latest is not None and ts <= latest:
+                event["TimeCreated"] = latest + sample_timing_delta(
+                    "windows.process_exit_after_visible_child",
+                    seed_parts=(key[0], key[1], latest),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
+    def _suppress_spooled_duplicate_lock_unlock_transitions_unlocked(self) -> None:
+        """Keep spooled 4800/4801 as a chronological session state machine."""
+        session_state: dict[tuple[str, str, str], str] = {}
+        dropped_rowids: set[int] = set()
+        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+
+        for rowid, event in self._iter_spooled_rows_unlocked(ordered=True):
+            event_id = event.get("EventID")
+            if event_id not in {4800, 4801}:
+                continue
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            logon_id = str(event.get("TargetLogonId") or "")
+            session_id = str(event.get("SessionId") or "")
+            if not computer or not logon_id:
+                continue
+            key = (computer, logon_id, session_id)
+            next_state = "locked" if event_id == 4800 else "unlocked"
+            if session_state.get(key) == next_state:
+                dropped_rowids.add(rowid)
+                if event_id == 4801:
+                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                continue
+            session_state[key] = next_state
+
+        for rowid, event in self._iter_spooled_rows_unlocked(ordered=True):
+            if rowid in dropped_rowids or event.get("EventID") != 4624:
+                continue
+            if str(event.get("LogonType") or "") != "7":
+                continue
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            logon_id = str(event.get("TargetLogonId") or "")
+            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
+                delta = ensure_utc(ts) - unlock_ts
+                if (
+                    computer == drop_computer
+                    and logon_id == drop_logon_id
+                    and timedelta(0) <= delta <= timedelta(seconds=2)
+                ):
+                    dropped_rowids.add(rowid)
+                    break
+
+        self._delete_spooled_events_unlocked(dropped_rowids)
+
     def _cleanup_spool_unlocked(self) -> None:
         """Remove the temporary Windows event spool database."""
         if self._spool_conn is not None:
@@ -1331,19 +1540,25 @@ class WindowsEventEmitter(LogEmitter):
 
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
-            self._event_dicts = list(self._iter_spooled_events_unlocked())
+            self._shift_spooled_process_creates_after_visible_parent_unlocked()
+            self._shift_spooled_process_terminations_after_dependents_unlocked()
+            self._shift_spooled_logoffs_after_dependents_unlocked()
+            self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
+            events = self._iter_spooled_events_unlocked()
+        else:
+            self._shift_process_creates_after_visible_parent()
+            self._shift_process_terminations_after_dependents()
+            self._shift_logoffs_after_dependents()
+            self._suppress_duplicate_lock_unlock_transitions()
 
-        self._shift_process_terminations_after_dependents()
-        self._shift_logoffs_after_dependents()
+            def _sort_key(event: dict) -> Any:
+                ts = event.get("TimeCreated", "")
+                if isinstance(ts, datetime):
+                    return ensure_utc(ts)
+                return ts
 
-        def _sort_key(event: dict) -> Any:
-            ts = event.get("TimeCreated", "")
-            if isinstance(ts, datetime):
-                return ensure_utc(ts)
-            return ts
-
-        self._event_dicts.sort(key=_sort_key)
-        events = iter(self._event_dicts)
+            self._event_dicts.sort(key=_sort_key)
+            events = iter(self._event_dicts)
 
         # Assign per-computer EventRecordIDs in sorted order
         for sequence, event in enumerate(events):
@@ -1367,19 +1582,30 @@ class WindowsEventEmitter(LogEmitter):
                     self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
                 else:
                     self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
-            gap_rng = random.Random(
-                f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}"
-            )
-            if gap_rng.random() < 0.15:
-                self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
-            elif gap_rng.random() < 0.03:
-                self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
-            else:
-                self._record_id_counters[counter_key] += 1
-            event["EventRecordID"] = self._record_id_counters[counter_key]
             if event.get("EventID") == 1102:
-                reset_rng = random.Random(f"erid_reset_{counter_key}_{event['EventRecordID']}")
-                self._record_id_counters[counter_key] = reset_rng.randint(0, 5)
+                reset_rng = random.Random(f"erid_reset_{counter_key}_{sequence}")
+                self._record_id_counters[counter_key] = reset_rng.randint(0, 3) + 1
+                event["EventRecordID"] = self._record_id_counters[counter_key]
+            else:
+                gap_rng = random.Random(
+                    f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}"
+                )
+                if gap_rng.random() < 0.15:
+                    self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
+                elif gap_rng.random() < 0.03:
+                    self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
+                else:
+                    self._record_id_counters[counter_key] += 1
+                event["EventRecordID"] = self._record_id_counters[counter_key]
+
+            normalized_time = event.get("TimeCreated")
+            if isinstance(normalized_time, datetime):
+                current_time = ensure_utc(normalized_time)
+                previous_record_time = self._last_record_time_created_by_computer.get(counter_key)
+                if previous_record_time is not None and current_time <= previous_record_time:
+                    current_time = previous_record_time + timedelta(microseconds=1)
+                    event["TimeCreated"] = current_time
+                self._last_record_time_created_by_computer[counter_key] = current_time
 
             rendered = self._render_event(event)
             host_fqdn = event.get("Computer", "")
@@ -1405,7 +1631,7 @@ class WindowsEventEmitter(LogEmitter):
             computer = str(event.get("Computer", ""))
             if event_id == 4634:
                 logon_id = str(event.get("TargetLogonId") or event.get("SubjectLogonId") or "")
-                if logon_id and not event.get("_storyline_origin"):
+                if logon_id:
                     logoffs.append(((computer, logon_id), event))
                 continue
             if event_id not in {4688, 4689, 4801}:
@@ -1424,6 +1650,101 @@ class WindowsEventEmitter(LogEmitter):
                     "windows.logoff_after_rendered_dependents",
                     seed_parts=(key[0], key[1], latest),
                 )
+
+    def _suppress_duplicate_lock_unlock_transitions(self) -> None:
+        """Keep 4800/4801 as a chronological session state machine.
+
+        Baseline code can schedule a future unlock before an earlier storyline
+        transition is generated. Final Security rendering has the complete
+        chronological view, so it owns suppression of duplicate visible states.
+        """
+
+        def _sort_key(index_and_event: tuple[int, dict[str, Any]]) -> tuple[datetime, int]:
+            index, event = index_and_event
+            ts = event.get("TimeCreated")
+            if isinstance(ts, datetime):
+                return (ensure_utc(ts), index)
+            return (datetime.max.replace(tzinfo=UTC), index)
+
+        session_state: dict[tuple[str, str, str], str] = {}
+        dropped_indexes: set[int] = set()
+        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+
+        for index, event in sorted(enumerate(self._event_dicts), key=_sort_key):
+            event_id = event.get("EventID")
+            if event_id not in {4800, 4801}:
+                continue
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            logon_id = str(event.get("TargetLogonId") or "")
+            session_id = str(event.get("SessionId") or "")
+            if not computer or not logon_id:
+                continue
+            key = (computer, logon_id, session_id)
+            next_state = "locked" if event_id == 4800 else "unlocked"
+            if session_state.get(key) == next_state:
+                dropped_indexes.add(index)
+                if event_id == 4801:
+                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                continue
+            session_state[key] = next_state
+
+        for index, event in enumerate(self._event_dicts):
+            if index in dropped_indexes or event.get("EventID") != 4624:
+                continue
+            if str(event.get("LogonType") or "") != "7":
+                continue
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            computer = str(event.get("Computer", ""))
+            logon_id = str(event.get("TargetLogonId") or "")
+            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
+                delta = ensure_utc(ts) - unlock_ts
+                if (
+                    computer == drop_computer
+                    and logon_id == drop_logon_id
+                    and timedelta(0) <= delta <= timedelta(seconds=2)
+                ):
+                    dropped_indexes.add(index)
+                    break
+
+        if dropped_indexes:
+            self._event_dicts = [
+                event
+                for index, event in enumerate(self._event_dicts)
+                if index not in dropped_indexes
+            ]
+
+    def _shift_process_creates_after_visible_parent(self) -> None:
+        """Prevent visible Security 4688 children from preceding parent 4688 rows."""
+        changed = True
+        while changed:
+            changed = False
+            process_create_times: dict[tuple[str, str], datetime] = {}
+            for event in self._event_dicts:
+                if event.get("EventID") != 4688:
+                    continue
+                ts = event.get("TimeCreated")
+                process_pid = str(event.get("NewProcessId") or "").lower()
+                computer = str(event.get("Computer", ""))
+                if isinstance(ts, datetime) and process_pid and process_pid not in {"0x0", "0x4"}:
+                    process_create_times[(computer, process_pid)] = ts
+
+            for event in self._event_dicts:
+                if event.get("EventID") != 4688:
+                    continue
+                ts = event.get("TimeCreated")
+                parent_pid = str(event.get("ProcessId") or "").lower()
+                computer = str(event.get("Computer", ""))
+                if not isinstance(ts, datetime) or parent_pid in {"", "0x0", "0x4", "-"}:
+                    continue
+                parent_time = process_create_times.get((computer, parent_pid))
+                if parent_time is not None and ts <= parent_time:
+                    event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
+                    changed = True
 
     def _shift_process_terminations_after_dependents(self) -> None:
         """Keep Security 4689 aligned with visible child-process lifecycle.

@@ -39,6 +39,15 @@ from evidenceforge.models.scenario import Persona, System, User
 
 logger = logging.getLogger(__name__)
 
+
+def _domain_to_dn(domain: str) -> str:
+    """Render a DNS domain as an LDAP distinguished-name suffix."""
+    labels = [label for label in domain.strip().lower().split(".") if label]
+    if not labels:
+        labels = ["corp", "local"]
+    return ",".join(f"DC={label}" for label in labels)
+
+
 # Intensity mapping: level -> (mean events per hour)
 SUSPICIOUS_NOISE_INTENSITY = {
     "low": 2.0,
@@ -194,6 +203,7 @@ def generate_suspicious_cli(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    ad_domain: str = "corp.local",
 ) -> dict | None:
     """Generate a suspicious CLI command from a non-attacker user."""
     user = rng.choice(users)
@@ -207,6 +217,7 @@ def generate_suspicious_cli(
     if os_cat == "windows":
         if rng.random() < 0.6:
             cmd = rng.choice(_BENIGN_POWERSHELL)
+            cmd = cmd.replace("DC=corp,DC=local", _domain_to_dn(ad_domain))
             process = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
         else:
             cmd = rng.choice(_BENIGN_CMD)
@@ -496,9 +507,9 @@ def generate_temp_dir_execution(
         exe_path = exe_path.replace("{user}", user.username)
     else:
         temp_exes = [
-            ("/tmp/pip-install-cache/setup.py", "python3 /tmp/pip-install-cache/setup.py install"),
+            ("/usr/bin/python3", "python3 /tmp/pip-install-cache/setup.py install"),
             ("/tmp/go-build-cache/main", "/tmp/go-build-cache/main --test"),
-            ("/tmp/npm-postinstall.sh", "bash /tmp/npm-postinstall.sh"),
+            ("/bin/bash", "bash /tmp/npm-postinstall.sh"),
         ]
         exe_path, cmd = rng.choice(temp_exes)
 
@@ -556,6 +567,7 @@ def generate_unusual_powershell(
     users: list[User],
     systems: list[System],
     current_hour: datetime,
+    ad_domain: str = "corp.local",
 ) -> dict | None:
     """Generate PowerShell with suspicious-looking flags (benign admin scripts)."""
     # Only Windows systems
@@ -587,12 +599,13 @@ def generate_unusual_powershell(
     script = rng.choice(_SCRIPT_NAMES)
     report = rng.choice(_REPORT_NAMES)
     api_path = rng.choice(_API_PATHS)
+    internal_api = f"internal-api.{ad_domain.strip().lower() or 'corp.local'}"
 
     suspicious_ps = [
         rf'powershell.exe -WindowStyle Hidden -Command "Get-WinEvent -LogName Security -MaxEvents {rng.choice([50, 100, 200, 500])} | Export-Csv C:\Reports\{report}.csv"',
         f"powershell.exe -EncodedCommand {_generate_encoded_command(rng)}",
         rf"powershell.exe -Exec Bypass -File C:\Scripts\{script}",
-        rf'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://internal-api.corp.local{api_path}"',
+        rf'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://{internal_api}{api_path}"',
         rf'powershell.exe -WindowStyle Hidden -Command "Compress-Archive -Path C:\{log_dir}\*.log -DestinationPath C:\Backups\{backup}.zip"',
     ]
 

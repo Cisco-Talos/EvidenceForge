@@ -97,6 +97,31 @@ class TestVipReverseLookup:
         assert engine.get_inbound_vip("172.16.0.5") == "203.0.113.5"
         assert engine.get_inbound_vip("10.0.1.50") is None
 
+    def test_public_inbound_address_uses_vip_for_private_static_nat(self):
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+
+        config, systems = _make_network_config(
+            nat_rules=[
+                NatRule(type="static", src=["dmz"], mapped_ip="203.0.113.5", real_ip="172.16.0.5")
+            ]
+        )
+        engine = NetworkVisibilityEngine(network_config=config, systems=systems)
+        assert engine.get_public_inbound_address("172.16.0.5") == "203.0.113.5"
+
+    def test_public_inbound_address_rejects_private_host_without_vip(self):
+        from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
+
+        config, systems = _make_network_config(
+            nat_rules=[
+                NatRule(type="static", src=["dmz"], mapped_ip="203.0.113.5", real_ip="172.16.0.5")
+            ]
+        )
+        systems.append(
+            System(hostname="PROXY-01", ip="172.16.0.20", os="Linux Ubuntu", type="server")
+        )
+        engine = NetworkVisibilityEngine(network_config=config, systems=systems)
+        assert engine.get_public_inbound_address("172.16.0.20") is None
+
     def test_dynamic_pat_does_not_create_vip(self):
         from evidenceforge.generation.network_visibility import NetworkVisibilityEngine
 

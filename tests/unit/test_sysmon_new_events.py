@@ -16,6 +16,7 @@ from evidenceforge.events.contexts import (
     HostContext,
     ImageLoadContext,
     NetworkContext,
+    ProcessAccessContext,
     ProcessContext,
     RegistryContext,
 )
@@ -562,6 +563,34 @@ class TestRenderEvent7:
         assert '<Data Name="SignatureStatus">Unavailable</Data>' in content
         assert '<Data Name="SignatureStatus">Valid</Data>' not in content
 
+    def test_signed_event7_populates_vendor_metadata_when_catalog_missing(self, emitter):
+        """Signed DLL loads should not render all PE metadata fields as '-'."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\Cisco\Secure Client\cscan.dll",
+                signed=True,
+                signature="Cisco Systems, Inc.",
+                signature_status="Valid",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="Company">Cisco Systems, Inc.</Data>' in content
+        assert '<Data Name="FileVersion">-</Data>' not in content
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""
@@ -646,6 +675,155 @@ class TestRenderEventRegistry:
         assert "<EventID>12</EventID>" in content
         assert "DeleteKey" in content
 
+    def test_value_delete_context_renders_event13(self, emitter):
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="registry_modify",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\regedit.exe",
+                command_line="regedit",
+                username="admin",
+            ),
+            registry=RegistryContext(
+                key=r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced\HideFileExt",
+                value="DWORD (0x00000001)",
+                action="delete",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert "<EventID>13</EventID>" in content
+        assert "SetValue" in content
+        assert "HideFileExt" in content
+        assert "DWORD (0x00000001)" in content
+
+
+class TestProcessCreateMetadata:
+    """Test host-specific Sysmon process metadata rendering."""
+
+    def test_windows_os_binary_versions_are_consistent_per_host(self, emitter):
+        host = _win_host()
+        first = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(username="admin", logon_id="0x123"),
+            process=ProcessContext(
+                pid=4100,
+                parent_pid=500,
+                image=r"C:\Windows\System32\gpresult.exe",
+                command_line="gpresult /r",
+                username="admin",
+                logon_id="0x123",
+                start_time=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            ),
+        )
+        second = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(username="admin", logon_id="0x123"),
+            process=ProcessContext(
+                pid=4101,
+                parent_pid=500,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="admin",
+                logon_id="0x123",
+                start_time=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
+            ),
+        )
+
+        emitter.emit(first)
+        emitter.emit(second)
+        emitter.close()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert content.count('<Data Name="FileVersion">10.0.19041.1</Data>') == 2
+        assert "10.0.20348.1" not in content
+
+    def test_os_binary_hashes_follow_host_file_version(self):
+        """The same OS binary path on different Windows builds should not share hashes."""
+        workstation = _win_host()
+        server = HostContext(
+            hostname="SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            domain="corp.local",
+            fqdn="SRV-01.corp.local",
+            netbios_domain="CORP",
+        )
+        image = r"C:\Windows\System32\cmd.exe"
+
+        workstation_hashes = SysmonEventEmitter._generate_hashes(image, workstation)
+        server_hashes = SysmonEventEmitter._generate_hashes(image, server)
+
+        assert workstation_hashes != server_hashes
+        assert SysmonEventEmitter._generate_hashes(image, workstation) == workstation_hashes
+
+    def test_hashes_follow_rendered_binary_identity(self):
+        """Identical rendered binary metadata should keep hashes stable across hosts."""
+        workstation = _win_host()
+        server = HostContext(
+            hostname="SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            domain="corp.local",
+            fqdn="SRV-01.corp.local",
+            netbios_domain="CORP",
+        )
+        image = r"C:\Windows\System32\MpCmdRun.exe"
+
+        assert SysmonEventEmitter._get_pe_metadata(image, workstation)[0] == "4.18.2211.5"
+        assert SysmonEventEmitter._get_pe_metadata(image, server)[0] == "4.18.2211.5"
+        assert SysmonEventEmitter._generate_hashes(
+            image, workstation
+        ) == SysmonEventEmitter._generate_hashes(image, server)
+
+    def test_image_load_hashes_include_rendered_signature_identity(self):
+        """Same DLL path with different rendered signer metadata must not share hashes."""
+        image = r"C:\Program Files\Mozilla Firefox\lgpllibs.dll"
+
+        mozilla_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(
+                "1.0.0.0",
+                "lgpllibs.dll module",
+                "Mozilla Corporation",
+                "Mozilla Corporation",
+                "lgpllibs.dll",
+                "Mozilla Corporation",
+                "Valid",
+            ),
+        )
+        microsoft_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(
+                "10.0.19041.1",
+                "lgpllibs.dll system library",
+                "Microsoft Windows Operating System",
+                "Microsoft Corporation",
+                "lgpllibs.dll",
+                "Microsoft Windows",
+                "Valid",
+            ),
+        )
+
+        assert mozilla_hashes != microsoft_hashes
+
 
 class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""
@@ -670,6 +848,29 @@ class TestRenderEvent22:
         assert "evil-c2.com" in content
         assert "1.2.3.4;" in content
         assert "svchost.exe" in content
+
+    def test_dns_query_uses_source_latency_offset(self, emitter):
+        """Sysmon Event 22 should not render at the exact Zeek DNS packet timestamp."""
+        event_time = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="connection",
+            src_host=_win_host(),
+            network=NetworkContext(
+                src_ip="10.0.1.10", dst_ip="10.0.0.1", src_port=49152, dst_port=53, protocol="udp"
+            ),
+            dns=DnsContext(
+                query="example.com", query_type="A", rcode="NOERROR", answers=["1.2.3.4"]
+            ),
+        )
+
+        emitter._render_sysmon_dns_query(event)
+
+        expected_delta = sample_timing_delta(
+            "source.sysmon_dns_query",
+            seed_parts=("WKS-01", "example.com", "A", event_time),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
 
     def test_nxdomain_query_status(self, emitter):
         event = SecurityEvent(
@@ -892,6 +1093,7 @@ class TestTemplateCompleteness:
         optional = {"RuleName"}
         required_empty = [f for f in empty if f not in optional]
         assert required_empty == [], f"Empty required fields in Event 13: {required_empty}"
+        assert '<Data Name="User">CORP\\admin</Data>' in content
 
     def test_event22_no_empty_required_fields(self, emitter):
         event = SecurityEvent(
@@ -914,6 +1116,27 @@ class TestTemplateCompleteness:
         optional = {"RuleName"}
         required_empty = [f for f in empty if f not in optional]
         assert required_empty == [], f"Empty required fields in Event 22: {required_empty}"
+
+    def test_sysmon_events_default_rule_name_to_dash(self, emitter):
+        """Sysmon RuleName should be consistently populated when no rule matched."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=_win_host(),
+            auth=AuthContext(username="admin"),
+            process=ProcessContext(
+                pid=4567,
+                parent_pid=1,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd",
+                username="admin",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert '<Data Name="RuleName">-</Data>' in content
+        assert '<Data Name="RuleName"></Data>' not in content
 
 
 # ── Tests for expert review fixes ──────────────────────────────────────
@@ -981,6 +1204,37 @@ class TestUserFieldFormatting:
         content = list(emitter._host_writers.values())[0].output_path.read_text()
         assert "CORP\\jsmith" in content
 
+    def test_process_access_target_user_gets_domain(self, emitter):
+        """Sysmon Event 10 target user should use source-native domain formatting."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="process_access",
+            src_host=_win_host(),
+            auth=AuthContext(username="jsmith", logon_id="0x12345"),
+            process=ProcessContext(
+                pid=4002,
+                parent_pid=3000,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe",
+                username="jsmith",
+                start_time=datetime(2024, 1, 15, 9, 59, tzinfo=UTC),
+            ),
+            process_access=ProcessAccessContext(
+                source_pid=4002,
+                source_image=r"C:\Windows\System32\cmd.exe",
+                source_thread_id=4200,
+                target_pid=500,
+                target_image=r"C:\Windows\System32\lsass.exe",
+                target_user="SYSTEM",
+                granted_access="0x1010",
+            ),
+        )
+        emitter._render_sysmon_process_access(event)
+        emitter.flush()
+        content = list(emitter._host_writers.values())[0].output_path.read_text()
+        assert '<Data Name="TargetUser">NT AUTHORITY\\SYSTEM</Data>' in content
+        assert '<Data Name="TargetUser">SYSTEM</Data>' not in content
+
 
 class TestCallTraceConsistency:
     """Fix 3: CallTrace offsets consistent per host, different across hosts."""
@@ -1010,9 +1264,9 @@ class TestCallTraceConsistency:
 
 
 class TestProcessGuidBootTime:
-    """Fix 4: ProcessGuid second segment varies with boot time."""
+    """ProcessGuid shape should be stable, host-specific, and source-native."""
 
-    def test_guid_differs_with_different_boot_times(self, emitter):
+    def test_guid_differs_with_different_boot_times_without_low_counter_shape(self, emitter):
         emitter._host_boot_times = {
             "HOST-A": datetime(2024, 2, 1, 6, 0, tzinfo=UTC),
             "HOST-B": datetime(2024, 3, 15, 12, 0, tzinfo=UTC),
@@ -1020,11 +1274,9 @@ class TestProcessGuidBootTime:
         creation = datetime(2024, 4, 1, 10, 0, tzinfo=UTC)
         guid_a = emitter._generate_process_guid("HOST-A", 1234, creation)
         guid_b = emitter._generate_process_guid("HOST-B", 1234, creation)
-        # Same PID and creation time, different boot times → different GUIDs
-        # (second segment should differ)
-        seg_a = guid_a.split("-")[1]
-        seg_b = guid_b.split("-")[1]
-        assert seg_a != seg_b, f"Boot-relative segment should differ: {seg_a} vs {seg_b}"
+        assert guid_a != guid_b
+        assert guid_a.split("-")[1] == guid_b.split("-")[1]
+        assert guid_a.split("-")[1] != "000c"
 
     def test_guid_deterministic_with_boot_time(self, emitter):
         emitter._host_boot_times = {

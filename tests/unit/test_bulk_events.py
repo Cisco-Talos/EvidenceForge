@@ -397,6 +397,18 @@ class TestWebScanConnectionProfile:
         assert state == "S0"
         assert resp_bytes == 0
 
+    def test_tls_profile_has_wide_duration_and_byte_distribution(self):
+        rng = random.Random(42)
+        samples = []
+        for _ in range(400):
+            sample = _web_scan_connection_profile(rng, is_tls=True)
+            if sample[0] == "SF":
+                samples.append(sample)
+        durations = [sample[1] for sample in samples]
+        resp_bytes = [sample[3] for sample in samples]
+        assert max(durations) - min(durations) > 4.0
+        assert max(resp_bytes) - min(resp_bytes) > 6000
+
     def test_referrer_only_allowed_for_crawl_like_successes(self):
         assert _web_scan_path_allows_referrer({"uri": "/", "status": 200})
         assert not _web_scan_path_allows_referrer({"uri": "/.git/HEAD", "status": 404})
@@ -571,6 +583,22 @@ class TestWebScanPresets:
             preset = get_preset(name)
             assert preset is not None
             assert 0 < preset["max_effective_rate"] <= preset["default_rate"]
+
+    def test_nikto_rate_cap_limits_repeated_probe_cycles(self):
+        from evidenceforge.config.web_scan_presets import get_preset
+
+        nikto = get_preset("nikto")
+        assert nikto is not None
+        assert nikto["max_effective_rate"] <= 0.35
+
+    def test_web_scan_paths_are_shuffled_between_passes(self):
+        import inspect
+
+        from evidenceforge.generation.engine.storyline import StorylineMixin
+
+        source = inspect.getsource(StorylineMixin)
+        assert "rng.shuffle(path_sequence)" in source
+        assert "skip_count = rng.randint" in source
 
     @pytest.mark.parametrize("value", [0, -0.1, "bad", float("inf"), float("nan"), True])
     def test_parse_positive_finite_rate_rejects_invalid_values(self, value):
@@ -861,6 +889,46 @@ class TestDnsTunnelEventSpec:
         raw_label = bytes.fromhex(captured_dns[0].query.split(".", 1)[0])
         assert b"ABCD" not in raw_label
         assert event["bytes_exfiltrated"] == 0
+
+    def test_dns_tunnel_generation_uses_natural_pacing_and_variable_labels(self):
+        engine = object.__new__(StorylineMixin)
+        captured = []
+
+        def capture_connection(**kwargs):
+            captured.append((kwargs["time"], kwargs["dns"]))
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=30,
+            payload_size=512,
+            interval="2s",
+            duration="15m",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=System(hostname="WS-01", ip="10.0.0.10", os="Windows 10", type="workstation"),
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        intervals = [
+            (later[0] - earlier[0]).total_seconds()
+            for earlier, later in zip(captured, captured[1:], strict=False)
+        ]
+        label_lengths = {len(dns.query.split(".", 1)[0]) for _ts, dns in captured}
+
+        assert len(captured) < 451
+        assert max(intervals) > 8.0
+        assert len(label_lengths) > 1
 
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────

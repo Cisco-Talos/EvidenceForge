@@ -60,6 +60,9 @@ def _setup_activity_gen(state_manager, mock_emitters, system):
     """Set up ActivityGenerator with seeded process tree for a system."""
     from evidenceforge.generation.engine import GenerationEngine
 
+    original_time = state_manager.state.current_time
+    if original_time is not None:
+        state_manager.set_current_time(original_time.replace(hour=10, minute=0, second=0))
     engine = object.__new__(GenerationEngine)
     engine.state_manager = state_manager
     engine._system_pids = {}
@@ -69,6 +72,8 @@ def _setup_activity_gen(state_manager, mock_emitters, system):
         engine._seed_windows_process_tree(system, pids)
     else:
         engine._seed_linux_process_tree(system, pids)
+    if original_time is not None:
+        state_manager.set_current_time(original_time)
     engine._system_pids[system.hostname] = pids
 
     ag = ActivityGenerator(state_manager, mock_emitters)
@@ -156,6 +161,61 @@ class TestWindowsProcessTreeRealism:
         assert parent_proc is not None
         assert "explorer.exe" in parent_proc.image.lower(), (
             f"GUI app parent should be explorer, got {parent_proc.image}"
+        )
+
+    def test_explorer_process_cannot_parent_from_browser_renderer(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """explorer.exe should stay anchored to the logon chain, not browser children."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC))
+        firefox_pid = state_manager.create_process(
+            win_system.hostname,
+            session.explorer_pid,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe"',
+            user.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC))
+        renderer_pid = state_manager.create_process(
+            win_system.hostname,
+            firefox_pid,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe" -contentproc',
+            user.username,
+            "Low",
+            logon_id=logon_id,
+        )
+
+        created_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            r"C:\Windows\explorer.exe",
+            parent_pid=renderer_pid,
+        )
+
+        created_proc = state_manager.get_process(win_system.hostname, created_pid)
+        assert created_proc is not None
+        parent_proc = state_manager.get_process(win_system.hostname, created_proc.parent_pid)
+        assert parent_proc is not None
+        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].lower()
+        assert parent_exe in {"userinit.exe", "winlogon.exe", "services.exe"}, (
+            f"explorer.exe parent should come from the logon chain, got {parent_proc.image}"
         )
 
     def test_system_process_gets_services_parent(
@@ -397,6 +457,71 @@ class TestDualSessionParentSelection:
             f"incorrectly selected."
         )
 
+    def test_network_logon_prefers_existing_remote_execution_wrapper(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """PsExec follow-on commands should parent from PSEXESVC, not flatten to services.exe."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        network_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=3,
+        )
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC))
+        wrapper_pid = state_manager.create_process(
+            system=win_system.hostname,
+            parent_pid=pids["services"],
+            image=r"C:\Windows\PSEXESVC.exe",
+            command_line=r"C:\Windows\PSEXESVC.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        ag._record_user_process(win_system, user, wrapper_pid, r"C:\Windows\PSEXESVC.exe")
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            user,
+            datetime(2024, 3, 18, 12, 1, 0, tzinfo=UTC),
+            network_logon_id,
+            r"C:\Windows\System32\net.exe",
+        )
+
+        assert parent_pid == wrapper_pid
+
+    def test_system_storyline_process_prefers_existing_remote_execution_wrapper(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """SYSTEM follow-on commands should also parent from a live remote wrapper."""
+        system_user = User(
+            username="SYSTEM",
+            full_name="SYSTEM",
+            email="system@example.com",
+            enabled=True,
+        )
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        state_manager.set_current_time(datetime(2024, 3, 18, 12, 0, 1, tzinfo=UTC))
+        wrapper_pid = state_manager.create_process(
+            system=win_system.hostname,
+            parent_pid=pids["services"],
+            image=r"C:\Windows\PSEXESVC.exe",
+            command_line=r"C:\Windows\PSEXESVC.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            system_user,
+            datetime(2024, 3, 18, 12, 1, 0, tzinfo=UTC),
+            "0x3e7",
+            r"C:\Windows\System32\net.exe",
+        )
+
+        assert parent_pid == wrapper_pid
+
     def test_interactive_logon_still_gets_explorer_when_network_exists(
         self, state_manager, mock_emitters, win_system, user
     ):
@@ -477,6 +602,35 @@ class TestLinuxParentSelection:
         )
 
         assert parent_pid == bash_pid
+
+    def test_linux_generate_process_replaces_untracked_parent_pid(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Linux user processes should not render a fabricated shell parent for PID 4."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        event_time = datetime(2024, 3, 18, 12, 0, 5, tzinfo=UTC)
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            session_kind="ssh",
+        )
+
+        pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id=logon_id,
+            process_name="/usr/bin/last",
+            command_line="last -n 50",
+            parent_pid=4,
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        assert proc is not None
+        assert proc.parent_pid != 4
+        assert proc.parent_pid == pids["bash"]
 
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(
