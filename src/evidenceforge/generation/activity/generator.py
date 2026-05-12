@@ -7962,7 +7962,7 @@ class ActivityGenerator:
         target_username: str,
         target_server: str,
         process_name: str,
-        process_pid: int,
+        process_pid: int | None,
         source_ip: str = "",
         source_port: int = 0,
     ) -> None:
@@ -7979,6 +7979,7 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
         subject = self._account_subject_fields(user.username, system, subject_logon_id)
+        process_pid = process_pid or 0
         if process_pid > 0 and process_name:
             running_process = self.state_manager.get_process(system.hostname, process_pid)
             running_image = running_process.image if running_process is not None else ""

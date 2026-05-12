@@ -2753,6 +2753,31 @@ class TestActivityGenerator:
         assert explicit.auth.process_pid > 0
         assert process.timestamp < explicit.timestamp
 
+    def test_generate_explicit_credentials_handles_missing_caller_pid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A baseline session without an explorer PID should still render 4648."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=None,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.process_pid == process.process.pid
+        assert explicit.auth.process_pid > 0
+
     def test_generate_explicit_credentials_replaces_mismatched_caller_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
