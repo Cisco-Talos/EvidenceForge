@@ -30,6 +30,7 @@ from pathlib import Path
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     DhcpContext,
+    DnsContext,
     FileTransferContext,
     HttpContext,
     NetworkContext,
@@ -455,3 +456,63 @@ class TestMultiSensorFanOut:
             assert any(core[field] != dmz[field] for field in varied_fields)
             assert dmz["orig_ip_bytes"] >= dmz["orig_bytes"] + dmz["orig_pkts"] * 40
             assert dmz["resp_ip_bytes"] >= dmz["resp_bytes"] + dmz["resp_pkts"] * 40
+
+    def test_secondary_sensor_varies_small_locked_observations(self):
+        """Tiny one-packet DNS-like observations should not clone after integer rounding."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            conn_emitter = ZeekEmitter(
+                load_format("zeek_conn"), base, sensor_hostnames=["core", "dmz"]
+            )
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.53",
+                    dst_port=53,
+                    protocol="udp",
+                    service="dns",
+                    zeek_uid="CSmallVariance01",
+                    conn_state="SF",
+                    history="Dd",
+                    duration=0.000222183223294453,
+                    orig_bytes=51,
+                    resp_bytes=187,
+                    orig_pkts=1,
+                    resp_pkts=1,
+                    orig_ip_bytes=79,
+                    resp_ip_bytes=215,
+                    ip_proto=17,
+                ),
+                dns=DnsContext(
+                    query="example.com",
+                    trans_id=1234,
+                    query_type="A",
+                    qtype=1,
+                    rcode="NOERROR",
+                    rcode_num=0,
+                    answers=["93.184.216.34"],
+                    TTLs=[300],
+                    rtt=0.000222183223294453,
+                ),
+                _sensor_hostnames_by_format={"zeek_conn": ["core", "dmz"]},
+            )
+
+            conn_emitter.emit(event)
+            conn_emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text())
+            dmz = json.loads((base / "dmz" / "conn.json").read_text())
+            clone_fields = (
+                "duration",
+                "orig_bytes",
+                "resp_bytes",
+                "orig_pkts",
+                "resp_pkts",
+                "orig_ip_bytes",
+                "resp_ip_bytes",
+            )
+            assert any(core[field] != dmz[field] for field in clone_fields)
