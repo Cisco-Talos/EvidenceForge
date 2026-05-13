@@ -8517,6 +8517,11 @@ class ActivityGenerator:
         failure_fields = pick_tgt_failure_fields(rng)
         dc_host = self._build_dc_host_context(dc_hostname)
         reporting_pid = self._get_system_pid(dc_hostname, "lsass", 0x2E0)
+        has_source_ip = source_ip not in {"", "-"}
+        normalized_source_ip = (
+            f"::ffff:{source_ip}" if has_source_ip and ":" not in source_ip else source_ip
+        )
+        source_port = _ephemeral_port(rng, self._os_for_ip(source_ip)) if has_source_ip else 0
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_preauth_failed",
@@ -8529,14 +8534,8 @@ class ActivityGenerator:
                 ticket_options=failure_fields["ticket_options"],
                 ticket_status=status,
                 pre_auth_type=failure_fields["pre_auth_type"],
-                source_ip=(
-                    "-"
-                    if source_ip in {"", "-"}
-                    else f"::ffff:{source_ip}"
-                    if ":" not in source_ip
-                    else source_ip
-                ),
-                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
+                source_ip=normalized_source_ip or "-",
+                source_port=source_port,
                 reporting_pid=reporting_pid,
             ),
         )

@@ -29,7 +29,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, DhcpContext, HostContext, NetworkContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    DhcpContext,
+    HostContext,
+    KerberosContext,
+    NetworkContext,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -1412,6 +1418,46 @@ class TestWindowsEventEmitter:
         assert "<Keywords>0x8010000000000000</Keywords>" in content
         assert "<Task>14339</Task>" in content
         assert '<Data Name="Status">0x18</Data>' in content
+
+    def test_kerberos_preauth_without_source_ip_does_not_keep_source_port(
+        self, format_def, temp_output
+    ):
+        """4771 source port should not survive when the source address is unavailable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="domain_controller",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="kerberos_preauth_failed",
+            dst_host=host,
+            kerberos=KerberosContext(
+                target_username="aisha.johnson",
+                target_domain="CORP.LOCAL",
+                target_sid="S-1-5-21-123-456-789-1104",
+                service_name="krbtgt",
+                ticket_options="0x40810010",
+                ticket_status="0x18",
+                pre_auth_type=2,
+                source_ip="-",
+                source_port=49888,
+                reporting_pid=732,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">0</Data>' in content
+        assert "49888" not in content
 
     def test_emit_log_cleared(self, format_def, temp_output):
         """Test emitting 1102 (security log cleared) with UserData structure."""

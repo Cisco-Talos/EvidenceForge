@@ -967,6 +967,8 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         krb = event.kerberos
         host = self._get_host(event)
+        source_ip = krb.source_ip or "-"
+        source_port = krb.source_port if source_ip not in {"", "-"} else 0
 
         event_data = {
             "EventID": 4771,
@@ -983,8 +985,8 @@ class WindowsEventEmitter(LogEmitter):
             "TicketOptions": krb.ticket_options,
             "Status": krb.ticket_status,
             "PreAuthType": krb.pre_auth_type,
-            "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpAddress": source_ip,
+            "IpPort": source_port,
         }
         self.emit_event(event_data)
 

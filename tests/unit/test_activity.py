@@ -1877,6 +1877,7 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "kerberos_preauth_failed"
         assert event.kerberos.source_ip == "-"
+        assert event.kerberos.source_port == 0
 
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters
