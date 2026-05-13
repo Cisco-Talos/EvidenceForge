@@ -74,7 +74,8 @@ class StateManager:
         self._logon_id_host_bases: dict[str, int] = {}
         self._logon_id_used_host_bases: set[int] = set()
         self._logon_id_epochs: dict[str, datetime] = {}
-        self._logon_id_second_ordinals: dict[tuple[str, int], int] = {}
+        self._logon_id_second_ordinals: dict[tuple[str, int, int], int] = {}
+        self._logon_id_block_offsets: dict[str, dict[int, int]] = {}
         self._used_logon_ids: set[int] = set()
         self._logon_id_aliases: dict[str, str] = {}
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
@@ -88,8 +89,10 @@ class StateManager:
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
+        self._linux_logind_session_block_offsets: dict[str, dict[int, int]] = {}
         self._linux_logind_session_last_ids: dict[str, int] = {}
         self._linux_logind_session_used_ids: dict[str, set[int]] = {}
+        self._linux_logind_session_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
 
         # Entity lifecycle: per-system boot times for temporal validation
@@ -139,25 +142,49 @@ class StateManager:
         self._logon_id_epochs[system] = epoch
         return epoch
 
+    def _logon_luid_block_stride(self, system: str, block: int) -> int:
+        """Return background LSA allocation churn for one minute-scale block."""
+        return 56 + (_stable_seed(f"logon_luid_stride:{system}:{block}") % 73)
+
+    def _logon_luid_block_offset(self, system: str, block: int) -> int:
+        """Return cumulative per-host LUID churn before a minute-scale block."""
+        offsets = self._logon_id_block_offsets.setdefault(system, {0: 0})
+        if block in offsets:
+            return offsets[block]
+
+        last_block = max(offsets)
+        offset = offsets[last_block]
+        for current_block in range(last_block, block):
+            gap = 17 + (_stable_seed(f"logon_luid_block_gap:{system}:{current_block}") % 61)
+            offset += (60 * self._logon_luid_block_stride(system, current_block)) + gap
+            offsets[current_block + 1] = offset
+        return offsets[block]
+
     def _allocate_logon_luid(self, system: str, event_time: datetime) -> int:
-        """Allocate a deterministic host-local, boot-relative Windows LogonID."""
+        """Allocate a deterministic host-local Windows LogonID.
+
+        Real LSA LUIDs are host-local allocator values, not a direct wall-clock
+        encoding. Generation can visit events out of visible order, so the
+        allocator uses event-time buckets plus deterministic background churn to
+        preserve chronological sanity without exposing a fixed per-second stride.
+        """
         current_time = ensure_utc(event_time)
         base = self._host_logon_base(system)
         epoch = self._host_logon_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        block = elapsed_seconds // 60
+        second_in_block = elapsed_seconds % 60
         subsecond_bucket = min(15, current_time.microsecond // 62500)
         ordinal_key = (system, elapsed_seconds, subsecond_bucket)
         ordinal = self._logon_id_second_ordinals.get(ordinal_key, 0)
         self._logon_id_second_ordinals[ordinal_key] = ordinal + 1
 
-        # Use boot-relative time for monotonic visible ordering. Low bits carry
-        # deterministic per-session variation so LUIDs do not all share the same
-        # trailing hex digit when events happen on exact-second boundaries.
-        low_nibble = (
-            _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 16
+        stride = self._logon_luid_block_stride(system, block)
+        candidate = base + self._logon_luid_block_offset(system, block)
+        candidate += (second_in_block * stride) + (subsecond_bucket * 3) + ordinal
+        candidate += (
+            _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 3
         )
-        candidate = base + (elapsed_seconds * 4096) + (subsecond_bucket * 256)
-        candidate += (ordinal * 16) + low_nibble
         while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
             candidate += 1
         self._used_logon_ids.add(candidate)
@@ -475,7 +502,7 @@ class StateManager:
         """
         with self._lock:
             if event_time is not None:
-                normalized_time = ensure_utc(event_time)
+                normalized_time = ensure_utc(event_time).replace(microsecond=0)
                 initial = self._linux_logind_session_initials.setdefault(
                     system,
                     rng.randint(20, 250),
@@ -486,18 +513,49 @@ class StateManager:
                         system,
                         normalized_time,
                     )
-                elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
-                # Use timestamp-derived spacing rather than generation-order
-                # counters. Baseline and storyline syslog paths can dispatch
-                # out of chronological order before emitters sort the file; a
-                # one-second stride leaves enough room that earlier visible
-                # events cannot collide into later session IDs.
-                candidate = initial + elapsed_seconds
+                elapsed_seconds = max(
+                    0,
+                    int((normalized_time - ensure_utc(epoch)).total_seconds()),
+                )
+                elapsed_quarters = elapsed_seconds // 900
+                minute_in_quarter = (elapsed_seconds % 900) // 60
+                block = elapsed_quarters // 16
+                quarter_in_block = elapsed_quarters % 16
+                block_offsets = self._linux_logind_session_block_offsets.setdefault(
+                    system,
+                    {0: 0},
+                )
+                if block not in block_offsets:
+                    last_block = max(block_offsets)
+                    offset = block_offsets[last_block]
+                    for current_block in range(last_block, block):
+                        stride = 4 + (
+                            _stable_seed(f"logind_session_stride:{system}:{current_block}") % 3
+                        )
+                        gap = _stable_seed(f"logind_session_gap:{system}:{current_block}") % 3
+                        offset += (16 * stride) + gap
+                        block_offsets[current_block + 1] = offset
+                stride = 4 + (_stable_seed(f"logind_session_stride:{system}:{block}") % 3)
+                candidate = (
+                    initial
+                    + block_offsets[block]
+                    + (quarter_in_block * stride)
+                    + (minute_in_quarter // 5)
+                )
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
-                if candidate in used:
-                    while candidate in used:
-                        candidate += 1
+                allocations = self._linux_logind_session_allocations.setdefault(system, [])
+                salt = 0
+                while candidate in used or self._linux_logind_matches_elapsed_delta(
+                    allocations,
+                    normalized_time,
+                    candidate,
+                ):
+                    candidate += 7 + (
+                        _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
+                    )
+                    salt += 1
                 used.add(candidate)
+                allocations.append((normalized_time, candidate))
                 self._linux_logind_session_last_ids[system] = max(
                     candidate, self._linux_logind_session_last_ids.get(system, candidate)
                 )
@@ -507,6 +565,19 @@ class StateManager:
                 self._linux_logind_session_counters[system] = rng.randint(20, 250)
             self._linux_logind_session_counters[system] += rng.randint(1, 4)
             return self._linux_logind_session_counters[system]
+
+    @staticmethod
+    def _linux_logind_matches_elapsed_delta(
+        allocations: list[tuple[datetime, int]],
+        event_time: datetime,
+        candidate: int,
+    ) -> bool:
+        """Return True when a session ID would exactly encode elapsed seconds."""
+        for allocated_time, allocated_id in allocations:
+            elapsed_seconds = abs(int((event_time - allocated_time).total_seconds()))
+            if elapsed_seconds > 0 and abs(candidate - allocated_id) == elapsed_seconds:
+                return True
+        return False
 
     # ========================================
     # Process Management

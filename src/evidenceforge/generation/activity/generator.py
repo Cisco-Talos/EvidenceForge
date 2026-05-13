@@ -6665,12 +6665,6 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            # Session ID: monotonic + unique per host. StateManager owns this
-            # sequence because baseline syslog noise and explicit SSH sessions
-            # both produce systemd-logind messages for the same host.
-            hostname = target_system.hostname
-            session_id = self.state_manager.next_linux_logind_session_id(hostname, rng, time)
-
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
                 timestamp=time - timedelta(seconds=1),
@@ -6707,6 +6701,7 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
+            hostname = target_system.hostname
             pam_event = SecurityEvent(
                 timestamp=time + timedelta(seconds=1),
                 event_type="syslog",
@@ -6725,8 +6720,17 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
+            logind_time = time + timedelta(seconds=2)
+            # Session ID: monotonic + unique per host. StateManager owns this
+            # sequence because baseline syslog noise and explicit SSH sessions
+            # both produce systemd-logind messages for the same host.
+            session_id = self.state_manager.next_linux_logind_session_id(
+                hostname,
+                rng,
+                logind_time,
+            )
             logind_event = SecurityEvent(
-                timestamp=time + timedelta(seconds=2),
+                timestamp=logind_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(

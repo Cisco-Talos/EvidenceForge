@@ -23,6 +23,7 @@
 """Unit tests for StateManager."""
 
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 
 import pytest
 
@@ -74,6 +75,73 @@ class TestStateManagerInit:
         assert earlier_id < later_id
         assert later_id - earlier_id < 600
 
+    def test_linux_logind_session_ids_do_not_encode_elapsed_seconds(self):
+        """Logind session IDs should look like allocator counters, not uptime seconds."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(13)
+
+        first = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=4, seconds=58),
+        )
+        second = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(minutes=21, seconds=23),
+        )
+
+        assert second > first
+        assert second - first != 985
+        assert second - first < 80
+
+    def test_linux_logind_session_collision_ids_avoid_elapsed_second_deltas(self):
+        """Collision bumps should not recreate an exact session-time delta."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(23)
+        event_times = [
+            start + timedelta(minutes=37, seconds=offset)
+            for offset in (0, 2, 5, 7, 12, 18, 24, 31, 43, 56)
+        ]
+
+        ids = [
+            sm.next_linux_logind_session_id("linux01", rng, event_time)
+            for event_time in event_times
+        ]
+
+        assert len(set(ids)) == len(ids)
+        allocations = list(zip(event_times, ids, strict=True))
+        for (prev_time, prev_id), (next_time, next_id) in pairwise(allocations):
+            elapsed_seconds = int((next_time - prev_time).total_seconds())
+            assert abs(next_id - prev_id) != elapsed_seconds
+
+    def test_linux_logind_session_ids_use_syslog_visible_seconds(self):
+        """Subsecond allocation timestamps should not leak whole-second deltas."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(29)
+
+        first_time = start + timedelta(minutes=37, seconds=39, milliseconds=950)
+        second_time = start + timedelta(minutes=37, seconds=51, milliseconds=50)
+        first = sm.next_linux_logind_session_id("linux01", rng, first_time)
+        second = sm.next_linux_logind_session_id("linux01", rng, second_time)
+
+        visible_elapsed = int(
+            (second_time.replace(microsecond=0) - first_time.replace(microsecond=0)).total_seconds()
+        )
+        assert abs(second - first) != visible_elapsed
+
     def test_linux_logind_session_ids_preboot_events_remain_monotonic(self):
         """Pre-boot events should still allocate monotonic IDs without collisions."""
         import random
@@ -117,7 +185,7 @@ class TestSessionManagement:
         assert session.source_ip == "192.168.1.50"
 
     def test_create_session_uses_host_local_monotonic_luids(self):
-        """New LogonIDs on one host should follow boot-relative LUID ordering."""
+        """New LogonIDs on one host should follow source-native LUID ordering."""
         sm = StateManager()
         boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
         sm.register_boot_time("WS-01", boot)
@@ -131,8 +199,34 @@ class TestSessionManagement:
 
         assert int(id1, 16) < int(id2, 16) < int(id3, 16)
 
+    def test_create_session_luids_do_not_encode_elapsed_seconds(self):
+        """LUID gaps should not expose a fixed wall-clock stride."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("WS-01", boot)
+
+        first = sm.create_session(
+            "user1",
+            "WS-01",
+            2,
+            "192.168.1.1",
+            start_time=datetime(2024, 1, 15, 12, 3, 37, 27_000, tzinfo=UTC),
+        )
+        second = sm.create_session(
+            "user2",
+            "WS-01",
+            3,
+            "192.168.1.2",
+            start_time=datetime(2024, 1, 15, 12, 9, 6, 698_000, tzinfo=UTC),
+        )
+
+        diff = int(second, 16) - int(first, 16)
+        assert diff > 0
+        assert diff != 329 * 4096
+        assert diff < 329 * 512
+
     def test_create_session_varies_low_luid_nibble(self):
-        """Boot-relative LogonIDs should not all expose a fixed trailing hex digit."""
+        """Generated LogonIDs should not all expose a fixed trailing hex digit."""
         sm = StateManager()
         boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
         sm.register_boot_time("WS-01", boot)

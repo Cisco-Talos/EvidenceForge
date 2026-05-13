@@ -4934,8 +4934,15 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
+                    _msg_offset = rng.randint(10, 50)
+                    login_times: list[datetime] = []
+                    for _ in range(4):
+                        login_times.append(ts + timedelta(milliseconds=_msg_offset))
+                        _msg_offset += rng.randint(1, 50)
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
-                        system.hostname, rng, ts
+                        system.hostname,
+                        rng,
+                        login_times[-1],
                     )
                     login_msgs = [
                         (
@@ -4955,17 +4962,19 @@ class BaselineMixin:
                             f"New session {ssh_sid} of user {ssh_user}.",
                         ),
                     ]
-                    _msg_offset = rng.randint(10, 50)
-                    for app, pid_val, lm in login_msgs:
+                    for (app, pid_val, lm), login_time in zip(
+                        login_msgs,
+                        login_times,
+                        strict=True,
+                    ):
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + timedelta(milliseconds=_msg_offset),
+                            time=login_time,
                             app_name=app,
                             message=lm,
                             pid=pid_val,
                             facility=10,
                         )
-                        _msg_offset += rng.randint(1, 50)
                     disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
                     if disconnect_time < self.end_time and rng.random() < 0.92:
                         self.activity_generator.generate_syslog_event(
