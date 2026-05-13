@@ -22,7 +22,7 @@
 
 [project]
 name = "evidence-forge"
-version = "0.6.2"
+version = "0.6.3"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
 authors = [
