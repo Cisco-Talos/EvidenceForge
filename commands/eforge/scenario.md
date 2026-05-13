@@ -117,15 +117,22 @@ The username format should follow a consistent convention for the organization (
 
 ### Realistic Naming for Attacker Infrastructure and Tools
 
-Everything the attacker controls should look plausible at first glance. The whole point of threat hunting training is that the data looks realistic — obvious names are a dead giveaway that defeats the exercise.
+Everything the attacker controls should look plausible at first glance and boring in aggregate. The whole point of threat hunting training is that the data looks realistic — obvious names are a dead giveaway, but names that neatly explain the attack are also a tell. Do not turn domains, service accounts, scheduled tasks, archive names, or process names into semantic breadcrumbs for the hunter.
+
+Good naming follows the victim organization's conventions, uses mundane abbreviations, legacy labels, ticket-like numbers, vendor-like terms, and occasional inconsistency. Bad naming summarizes the artifact's role in the scenario, even if it is not overtly malicious.
 
 **C2 servers and malicious domains:**
-- Good: `cdn-assets-update.com`, `analytics-service.net`, `img-hosting-cdn.com`, `graph-api-auth.com`
-- Bad: `evil-c2.com`, `malware-server.net`, `attacker-infra.io`, `hack.evil.com`
+- Good: `brynwell.io`, `mosaic-metrics.net`, `evergreenads.co`, `northlakeportal.com`
+- Bad: `evil-c2.com`, `malware-server.net`, `attacker-infra.io`, `hack.evil.com`, `cdn-assets-update.com`, `graph-api-auth.com`
 
 **Malicious files and processes:**
-- Good: `svchost_helper.exe`, `update-agent.bin`, `chromium_updater.sh`, `ms-index-service.exe`
-- Bad: `my_password_dumper.exe`, `evil_payload.ps1`, `hack_tool.bat`, `malware.exe`
+- Good: `brsvc.exe`, `taskhostw32.exe`, `watchd`, `msidxsvc.exe`
+- Bad: `my_password_dumper.exe`, `evil_payload.ps1`, `hack_tool.bat`, `malware.exe`, `db_dump_agent.exe`, `exfil_worker.sh`
+
+**Created accounts, services, scheduled tasks, and staging archives:**
+- Good: `svc_ops03`, `adm_maint`, `printmon`, `CacheTask`, `tmp-4721.zip`, `q3_rollup.dat`
+- Bad: `attacker1`, `evil_admin`, `HealthMonitorSvc`, `svc_sqlreader`, `ExfilTask`, `patient_claims.sql.gz`
+- Source business files may have descriptive names; attacker-created staging bundles should usually look like ordinary temp, report, backup, or build artifacts instead of naming the exact theft objective.
 
 **Attacker email addresses** (for phishing "From:" lines, etc.):
 - Good: `support@accounts-verify.com`, `noreply@hr-benefits-portal.net`, `j.martinez@consulting-group.com`
@@ -504,7 +511,8 @@ After the interview, generate both files:
 3. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
    - **Attack realism**: Does the attack chain make sense? Would a real attacker do this in this order? Are there missing steps (e.g., no reconnaissance before lateral movement, no persistence after initial access)?
    - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
-   - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
+   - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts, scheduled tasks, services, staging archives) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
+   - **Anti-curation check**: Do artifact names collectively reveal the storyline too neatly? Replace names that summarize intent or function, such as C2 domains full of `cdn`/`auth`/`update`, task or service names like `HealthMonitorSvc`, accounts like `svc_sqlreader`, or staging archives named after the exact data being stolen.
    - **Environmental consistency**: Do the users, systems, and network make sense together? Would this org realistically have this infrastructure?
    - **Log boundary**: Are all systems in the systems list owned by the victim org? Are there any third-party servers (SaaS, cloud provider, partner) that shouldn't be generating OS-level logs? External entities should only appear as IP addresses in network connections, never as systems with hostnames and OS-level log generation.
    - **Timing realism**: Are attack events spaced realistically? (Not crammed into 30 seconds, not dragged over days with no activity)
@@ -549,4 +557,3 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 If the user wants to immediately generate logs, suggest using `/eforge generate` or running `eforge generate <scenario-file>`.
 
 When generation completes, the output directory will contain a `GROUND_TRUTH.md` file with the full attack timeline, IOCs, and answer key. Let the user know this exists and where to find it.
-
