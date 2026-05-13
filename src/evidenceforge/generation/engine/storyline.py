@@ -317,6 +317,132 @@ def _web_scan_connection_profile(rng, *, is_tls: bool = False) -> tuple[str, flo
     return conn_state, rng.uniform(0.01, 0.5), rng.randint(200, 2000), rng.randint(200, 5000)
 
 
+_SCAN_PORT_SERVICES = {
+    22: "ssh",
+    53: "dns",
+    80: "http",
+    443: "ssl",
+    445: "smb",
+    3306: "mysql",
+    3389: "rdp",
+    5432: "postgresql",
+    8080: "http",
+}
+_SCAN_SERVICE_ALIASES = {
+    22: {"ssh", "sshd", "openssh"},
+    53: {"dns", "bind", "named", "ad-ds"},
+    80: {"http", "apache", "apache2", "nginx", "httpd", "iis", "gunicorn"},
+    443: {"https", "ssl", "tls", "apache", "apache2", "nginx", "httpd", "iis"},
+    445: {"smb", "samba", "lanmanserver", "ad-ds"},
+    3306: {"mysql", "mariadb"},
+    3389: {"rdp", "termservice", "terminal-services"},
+    5432: {"postgres", "postgresql"},
+    8080: {"http", "apache", "apache2", "nginx", "httpd", "gunicorn", "tomcat", "squid"},
+}
+
+
+def _inventory_token(value: str) -> str:
+    """Normalize scenario inventory labels for lightweight matching."""
+    return value.lower().replace(" ", "-").replace("_", "-")
+
+
+def _scan_target_exposes_port(
+    target_system: System | None,
+    port: int,
+    *,
+    external: bool = False,
+) -> bool:
+    """Return whether target inventory suggests a scan should find an open port."""
+    if target_system is None:
+        return False
+    if external and port not in {80, 443, 8080}:
+        return False
+    services = {_inventory_token(service) for service in target_system.services}
+    roles = {_inventory_token(role) for role in target_system.roles}
+    system_type = _inventory_token(target_system.type)
+    if services & _SCAN_SERVICE_ALIASES.get(port, set()):
+        return True
+    if port in {80, 443, 8080} and roles & {"web-server", "app-server", "forward-proxy"}:
+        return True
+    if port == 445 and (system_type == "domain-controller" or "file-server" in roles):
+        return True
+    if port == 3306 and "database" in roles:
+        return True
+    if port == 53 and "dns-server" in roles:
+        return True
+    if port == 3389 and "windows" in target_system.os.lower() and not external:
+        return True
+    return False
+
+
+def _port_scan_connection_profile(
+    rng,
+    *,
+    port: int,
+    target_system: System | None,
+    external: bool,
+    default_deny_state: str,
+) -> tuple[bool, str | None, str, float, int, int]:
+    """Return firewall/action and conn fields for one storyline port-scan probe."""
+    if _scan_target_exposes_port(target_system, port, external=external) and rng.random() > 0.14:
+        conn_state = rng.choices(["SF", "RSTO", "RSTR"], weights=[78, 12, 10], k=1)[0]
+        service = _SCAN_PORT_SERVICES.get(port, "")
+        if conn_state == "SF":
+            return (
+                False,
+                conn_state,
+                service,
+                rng.uniform(0.04, 0.95),
+                rng.randint(0, 160),
+                rng.randint(0, 900),
+            )
+        return (
+            False,
+            conn_state,
+            service,
+            rng.uniform(0.01, 0.35),
+            rng.randint(0, 120),
+            rng.randint(0, 240),
+        )
+
+    if default_deny_state == "REJ":
+        conn_state = rng.choices(["REJ", "S0"], weights=[72, 28], k=1)[0]
+    else:
+        conn_state = rng.choices(["S0", "REJ"], weights=[72, 28], k=1)[0]
+    if conn_state == "S0":
+        return True, conn_state, "", rng.uniform(1.2, 7.0), rng.randint(0, 64), 0
+    return True, conn_state, "", rng.uniform(0.003, 0.2), rng.randint(0, 96), rng.randint(0, 80)
+
+
+def _observed_web_scan_status(path_entry: dict[str, Any], rng) -> int:
+    """Return one request's observed HTTP status with sparse scan-time drift."""
+    status = int(path_entry.get("status", 404))
+    if rng.random() >= 0.08:
+        return status
+    if status == 200:
+        return rng.choices([301, 302, 403, 404, 500], weights=[24, 16, 18, 34, 8], k=1)[0]
+    if status in {301, 302}:
+        return rng.choice([200, 403, 404])
+    if status == 403:
+        return rng.choices([401, 404, 429, 500], weights=[18, 58, 18, 6], k=1)[0]
+    if status == 404:
+        return rng.choices([403, 429, 500], weights=[72, 20, 8], k=1)[0]
+    return status
+
+
+def _dns_tunnel_extra_labels(query_count: int, rng) -> list[str]:
+    """Return optional DNS tunnel labels that make query grammar less uniform."""
+    roll = rng.random()
+    if roll < 0.55:
+        return []
+    edge = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x'))}{rng.randint(1, 99)}"
+    if roll < 0.74:
+        return [edge]
+    if roll < 0.9:
+        return [f"s{query_count & 0xFFFF:x}"]
+    return [edge, f"r{rng.randint(1, 12)}"]
+
+
 def _web_scan_path_allows_referrer(path_entry: dict[str, Any]) -> bool:
     """Return whether a scanner path plausibly carries a crawl Referer."""
     uri = str(path_entry.get("uri", ""))
@@ -1965,39 +2091,73 @@ class StorylineMixin:
 
             # Resolve interfaces
             src_iface = self._resolve_firewall_interface(scan_src_ip)
+            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+            vip_to_real_ip = getattr(
+                getattr(getattr(self, "dispatcher", None), "visibility_engine", None),
+                "_vip_to_real_ip",
+                {},
+            )
+            scan_profile_rng = random.Random(
+                _stable_seed(
+                    "port_scan_profile:"
+                    f"{scan_src_ip}:{','.join(resolved_targets)}:{spec.ports}:{time.isoformat()}"
+                )
+            )
 
-            # Generate deny connections: targets × ports
+            # Generate scan probes: open service hits plus rejected/filtered denies.
             spacing = 1.0 / spec.scan_rate
+            probe_pairs = [
+                (target_ip, port) for target_ip in resolved_targets for port in spec.ports
+            ]
+            scan_profile_rng.shuffle(probe_pairs)
             total_count = 0
-            for target_ip in resolved_targets:
+            for target_ip, port in probe_pairs:
+                real_target_ip = vip_to_real_ip.get(target_ip, target_ip)
+                target_system = ip_map.get(real_target_ip)
                 dst_iface = self._resolve_firewall_interface(target_ip)
-                for port in spec.ports:
-                    jitter_offset = rng.uniform(-spacing * 0.2, spacing * 0.2)
-                    scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
-                    self.state_manager.set_current_time(scan_time)
+                jitter_offset = rng.uniform(-spacing * 0.45, spacing * 0.55)
+                scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
+                self.state_manager.set_current_time(scan_time)
 
-                    from evidenceforge.events.contexts import FirewallContext
+                from evidenceforge.events.contexts import FirewallContext
 
-                    # ICMP is connectionless — don't pass TCP conn_state
-                    scan_conn_state = None if spec.protocol == "icmp" else conn_state
-                    self.activity_generator.generate_connection(
-                        src_ip=scan_src_ip,
-                        dst_ip=target_ip,
-                        time=scan_time,
-                        dst_port=port,
-                        proto=spec.protocol,
-                        conn_state=scan_conn_state,
-                        firewall=FirewallContext(
-                            action="deny",
-                            msg_id=106023,
-                            connection_id=0,
-                            src_interface=src_iface,
-                            dst_interface=dst_iface,
-                            access_group=f"{src_iface}_access_in",
-                        ),
-                        emit_dns=False,
+                denied, scan_conn_state, service, duration, orig_bytes, resp_bytes = (
+                    _port_scan_connection_profile(
+                        scan_profile_rng,
+                        port=port,
+                        target_system=target_system,
+                        external=is_external_scan,
+                        default_deny_state=conn_state,
                     )
-                    total_count += 1
+                )
+                firewall = (
+                    FirewallContext(
+                        action="deny",
+                        msg_id=106023,
+                        connection_id=0,
+                        src_interface=src_iface,
+                        dst_interface=dst_iface,
+                        access_group=f"{src_iface}_access_in",
+                    )
+                    if denied
+                    else None
+                )
+
+                self.activity_generator.generate_connection(
+                    src_ip=scan_src_ip,
+                    dst_ip=target_ip,
+                    time=scan_time,
+                    dst_port=port,
+                    proto=spec.protocol,
+                    service=service,
+                    duration=duration,
+                    orig_bytes=orig_bytes,
+                    resp_bytes=resp_bytes,
+                    conn_state=None if spec.protocol == "icmp" else scan_conn_state,
+                    firewall=firewall,
+                    emit_dns=False,
+                )
+                total_count += 1
 
             malicious_event["target_count"] = len(resolved_targets)
             malicious_event["ports"] = spec.ports
@@ -2435,7 +2595,16 @@ class StorylineMixin:
 
                 _method = path_entry.get("method", "GET")
                 _uri = path_entry.get("uri", "/")
-                _status = path_entry.get("status", 404)
+                _status = _observed_web_scan_status(
+                    path_entry,
+                    random.Random(
+                        _stable_seed(
+                            "web_scan_status:"
+                            f"{scan_src_ip}:{scan_dst_ip}:{_uri}:{request_count}:"
+                            f"{tick_time.isoformat()}"
+                        )
+                    ),
+                )
 
                 _mime_type = normalize_mime_type_for_path(_uri, "text/html")
                 _scan_referrer = (
@@ -2878,7 +3047,19 @@ class StorylineMixin:
 
                 # Truncate to label_length
                 encoded = encoded[:label_length]
-                tunnel_query = f"{encoded}.{spec.base_domain}"
+                query_labels = [
+                    encoded,
+                    *_dns_tunnel_extra_labels(
+                        query_count,
+                        random.Random(
+                            _stable_seed(
+                                "dns_tunnel_extra_labels:"
+                                f"{spec.base_domain}:{tunnel_salt.hex()}:{query_count}"
+                            )
+                        ),
+                    ),
+                ]
+                tunnel_query = ".".join([*query_labels, spec.base_domain])
 
                 rcode_name = rng.choices(rcode_names, weights=rcode_values, k=1)[0]
                 rcode_num = _RCODE_MAP.get(rcode_name, 0)
