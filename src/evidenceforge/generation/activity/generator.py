@@ -8380,6 +8380,9 @@ class ActivityGenerator:
         # and Zeek evidence to appear first in a bounded time slice.
         logon_time = observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600))
         if logon_id is not None:
+            reassigned_logon_id = self.state_manager.reassign_session_logon_id(logon_id, logon_time)
+            if reassigned_logon_id is not None:
+                logon_id = reassigned_logon_id
             self.state_manager.update_session_metadata(
                 logon_id,
                 username=user.username,

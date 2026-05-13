@@ -171,6 +171,45 @@ class TestSessionManagement:
         assert sm.get_session(earlier) is None
         assert sm.get_session(later) is None
 
+    def test_allocate_logon_id_preserves_subsecond_event_time_order(self):
+        """Out-of-order same-second allocation should still sort by event timestamp."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("DC-01", boot)
+
+        later = sm.allocate_logon_id("DC-01", datetime(2024, 1, 15, 10, 1, 0, 700000, UTC))
+        earlier = sm.allocate_logon_id(
+            "DC-01",
+            datetime(2024, 1, 15, 10, 1, 0, 100000, UTC),
+        )
+
+        assert int(earlier, 16) < int(later, 16)
+
+    def test_reassign_session_logon_id_rekeys_session_to_event_time(self):
+        """Planned sessions can be re-keyed once final source-native logon time is known."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("DC-01", boot)
+        sm.set_current_time(datetime(2024, 1, 15, 15, 39, 4, tzinfo=UTC))
+        original = sm.create_session("aisha.johnson", "DC-01", 10, "10.10.1.35")
+
+        intervening = sm.allocate_logon_id(
+            "DC-01",
+            datetime(2024, 1, 15, 15, 39, 5, 397056, UTC),
+        )
+        reassigned = sm.reassign_session_logon_id(
+            original,
+            datetime(2024, 1, 15, 15, 39, 9, 751464, UTC),
+        )
+
+        assert reassigned is not None
+        assert sm.state.active_sessions.get(original) is None
+        session = sm.get_session(reassigned)
+        assert session is not None
+        assert sm.get_session(original) is session
+        assert session.start_time == datetime(2024, 1, 15, 15, 39, 9, 751464, UTC)
+        assert int(reassigned, 16) > int(intervening, 16)
+
     def test_create_session_keeps_host_ranges_unique(self):
         """Host-local LUID sequences should not collide in global state."""
         sm = StateManager()

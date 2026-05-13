@@ -794,8 +794,8 @@ class TestActivityGenerator:
         session = state_manager.get_session(preallocated_logon_id)
 
         assert logon_event.auth.username == "aisha.johnson"
-        assert logon_event.auth.logon_id == preallocated_logon_id
         assert session is not None
+        assert logon_event.auth.logon_id == session.logon_id
         assert session.username == logon_event.auth.username
 
     def test_generate_rdp_session_fallback_user_tolerates_malformed_ad_domain(

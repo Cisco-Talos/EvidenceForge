@@ -76,6 +76,7 @@ class StateManager:
         self._logon_id_epochs: dict[str, datetime] = {}
         self._logon_id_second_ordinals: dict[tuple[str, int], int] = {}
         self._used_logon_ids: set[int] = set()
+        self._logon_id_aliases: dict[str, str] = {}
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
@@ -142,14 +143,14 @@ class StateManager:
         base = self._host_logon_base(system)
         epoch = self._host_logon_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
-        ordinal_key = (system, elapsed_seconds)
+        subsecond_bucket = min(15, current_time.microsecond // 62500)
+        ordinal_key = (system, elapsed_seconds, subsecond_bucket)
         ordinal = self._logon_id_second_ordinals.get(ordinal_key, 0)
         self._logon_id_second_ordinals[ordinal_key] = ordinal + 1
 
-        # Use boot-relative time for monotonic visible ordering, with a small
-        # deterministic slot so adjacent events do not look like +1 counters.
-        slot = _stable_seed(f"logon_luid_slot_{system}_{elapsed_seconds}") % 32
-        candidate = base + (elapsed_seconds * 256) + slot + (ordinal * 32)
+        # Use boot-relative time for monotonic visible ordering. Low bits carry
+        # coarse subsecond placement plus an ordinal for same-bucket bursts.
+        candidate = base + (elapsed_seconds * 256) + (subsecond_bucket * 16) + ordinal
         while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
             candidate += 1
         self._used_logon_ids.add(candidate)
@@ -171,6 +172,10 @@ class StateManager:
         except (TypeError, ValueError):
             return
         self._used_logon_ids.add(val)
+
+    def _resolve_logon_id(self, logon_id: str) -> str:
+        """Resolve a preplanned session LogonID to its final rendered value."""
+        return self._logon_id_aliases.get(logon_id, logon_id)
 
     def create_session(
         self,
@@ -224,6 +229,7 @@ class StateManager:
             )
 
             self.state.active_sessions[logon_id] = session
+            self._logon_id_aliases.pop(logon_id, None)
             self._ended_sessions.pop(logon_id, None)
             logger.debug(f"Created session {logon_id} for {username}@{system}")
             return logon_id
@@ -238,7 +244,9 @@ class StateManager:
             ActiveSession if found, None otherwise
         """
         with self._lock:
-            return self.state.active_sessions.get(logon_id)
+            return self.state.active_sessions.get(logon_id) or self.state.active_sessions.get(
+                self._resolve_logon_id(logon_id)
+            )
 
     def get_sessions_for_user(self, username: str) -> list[ActiveSession]:
         """Get all active sessions for a user.
@@ -301,6 +309,7 @@ class StateManager:
                 ecar_object_id=str(uuid.uuid4()),
             )
             self.state.active_sessions[logon_id] = session
+            self._logon_id_aliases.pop(logon_id, None)
             self._ended_sessions.pop(logon_id, None)
             logger.debug("Registered external session %s for %s@%s", logon_id, username, system)
             return session
@@ -319,7 +328,7 @@ class StateManager:
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
-            session = self.state.active_sessions.get(logon_id)
+            session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
             if username is not None:
@@ -338,6 +347,21 @@ class StateManager:
                 session.network_close_time = ensure_utc(network_close_time)
             return True
 
+    def reassign_session_logon_id(self, logon_id: str, event_time: datetime) -> str | None:
+        """Re-key an active session after its final source-native start time is known."""
+        with self._lock:
+            session = self.state.active_sessions.pop(logon_id, None)
+            if session is None:
+                return None
+            new_logon_id = f"0x{self._allocate_logon_luid(session.system, event_time):x}"
+            session.logon_id = new_logon_id
+            session.start_time = ensure_utc(event_time)
+            self.state.active_sessions[new_logon_id] = session
+            self._logon_id_aliases[logon_id] = new_logon_id
+            self._ended_sessions.pop(logon_id, None)
+            self._ended_sessions.pop(new_logon_id, None)
+            return new_logon_id
+
     def end_session(self, logon_id: str, end_time: datetime | None = None) -> bool:
         """End an active session.
 
@@ -349,29 +373,39 @@ class StateManager:
             True if session was found and removed, False if not found
         """
         with self._lock:
-            session = self.state.active_sessions.pop(logon_id, None)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.pop(resolved_logon_id, None)
             if session is not None:
                 if end_time is None:
                     end_time = self.state.current_time
                 if end_time is not None:
-                    self._ended_sessions[logon_id] = (session, ensure_utc(end_time))
-                logger.debug(f"Ended session {logon_id}")
+                    ended = (session, ensure_utc(end_time))
+                    self._ended_sessions[resolved_logon_id] = ended
+                    if resolved_logon_id != logon_id:
+                        self._ended_sessions[logon_id] = ended
+                logger.debug("Ended session %s", resolved_logon_id)
                 return True
             return False
 
     def get_session_logon_type(self, logon_id: str) -> int | None:
         """Return the original logon type for an active or recently ended session."""
         with self._lock:
-            session = self.state.active_sessions.get(logon_id)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
             if session is not None:
                 return session.logon_type
-            ended = self._ended_sessions.get(logon_id)
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
             return ended[0].logon_type if ended is not None else None
 
     def get_session_end_time(self, logon_id: str) -> datetime | None:
         """Return the visible end time for a recently ended session."""
         with self._lock:
-            ended = self._ended_sessions.get(logon_id)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
             return ended[1] if ended is not None else None
 
     def list_active_sessions(self) -> list[ActiveSession]:
