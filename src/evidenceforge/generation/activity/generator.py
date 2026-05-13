@@ -231,12 +231,30 @@ _LINUX_ALIAS_COMMANDS = {
     "l": ("/usr/bin/ls", "ls -CF"),
 }
 _NMAP_PORT_SERVICES = {
+    21: "ftp",
     22: "ssh",
+    25: "smtp",
+    53: "dns",
     80: "http",
     443: "ssl",
     445: "smb",
     3306: "mysql",
     3389: "rdp",
+    5432: "postgresql",
+    8080: "http",
+}
+_NMAP_SERVICE_ALIASES = {
+    21: {"ftp", "vsftpd", "ftpd"},
+    22: {"ssh", "sshd", "openssh"},
+    25: {"smtp", "postfix", "sendmail", "mail"},
+    53: {"dns", "bind", "named", "ad-ds"},
+    80: {"http", "apache", "apache2", "nginx", "httpd", "iis", "gunicorn"},
+    443: {"https", "ssl", "tls", "apache", "apache2", "nginx", "httpd", "iis"},
+    445: {"smb", "samba", "lanmanserver", "ad-ds"},
+    3306: {"mysql", "mariadb"},
+    3389: {"rdp", "termservice", "terminal-services"},
+    5432: {"postgres", "postgresql"},
+    8080: {"http", "apache", "apache2", "nginx", "httpd", "gunicorn", "tomcat", "squid"},
 }
 
 
@@ -300,11 +318,69 @@ def _service_for_port(port: int) -> str | None:
     return _NMAP_PORT_SERVICES.get(port)
 
 
-def _nmap_conn_state(port: int) -> str:
+def _inventory_token(value: str) -> str:
+    """Normalize scenario inventory labels for lightweight matching."""
+    return value.lower().replace(" ", "-").replace("_", "-")
+
+
+def _nmap_target_exposes_port(port: int, target_system: System | None) -> bool:
+    """Return whether target inventory suggests a scanned port is open."""
+    if target_system is None:
+        return False
+    services = {_inventory_token(service) for service in target_system.services}
+    roles = {_inventory_token(role) for role in target_system.roles}
+    system_type = _inventory_token(target_system.type)
+    aliases = _NMAP_SERVICE_ALIASES.get(port, set())
+    if services & aliases:
+        return True
+    if port in {80, 443, 8080} and roles & {"web-server", "app-server", "forward-proxy"}:
+        return True
+    if port == 445 and (system_type == "domain-controller" or "file-server" in roles):
+        return True
+    if port == 3306 and "database" in roles:
+        return True
+    if port == 53 and "dns-server" in roles:
+        return True
+    if port == 3389 and "windows" in target_system.os.lower():
+        return True
+    return False
+
+
+def _nmap_probe_profile(
+    port: int,
+    target_system: System | None,
+    rng: random.Random,
+) -> tuple[str, str, float, int, int]:
+    """Return source-native connection fields for one nmap TCP probe."""
+    if _nmap_target_exposes_port(port, target_system):
+        conn_state = rng.choices(["SF", "RSTO", "RSTR"], weights=[82, 10, 8], k=1)[0]
+        service = _service_for_port(port) or ""
+        if conn_state == "SF":
+            return (
+                conn_state,
+                service,
+                rng.uniform(0.04, 0.9),
+                rng.randint(0, 180),
+                rng.randint(0, 900),
+            )
+        return (
+            conn_state,
+            service,
+            rng.uniform(0.01, 0.35),
+            rng.randint(0, 140),
+            rng.randint(0, 240),
+        )
+
+    conn_state = rng.choices(["REJ", "S0", "RSTO"], weights=[54, 38, 8], k=1)[0]
+    if conn_state == "S0":
+        return conn_state, "", rng.uniform(1.5, 6.0), rng.randint(0, 64), 0
+    return conn_state, "", rng.uniform(0.003, 0.18), rng.randint(0, 96), rng.randint(0, 80)
+
+
+def _nmap_conn_state(port: int, target_system: System | None = None) -> str:
     """Return a plausible Zeek conn_state for a TCP-connect scan probe."""
-    if port in {22, 80, 443, 445, 3306, 3389}:
-        return "SF"
-    return "REJ"
+    rng = random.Random(_stable_seed(f"nmap_conn_state:{port}:{getattr(target_system, 'ip', '')}"))
+    return _nmap_probe_profile(port, target_system, rng)[0]
 
 
 _WINDOWS_USER_SESSION_PROCESSES = {
@@ -4556,26 +4632,35 @@ class ActivityGenerator:
         rng = random.Random(
             _stable_seed(f"nmap_effects:{system.hostname}:{pid}:{command_line}:{time.isoformat()}")
         )
-        for idx, target_ip in enumerate(targets[:32]):
-            for port_idx, port in enumerate(ports[:12]):
-                offset = timedelta(milliseconds=180 + idx * 260 + port_idx * rng.randint(45, 140))
-                self.generate_connection(
-                    src_ip=system.ip,
-                    dst_ip=target_ip,
-                    time=time + offset,
-                    dst_port=port,
-                    proto="tcp",
-                    service="",
-                    duration=rng.uniform(0.02, 0.45),
-                    orig_bytes=rng.randint(40, 180),
-                    resp_bytes=rng.randint(0, 900),
-                    emit_dns=False,
-                    pid=pid,
-                    source_system=system,
-                    conn_state=_nmap_conn_state(port),
-                    proxy_bypass=True,
-                    process_image=process_name,
-                )
+        probe_pairs = [(target_ip, port) for target_ip in targets[:32] for port in ports[:12]]
+        rng.shuffle(probe_pairs)
+        elapsed_ms = rng.randint(120, 260)
+        for target_ip, port in probe_pairs:
+            target_system = self._ip_to_system.get(target_ip)
+            conn_state, service, duration, orig_bytes, resp_bytes = _nmap_probe_profile(
+                port,
+                target_system,
+                rng,
+            )
+            offset = timedelta(milliseconds=elapsed_ms)
+            elapsed_ms += rng.randint(35, 260) + int(rng.expovariate(1.0 / 90.0))
+            self.generate_connection(
+                src_ip=system.ip,
+                dst_ip=target_ip,
+                time=time + offset,
+                dst_port=port,
+                proto="tcp",
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                emit_dns=False,
+                pid=pid,
+                source_system=system,
+                conn_state=conn_state,
+                proxy_bypass=True,
+                process_image=process_name,
+            )
 
     def _resolve_nmap_targets(self, command_line: str, system: System) -> list[str]:
         """Resolve nmap CIDR/IP arguments to visible scenario hosts when possible."""

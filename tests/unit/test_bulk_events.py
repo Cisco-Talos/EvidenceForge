@@ -16,6 +16,9 @@ from evidenceforge.generation.engine.storyline import (
     _effective_rate_interval,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
+    _observed_web_scan_status,
+    _port_scan_connection_profile,
+    _scan_target_exposes_port,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
 )
@@ -483,6 +486,14 @@ class TestWebScanConnectionProfile:
         assert max(durations) - min(durations) > 4.0
         assert max(resp_bytes) - min(resp_bytes) > 6000
 
+    def test_scan_statuses_have_sparse_runtime_drift(self):
+        rng = random.Random(42)
+        statuses = [
+            _observed_web_scan_status({"uri": "/admin", "status": 404}, rng) for _ in range(300)
+        ]
+        assert 404 in statuses
+        assert set(statuses) & {403, 429, 500}
+
     def test_referrer_only_allowed_for_crawl_like_successes(self):
         assert _web_scan_path_allows_referrer({"uri": "/", "status": 200})
         assert not _web_scan_path_allows_referrer({"uri": "/.git/HEAD", "status": 404})
@@ -490,6 +501,71 @@ class TestWebScanConnectionProfile:
         assert not _web_scan_path_allows_referrer(
             {"uri": "/robots.txt", "status": 200, "ids": {"sid": 1}}
         )
+
+
+class TestPortScanConnectionProfile:
+    def test_profile_uses_target_services_for_open_ports(self):
+        rng = random.Random(7)
+        target = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2", "ssh"],
+            roles=["web_server"],
+        )
+
+        assert _scan_target_exposes_port(target, 80, external=True)
+        assert not _scan_target_exposes_port(target, 22, external=True)
+        assert _scan_target_exposes_port(
+            System(
+                hostname="APP-01",
+                ip="10.0.0.21",
+                os="Ubuntu 22.04",
+                type="server",
+                services=[],
+                roles=["web_server"],
+            ),
+            80,
+            external=True,
+        )
+        denied, conn_state, service, _duration, _orig_bytes, _resp_bytes = (
+            _port_scan_connection_profile(
+                rng,
+                port=80,
+                target_system=target,
+                external=True,
+                default_deny_state="S0",
+            )
+        )
+
+        assert not denied
+        assert conn_state in {"SF", "RSTO", "RSTR"}
+        assert service == "http"
+
+    def test_profile_includes_filtered_and_rejected_closed_ports(self):
+        rng = random.Random(42)
+        target = System(
+            hostname="DB-01",
+            ip="10.0.0.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["mysql"],
+            roles=["database"],
+        )
+        samples = [
+            _port_scan_connection_profile(
+                rng,
+                port=3389,
+                target_system=target,
+                external=False,
+                default_deny_state="S0",
+            )
+            for _ in range(120)
+        ]
+
+        assert all(sample[0] for sample in samples)
+        assert {sample[1] for sample in samples} >= {"S0", "REJ"}
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────
@@ -999,10 +1075,12 @@ class TestDnsTunnelEventSpec:
             for earlier, later in zip(captured, captured[1:], strict=False)
         ]
         label_lengths = {len(dns.query.split(".", 1)[0]) for _ts, dns in captured}
+        label_depths = {len(dns.query.split(".")) for _ts, dns in captured}
 
         assert len(captured) < 451
         assert max(intervals) > 8.0
         assert len(label_lengths) > 1
+        assert len(label_depths) > 1
 
     def test_dns_tunnel_generation_skews_ttls_and_expands_answer_vocabulary(self):
         engine = object.__new__(StorylineMixin)
