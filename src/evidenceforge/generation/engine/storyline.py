@@ -1141,6 +1141,18 @@ class StorylineMixin:
                     ),
                 )
 
+            process_command_line = command_line
+            if os_category == "linux":
+                from evidenceforge.generation.activity.generator import (
+                    _linux_command_process_from_shell,
+                )
+
+                inferred_process = _linux_command_process_from_shell(command_line)
+                if inferred_process is not None:
+                    inferred_image, inferred_command_line = inferred_process
+                    if inferred_image.rsplit("/", 1)[-1] == process_name.rsplit("/", 1)[-1]:
+                        process_command_line = inferred_command_line
+
             output_file = self._extract_output_file(command_line, os_category)
             parent_pid = self.activity_generator._resolve_parent(
                 system, actor, time, logon_id, process_name
@@ -1156,7 +1168,7 @@ class StorylineMixin:
                 time=time,
                 logon_id=logon_id,
                 process_name=process_name,
-                command_line=command_line,
+                command_line=process_command_line,
                 parent_pid=parent_pid,
                 ensure_file_event=not service_backed_process,
                 from_storyline=True,
@@ -1194,7 +1206,7 @@ class StorylineMixin:
                             pid=pid,
                             parent_pid=parent_pid,
                             image=process_name,
-                            command_line=command_line,
+                            command_line=process_command_line,
                             username=actor.username,
                             logon_id=logon_id,
                             start_time=running_proc.start_time
@@ -1359,7 +1371,7 @@ class StorylineMixin:
 
             # Mark as story process and schedule termination
             self.state_manager.mark_story_process(system.hostname, pid)
-            lifetime = _estimate_process_lifetime(process_name, command_line)
+            lifetime = _estimate_process_lifetime(process_name, process_command_line)
             if lifetime is not None:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)

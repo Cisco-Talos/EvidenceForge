@@ -212,6 +212,7 @@ _LINUX_COMMAND_IMAGE_OVERRIDES = {
     "uptime": "/usr/bin/uptime",
     "vim": "/usr/bin/vim",
     "w": "/usr/bin/w",
+    "wc": "/usr/bin/wc",
     "wget": "/usr/bin/wget",
     "whoami": "/usr/bin/whoami",
 }
@@ -1067,13 +1068,78 @@ def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
 
 def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
     """Infer process image and command line for a Linux shell-history command."""
-    first_stage = command.split("|", 1)[0].strip()
-    if not first_stage:
+    processes = _linux_command_processes_from_shell(command)
+    return processes[0] if processes else None
+
+
+def _linux_command_processes_from_shell(command: str) -> list[tuple[str, str]]:
+    """Infer source-native process argv entries from a Linux shell command."""
+    return [
+        process
+        for stage in _split_linux_pipeline(command)
+        if (process := _linux_command_process_from_stage(stage)) is not None
+    ]
+
+
+def _split_linux_pipeline(command: str) -> list[str]:
+    """Split a shell command on unquoted pipeline/control separators."""
+    stages: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            current.append(char)
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            current.append(char)
+            escaped = True
+            index += 1
+            continue
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        separator_width = 0
+        if char in {"|", ";"}:
+            separator_width = 2 if command[index : index + 2] == "||" else 1
+        elif command[index : index + 2] == "&&":
+            separator_width = 2
+        if separator_width:
+            stage = "".join(current).strip()
+            if stage:
+                stages.append(stage)
+            current = []
+            index += separator_width
+            continue
+        current.append(char)
+        index += 1
+    stage = "".join(current).strip()
+    if stage:
+        stages.append(stage)
+    return stages
+
+
+def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
+    """Infer a source-native process image/argv pair from one shell pipeline stage."""
+    if not stage:
         return None
     try:
-        parts = shlex.split(first_stage, comments=False, posix=True)
+        raw_parts = shlex.split(stage, comments=False, posix=True)
     except ValueError:
         return None
+    parts = _strip_linux_shell_redirections(raw_parts)
     if not parts:
         return None
 
@@ -1106,12 +1172,39 @@ def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
         if index + 1 < len(parts):
             command_line = f"{command_line} {shlex.join(parts[index + 1 :])}"
         return image, command_line
+    command_line = shlex.join(parts[index:])
     if parts[index].startswith("/"):
-        return parts[index], command
+        return parts[index], command_line
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
     if mapped is not None:
-        return mapped, command
+        return mapped, command_line
     return None
+
+
+def _strip_linux_shell_redirections(parts: list[str]) -> list[str]:
+    """Remove shell redirection operators and targets from argv tokens."""
+    cleaned: list[str] = []
+    skip_next = False
+    redirect_ops = {">", ">>", "<", "<<", "<>", ">|", "&>", "&>>"}
+    redirect_prefix_re = re.compile(r"^(?:\d?>&\d+|\d?>>?|&>>?|<<?|<>|>\|).+")
+    attached_redirect_re = re.compile(r"^(?P<arg>.+?)(?:\d?>>?|>>?|<<?|<>|>\|).+")
+    for token in parts:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in redirect_ops or re.fullmatch(r"\d?>>?", token):
+            skip_next = True
+            continue
+        if redirect_prefix_re.match(token):
+            continue
+        attached = attached_redirect_re.match(token)
+        if attached:
+            arg = attached.group("arg")
+            if arg:
+                cleaned.append(arg)
+            continue
+        cleaned.append(token)
+    return cleaned
 
 
 def _dns_base_ttl(query: str, is_internal: bool) -> int:
@@ -6805,10 +6898,9 @@ class ActivityGenerator:
         """Emit process telemetry for interactive Linux shell commands when state supports it."""
         if _get_os_category(system.os) != "linux":
             return
-        process = _linux_command_process_from_shell(command)
-        if process is None:
+        processes = _linux_command_processes_from_shell(command)
+        if not processes:
             return
-        image, process_command_line = process
 
         sessions = [
             session
@@ -6845,29 +6937,30 @@ class ActivityGenerator:
         ):
             return
 
-        parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
-        process_time = time + timedelta(milliseconds=rng.randint(20, 450))
-        pid = self.generate_process(
-            user=user,
-            system=system,
-            time=process_time,
-            logon_id=session.logon_id,
-            process_name=image,
-            command_line=process_command_line,
-            parent_pid=parent_pid,
-            suppress_command_file_effect=True,
-        )
-        self._record_user_process(system, user, pid, image)
-        lifetime = _linux_foreground_lifetime(image, process_command_line)
-        if lifetime is not None:
-            self.generate_process_termination(
+        for index, (image, process_command_line) in enumerate(processes[:4]):
+            parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
+            process_time = time + timedelta(milliseconds=rng.randint(20, 180) + index * 35)
+            pid = self.generate_process(
                 user=user,
                 system=system,
-                time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
-                pid=pid,
-                process_name=image,
+                time=process_time,
                 logon_id=session.logon_id,
+                process_name=image,
+                command_line=process_command_line,
+                parent_pid=parent_pid,
+                suppress_command_file_effect=True,
             )
+            self._record_user_process(system, user, pid, image)
+            lifetime = _linux_foreground_lifetime(image, process_command_line)
+            if lifetime is not None:
+                self.generate_process_termination(
+                    user=user,
+                    system=system,
+                    time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
+                    pid=pid,
+                    process_name=image,
+                    logon_id=session.logon_id,
+                )
 
     def _schedule_bash_history_time(
         self,

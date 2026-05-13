@@ -3707,6 +3707,102 @@ class TestActivityGenerator:
         assert process_events[-1].process.image == "/usr/bin/python3"
         assert process_events[-1].process.command_line == command
 
+    def test_linux_shell_pipeline_uses_source_native_process_argv(self):
+        """Linux process telemetry should not attach shell operators to child argv."""
+        processes = generator_module._linux_command_processes_from_shell(
+            "ss -ltnp | grep postfix | wc -l"
+        )
+
+        assert processes == [
+            ("/usr/sbin/ss", "ss -ltnp"),
+            ("/usr/bin/grep", "grep postfix"),
+            ("/usr/bin/wc", "wc -l"),
+        ]
+
+    def test_linux_shell_redirection_removed_from_process_argv(self):
+        """Redirection targets belong to the shell/file effect, not process argv."""
+        process = generator_module._linux_command_process_from_shell(
+            "mysqldump --single-transaction ehr patients > /tmp/patient_claims.sql"
+        )
+
+        assert process == (
+            "/usr/bin/mysqldump",
+            "mysqldump --single-transaction ehr patients",
+        )
+
+    def test_linux_shell_control_operators_split_process_argv(self):
+        """Shell control operators should separate child process argv entries."""
+        processes = generator_module._linux_command_processes_from_shell(
+            "whoami && id || df; uptime"
+        )
+
+        assert processes == [
+            ("/usr/bin/whoami", "whoami"),
+            ("/usr/bin/id", "id"),
+            ("/usr/bin/df", "df"),
+            ("/usr/bin/uptime", "uptime"),
+        ]
+
+    def test_generate_bash_command_emits_pipeline_children_with_clean_argv(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Pipeline commands should emit separate child processes without pipe syntax."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            "0xabc123",
+        )
+        session.session_shell_pid = bash_pid
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "cat /etc/shadow | head -5",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create" and event.process is not None
+        ]
+        command_lines = [event.process.command_line for event in process_events]
+        assert "cat /etc/shadow" in command_lines
+        assert "head -5" in command_lines
+        assert all("|" not in command for command in command_lines)
+
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
