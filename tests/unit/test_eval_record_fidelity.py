@@ -61,6 +61,17 @@ class TestTierA:
         # Well-formed Zeek records should all pass
         assert tier_a.score == 100.0
 
+    def test_snort_native_timestamps_pass_spec_validation(self):
+        """Snort fast-alert timestamps are source-native, not ISO strings."""
+        from evidenceforge.evaluation.parsers.snort import SnortAlertParser
+
+        parser = SnortAlertParser()
+        records = list(parser.parse_file(GOOD_FIXTURES / "snort_alert.alert"))
+
+        scorer = RecordFidelityScorer()
+        tier_a = scorer._score_spec_conformance({"snort_alert": records})
+        assert tier_a.score == 100.0
+
     def test_records_with_parse_errors_score_low(self):
         """Records that failed to parse should reduce Tier A score."""
         records = [
