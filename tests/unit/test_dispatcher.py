@@ -471,6 +471,53 @@ class TestCanHandleDefault:
         assert "19:00:53" in lines[0]
         assert "20:01:25" in lines[1]
 
+    def test_syslog_normalizes_logind_session_ids_in_rendered_order(self, tmp_path):
+        """Rendered New-session IDs should not move backward after final syslog sort."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        for timestamp, message in [
+            (
+                datetime(2024, 3, 18, 12, 10, 9, tzinfo=UTC),
+                "New session 7608 of user admin.",
+            ),
+            (
+                datetime(2024, 3, 18, 12, 4, 40, tzinfo=UTC),
+                "New session 7616 of user root.",
+            ),
+            (
+                datetime(2024, 3, 18, 12, 12, 0, tzinfo=UTC),
+                "Removed session 7616.",
+            ),
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "systemd-logind",
+                    "pid": 22523,
+                    "facility": 10,
+                    "severity": 6,
+                    "message": message,
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        new_sessions = [
+            int(line.split("New session ", 1)[1].split(" ", 1)[0])
+            for line in lines
+            if "New session" in line
+        ]
+        removed_session = int(lines[2].split("Removed session ", 1)[1].rstrip("."))
+        assert new_sessions == sorted(new_sessions)
+        assert removed_session == new_sessions[0]
+
     def test_syslog_sorts_same_second_ssh_lifecycle(self, tmp_path):
         """Same-second SSH syslog groups should keep lifecycle order."""
         from datetime import UTC, datetime
