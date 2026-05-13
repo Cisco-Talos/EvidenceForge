@@ -499,6 +499,7 @@ class TestSupplementaryAuditEvents:
         assert len(result) == 1
         assert result[0].method == "generate_scheduled_task"
         assert result[0].kwargs["task_name"] == "Backdoor"
+        assert result[0].kwargs["source_command_line"] == ctx.command_line
 
     def test_expand_sc_create(self):
         rule = SupplementaryAuditEvents()

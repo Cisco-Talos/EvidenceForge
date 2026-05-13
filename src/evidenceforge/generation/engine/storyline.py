@@ -675,6 +675,21 @@ def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[fl
     return (2.0, 15.0)
 
 
+def _extract_schtasks_option(command_line: str, option: str) -> str:
+    """Extract a quoted or bare schtasks.exe option value."""
+    if not command_line:
+        return ""
+    option_name = option.lstrip("/")
+    match = re.search(
+        rf'(?:^|\s)/{re.escape(option_name)}\s+(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))',
+        command_line,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return ""
+    return (match.group("quoted") or match.group("bare") or "").strip()
+
+
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
 
@@ -711,6 +726,38 @@ class StorylineMixin:
             "service_account": service_account,
             "installed_at": time,
         }
+
+    @staticmethod
+    def _scheduled_task_lookup_key(system: System, task_name: str) -> tuple[str, str]:
+        """Return a normalized host/task key for correlating schtasks with 4698."""
+        normalized_task = task_name.strip().strip('"').replace("/", "\\")
+        if not normalized_task.startswith("\\"):
+            normalized_task = f"\\{normalized_task}"
+        return system.hostname, normalized_task.lower()
+
+    def _record_storyline_scheduled_task_command(
+        self,
+        system: System,
+        task_name: str,
+        command_line: str,
+    ) -> None:
+        """Remember a schtasks.exe command so the later 4698 XML matches it."""
+        if not task_name or not command_line:
+            return
+        if not hasattr(self, "_storyline_scheduled_task_commands"):
+            self._storyline_scheduled_task_commands: dict[tuple[str, str], str] = {}
+        self._storyline_scheduled_task_commands[
+            self._scheduled_task_lookup_key(system, task_name)
+        ] = command_line
+
+    def _recent_storyline_scheduled_task_command(
+        self,
+        system: System,
+        task_name: str,
+    ) -> str:
+        """Return the most recent schtasks.exe command for a host/task pair."""
+        commands = getattr(self, "_storyline_scheduled_task_commands", {})
+        return commands.get(self._scheduled_task_lookup_key(system, task_name), "")
 
     def _ensure_storyline_service_process_for_beacon(
         self,
@@ -1305,6 +1352,9 @@ class StorylineMixin:
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
+            task_name = _extract_schtasks_option(command_line, "tn")
+            if task_name and "/create" in command_line.lower():
+                self._record_storyline_scheduled_task_command(system, task_name, command_line)
 
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
@@ -1853,6 +1903,10 @@ class StorylineMixin:
 
         elif spec.type == "scheduled_task_created":
             task_content = spec.task_content
+            source_command_line = self._recent_storyline_scheduled_task_command(
+                system,
+                spec.task_name,
+            )
             if not task_content:
                 task_content = (
                     f'<?xml version="1.0" encoding="UTF-16"?>\n'
@@ -1883,6 +1937,7 @@ class StorylineMixin:
                 task_name=spec.task_name,
                 action="created",
                 task_content=task_content,
+                source_command_line=source_command_line,
             )
             malicious_event["task_name"] = spec.task_name
             malicious_event["task_content"] = task_content
