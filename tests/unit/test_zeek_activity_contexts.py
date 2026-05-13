@@ -29,7 +29,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext
+from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -234,6 +234,69 @@ class TestSslContextPopulation:
         egress = egress_events[-1]
         assert egress.network.conn_state == "SF"
         assert egress.network.orig_bytes >= body_bytes
+
+    def test_explicit_proxy_http_origin_leg_preserves_forwarded_request(self, activity_gen):
+        """Plain HTTP proxy egress should render the forwarded request, not invent a new one."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Firefox/121.0"
+        proxy_context = ProxyContext(
+            client_ip=source.ip,
+            method="GET",
+            url="http://www.google.com/complete/search?q=vpn+configuration",
+            host="www.google.com",
+            status_code=200,
+            tunnel_status_code=200,
+            sc_bytes=4250,
+            cs_bytes=620,
+            time_taken=1400,
+            user_agent=user_agent,
+            content_type="application/json",
+            cache_result="MISS",
+            referrer="",
+            proxy_fqdn=gen._proxy_fqdn(proxy),
+        )
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="142.250.80.46",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=180,
+            resp_bytes=4000,
+            conn_state="SF",
+            source_system=source,
+            hostname="www.google.com",
+            proxy=proxy_context,
+        )
+
+        http_events = [event for event in events if event.http is not None and event.network]
+        client = next(
+            event
+            for event in http_events
+            if event.network.src_ip == source.ip and event.network.dst_ip == proxy.ip
+        )
+        egress = next(event for event in http_events if event.network.src_ip == proxy.ip)
+
+        assert client.http.uri == "http://www.google.com/complete/search?q=vpn+configuration"
+        assert egress.http.uri == "/complete/search?q=vpn+configuration"
+        assert egress.http.host == "www.google.com"
+        assert egress.http.user_agent == client.http.user_agent == user_agent
+        assert egress.http.status_code == client.http.status_code == 200
+        assert egress.http.response_body_len == client.http.response_body_len == 4000
 
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""

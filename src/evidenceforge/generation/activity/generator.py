@@ -39,6 +39,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
@@ -1144,6 +1145,35 @@ def _proxy_request_allows_cache_hit(
         "application/javascript",
         "text/css",
     }
+
+
+def _origin_form_uri_from_proxy_url(url: str) -> str:
+    """Return the origin-form URI represented by an explicit-proxy request URL."""
+    parsed = urlsplit(url)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or "/"
+        return f"{path}?{parsed.query}" if parsed.query else path
+    if not url:
+        return "/"
+    return url if url.startswith(("/", "*")) else f"/{url}"
+
+
+def _proxy_http_response_body_len(
+    proxy_context: ProxyContext,
+    *,
+    resp_bytes: int | None,
+    http: HttpContext | None = None,
+) -> int:
+    """Return Zeek HTTP entity-body length for an explicit proxy response."""
+    if proxy_context.status_code in {204, 304} or proxy_context.method == "HEAD":
+        return 0
+    if proxy_context.status_code >= 400:
+        return max(0, proxy_context.sc_bytes)
+    if http is not None and http.status_code == proxy_context.status_code:
+        return max(0, http.response_body_len)
+    if resp_bytes is not None:
+        return max(0, resp_bytes)
+    return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
 
 
 _APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]+ \d{4}\]")
@@ -4813,7 +4843,11 @@ class ActivityGenerator:
                     version=http.version,
                     user_agent=http.user_agent,
                     request_body_len=http.request_body_len,
-                    response_body_len=proxy_context.sc_bytes,
+                    response_body_len=_proxy_http_response_body_len(
+                        proxy_context,
+                        resp_bytes=resp_bytes,
+                        http=http,
+                    ),
                     status_code=proxy_context.status_code,
                     status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
                     referrer=http.referrer,
@@ -4834,7 +4868,10 @@ class ActivityGenerator:
                     version="1.1",
                     user_agent=proxy_context.user_agent,
                     request_body_len=request_body_len,
-                    response_body_len=proxy_context.sc_bytes,
+                    response_body_len=_proxy_http_response_body_len(
+                        proxy_context,
+                        resp_bytes=resp_bytes,
+                    ),
                     status_code=proxy_context.status_code,
                     status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
                     referrer=proxy_context.referrer,
@@ -4962,7 +4999,46 @@ class ActivityGenerator:
             egress_http = (
                 http if http is not None and proxy_context.cache_result == "MISS" else None
             )
+            if egress_http is None and dst_port == 80 and proxy_context.cache_result == "MISS":
+                status_messages = {
+                    200: "OK",
+                    301: "Moved Permanently",
+                    302: "Found",
+                    304: "Not Modified",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    500: "Internal Server Error",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
+                response_body_len = _proxy_http_response_body_len(
+                    proxy_context,
+                    resp_bytes=resp_bytes,
+                )
+                request_body_len = 0
+                if proxy_context.method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:
+                    request_body_len = max(orig_bytes or 0, proxy_context.cs_bytes)
+                egress_http = HttpContext(
+                    method=proxy_context.method,
+                    host=proxy_context.host,
+                    uri=_origin_form_uri_from_proxy_url(proxy_context.url),
+                    version="1.1",
+                    user_agent=proxy_context.user_agent,
+                    request_body_len=request_body_len,
+                    response_body_len=response_body_len,
+                    status_code=proxy_context.status_code,
+                    status_msg=status_messages.get(proxy_context.status_code, "OK"),
+                    referrer=proxy_context.referrer,
+                    trans_depth=client_http.trans_depth if client_http is not None else 1,
+                    tags=[],
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type and proxy_context.status_code == 200
+                    else [],
+                )
             egress_resp_bytes = resp_bytes
+            if egress_http is not None:
+                egress_resp_bytes = max(resp_bytes or 0, egress_http.response_body_len)
             if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
                 egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
             if proxy_context.host:
