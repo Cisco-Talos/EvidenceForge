@@ -623,7 +623,9 @@ class TestSslUidCorrelation:
             default_max_ms=0,
             default_position="after",
         )
-        assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000)
+        ssl_offset_us = round((ssl_ts - conn_ts) * 1_000_000)
+        assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000) + 0.001
+        assert ssl_offset_us % 1000 != 0
         assert ssl_ts < x509_ts <= conn_ts + ((ssl_window.max_ms + x509_window.max_ms) / 1000)
         assert x509_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
