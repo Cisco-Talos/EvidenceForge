@@ -108,7 +108,7 @@ class TestSessionManagement:
         )
 
         assert logon_id.startswith("0x")
-        assert int(logon_id, 16) >= 0x10000  # High-entropy value, not sequential
+        assert int(logon_id, 16) >= 0x10000
         session = sm.get_session(logon_id)
         assert session is not None
         assert session.username == "jdoe"
@@ -116,17 +116,45 @@ class TestSessionManagement:
         assert session.logon_type == 2
         assert session.source_ip == "192.168.1.50"
 
-    def test_create_session_increments_counter(self):
-        """Test that creating sessions increments LogonID counter."""
+    def test_create_session_uses_host_local_monotonic_luids(self):
+        """New LogonIDs on one host should follow boot-relative LUID ordering."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("WS-01", boot)
+
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        id1 = sm.create_session("user1", "WS-01", 2, "192.168.1.1")
+        sm.set_current_time(datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC))
+        id2 = sm.create_session("user2", "WS-01", 3, "192.168.1.2")
+        sm.set_current_time(datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC))
+        id3 = sm.create_session("user3", "WS-01", 3, "192.168.1.3")
+
+        assert int(id1, 16) < int(id2, 16) < int(id3, 16)
+
+    def test_create_session_keeps_host_ranges_unique(self):
+        """Host-local LUID sequences should not collide in global state."""
         sm = StateManager()
         sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
-        id1 = sm.create_session("user1", "WS-01", 2, "192.168.1.1")
-        id2 = sm.create_session("user2", "WS-02", 3, "192.168.1.2")
+        ids = [sm.create_session(f"user{i}", f"WS-{i:02d}", 3, f"192.168.1.{i}") for i in range(20)]
 
-        assert id1 != id2  # Unique LogonIDs
-        assert id1.startswith("0x")
-        assert id2.startswith("0x")
+        assert len(set(ids)) == len(ids)
+
+    def test_register_session_marks_external_logon_id_used(self):
+        """Externally registered sessions should reserve their LogonID value."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        sm.register_session(
+            logon_id="0x123456",
+            username="external",
+            system="WS-01",
+            logon_type=3,
+            source_ip="192.168.1.10",
+            start_time=start,
+        )
+
+        assert int("0x123456", 16) in sm._used_logon_ids
 
     def test_create_session_requires_current_time(self):
         """Test that creating session fails if current_time not set."""

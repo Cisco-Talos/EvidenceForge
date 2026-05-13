@@ -41,6 +41,7 @@ from evidenceforge.models.state import (
     RunningProcess,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class StateManager:
 
     Attributes:
         state: GeneratorState containing all active entities
-        _logon_id_counter: Counter for generating unique LogonIDs
+        _logon_id_host_bases: Per-host base ranges for Windows LogonID/LUID allocation
         _pid_counters: Per-system PID counters dict[system_hostname, int]
         _connection_id_counter: Counter for generating unique connection IDs
         _lock: Reentrant lock for thread-safe access to state and counters
@@ -70,7 +71,10 @@ class StateManager:
     def __init__(self) -> None:
         """Initialize StateManager with empty state."""
         self.state = GeneratorState()
-        self._logon_id_rngs: dict[str, random.Random] = {}  # Per-host LogonID RNGs
+        self._logon_id_host_bases: dict[str, int] = {}
+        self._logon_id_used_host_bases: set[int] = set()
+        self._logon_id_epochs: dict[str, datetime] = {}
+        self._logon_id_second_ordinals: dict[tuple[str, int], int] = {}
         self._used_logon_ids: set[int] = set()
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
@@ -93,6 +97,74 @@ class StateManager:
     # ========================================
     # Session Management
     # ========================================
+
+    def _host_logon_base(self, system: str) -> int:
+        """Return a stable host-local LUID range base.
+
+        ``GeneratorState.active_sessions`` still keys sessions by LogonID, so
+        each host receives a disjoint high-order range while visible values
+        remain monotonic inside that host's range.
+        """
+        base = self._logon_id_host_bases.get(system)
+        if base is not None:
+            return base
+
+        for salt in range(512):
+            # Keep values in the 32-bit LUID-looking space while leaving enough
+            # room for boot-relative growth during multi-day uptime windows.
+            bucket = 0x10 + (_stable_seed(f"logon_luid_host_{system}_{salt}") % 0xE0)
+            candidate = bucket << 24
+            if candidate not in self._logon_id_used_host_bases:
+                self._logon_id_host_bases[system] = candidate
+                self._logon_id_used_host_bases.add(candidate)
+                return candidate
+
+        raise StateError("LogonID host range allocation exhausted")
+
+    def _host_logon_epoch(self, system: str, current_time: datetime) -> datetime:
+        """Return the boot/uptime epoch used for host-local LUID allocation."""
+        boot_time = self._system_boot_times.get(system)
+        if boot_time is not None:
+            return ensure_utc(boot_time)
+
+        epoch = self._logon_id_epochs.get(system)
+        if epoch is not None:
+            return epoch
+
+        uptime_seconds = 3600 + (_stable_seed(f"logon_luid_uptime_{system}") % (3 * 86400))
+        epoch = ensure_utc(current_time) - timedelta(seconds=uptime_seconds)
+        self._logon_id_epochs[system] = epoch
+        return epoch
+
+    def _allocate_logon_luid(self, system: str) -> int:
+        """Allocate a deterministic host-local, boot-relative Windows LogonID."""
+        if self.state.current_time is None:
+            raise StateError("Cannot create session: current_time not set")
+
+        current_time = ensure_utc(self.state.current_time)
+        base = self._host_logon_base(system)
+        epoch = self._host_logon_epoch(system, current_time)
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        ordinal_key = (system, elapsed_seconds)
+        ordinal = self._logon_id_second_ordinals.get(ordinal_key, 0)
+        self._logon_id_second_ordinals[ordinal_key] = ordinal + 1
+
+        # Use boot-relative time for monotonic visible ordering, with a small
+        # deterministic slot so adjacent events do not look like +1 counters.
+        slot = _stable_seed(f"logon_luid_slot_{system}_{elapsed_seconds}") % 32
+        candidate = base + (elapsed_seconds * 256) + slot + (ordinal * 32)
+        while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
+            candidate += 1
+        self._used_logon_ids.add(candidate)
+        return candidate
+
+    def _mark_logon_id_used(self, logon_id: str) -> None:
+        """Record externally supplied LogonIDs so generated sessions avoid reuse."""
+        try:
+            val = int(logon_id, 16)
+        except (TypeError, ValueError):
+            return
+        self._used_logon_ids.add(val)
 
     def create_session(
         self,
@@ -122,20 +194,7 @@ class StateManager:
             if self.state.current_time is None:
                 raise StateError("Cannot create session: current_time not set")
 
-            # Generate high-entropy LogonID (real LSASS uses random 32-bit values)
-            # Per-host RNG ensures different hosts produce different LogonID sequences
-            if system not in self._logon_id_rngs:
-                from evidenceforge.utils.rng import _stable_seed
-
-                self._logon_id_rngs[system] = random.Random(_stable_seed(f"logon_ids_{system}"))
-            host_rng = self._logon_id_rngs[system]
-            for _ in range(100):
-                val = host_rng.randint(0x10000, 0xFFFFFFFF)
-                if val not in self._used_logon_ids and val not in self._reserved_logon_ids:
-                    break
-            else:
-                raise StateError("LogonID generation exhausted (100 collisions)")
-            self._used_logon_ids.add(val)
+            val = self._allocate_logon_luid(system)
             logon_id = f"0x{val:x}"
 
             # Create session
@@ -215,6 +274,7 @@ class StateManager:
             existing = self.state.active_sessions.get(logon_id)
             if existing is not None:
                 return existing
+            self._mark_logon_id_used(logon_id)
 
             session = ActiveSession(
                 logon_id=logon_id,
@@ -404,8 +464,6 @@ class StateManager:
 
             # Allocate PID for this system — OS-aware allocation (Phase 6.0)
             if system not in self._pid_counters:
-                from evidenceforge.utils.rng import _stable_seed
-
                 self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
                 pid_rng = self._pid_rngs[system]
                 # Detect OS from image path: backslash = Windows, forward slash = Linux
@@ -427,8 +485,6 @@ class StateManager:
 
             # Increment with OS-aware gaps
             if system not in self._pid_rngs:
-                from evidenceforge.utils.rng import _stable_seed
-
                 self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
             pid_rng = self._pid_rngs[system]
             if self._pid_os.get(system) == "windows":
