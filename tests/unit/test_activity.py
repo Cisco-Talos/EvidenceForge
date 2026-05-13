@@ -286,6 +286,57 @@ class TestActivityGenerator:
         assert r"<Command>C:\Windows\Temp\payload.exe</Command>" in task_content
         assert "<Arguments>--sync</Arguments>" in task_content
 
+    def test_generate_scheduled_task_reflects_hourly_schtasks_command(
+        self, activity_gen, test_system, mock_emitters
+    ):
+        """Task XML should reflect `/SC HOURLY` and `/RU SYSTEM` from schtasks.exe."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        system_user = User(username="SYSTEM", full_name="System", email="system@example.local")
+
+        activity_gen.generate_scheduled_task(
+            user=system_user,
+            system=test_system,
+            time=timestamp,
+            task_name=r"\Microsoft\Windows\Maintenance\SystemHealthCheck",
+            task_content=(
+                r"<Task><Actions><Exec><Command>C:\Windows\System32\cmd.exe</Command>"
+                r"</Exec></Actions></Task>"
+            ),
+            source_command_line=(
+                r'schtasks.exe /Create /TN "\Microsoft\Windows\Maintenance\SystemHealthCheck" '
+                r'/SC HOURLY /TR "C:\Windows\System32\HealthMonitorSvc.exe" /RU SYSTEM'
+            ),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        task_content = event.scheduled_task.task_content
+        assert "<Repetition>" in task_content
+        assert "<Interval>PT1H</Interval>" in task_content
+        assert r"<Command>C:\Windows\System32\HealthMonitorSvc.exe</Command>" in task_content
+        assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in task_content
+        assert "<LogonType>ServiceAccount</LogonType>" in task_content
+
+    def test_generate_scheduled_task_reflects_hourly_modifier(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """Hourly `/MO` values should become Task Scheduler repetition intervals."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        activity_gen.generate_scheduled_task(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            task_name=r"\Ops\QuarterHourly",
+            task_content=r"C:\Windows\System32\cmd.exe /c whoami",
+            source_command_line=(
+                r'schtasks.exe /Create /TN "\Ops\QuarterHourly" /SC HOURLY /MO 4 '
+                r'/TR "C:\Windows\System32\cmd.exe /c whoami"'
+            ),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        assert "<Interval>PT4H</Interval>" in event.scheduled_task.task_content
+
     def test_generate_logon_existing_session_renders_canonical_start_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

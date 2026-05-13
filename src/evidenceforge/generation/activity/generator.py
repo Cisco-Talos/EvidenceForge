@@ -9308,6 +9308,7 @@ class ActivityGenerator:
         task_name: str,
         action: str = "created",
         task_content: str = "",
+        source_command_line: str = "",
     ) -> None:
         """Generate scheduled task event (4698/4699/4700/4701) on target system."""
         from evidenceforge.events.contexts import ScheduledTaskContext
@@ -9320,6 +9321,7 @@ class ActivityGenerator:
             actor=user,
             host=host,
             time=time,
+            source_command_line=source_command_line,
         )
         event = SecurityEvent(
             timestamp=time,
@@ -9348,12 +9350,17 @@ class ActivityGenerator:
         actor: User,
         host: HostContext,
         time: datetime,
+        source_command_line: str = "",
     ) -> str:
         """Return a full Task Scheduler XML definition for Security 4698 events."""
         if self._is_complete_task_xml(task_content):
             return task_content
 
-        command, arguments = self._extract_scheduled_task_command(task_content, task_name)
+        command, arguments = self._extract_scheduled_task_command(
+            task_content,
+            task_name,
+            source_command_line=source_command_line,
+        )
         return self._build_scheduled_task_xml(
             task_name=task_name,
             command=command,
@@ -9361,6 +9368,8 @@ class ActivityGenerator:
             actor=actor,
             host=host,
             time=time,
+            schedule=self._extract_schtasks_schedule(source_command_line),
+            principal_name=self._extract_schtasks_option(source_command_line, "ru"),
         )
 
     @staticmethod
@@ -9380,20 +9389,29 @@ class ActivityGenerator:
         )
 
     @classmethod
-    def _extract_scheduled_task_command(cls, task_content: str, task_name: str) -> tuple[str, str]:
+    def _extract_scheduled_task_command(
+        cls,
+        task_content: str,
+        task_name: str,
+        *,
+        source_command_line: str = "",
+    ) -> tuple[str, str]:
         """Extract a command/arguments pair from command text or minimal task XML."""
         import re
         from html import unescape
 
         command = ""
         arguments = ""
+        source_action = cls._extract_schtasks_option(source_command_line, "tr")
         command_match = re.search(
             r"<Command>(?P<command>.*?)</Command>", task_content, flags=re.IGNORECASE | re.DOTALL
         )
         args_match = re.search(
             r"<Arguments>(?P<args>.*?)</Arguments>", task_content, flags=re.IGNORECASE | re.DOTALL
         )
-        if command_match:
+        if source_action:
+            command = source_action
+        elif command_match:
             command = unescape(command_match.group("command")).strip()
         else:
             command = task_content.strip()
@@ -9432,6 +9450,99 @@ class ActivityGenerator:
         return stripped, ""
 
     @staticmethod
+    def _extract_schtasks_option(command_line: str, option: str) -> str:
+        """Extract a quoted or bare schtasks.exe option value."""
+        import re
+
+        if not command_line:
+            return ""
+        option_name = option.lstrip("/")
+        match = re.search(
+            rf'(?:^|\s)/{re.escape(option_name)}\s+(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))',
+            command_line,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return ""
+        return (match.group("quoted") or match.group("bare") or "").strip()
+
+    @classmethod
+    def _extract_schtasks_schedule(cls, command_line: str) -> dict[str, str]:
+        """Extract the subset of schtasks schedule options represented in task XML."""
+        schedule = cls._extract_schtasks_option(command_line, "sc").upper()
+        if not schedule:
+            return {}
+        details = {"sc": schedule}
+        for option in ("mo", "st", "sd"):
+            value = cls._extract_schtasks_option(command_line, option)
+            if value:
+                details[option] = value
+        return details
+
+    @staticmethod
+    def _schedule_modifier(schedule: dict[str, str], default: int = 1) -> int:
+        """Return a safe positive `/MO` schedule modifier."""
+        try:
+            modifier = int(schedule.get("mo", ""))
+        except ValueError:
+            return default
+        return max(1, min(modifier, 365))
+
+    @classmethod
+    def _scheduled_task_trigger_xml(cls, start_boundary: str, schedule: dict[str, str]) -> str:
+        """Render the trigger XML implied by common schtasks schedule options."""
+        schedule_type = schedule.get("sc", "").upper()
+        modifier = cls._schedule_modifier(schedule)
+        if schedule_type == "HOURLY":
+            interval = f"PT{modifier}H"
+            return (
+                "  <Triggers>\n"
+                "    <TimeTrigger>\n"
+                f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+                "      <Enabled>true</Enabled>\n"
+                "      <Repetition>\n"
+                f"        <Interval>{interval}</Interval>\n"
+                "        <StopAtDurationEnd>false</StopAtDurationEnd>\n"
+                "      </Repetition>\n"
+                "    </TimeTrigger>\n"
+                "  </Triggers>\n"
+            )
+        if schedule_type == "MINUTE":
+            interval = f"PT{modifier}M"
+            return (
+                "  <Triggers>\n"
+                "    <TimeTrigger>\n"
+                f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+                "      <Enabled>true</Enabled>\n"
+                "      <Repetition>\n"
+                f"        <Interval>{interval}</Interval>\n"
+                "        <StopAtDurationEnd>false</StopAtDurationEnd>\n"
+                "      </Repetition>\n"
+                "    </TimeTrigger>\n"
+                "  </Triggers>\n"
+            )
+        if schedule_type == "DAILY":
+            return (
+                "  <Triggers>\n"
+                "    <CalendarTrigger>\n"
+                f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+                "      <Enabled>true</Enabled>\n"
+                "      <ScheduleByDay>\n"
+                f"        <DaysInterval>{modifier}</DaysInterval>\n"
+                "      </ScheduleByDay>\n"
+                "    </CalendarTrigger>\n"
+                "  </Triggers>\n"
+            )
+        return (
+            "  <Triggers>\n"
+            "    <TimeTrigger>\n"
+            f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+            "      <Enabled>true</Enabled>\n"
+            "    </TimeTrigger>\n"
+            "  </Triggers>\n"
+        )
+
+    @staticmethod
     def _build_scheduled_task_xml(
         *,
         task_name: str,
@@ -9440,12 +9551,14 @@ class ActivityGenerator:
         actor: User,
         host: HostContext,
         time: datetime,
+        schedule: dict[str, str] | None = None,
+        principal_name: str = "",
     ) -> str:
         """Build source-native Task Scheduler XML for Windows Security 4698."""
         from xml.sax.saxutils import escape as xml_escape
 
         task_path = task_name if task_name.startswith("\\") else f"\\{task_name}"
-        author = ActivityGenerator._scheduled_task_principal(actor.username, host)
+        author = ActivityGenerator._scheduled_task_principal(principal_name or actor.username, host)
         start_boundary = (
             time.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         )
@@ -9456,6 +9569,7 @@ class ActivityGenerator:
         run_level = (
             "HighestAvailable" if author.upper() == "NT AUTHORITY\\SYSTEM" else "LeastPrivilege"
         )
+        trigger_xml = ActivityGenerator._scheduled_task_trigger_xml(start_boundary, schedule or {})
         return (
             '<?xml version="1.0" encoding="UTF-16"?>\n'
             '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -9464,12 +9578,7 @@ class ActivityGenerator:
             f"    <Author>{xml_escape(author)}</Author>\n"
             f"    <URI>{xml_escape(task_path)}</URI>\n"
             "  </RegistrationInfo>\n"
-            "  <Triggers>\n"
-            "    <TimeTrigger>\n"
-            f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
-            "      <Enabled>true</Enabled>\n"
-            "    </TimeTrigger>\n"
-            "  </Triggers>\n"
+            f"{trigger_xml}"
             "  <Principals>\n"
             '    <Principal id="Author">\n'
             f"      <UserId>{xml_escape(author)}</UserId>\n"
