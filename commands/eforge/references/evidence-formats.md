@@ -222,7 +222,7 @@ Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 2. **Per-path content alerts** — curated SID mappings for specific probe paths (non-TLS only)
 3. **Connection-rate threshold** — generic scan-rate alerts (both TLS and non-TLS)
 
-Alert format: `[sid:gen_id:rev]` where `rev` reflects real ET/Community ruleset revision numbers sourced from `sample_data/snort/`. Each SID in `ids_signatures.yaml` carries a `rev` field.
+Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the rule, and `rev` reflects real ET/Community ruleset revision numbers sourced from `sample_data/snort/`. Each `(gid, sid)` pair has stable rule identity and carries a `rev` field.
 
 **Known Limitations:**
 - IDS alert variety is limited to curated SID pools (not full ruleset simulation)

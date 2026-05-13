@@ -69,7 +69,7 @@ class TestSnortRevField:
         emitter.flush()
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
-        assert "[2002677:1:14]" in output
+        assert "[1:2002677:14]" in output
         assert "ET SCAN Nikto" in output
 
     def test_snort_emitter_default_rev_is_1(self, tmp_path):
@@ -101,7 +101,7 @@ class TestSnortRevField:
         emitter.flush()
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
-        assert "[384:1:1]" in output
+        assert "[1:384:1]" in output
 
 
 # ── Web scan preset IDS config ───────────────────────────────────────────

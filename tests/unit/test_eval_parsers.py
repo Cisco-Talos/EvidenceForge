@@ -279,6 +279,13 @@ class TestSyslogParser:
 
 
 class TestSnortAlertParser:
+    def test_can_parse_generated_log_name(self):
+        from evidenceforge.evaluation.parsers.snort import SnortAlertParser
+
+        parser = SnortAlertParser()
+        assert parser.can_parse(Path("snort_alert.log"))
+        assert parser.can_parse(Path("snort_alert.alert"))
+
     def test_parses_all_alerts(self):
         from evidenceforge.evaluation.parsers.snort import SnortAlertParser
 
@@ -292,7 +299,9 @@ class TestSnortAlertParser:
         parser = SnortAlertParser()
         records = list(parser.parse_file(GOOD_FIXTURES / "snort_alert.alert"))
         first = records[0]
+        assert first.fields["gid"] == 1
         assert first.fields["sid"] == 2013382
+        assert first.fields["rev"] == 1
         assert first.fields["priority"] == 1
         assert first.fields["protocol"] == "TCP"
         assert first.fields["src_ip"] == "203.0.113.50"

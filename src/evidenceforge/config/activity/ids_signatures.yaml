@@ -64,7 +64,7 @@ signatures:
   - {sid: 2002911, rev: 7, message: "ET SCAN Potential SSH Scan", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 22, direction: in}
   - {sid: 2010937, rev: 3, message: "ET SCAN Suspicious inbound to mySQL port 3306", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 3306, direction: in, target_services: [mysql, mssql]}
   - {sid: 2010936, rev: 3, message: "ET SCAN Suspicious inbound to MSSQL port 1433", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 1433, direction: in, target_services: [mssql]}
-  - {sid: 2002910, rev: 5, message: "ET SCAN Potential VNC Scan 5900-5920", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5900, direction: in}
+  - {sid: 2002912, rev: 5, message: "ET SCAN Potential VNC Scan 5900-5920", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5900, direction: in}
   - {sid: 2000536, rev: 7, message: "ET SCAN NMAP -sO", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
   - {sid: 2000537, rev: 8, message: "ET SCAN NMAP -sS window 2048", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
   - {sid: 2000545, rev: 8, message: "ET SCAN NMAP -f -sV", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 443, direction: in, baseline_fp_allowed: false}

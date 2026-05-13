@@ -1,2 +1,2 @@
-03/15-10:15:00.123456 [**] [2013382:1:1] ET TROJAN Possible Malware Download [**] [Classification: A Network Trojan was detected] [Priority: 1] {TCP} 203.0.113.50:443 -> 10.0.10.50:54321
+03/15-10:15:00.123456 [**] [1:2013382:1] ET TROJAN Possible Malware Download [**] [Classification: A Network Trojan was detected] [Priority: 1] {TCP} 203.0.113.50:443 -> 10.0.10.50:54321
 03/15-10:20:00.654321 [**] [2000001:1:1] ET SCAN Nmap SYN Scan [**] [Classification: Attempted Information Leak] [Priority: 2] {TCP} 10.0.10.50:12345 -> 10.0.30.5:22

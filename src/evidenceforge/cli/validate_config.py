@@ -527,6 +527,34 @@ def validate_config() -> ValidationResult:
                     )
                 )
 
+    ids_rule_identities: dict[tuple[int, int], tuple[str, str]] = {}
+
+    def _record_ids_rule_identity(
+        file_name: str,
+        sid: object,
+        gid: object,
+        message: object,
+    ) -> None:
+        """Track Snort gid/sid identity so one rule ID cannot name multiple rules."""
+        if not isinstance(sid, int) or not isinstance(gid, int) or not isinstance(message, str):
+            return
+        key = (gid, sid)
+        normalized_message = " ".join(message.split())
+        existing = ids_rule_identities.get(key)
+        if existing is None:
+            ids_rule_identities[key] = (normalized_message, file_name)
+            return
+        existing_message, existing_file = existing
+        if existing_message != normalized_message:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"IDS rule gid/sid [{gid}:{sid}] message conflicts with {existing_file}: "
+                    f"{normalized_message!r} != {existing_message!r}",
+                )
+            )
+
     # --- IDS Signature Integrity ---
     for i, sig in enumerate(ids_data.get("signatures", [])):
         sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
@@ -561,6 +589,16 @@ def validate_config() -> ValidationResult:
                     f"Signature {sid} baseline_fp_allowed must be a boolean",
                 )
             )
+        gid = sig.get("gid", 1)
+        if not isinstance(gid, int) or gid < 1:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "ids_signatures.yaml",
+                    f"Signature {sid} gid must be a positive integer",
+                )
+            )
+        _record_ids_rule_identity("ids_signatures.yaml", sig.get("sid"), gid, sig.get("message"))
         templates = sig.get("dns_query_templates")
         if templates is not None:
             if proto not in {"udp", "tcp"} or sig.get("dst_port") != 53:
@@ -1822,6 +1860,12 @@ def validate_config() -> ValidationResult:
                             f'Preset "{name}" ids_ua missing required field "{field}"',
                         )
                     )
+            _record_ids_rule_identity(
+                "web_scan_presets.yaml",
+                ids_ua.get("sid"),
+                ids_ua.get("gid", 1),
+                ids_ua.get("message"),
+            )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
@@ -1834,6 +1878,12 @@ def validate_config() -> ValidationResult:
                             f'Preset "{name}" ids_rate missing required field "{field}"',
                         )
                     )
+            _record_ids_rule_identity(
+                "web_scan_presets.yaml",
+                ids_rate.get("sid"),
+                ids_rate.get("gid", 1),
+                ids_rate.get("message"),
+            )
             threshold = ids_rate.get("threshold")
             if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
                 result.issues.append(
@@ -1856,6 +1906,12 @@ def validate_config() -> ValidationResult:
                                 f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids missing "{field}"',
                             )
                         )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    path_ids.get("sid"),
+                    path_ids.get("gid", 1),
+                    path_ids.get("message"),
+                )
 
     # --- RSAT tools validation ---
     from evidenceforge.generation.activity.rsat_tools import load_rsat_tools

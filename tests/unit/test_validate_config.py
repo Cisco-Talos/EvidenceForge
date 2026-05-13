@@ -584,6 +584,46 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_conflicting_ids_rule_identity(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_conflicting_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": 999003,
+                        "rev": 1,
+                        "message": "ET TEST First Meaning",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "tcp",
+                        "dst_port": 80,
+                        "direction": "in",
+                    },
+                    {
+                        "sid": 999003,
+                        "rev": 2,
+                        "message": "ET TEST Different Meaning",
+                        "classification": "misc-activity",
+                        "priority": 3,
+                        "proto": "tcp",
+                        "dst_port": 443,
+                        "direction": "in",
+                    },
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_conflicting_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "IDS rule gid/sid [1:999003] message conflicts" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_boot_only_process_in_system_services(self, monkeypatch):
         from evidenceforge.generation.activity import system_processes
 
