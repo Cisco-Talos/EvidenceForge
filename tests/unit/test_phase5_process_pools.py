@@ -92,6 +92,28 @@ class TestProcessPoolSize:
             "SearchFilterHost.exe": "search_indexer",
         }
 
+    def test_system_process_templates_avoid_windows_internal_path_artifacts(self):
+        """Windows internal maintenance paths and pipe args should look source-native."""
+        data = load_system_processes()
+        tiworker_entries = [
+            entry for entry in data["scheduled_tasks"] if entry["image"].endswith("TiWorker.exe")
+        ]
+        search_protocol_entries = [
+            entry
+            for entry in data["system_services"]["workstation"]
+            if entry["image"].endswith("SearchProtocolHost.exe")
+        ]
+
+        assert tiworker_entries
+        assert search_protocol_entries
+        assert all("servicingstack_\\" not in entry["image"] for entry in tiworker_entries)
+
+        command = search_protocol_entries[0]["command_templates"][0]
+        params = search_protocol_entries[0]["params"]["search_pipe_args"]
+        assert "SearchProtocolHost.exe {search_pipe_args}" == command
+        assert all("S-1-5-21 1" not in arg for arg in params)
+        assert all("UsGthrCtrlFltPipeMssGthrPipe" in arg for arg in params)
+
 
 class TestBaselinePatterns:
     """Verify baseline patterns include new activity types."""

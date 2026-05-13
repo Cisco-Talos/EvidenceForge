@@ -293,11 +293,21 @@ class TestTlsIssuers:
     def test_tls_destination_picker_is_host_stable_but_not_globally_flat(self):
         """Different hosts should draw from overlapping but distinct TLS preferences."""
         host_a = [
-            pick_tls_destination(random.Random(seed), src_host="WKS-01", source_os="windows")[0]
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-01",
+                source_os="windows",
+                system_type="workstation",
+            )[0]
             for seed in range(80)
         ]
         host_b = [
-            pick_tls_destination(random.Random(seed), src_host="WKS-02", source_os="windows")[0]
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-02",
+                source_os="windows",
+                system_type="workstation",
+            )[0]
             for seed in range(80)
         ]
 
@@ -330,6 +340,26 @@ class TestTlsIssuers:
 
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
         assert "download.windowsupdate.com" not in linux_domains
+
+    def test_tls_destination_picker_excludes_cleartext_cert_infra_domains(self):
+        """OCSP/CRL responders are HTTP objects, not direct TLS SNI destinations."""
+        from evidenceforge.generation.activity.proxy_uri import get_proxy_domain_class
+
+        domains = {
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-01",
+                source_os="windows",
+                system_type="workstation",
+                purpose_tags=("background",),
+            )[0]
+            for seed in range(1200)
+        }
+
+        assert "ctldl.windowsupdate.com" in domains
+        assert not {
+            domain for domain in domains if get_proxy_domain_class(domain) in {"ocsp", "crl"}
+        }
 
     def test_public_ca_chain_templates_keep_issuer_family(self):
         """Public CA intermediates should not fall through to an unrelated root family."""
