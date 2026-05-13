@@ -441,7 +441,7 @@ applications:
           original_filename: "docker.exe"
         command_templates:
           - 'docker.exe ps'
-          - 'docker.exe images --format "table {{{{.Repository}}}}\t{{{{.Tag}}}}\t{{{{.Size}}}}"'
+          - 'docker.exe images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"'
       linux:
         image_path: "/usr/bin/docker"
         command_templates:

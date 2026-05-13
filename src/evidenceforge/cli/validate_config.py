@@ -1130,6 +1130,16 @@ def validate_config() -> ValidationResult:
                         f'App "{app_id}" has bare filename image_path for {os_name}: "{image_path}"',
                     )
                 )
+            for template in platform.get("command_templates", []):
+                if "{{{{" in template or "}}}}" in template:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "application_catalog.yaml",
+                            f'App "{app_id}" command template for {os_name} contains '
+                            "escaped literal braces that would leak into rendered command lines",
+                        )
+                    )
 
     # --- Checks 18-20: Process Chain ---
     # Collect all exe basenames from spawn rules

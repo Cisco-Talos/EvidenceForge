@@ -13,6 +13,7 @@ from evidenceforge.generation.activity.application_catalog import (
     load_catalog,
     pick_app_and_command,
 )
+from evidenceforge.generation.activity.helpers import _parameterize_command
 
 
 class TestCatalogLoading:
@@ -73,6 +74,21 @@ class TestCatalogLoading:
             windows = app.get("platforms", {}).get("windows", {})
             for template in windows.get("command_templates", []):
                 assert not any(marker in template for marker in child_markers)
+
+    def test_docker_go_template_braces_render_source_native(self):
+        """Docker Go-template braces should not be escaped into generated telemetry."""
+        data = load_catalog()
+        docker = next(app for app in data["applications"] if app["id"] == "docker")
+        templates = docker["platforms"]["windows"]["command_templates"]
+        template = next(t for t in templates if "images --format" in t)
+
+        rendered = _parameterize_command(random.Random(42), template, username="developer")
+
+        assert "{{.Repository}}" in rendered
+        assert "{{.Tag}}" in rendered
+        assert "{{.Size}}" in rendered
+        assert "{{{{" not in rendered
+        assert "}}}}" not in rendered
 
 
 class TestPersonaFiltering:

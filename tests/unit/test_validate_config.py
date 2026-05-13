@@ -679,6 +679,41 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_command_template_escaped_brace_leaks(self, monkeypatch):
+        from evidenceforge.generation.activity import application_catalog
+
+        real_loader = application_catalog.load_catalog
+
+        def load_invalid_catalog():
+            data = real_loader()
+            apps = []
+            for app in data.get("applications", []):
+                app_copy = dict(app)
+                platforms = {
+                    name: dict(platform) for name, platform in app.get("platforms", {}).items()
+                }
+                if app_copy.get("id") == "docker":
+                    windows = dict(platforms["windows"])
+                    windows["command_templates"] = [
+                        'docker.exe images --format "table {{{{.Repository}}}}"'
+                    ]
+                    platforms["windows"] = windows
+                app_copy["platforms"] = platforms
+                apps.append(app_copy)
+            return {**data, "applications": apps}
+
+        monkeypatch.setattr(application_catalog, "load_catalog", load_invalid_catalog)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "application_catalog.yaml"
+            and 'App "docker" command template for windows contains escaped literal braces'
+            in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_recurring_syslog_startup_banner(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
