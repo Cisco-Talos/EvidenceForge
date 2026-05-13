@@ -343,6 +343,35 @@ _USER_BROWSER_AFFINITY: dict[str, str] = {}
 _BROWSER_IDS = frozenset({"chrome", "firefox", "edge"})
 
 
+def _apply_browser_affinity(
+    rng: random.Random,
+    apps: list[dict[str, Any]],
+    selected_app: dict[str, Any],
+    username: str,
+) -> dict[str, Any]:
+    """Keep a user's selected browser family stable across user-app launches."""
+    selected_id = selected_app.get("id", "").lower()
+    if selected_id not in _BROWSER_IDS or not username:
+        return selected_app
+
+    browser_apps = [app for app in apps if app.get("id", "").lower() in _BROWSER_IDS]
+    if len(browser_apps) <= 1:
+        return selected_app
+
+    if username not in _USER_BROWSER_AFFINITY:
+        from evidenceforge.utils.rng import _stable_seed
+
+        idx = _stable_seed(f"browser_{username}") % len(browser_apps)
+        _USER_BROWSER_AFFINITY[username] = browser_apps[idx]["id"]
+
+    primary_id = _USER_BROWSER_AFFINITY[username]
+    if rng.random() < 0.90:
+        return next((app for app in browser_apps if app["id"] == primary_id), selected_app)
+
+    others = [app for app in browser_apps if app["id"] != primary_id]
+    return rng.choice(others) if others else selected_app
+
+
 def pick_app_and_command(
     rng: random.Random,
     persona: str,
@@ -363,26 +392,8 @@ def pick_app_and_command(
     if not apps:
         return None
 
-    # Per-user browser affinity: same user mostly uses the same browser
-    browser_apps = [a for a in apps if a.get("id", "").lower() in _BROWSER_IDS]
-    if browser_apps and len(browser_apps) > 1 and username and category == "browser":
-        if username not in _USER_BROWSER_AFFINITY:
-            # Deterministic primary browser per user
-            from evidenceforge.utils.rng import _stable_seed
-
-            idx = _stable_seed(f"browser_{username}") % len(browser_apps)
-            _USER_BROWSER_AFFINITY[username] = browser_apps[idx]["id"]
-
-        primary_id = _USER_BROWSER_AFFINITY[username]
-        if rng.random() < 0.90:
-            # Use primary browser
-            app = next((a for a in browser_apps if a["id"] == primary_id), rng.choice(apps))
-        else:
-            # Occasionally use a different browser
-            others = [a for a in browser_apps if a["id"] != primary_id]
-            app = rng.choice(others) if others else rng.choice(apps)
-    else:
-        app = rng.choice(apps)
+    app = rng.choice(apps)
+    app = _apply_browser_affinity(rng, apps, app, username)
 
     platform = app["platforms"][os_category]
     image_path = platform["image_path"]

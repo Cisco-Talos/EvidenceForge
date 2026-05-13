@@ -321,6 +321,14 @@ _WINDOWS_ONE_SHOT_CLI_EXES = {
     "whoami.exe",
     "wmic.exe",
 }
+_WINDOWS_BROWSER_EXES = frozenset({"chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe"})
+_WINDOWS_BROWSER_CHILD_MARKERS = (
+    "--type=",
+    "--utility-sub-type=",
+    "-contentproc",
+    " -childid ",
+    " /prefetch:",
+)
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -1407,6 +1415,8 @@ class ActivityGenerator:
         self._last_one_shot_cli_launch_by_command: dict[
             tuple[str, str, str, str, str], datetime
         ] = {}
+        self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
+        self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -3671,6 +3681,104 @@ class ActivityGenerator:
         self._last_one_shot_cli_launch_by_command[command_key] = adjusted_time
         return adjusted_time
 
+    @staticmethod
+    def _is_top_level_browser_launch(process_name: str, command_line: str) -> bool:
+        """Return whether a Windows browser command represents a user-facing process."""
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_BROWSER_EXES:
+            return False
+        command = f" {command_line.lower()} "
+        return not any(marker in command for marker in _WINDOWS_BROWSER_CHILD_MARKERS)
+
+    def _existing_user_browser_pid(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> int | None:
+        """Reuse an open browser instead of emitting repeated top-level launches."""
+        if _get_os_category(system.os) != "windows":
+            return None
+        if not self._is_top_level_browser_launch(process_name, command_line):
+            return None
+
+        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        preferred_key = (system.hostname, username, logon_id)
+        preferred_exe = self._preferred_browser_by_session.get(preferred_key)
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            if proc.username != username:
+                continue
+            if proc.logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if proc_exe not in _WINDOWS_BROWSER_EXES:
+                continue
+            if not self._is_top_level_browser_launch(proc.image, proc.command_line):
+                continue
+            candidates.append(proc)
+
+        if not candidates:
+            self._preferred_browser_by_session[preferred_key] = requested_exe
+            return None
+
+        if preferred_exe:
+            preferred = [proc for proc in candidates if proc.image.lower().endswith(preferred_exe)]
+            if preferred:
+                proc = max(preferred, key=lambda candidate: candidate.start_time)
+                self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+                return proc.pid
+
+        same_exe = [
+            proc
+            for proc in candidates
+            if proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == requested_exe
+        ]
+        chosen = max(same_exe or candidates, key=lambda candidate: candidate.start_time)
+        self._preferred_browser_by_session[preferred_key] = (
+            chosen.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        )
+        self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
+        return chosen.pid
+
+    def _space_browser_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> datetime:
+        """Avoid rendered bursts of repeated top-level browser process creates."""
+        if _get_os_category(system.os) != "windows":
+            return time
+        if not self._is_top_level_browser_launch(process_name, command_line):
+            return time
+
+        key = (system.hostname, username, logon_id)
+        previous = self._last_browser_launch_by_session.get(key)
+        adjusted_time = time
+        if previous is not None:
+            rng = random.Random(
+                _stable_seed(
+                    f"browser_launch_gap:{system.hostname}:{username}:{logon_id}:"
+                    f"{previous.isoformat()}"
+                )
+            )
+            min_gap = timedelta(seconds=rng.uniform(4.0, 18.0))
+            if adjusted_time < previous + min_gap:
+                adjusted_time = previous + min_gap
+        self._last_browser_launch_by_session[key] = adjusted_time
+        return adjusted_time
+
     def generate_process(
         self,
         user: User,
@@ -3817,6 +3925,17 @@ class ActivityGenerator:
             if spaced_time != time:
                 time = spaced_time
                 self.state_manager.set_current_time(time)
+            spaced_time = self._space_browser_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if spaced_time != time:
+                time = spaced_time
+                self.state_manager.set_current_time(time)
         if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
             _integrity = "Medium"
         if _get_os_category(system.os) == "windows":
@@ -3839,12 +3958,25 @@ class ActivityGenerator:
                     running_proc.last_activity_time = time
             return singleton_pid
 
+        if not from_storyline:
+            browser_pid = self._existing_user_browser_pid(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if browser_pid is not None:
+                return browser_pid
+
         parent_pid = self._sanitize_user_parent_pid(
             system=system,
             user=user,
             time=time,
             logon_id=process_logon_id,
             process_name=process_name,
+            command_line=command_line,
             parent_pid=parent_pid,
             process_username=process_username,
         )
@@ -10301,6 +10433,78 @@ class ActivityGenerator:
                 return session.explorer_pid
         return None
 
+    def _ensure_session_explorer_pid(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+    ) -> int | None:
+        """Return or create the per-session Explorer state for GUI children."""
+        existing = self._get_session_explorer_pid(system, user, time=time, logon_id=logon_id)
+        if existing is not None:
+            return existing
+
+        session = self.state_manager.get_session(logon_id)
+        if session is None:
+            return None
+        if session.system != system.hostname or session.username != user.username:
+            return None
+        if session.logon_type == 3 or session.session_kind == "network":
+            return None
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        parent_for_chain = None
+        for candidate in ("smss", "wininit", "winlogon", "services"):
+            pid = sys_pids.get(candidate)
+            if pid and self._is_pid_active_at(system, pid, time):
+                parent_for_chain = pid
+                break
+        if parent_for_chain is None:
+            return None
+
+        original_time = self.state_manager.state.current_time
+        chain_time = max(session.start_time, time - timedelta(milliseconds=250))
+        self.state_manager.set_current_time(chain_time)
+        try:
+            winlogon_pid = session.session_winlogon_pid
+            if winlogon_pid is None or not self._is_pid_active_at(system, winlogon_pid, time):
+                winlogon_pid = self.state_manager.create_process(
+                    system.hostname,
+                    parent_for_chain,
+                    r"C:\Windows\System32\winlogon.exe",
+                    "winlogon.exe",
+                    "SYSTEM",
+                    "System",
+                    logon_id=logon_id,
+                )
+                session.session_winlogon_pid = winlogon_pid
+                session.process_tree_root = winlogon_pid
+
+            userinit_pid = self.state_manager.create_process(
+                system.hostname,
+                winlogon_pid,
+                r"C:\Windows\System32\userinit.exe",
+                "userinit.exe",
+                user.username,
+                "Medium",
+                logon_id=logon_id,
+            )
+            explorer_pid = self.state_manager.create_process(
+                system.hostname,
+                userinit_pid,
+                r"C:\Windows\explorer.exe",
+                "explorer.exe",
+                user.username,
+                "Medium",
+                logon_id=logon_id,
+            )
+            session.explorer_pid = explorer_pid
+            return explorer_pid
+        finally:
+            if original_time is not None:
+                self.state_manager.set_current_time(original_time)
+
     def _windows_explorer_parent_pid(
         self,
         system: System,
@@ -10424,17 +10628,24 @@ class ActivityGenerator:
                 )
 
             # Prefer session-specific explorer PID over system-wide default
-            session_explorer = self._get_session_explorer_pid(
+            session_explorer = self._ensure_session_explorer_pid(
                 system, user, time=time, logon_id=logon_id
             )
             fallback_explorer = sys_pids.get("explorer")
-            if fallback_explorer and not self._parent_process_matches_logon(
-                hostname=system.hostname,
-                parent_pid=fallback_explorer,
-                logon_id=logon_id,
-                os_category=os_cat,
-            ):
-                fallback_explorer = None
+            if fallback_explorer:
+                fallback_proc = self.state_manager.get_process(system.hostname, fallback_explorer)
+                fallback_exe = (
+                    fallback_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                    if fallback_proc is not None
+                    else ""
+                )
+                if fallback_exe != "explorer.exe" or not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=fallback_explorer,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    fallback_explorer = None
             explorer_pid = (
                 session_explorer
                 or fallback_explorer
@@ -10690,6 +10901,7 @@ class ActivityGenerator:
         time: datetime,
         logon_id: str,
         process_name: str,
+        command_line: str,
         parent_pid: int,
         process_username: str,
     ) -> int:
@@ -10702,13 +10914,22 @@ class ActivityGenerator:
         parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
         parent_image = (parent_proc.image if parent_proc is not None else "").lower()
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        is_browser_child = process_exe in _WINDOWS_BROWSER_EXES and not (
+            self._is_top_level_browser_launch(process_name, command_line)
+        )
         if os_category == "windows" and process_exe == "explorer.exe":
             return self._windows_explorer_parent_pid(system, user, time, logon_id)
 
         if os_category == "windows":
+            if process_exe in self._WINDOWS_GUI_APPS and not is_browser_child:
+                explorer_pid = self._ensure_session_explorer_pid(system, user, time, logon_id)
+                if explorer_pid is not None:
+                    return explorer_pid
             if (
                 parent_pid != 4
                 and parent_image not in {"system", "ntoskrnl.exe"}
+                and parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                not in {"winlogon.exe", "userinit.exe"}
                 and self._is_pid_active_at(system, parent_pid, time)
                 and self._parent_process_matches_logon(
                     hostname=system.hostname,
@@ -10743,6 +10964,14 @@ class ActivityGenerator:
             return parent_pid
         for role in ("explorer", "winlogon", "services", "svchost_dcom"):
             candidate = sys_pids.get(role)
+            candidate_proc = self.state_manager.get_process(system.hostname, candidate or -1)
+            candidate_exe = (
+                candidate_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if candidate_proc is not None
+                else ""
+            )
+            if process_exe in self._WINDOWS_GUI_APPS and candidate_exe != "explorer.exe":
+                continue
             if (
                 candidate
                 and candidate != 4
@@ -10790,14 +11019,12 @@ class ActivityGenerator:
         # Safety limit
         if depth > 3:
             if os_cat == "windows":
-                session_explorer = self._get_session_explorer_pid(
+                session_explorer = self._ensure_session_explorer_pid(
                     system, user, time=time, logon_id=logon_id
                 )
                 if session_explorer is not None:
                     return session_explorer
-                return sys_pids.get(
-                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
-                )
+                return sys_pids.get("services", sys_pids.get("wininit", 4))
             return (
                 sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
             )
@@ -10806,14 +11033,12 @@ class ActivityGenerator:
         possible_parents = reverse.get(child_exe, [])
         if not possible_parents:
             if os_cat == "windows":
-                session_explorer = self._get_session_explorer_pid(
+                session_explorer = self._ensure_session_explorer_pid(
                     system, user, time=time, logon_id=logon_id
                 )
                 if session_explorer is not None:
                     return session_explorer
-                return sys_pids.get(
-                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
-                )
+                return sys_pids.get("services", sys_pids.get("wininit", 4))
             return (
                 sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
             )
@@ -10851,7 +11076,7 @@ class ActivityGenerator:
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux
         chosen_parent = rng.choice(possible_parents)
         if os_cat == "windows" and chosen_parent.lower() == "explorer.exe":
-            session_explorer = self._get_session_explorer_pid(
+            session_explorer = self._ensure_session_explorer_pid(
                 system, user, time=time, logon_id=logon_id
             )
             if session_explorer is not None:
@@ -10992,6 +11217,9 @@ class ActivityGenerator:
 
     def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
         """Record a user process in history for future parent selection."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is not None:
+            process_name = proc.image
         key = (system.hostname, user.username)
         self._user_process_history.setdefault(key, []).append((pid, process_name))
         # Keep only last 10 processes per user/system

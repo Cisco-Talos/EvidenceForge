@@ -163,6 +163,143 @@ class TestWindowsProcessTreeRealism:
             f"GUI app parent should be explorer, got {parent_proc.image}"
         )
 
+    def test_gui_app_repairs_missing_session_explorer(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """GUI apps should not fall back to winlogon when session Explorer state is absent."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.explorer_pid = None
+        pids["explorer"] = pids["winlogon"]
+
+        created_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+            parent_pid=pids["winlogon"],
+        )
+
+        created_proc = state_manager.get_process(win_system.hostname, created_pid)
+        assert created_proc is not None
+        parent_proc = state_manager.get_process(win_system.hostname, created_proc.parent_pid)
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\explorer.exe")
+        assert session.explorer_pid == parent_proc.pid
+
+    def test_top_level_browser_reuses_existing_session_browser(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Repeated navigations in one session should reuse the open browser process."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+
+        first_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+        )
+        second_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
+        )
+
+        assert second_pid == first_pid
+        browser_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(win_system.hostname)
+            if proc.username == user.username
+            and proc.image.rsplit("\\", 1)[-1].lower()
+            in {"chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe"}
+        ]
+        assert len(browser_processes) == 1
+
+    def test_browser_launch_spacing_avoids_same_second_duplicates(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Out-of-order generation should not leave same-second browser launch bursts."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = "0xabc123"
+        first = datetime(2024, 3, 18, 12, 0, 10, tzinfo=UTC)
+        second = datetime(2024, 3, 18, 12, 0, 9, tzinfo=UTC)
+
+        first_adjusted = ag._space_browser_launch(
+            system=win_system,
+            username=user.username,
+            logon_id=logon_id,
+            process_name=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line=r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+            time=first,
+        )
+        second_adjusted = ag._space_browser_launch(
+            system=win_system,
+            username=user.username,
+            logon_id=logon_id,
+            process_name=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line=r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.org/',
+            time=second,
+        )
+
+        assert first_adjusted == first
+        assert (second_adjusted - first_adjusted).total_seconds() >= 4.0
+
+    def test_browser_renderer_children_are_not_reused_as_top_level_browser(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Browser child processes should still get distinct child PIDs."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        parent_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+        )
+
+        child_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --enable-features=NetworkService',
+            parent_pid=parent_pid,
+        )
+
+        assert child_pid != parent_pid
+        child_proc = state_manager.get_process(win_system.hostname, child_pid)
+        assert child_proc is not None
+        assert child_proc.parent_pid == parent_pid
+
     def test_explorer_process_cannot_parent_from_browser_renderer(
         self, state_manager, mock_emitters, win_system, user
     ):

@@ -904,8 +904,16 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
+        render_time = event.timestamp + self._source_offset(
+            "process_terminate",
+            host.hostname,
+            proc.pid,
+            event.timestamp,
+            minimum_ms=12,
+            maximum_ms=180,
+        )
 
-        utc_time = _format_sysmon_utc_time(event.timestamp)
+        utc_time = _format_sysmon_utc_time(render_time)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -917,7 +925,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 5,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,

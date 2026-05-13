@@ -201,6 +201,8 @@ class TestSysmonEventEmitter:
         content = output_file.read_text()
         assert "<EventID>5</EventID>" in content
         assert '<Data Name="ProcessId">8052</Data>' in content
+        assert 'SystemTime="2024-01-15T10:30:00.0000000Z"' not in content
+        assert '<Data Name="UtcTime">2024-01-15 10:30:00.000</Data>' not in content
 
     def test_logon_guid_is_stable_per_host_logon_session(self, format_def, temp_output):
         """Sysmon LogonGuid should identify the logon session, not each process."""
