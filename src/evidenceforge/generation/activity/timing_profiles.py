@@ -111,6 +111,14 @@ def sample_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) -> timede
     return timedelta(milliseconds=rng.randint(window.min_ms, window.max_ms))
 
 
+def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) -> timedelta:
+    """Sample a deterministic packet-observation delta with sub-millisecond jitter."""
+    base_delta = sample_timing_delta(key, seed_parts=seed_parts)
+    seed = "packet_timing_delta:" + key + ":" + ":".join(str(part) for part in seed_parts)
+    rng = random.Random(_stable_seed(seed))
+    return base_delta + timedelta(microseconds=rng.randint(37, 997))
+
+
 def windows_collision_spacing_config() -> dict[str, int]:
     """Return Windows/Sysmon same-timestamp collision spacing settings."""
     spacing = load_timing_profiles().get("windows_event_time", {}).get("collision_spacing", {})
