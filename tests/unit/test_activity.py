@@ -847,12 +847,16 @@ class TestActivityGenerator:
             ip="10.10.2.30",
             os="Ubuntu 22.04",
             type="server",
+            services=["ssh", "apache2", "mysql"],
+            roles=["app_server"],
         )
         target_b = System(
             hostname="FILE-01",
             ip="10.10.2.20",
             os="Windows Server 2019",
             type="server",
+            services=["smb"],
+            roles=["file_server"],
         )
         activity_gen._ip_to_system = {
             source.ip: source,
@@ -881,6 +885,14 @@ class TestActivityGenerator:
         assert scan_events
         assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445, 3306}
+        assert len({event.network.conn_state for event in scan_events}) > 1
+        assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
+        assert {event.network.service for event in scan_events if event.network.service} >= {
+            "ssh",
+            "http",
+            "smb",
+            "mysql",
+        }
 
     def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
         """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
