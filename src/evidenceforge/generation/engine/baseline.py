@@ -532,6 +532,32 @@ def _generate_web_request(rng: random.Random) -> tuple[str, str, int, str]:
     return (path, method, status, normalize_mime_type_for_path(path, mime))
 
 
+def _machine_account_tgs_gap_ms(rng: random.Random, *, first: bool) -> int:
+    """Return a realistic gap before machine-account service-ticket requests."""
+    if first:
+        roll = rng.random()
+        if roll < 0.55:
+            return rng.randint(120, 1_200)
+        if roll < 0.90:
+            return rng.randint(2_000, 45_000)
+        return rng.randint(60_000, 900_000)
+    roll = rng.random()
+    if roll < 0.70:
+        return rng.randint(500, 5_000)
+    if roll < 0.95:
+        return rng.randint(5_000, 60_000)
+    return rng.randint(60_000, 600_000)
+
+
+def _machine_account_ntlm_offset_seconds(tgt_offset_seconds: float, rng: random.Random) -> float:
+    """Place baseline NTLM validation away from same-second Kerberos cycles."""
+    candidate = rng.uniform(0, 3599)
+    if abs(candidate - tgt_offset_seconds) < 2.0:
+        direction = -1 if tgt_offset_seconds > 1800 else 1
+        candidate = tgt_offset_seconds + direction * rng.uniform(30, 300)
+    return max(0.0, min(3599.0, candidate))
+
+
 class BaselineMixin:
     """Mixin providing baseline activity generation methods."""
 
@@ -4618,7 +4644,7 @@ class BaselineMixin:
                             dc_hostname=dc_hostname,
                             time=ts,
                         )
-                        num_tgs = rng.randint(2, 5)
+                        num_tgs = 0 if rng.random() < 0.22 else rng.randint(1, 5)
                         member_servers = [
                             s.hostname
                             for s in self.scenario.environment.systems
@@ -4638,10 +4664,12 @@ class BaselineMixin:
                                 ]
                             )
                         ] or [dc_hostname]
+                        elapsed_ms = 0
                         for tgs_i in range(num_tgs):
-                            ts2 = ts + timedelta(
-                                milliseconds=rng.randint(50, 200) + tgs_i * rng.randint(100, 500)
-                            )
+                            elapsed_ms += _machine_account_tgs_gap_ms(rng, first=tgs_i == 0)
+                            ts2 = ts + timedelta(milliseconds=elapsed_ms)
+                            if ts2 >= current_hour + timedelta(hours=1):
+                                continue
                             svc = rng.choice(["cifs", "ldap", "http", "host"])
                             if rng.random() < 0.60 and member_servers:
                                 target = rng.choice(member_servers)
@@ -4655,11 +4683,12 @@ class BaselineMixin:
                                 time=ts2,
                             )
                         if rng.random() < 0.10:
+                            ntlm_offset = _machine_account_ntlm_offset_seconds(offset, rng)
                             self.activity_generator.generate_ntlm_validation(
                                 username=username,
                                 workstation=client.hostname,
                                 dc_hostname=dc_hostname,
-                                time=ts,
+                                time=current_hour + timedelta(seconds=ntlm_offset),
                             )
 
         # TGT Renewal

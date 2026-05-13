@@ -60,6 +60,19 @@ _INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
     8080: ("squid", "nginx", "apache2", "httpd"),
 }
 
+_ECAR_FAILURE_REASON_BY_SUBSTATUS = {
+    "0xc0000064": "unknown_user",
+    "0xc000006a": "bad_password",
+    "0xc0000072": "account_disabled",
+    "0xc0000234": "account_locked",
+}
+
+_ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
+    "%%2304": "account_locked",
+    "%%2307": "account_disabled",
+    "%%2313": "bad_password",
+}
+
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     """Extract timestamp_ms for chronological per-host eCAR output sorting."""
@@ -69,6 +82,17 @@ def _ecar_sort_key(line: str) -> tuple[int, int, str]:
         return int(record.get("timestamp_ms", 0)), priority, line
     except (TypeError, ValueError, json.JSONDecodeError):
         return 0, 50, line
+
+
+def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
+    """Map native failed-auth codes into stable eCAR reason vocabulary."""
+    if os_category != "windows":
+        return "bad_password"
+    substatus = str(getattr(auth, "failure_substatus", "") or "").lower()
+    if substatus in _ECAR_FAILURE_REASON_BY_SUBSTATUS:
+        return _ECAR_FAILURE_REASON_BY_SUBSTATUS[substatus]
+    reason = str(getattr(auth, "failure_reason", "") or "")
+    return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
 
 
 class EcarEmitter(HostMultiplexEmitter):
@@ -218,7 +242,9 @@ class EcarEmitter(HostMultiplexEmitter):
             "src_ip": event.auth.source_ip,
             "outcome": "failure",
             "session_lifecycle": "attempt_failed",
-            "failure_reason": "bad_password",
+            "failure_reason": _ecar_failed_logon_reason(
+                event.auth, getattr(host, "os_category", "")
+            ),
             "_host_fqdn": self._host_fqdn(host),
         }
         if getattr(host, "os_category", "") == "windows":

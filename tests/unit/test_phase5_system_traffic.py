@@ -22,13 +22,18 @@
 
 """Unit tests for Phase 5.4: Background Traffic & System Activity."""
 
+import random
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.engine.baseline import _registry_writer_candidates
+from evidenceforge.generation.engine.baseline import (
+    _machine_account_ntlm_offset_seconds,
+    _machine_account_tgs_gap_ms,
+    _registry_writer_candidates,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -536,6 +541,23 @@ class TestParentPidSelection:
 
 class TestInfrastructureTrafficGeneration:
     """Test Kerberos/LDAP/DB traffic detection and generation."""
+
+    def test_machine_account_kerberos_gaps_include_non_immediate_tgs(self):
+        """Machine-account TGS timing should not be locked to tiny millisecond gaps."""
+        rng = random.Random(7)
+        gaps = [_machine_account_tgs_gap_ms(rng, first=True) for _ in range(100)]
+
+        assert any(gap > 2_000 for gap in gaps)
+        assert any(gap > 60_000 for gap in gaps)
+
+    def test_machine_account_ntlm_offset_avoids_same_second_kerberos(self):
+        """Baseline NTLM validation should not share the Kerberos cycle timestamp."""
+        rng = random.Random(11)
+        tgt_offset = 512.5
+        offsets = [_machine_account_ntlm_offset_seconds(tgt_offset, rng) for _ in range(100)]
+
+        assert all(0 <= offset <= 3599 for offset in offsets)
+        assert all(abs(offset - tgt_offset) >= 2.0 for offset in offsets)
 
     def test_detects_mssql_from_services(self):
         """DB servers should be detected from system services list."""

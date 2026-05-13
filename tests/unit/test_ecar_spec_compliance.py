@@ -286,8 +286,47 @@ class TestSessionOutcomeRendering:
         rendered = emitter.emit_event.call_args[0][0]
         assert rendered["outcome"] == "failure"
         assert rendered["session_lifecycle"] == "attempt_failed"
+        assert rendered["failure_reason"] == "bad_password"
         assert rendered["status_code"] == "0xC000006D"
         assert rendered["sub_status"] == "0xC000006A"
+
+    @pytest.mark.parametrize(
+        ("substatus", "expected_reason"),
+        [
+            ("0xC0000064", "unknown_user"),
+            ("0xC0000072", "account_disabled"),
+            ("0xC0000234", "account_locked"),
+        ],
+    )
+    def test_failed_logon_maps_windows_substatus_to_reason(
+        self, emitter, ts, substatus, expected_reason
+    ):
+        """eCAR should preserve native failed-auth meaning instead of flattening."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jdoe",
+                source_ip="10.0.0.20",
+                failure_status="0xC000006D",
+                failure_substatus=substatus,
+            ),
+        )
+
+        emitter._render_failed_logon(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["failure_reason"] == expected_reason
 
     def test_linux_failed_logon_omits_windows_ntstatus_fields(self, emitter, ts):
         """Linux eCAR login failures should not carry Windows-only NTSTATUS details."""
