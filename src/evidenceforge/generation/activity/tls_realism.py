@@ -6,12 +6,15 @@
 import fnmatch
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "tls_realism.yaml"
@@ -117,12 +120,15 @@ def certificate_analyzer_delay_ms(
 
 def ssl_analyzer_delay_ms(*, zeek_uid: str, event_timestamp: datetime) -> int:
     """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
-    return int(
-        sample_timing_delta(
-            "source.zeek_ssl_analyzer",
-            seed_parts=(zeek_uid, event_timestamp),
-        ).total_seconds()
-        * 1000
+    delay = ssl_analyzer_delay(zeek_uid=zeek_uid, event_timestamp=event_timestamp)
+    return int(delay.total_seconds() * 1000)
+
+
+def ssl_analyzer_delay(*, zeek_uid: str, event_timestamp: datetime) -> timedelta:
+    """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
+    return sample_packet_timing_delta(
+        "source.zeek_ssl_analyzer",
+        seed_parts=(zeek_uid, event_timestamp),
     )
 
 

@@ -203,7 +203,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._session_timestamp(event, host, "login"),
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
@@ -220,7 +220,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR USER_SESSION/LOGOUT event (logged on dst_host)."""
         host = event.dst_host
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._session_timestamp(event, host, "logout"),
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGOUT",
@@ -234,7 +234,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR failed USER_SESSION/LOGIN attempt on dst_host."""
         host = event.dst_host
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._session_timestamp(event, host, "failed_login"),
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
@@ -252,6 +252,31 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["sub_status"] = event.auth.failure_substatus
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
+
+    def _session_timestamp(
+        self,
+        event: SecurityEvent,
+        host: HostContext | None,
+        lifecycle: str,
+    ) -> datetime:
+        """Return the eCAR render timestamp for a user-session observation."""
+        auth = event.auth
+        edr = event.edr
+        return event.timestamp + sample_timing_delta(
+            "source.ecar_session",
+            seed_parts=(
+                lifecycle,
+                self._host_name(host),
+                getattr(auth, "username", ""),
+                getattr(auth, "source_ip", ""),
+                getattr(auth, "source_port", ""),
+                getattr(auth, "logon_id", ""),
+                getattr(auth, "logon_type", ""),
+                getattr(edr, "object_id", ""),
+                event.storyline_cluster_id or "",
+                event.timestamp,
+            ),
+        )
 
     def _render_process_create(self, event: SecurityEvent) -> None:
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""

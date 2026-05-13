@@ -66,6 +66,11 @@ relationships:
     position: after
     min_ms: 40
     max_ms: 300
+  source.ecar_session:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 11
   source.ecar_remote_thread:
     class: source_latency
     position: after
