@@ -358,6 +358,28 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_dns_tunnel_ttl_choices(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_ttl_choices": [{"value": -1, "weight": 0}],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_too_short_workstation_unlock_gap(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 

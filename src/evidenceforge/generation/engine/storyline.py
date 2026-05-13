@@ -175,6 +175,78 @@ def _iter_dns_tunnel_ticks(
         yield paced_time
 
 
+def _choose_dns_tunnel_campaign_ttl(
+    ttl_choices: list[tuple[int, float]],
+    rng: random.Random,
+) -> int:
+    """Choose the dominant response TTL for one DNS tunnel campaign."""
+    values = [value for value, _weight in ttl_choices]
+    weights = [weight for _value, weight in ttl_choices]
+    return int(rng.choices(values, weights=weights, k=1)[0])
+
+
+def _choose_dns_tunnel_response_ttl(
+    ttl_choices: list[tuple[int, float]],
+    campaign_ttl: int,
+    rng: random.Random,
+) -> float:
+    """Pick a source-native DNS tunnel response TTL with campaign-level skew."""
+    roll = rng.random()
+    if roll < 0.55:
+        return float(campaign_ttl)
+
+    near_distance = max(2, min(15, campaign_ttl or 2))
+    nearby_ttls = [
+        value
+        for value, _weight in ttl_choices
+        if value != campaign_ttl and abs(value - campaign_ttl) <= near_distance
+    ]
+    if roll < 0.78 and nearby_ttls:
+        return float(rng.choice(nearby_ttls))
+
+    values = [value for value, _weight in ttl_choices]
+    weights = [weight for _value, weight in ttl_choices]
+    return float(rng.choices(values, weights=weights, k=1)[0])
+
+
+def _choose_dns_tunnel_response_template(
+    templates: list[str],
+    primary_template: str,
+    secondary_templates: list[str],
+    rng: random.Random,
+) -> str:
+    """Choose a DNS tunnel response template with family-level stickiness."""
+    roll = rng.random()
+    if roll < 0.46:
+        return primary_template
+    if roll < 0.82 and secondary_templates:
+        return rng.choice(secondary_templates)
+    return rng.choice(templates)
+
+
+def _render_dns_tunnel_response_template(
+    template: str,
+    *,
+    token: str,
+    query_count: int,
+    ttl: float,
+    rng: random.Random,
+) -> str:
+    """Render a DNS tunnel TXT answer template using deterministic local values."""
+    edge_hint = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x'))}{rng.randint(1, 99)}"
+    replacements = {
+        "{token}": token,
+        "{seq}": str(query_count),
+        "{seq_hex}": f"{query_count & 0xFFFF:x}",
+        "{edge}": edge_hint,
+        "{ttl}": str(int(ttl)),
+    }
+    rendered = template
+    for placeholder, value in replacements.items():
+        rendered = rendered.replace(placeholder, value)
+    return rendered
+
+
 def _effective_rate_interval(rate: float, count: int | None, rng) -> float:
     """Return interval for rate-based bulk events.
 
@@ -2635,6 +2707,7 @@ class StorylineMixin:
                 dns_tunnel_rcode_weights,
                 dns_tunnel_response_templates,
                 dns_tunnel_rtt_range,
+                dns_tunnel_ttl_choices,
             )
 
             _QTYPE_MAP = {"TXT": 16, "NULL": 10, "CNAME": 5}
@@ -2690,6 +2763,17 @@ class StorylineMixin:
             qtype_num = _QTYPE_MAP.get(spec.qtype, 16)
             min_rtt, max_rtt = dns_tunnel_rtt_range()
             response_templates = dns_tunnel_response_templates() or ["status={token}"]
+            response_primary_template = rng.choice(response_templates)
+            response_secondary_templates = [
+                template
+                for template in rng.sample(
+                    response_templates,
+                    k=min(len(response_templates), rng.randint(3, 6)),
+                )
+                if template != response_primary_template
+            ]
+            ttl_choices = dns_tunnel_ttl_choices()
+            campaign_ttl = _choose_dns_tunnel_campaign_ttl(ttl_choices, rng)
             rcode_weights = dns_tunnel_rcode_weights()
             rcode_names = list(rcode_weights)
             rcode_values = [rcode_weights[name] for name in rcode_names]
@@ -2779,9 +2863,27 @@ class StorylineMixin:
                         )
                     else:
                         response_token = token_bytes.hex()
-                    response_template = rng.choice(response_templates)
-                    answers = [response_template.replace("{token}", response_token)]
-                    ttls = [float(rng.choice([0, 1, 2, 5, 10, 15, 30, 60]))]
+                    response_ttl = _choose_dns_tunnel_response_ttl(
+                        ttl_choices,
+                        campaign_ttl,
+                        rng,
+                    )
+                    response_template = _choose_dns_tunnel_response_template(
+                        response_templates,
+                        response_primary_template,
+                        response_secondary_templates,
+                        rng,
+                    )
+                    answers = [
+                        _render_dns_tunnel_response_template(
+                            response_template,
+                            token=response_token,
+                            query_count=query_count,
+                            ttl=response_ttl,
+                            rng=rng,
+                        )
+                    ]
+                    ttls = [response_ttl]
                 else:
                     resp_bytes = rng.randint(55, 180)
 
@@ -2814,7 +2916,7 @@ class StorylineMixin:
                     resp_bytes=resp_bytes,
                     duration=dns_ctx.rtt,
                 )
-                total_bytes += len(chunk)
+                total_bytes += len(visible_payload)
                 query_count += 1
 
             malicious_event["base_domain"] = spec.base_domain

@@ -80,14 +80,44 @@ dns_tunnel_rtt:
   max_seconds: 0.35
 
 dns_tunnel_response_templates:
-  - "status={token}"
-  - "node={token}"
-  - "cdn={token}"
-  - "cache={token}"
-  - "ok-{token}"
-  - "edge-{token}"
-  - "ack.{token}"
-  - "r={token};ttl=30"
+  - "{token}"
+  - "v={token}"
+  - "id={token}"
+  - "d={token}"
+  - "rx={token}"
+  - "p={seq_hex};d={token}"
+  - "s={seq};d={token}"
+  - "m={token};c={seq_hex}"
+  - "r={seq_hex};b={token}"
+  - "ok:{seq}:{token}"
+  - "{edge}={token}"
+  - "n={seq_hex}.{token}"
+
+dns_tunnel_ttl_choices:
+  - value: 0
+    weight: 4
+  - value: 1
+    weight: 11
+  - value: 2
+    weight: 17
+  - value: 3
+    weight: 7
+  - value: 5
+    weight: 22
+  - value: 7
+    weight: 5
+  - value: 10
+    weight: 14
+  - value: 15
+    weight: 8
+  - value: 20
+    weight: 3
+  - value: 30
+    weight: 5
+  - value: 45
+    weight: 2
+  - value: 60
+    weight: 2
 
 dns_tunnel_rcode_weights:
   NOERROR: 92

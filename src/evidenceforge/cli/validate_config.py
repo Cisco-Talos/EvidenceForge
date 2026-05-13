@@ -26,6 +26,7 @@ Runs integrity checks across all config YAML files (activity, personas,
 formats, evaluation) and reports errors, warnings, and info items.
 """
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1456,6 +1457,7 @@ def validate_config() -> ValidationResult:
         CreateRemoteThreadPatternEntry,
         DnsEntry,
         DnsTunnelRttConfig,
+        DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
         KerberosRealismConfig,
         OuiEntry,
@@ -1730,6 +1732,7 @@ def validate_config() -> ValidationResult:
                 )
             )
         else:
+            allowed_template_fields = {"token", "seq", "seq_hex", "edge", "ttl"}
             for idx, template in enumerate(templates):
                 if not isinstance(template, str) or "{token}" not in template:
                     result.issues.append(
@@ -1739,6 +1742,40 @@ def validate_config() -> ValidationResult:
                             f"entry {idx} must be a string containing '{{token}}'",
                         )
                     )
+                    continue
+                unknown_fields = {
+                    field
+                    for field in re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", template)
+                    if field not in allowed_template_fields
+                }
+                if unknown_fields:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_response_templates)",
+                            (
+                                f"entry {idx} uses unsupported placeholder(s): "
+                                f"{', '.join(sorted(unknown_fields))}"
+                            ),
+                        )
+                    )
+        ttl_choices = net_params.get("dns_tunnel_ttl_choices", [])
+        if not isinstance(ttl_choices, list) or not ttl_choices:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (dns_tunnel_ttl_choices)",
+                    "dns_tunnel_ttl_choices must be a non-empty list",
+                )
+            )
+        else:
+            _SCHEMA_CHECKS.append(
+                (
+                    ttl_choices,
+                    DnsTunnelTtlEntry,
+                    "network_params.yaml (dns_tunnel_ttl_choices)",
+                )
+            )
         rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
         allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
         if not isinstance(rcode_weights, dict) or not rcode_weights:

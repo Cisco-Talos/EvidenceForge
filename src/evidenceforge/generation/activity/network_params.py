@@ -15,6 +15,20 @@ from evidenceforge.config.overlay import extend_list, load_with_overlay
 from evidenceforge.config.schemas import DnsTunnelRttConfig
 
 _CACHED_DATA: dict[str, Any] | None = None
+_DEFAULT_DNS_TUNNEL_TTL_CHOICES: list[tuple[int, float]] = [
+    (0, 4.0),
+    (1, 11.0),
+    (2, 17.0),
+    (3, 7.0),
+    (5, 22.0),
+    (7, 5.0),
+    (10, 14.0),
+    (15, 8.0),
+    (20, 3.0),
+    (30, 5.0),
+    (45, 2.0),
+    (60, 2.0),
+]
 
 
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -34,6 +48,11 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         result["dns_tunnel_response_templates"] = extend_list(
             default.get("dns_tunnel_response_templates", []),
             overlay["dns_tunnel_response_templates"],
+        )
+    if "dns_tunnel_ttl_choices" in overlay:
+        result["dns_tunnel_ttl_choices"] = extend_list(
+            default.get("dns_tunnel_ttl_choices", []),
+            overlay["dns_tunnel_ttl_choices"],
         )
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
@@ -94,6 +113,26 @@ def dns_tunnel_response_templates() -> list[str]:
     if not isinstance(templates, list):
         return []
     return [str(template) for template in templates if isinstance(template, str) and template]
+
+
+def dns_tunnel_ttl_choices() -> list[tuple[int, float]]:
+    """Return configured weighted DNS tunnel response TTL choices."""
+    choices = load_network_params().get("dns_tunnel_ttl_choices", [])
+    if not isinstance(choices, list):
+        return list(_DEFAULT_DNS_TUNNEL_TTL_CHOICES)
+
+    cleaned: list[tuple[int, float]] = []
+    for entry in choices:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            value = int(entry["value"])
+            weight = float(entry.get("weight", 1.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= value <= 3600 and weight > 0 and math.isfinite(weight):
+            cleaned.append((value, weight))
+    return cleaned or list(_DEFAULT_DNS_TUNNEL_TTL_CHOICES)
 
 
 def dns_tunnel_rcode_weights() -> dict[str, float]:

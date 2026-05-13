@@ -4,6 +4,7 @@
 """Tests for bulk/periodic event types and shared timing engine."""
 
 import random
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -1002,6 +1003,50 @@ class TestDnsTunnelEventSpec:
         assert len(captured) < 451
         assert max(intervals) > 8.0
         assert len(label_lengths) > 1
+
+    def test_dns_tunnel_generation_skews_ttls_and_expands_answer_vocabulary(self):
+        engine = object.__new__(StorylineMixin)
+        captured = []
+
+        def capture_connection(**kwargs):
+            captured.append(kwargs["dns"])
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=30,
+            payload_size=2048,
+            interval="2s",
+            count=140,
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=System(hostname="WS-01", ip="10.0.0.10", os="Windows 10", type="workstation"),
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        noerror_dns = [dns for dns in captured if dns.answers and dns.TTLs]
+        ttl_counts = Counter(int(dns.TTLs[0]) for dns in noerror_dns)
+        answers = [dns.answers[0] for dns in noerror_dns]
+
+        assert len(noerror_dns) > 90
+        assert len(ttl_counts) >= 3
+        assert ttl_counts.most_common(1)[0][1] > len(noerror_dns) * 0.35
+        assert all("{" not in answer and "}" not in answer for answer in answers)
+        assert not any(
+            answer.startswith(("status=", "node=", "cdn=", "cache=", "edge-", "ack."))
+            or "ttl=30" in answer
+            for answer in answers
+        )
 
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────

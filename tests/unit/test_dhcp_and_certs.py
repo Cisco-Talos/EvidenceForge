@@ -518,6 +518,30 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_dns_tunnel_ttl_choices_are_loaded_from_network_params_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response TTL weights should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_ttl_choices,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_ttl_choices": [{"value": 9, "weight": 5}]},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert (9, 5.0) in dns_tunnel_ttl_choices()
+        finally:
+            reset_network_params_cache()
+
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
         generator = ActivityGenerator(StateManager(), {})

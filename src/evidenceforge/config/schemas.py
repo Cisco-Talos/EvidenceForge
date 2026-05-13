@@ -717,6 +717,13 @@ class DnsTunnelRttConfig(BaseModel, extra="forbid"):
         return self
 
 
+class DnsTunnelTtlEntry(BaseModel, extra="forbid"):
+    """A weighted DNS tunnel response TTL choice in network_params.yaml."""
+
+    value: int = Field(ge=0, le=3600)
+    weight: float = Field(gt=0)
+
+
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
     """Local interactive 4625 profile."""
 
