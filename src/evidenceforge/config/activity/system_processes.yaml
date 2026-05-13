@@ -188,6 +188,12 @@ process_loaded_modules:
         original_filename: "7-zip.dll"
     - path: "C:\\Program Files\\Microsoft OneDrive\\FileSyncShell64.dll"
       signature: "Microsoft Corporation"
+      pe_metadata:
+        file_version: "24.020.0128.0003"
+        description: "Microsoft OneDrive Shell Extension"
+        product: "Microsoft OneDrive"
+        company: "Microsoft Corporation"
+        original_filename: "FileSyncShell64.dll"
 
   lsass.exe:
     - path: "C:\\Windows\\System32\\msv1_0.dll"
@@ -221,6 +227,12 @@ process_loaded_modules:
     # Third-party service DLLs (survive Event 7 exclude filter)
     - path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
       signature: "Microsoft Corporation"
+      pe_metadata:
+        file_version: "10.8049.22439.1065"
+        description: "Microsoft Defender for Endpoint Sensor Command Proxy"
+        product: "Microsoft Defender for Endpoint"
+        company: "Microsoft Corporation"
+        original_filename: "SenseCncProxy.dll"
     - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
       signature: "Microsoft Corporation"
 
@@ -247,6 +259,12 @@ process_loaded_modules:
     # Third-party task DLLs
     - path: "C:\\Program Files\\Windows Defender\\MpOAV.dll"
       signature: "Microsoft Corporation"
+      pe_metadata:
+        file_version: "4.18.2301.6"
+        description: "IOfficeAntiVirus Module"
+        product: "Microsoft Defender Antivirus"
+        company: "Microsoft Corporation"
+        original_filename: "MpOAV.dll"
 
   MsMpEng.exe:
     - path: "C:\\Windows\\System32\\ole32.dll"

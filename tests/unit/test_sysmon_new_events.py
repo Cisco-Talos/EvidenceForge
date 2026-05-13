@@ -888,6 +888,33 @@ class TestProcessCreateMetadata:
 
         assert mozilla_hashes != microsoft_hashes
 
+    @pytest.mark.parametrize(
+        ("image", "expected_product"),
+        [
+            (
+                r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+                "Microsoft Defender for Endpoint",
+            ),
+            (
+                r"C:\Program Files\Windows Defender\MpOAV.dll",
+                "Microsoft Defender Antivirus",
+            ),
+            (
+                r"C:\Program Files\Microsoft OneDrive\24.020.0128.0003\FileSyncShell64.dll",
+                "Microsoft OneDrive",
+            ),
+        ],
+    )
+    def test_microsoft_program_files_modules_use_product_metadata(
+        self, image: str, expected_product: str
+    ):
+        """Program Files module loads should not fall back to Windows OS metadata."""
+        metadata = SysmonEventEmitter._get_pe_metadata(image, _win_host())
+
+        assert metadata[2] == expected_product
+        assert metadata[2] != "Microsoft Windows Operating System"
+        assert metadata[4] == image.rsplit("\\", 1)[-1]
+
 
 class TestRenderEvent22:
     """Test Event 22 (DNSQuery) rendering."""
