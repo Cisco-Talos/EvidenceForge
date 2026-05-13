@@ -25,7 +25,7 @@ fields:
   - name: facility
     type: integer
     required: false
-    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv). Not present in BSD format text."
+    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv). Rendered into RFC 5424 PRI."
     constraints:
       min_value: 0
       max_value: 23
@@ -33,7 +33,7 @@ fields:
   - name: severity
     type: integer
     required: false
-    description: "Syslog severity (6=info, 5=notice, 4=warning). Not present in BSD format text."
+    description: "Syslog severity (6=info, 5=notice, 4=warning). Rendered into RFC 5424 PRI."
     constraints:
       min_value: 0
       max_value: 7
@@ -43,10 +43,47 @@ fields:
     required: true
     description: "Application/process name (sshd, su, sudo, systemd, etc.)"
 
+  - name: pri
+    type: integer
+    required: false
+    description: "RFC 5424 PRI value derived from facility * 8 + severity"
+    constraints:
+      min_value: 0
+      max_value: 191
+
+  - name: version
+    type: integer
+    required: false
+    description: "RFC 5424 protocol version. EvidenceForge emits version 1."
+    constraints:
+      allowed_values: [1]
+
   - name: pid
     type: integer
     required: false
     description: "Process ID"
+
+  - name: procid
+    type: string
+    required: false
+    description: "RFC 5424 PROCID token, usually the process ID or '-'"
+
+  - name: msgid
+    type: string
+    required: false
+    description: "RFC 5424 MSGID token. EvidenceForge currently emits '-'."
+
+  - name: structured_data
+    type: string
+    required: false
+    description: "RFC 5424 structured-data field. EvidenceForge currently emits '-'."
+
+  - name: syslog_protocol
+    type: string
+    required: false
+    description: "Parser metadata identifying RFC 5424 output or legacy RFC 3164/BSD eval input."
+    constraints:
+      allowed_values: [rfc5424, rfc3164_legacy, iso_legacy]
 
   - name: message
     type: string
@@ -58,4 +95,4 @@ output:
   file_extension: ".log"
   encoding: utf-8
   template: |
-    {% if app_name == 'kernel' %}{{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} kernel: {{ message }}{% else %}{{ timestamp.strftime('%b %d %H:%M:%S') }} {{ hostname }} {{ app_name }}[{{ pid }}]: {{ message }}{% endif %}
+    <{{ pri }}>1 {{ timestamp }} {{ hostname }} {{ app_name }} {{ procid }} {{ msgid }} {{ structured_data }} {{ message }}

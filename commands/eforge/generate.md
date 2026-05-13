@@ -162,7 +162,7 @@ After reviewing output, you can suggest:
 | windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
 | zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
 | ecar | EDR/XDR telemetry in eCAR format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
-| syslog | Linux syslog (BSD format) | Linux systems |
+| syslog | Linux syslog (RFC 5424) | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
 | cisco_asa | Cisco ASA firewall syslog (Built/Teardown/Deny) | Firewall sensors |
