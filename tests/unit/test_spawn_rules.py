@@ -300,6 +300,174 @@ class TestWindowsProcessTreeRealism:
         assert child_proc is not None
         assert child_proc.parent_pid == parent_pid
 
+    def test_browser_child_rejects_cross_family_explicit_parent(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Browser utility children should not inherit a different browser family as parent."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        firefox_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
+        )
+
+        chrome_child_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer',
+            parent_pid=firefox_pid,
+        )
+
+        chrome_child = state_manager.get_process(win_system.hostname, chrome_child_pid)
+        assert chrome_child is not None
+        parent_proc = state_manager.get_process(win_system.hostname, chrome_child.parent_pid)
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\chrome.exe")
+        assert chrome_child.parent_pid != firefox_pid
+
+    def test_electron_child_keeps_same_family_parent(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Electron utility children should parent to their owning app, not Explorer."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        teams_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe",
+            r'"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe" --processStart Teams.exe',
+        )
+
+        utility_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe",
+            r'"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility',
+            parent_pid=teams_pid,
+        )
+
+        utility_proc = state_manager.get_process(win_system.hostname, utility_pid)
+        assert utility_proc is not None
+        assert utility_proc.parent_pid == teams_pid
+
+    def test_reused_browser_effects_spawn_actual_browser_family_children(
+        self, state_manager, mock_emitters, win_system, user, monkeypatch
+    ):
+        """Baseline child effects should follow the reused browser PID's actual image."""
+        from evidenceforge.generation.activity import application_catalog
+
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        calls = iter(
+            [
+                (
+                    r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                    r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
+                ),
+                (
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+                ),
+            ]
+        )
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: next(calls),
+        )
+
+        def fake_children(os_category: str, parent_exe: str) -> list[dict[str, str]]:
+            if os_category != "windows":
+                return []
+            if parent_exe == "firefox.exe":
+                return [
+                    {
+                        "image": r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                        "command_line": (
+                            r'"C:\Program Files\Mozilla Firefox\firefox.exe" '
+                            r"-contentproc -childID 3 -isForBrowser"
+                        ),
+                    }
+                ]
+            if parent_exe == "chrome.exe":
+                return [
+                    {
+                        "image": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                        "command_line": (
+                            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" '
+                            r"--type=renderer"
+                        ),
+                    }
+                ]
+            return []
+
+        monkeypatch.setattr(application_catalog, "get_child_processes", fake_children)
+        monkeypatch.setattr(ag, "_emit_process_network_correlation", lambda *args: None)
+
+        ag.execute_baseline_activity(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            "process_user_apps",
+        )
+        ag.execute_baseline_activity(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC),
+            "process_user_apps",
+        )
+
+        user_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(win_system.hostname)
+            if proc.username == user.username
+        ]
+        chrome_children = [
+            proc
+            for proc in user_processes
+            if proc.image.lower().endswith(r"\chrome.exe")
+            and "--type=renderer" in proc.command_line
+        ]
+        firefox_children = [
+            proc
+            for proc in user_processes
+            if proc.image.lower().endswith(r"\firefox.exe") and "-contentproc" in proc.command_line
+        ]
+
+        assert not chrome_children
+        assert len(firefox_children) == 2
+        parent_pids = {proc.parent_pid for proc in firefox_children}
+        assert len(parent_pids) == 1
+        parent_proc = state_manager.get_process(win_system.hostname, next(iter(parent_pids)))
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\firefox.exe")
+
     def test_explorer_process_cannot_parent_from_browser_renderer(
         self, state_manager, mock_emitters, win_system, user
     ):

@@ -331,6 +331,11 @@ _WINDOWS_BROWSER_CHILD_MARKERS = (
     " -childid ",
     " /prefetch:",
 )
+_WINDOWS_ELECTRON_CHILD_EXES = frozenset({"teams.exe"})
+_WINDOWS_ELECTRON_CHILD_MARKERS = (
+    "--type=",
+    "--utility-sub-type=",
+)
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -3821,6 +3826,19 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
         return chosen.pid
 
+    def _process_effect_context(
+        self,
+        system: System,
+        pid: int,
+        process_name: str,
+        command_line: str,
+    ) -> tuple[str, str]:
+        """Return the process identity that downstream effects should use."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None:
+            return process_name, command_line
+        return proc.image, proc.command_line
+
     def _space_browser_launch(
         self,
         *,
@@ -3865,6 +3883,7 @@ class ActivityGenerator:
         ensure_file_event: bool = False,
         from_storyline: bool = False,
         suppress_command_file_effect: bool = False,
+        allow_existing_browser_reuse: bool = True,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -3885,6 +3904,9 @@ class ActivityGenerator:
             command_line: Command line string
             parent_pid: Parent process PID (default 4 = System)
             suppress_command_file_effect: Caller already owns command output file artifacts.
+            allow_existing_browser_reuse: Reuse an already-open browser for repeated
+                navigation requests. Parent-repair paths disable this when they need
+                a concrete same-family browser parent for renderer/utility children.
 
         Returns:
             PID of the new process
@@ -4032,7 +4054,7 @@ class ActivityGenerator:
                     running_proc.last_activity_time = time
             return singleton_pid
 
-        if not from_storyline:
+        if not from_storyline and allow_existing_browser_reuse:
             browser_pid = self._existing_user_browser_pid(
                 system=system,
                 username=process_username,
@@ -7878,6 +7900,12 @@ class ActivityGenerator:
                     self._record_user_process(system, user, pid, process_name)
                     if active_session:
                         active_session.last_activity_time = process_time
+                    effect_process_name, effect_command_line = self._process_effect_context(
+                        system,
+                        pid,
+                        process_name,
+                        command_line,
+                    )
 
                     # Spawn child/utility processes for apps that have them
                     if activity_type == "process_user_apps":
@@ -7885,9 +7913,9 @@ class ActivityGenerator:
                             get_child_processes,
                         )
 
-                        exe_lower = process_name.rsplit("\\", 1)[-1].lower()
-                        if "/" in process_name:
-                            exe_lower = process_name.rsplit("/", 1)[-1].lower()
+                        exe_lower = effect_process_name.rsplit("\\", 1)[-1].lower()
+                        if "/" in effect_process_name:
+                            exe_lower = effect_process_name.rsplit("/", 1)[-1].lower()
                         child_entries = get_child_processes(os_category, exe_lower)
                         if child_entries:
                             num_children = rng.randint(1, min(3, len(child_entries)))
@@ -7912,32 +7940,48 @@ class ActivityGenerator:
                     # Emit correlated network connection for network-active apps
                     # (tight PID+timestamp coupling alongside profile-driven volume)
                     self._emit_process_network_correlation(
-                        system, process_name, command_line, process_time, pid, rng
+                        system,
+                        effect_process_name,
+                        effect_command_line,
+                        process_time,
+                        pid,
+                        rng,
                     )
 
                     # Also generate bash history for Linux processes from the same
                     # canonical command so eCAR and shell artifacts do not diverge.
                     if os_category == "windows":
-                        lifetime = _windows_foreground_lifetime(process_name, command_line)
+                        lifetime = _windows_foreground_lifetime(
+                            effect_process_name,
+                            effect_command_line,
+                        )
                         if lifetime is not None:
                             self.generate_process_termination(
                                 user=user,
                                 system=system,
                                 time=time + timedelta(seconds=rng.uniform(*lifetime)),
                                 pid=pid,
-                                process_name=process_name,
+                                process_name=effect_process_name,
                                 logon_id=logon_id,
                             )
                     elif os_category == "linux":
-                        self._emit_bash_command_event(user, system, process_time, command_line)
-                        lifetime = _linux_foreground_lifetime(process_name, command_line)
+                        self._emit_bash_command_event(
+                            user,
+                            system,
+                            process_time,
+                            effect_command_line,
+                        )
+                        lifetime = _linux_foreground_lifetime(
+                            effect_process_name,
+                            effect_command_line,
+                        )
                         if lifetime is not None:
                             self.generate_process_termination(
                                 user=user,
                                 system=system,
                                 time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
                                 pid=pid,
-                                process_name=process_name,
+                                process_name=effect_process_name,
                                 logon_id=logon_id,
                             )
 
@@ -11054,10 +11098,26 @@ class ActivityGenerator:
         is_browser_child = process_exe in _WINDOWS_BROWSER_EXES and not (
             self._is_top_level_browser_launch(process_name, command_line)
         )
+        is_same_exe_gui_child = self._is_windows_same_exe_gui_child(
+            process_name,
+            command_line,
+        )
         if os_category == "windows" and process_exe == "explorer.exe":
             return self._windows_explorer_parent_pid(system, user, time, logon_id)
 
         if os_category == "windows":
+            if is_same_exe_gui_child:
+                same_exe_parent = self._windows_same_exe_gui_parent_pid(
+                    system=system,
+                    user=user,
+                    time=time,
+                    logon_id=logon_id,
+                    process_name=process_name,
+                    parent_pid=parent_pid,
+                    process_username=process_username,
+                )
+                if same_exe_parent is not None:
+                    return same_exe_parent
             if process_exe in self._WINDOWS_GUI_APPS and not is_browser_child:
                 explorer_pid = self._ensure_session_explorer_pid(system, user, time, logon_id)
                 if explorer_pid is not None:
@@ -11122,6 +11182,98 @@ class ActivityGenerator:
             ):
                 return candidate
         return parent_pid
+
+    def _is_windows_same_exe_gui_child(self, process_name: str, command_line: str) -> bool:
+        """Return whether a Windows GUI command should be parented by its own executable."""
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        command = f" {command_line.lower()} "
+        if process_exe in _WINDOWS_BROWSER_EXES:
+            return not self._is_top_level_browser_launch(process_name, command_line)
+        if process_exe in _WINDOWS_ELECTRON_CHILD_EXES:
+            return any(marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS)
+        return False
+
+    def _windows_same_exe_gui_parent_pid(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int | None:
+        """Return or create a same-family parent for browser/Electron child processes."""
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if (
+            parent_proc is not None
+            and parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == process_exe
+            and not self._is_windows_same_exe_gui_child(parent_proc.image, parent_proc.command_line)
+            and self._is_pid_active_at(system, parent_pid, time)
+            and self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=parent_pid,
+                logon_id=logon_id,
+                os_category="windows",
+            )
+        ):
+            return parent_pid
+
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if proc_exe != process_exe:
+                continue
+            if self._is_windows_same_exe_gui_child(proc.image, proc.command_line):
+                continue
+            if proc.username != process_username:
+                continue
+            if proc.logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            candidates.append(proc)
+        if candidates:
+            return max(candidates, key=lambda candidate: candidate.start_time or time).pid
+
+        from evidenceforge.generation.activity.application_catalog import resolve_image_path
+        from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+        parent_time = time - timedelta(
+            milliseconds=150
+            + (_stable_seed(f"same_exe_gui_parent:{system.hostname}:{process_exe}:{time}") % 850)
+        )
+        session = self.state_manager.get_session(logon_id)
+        if session is not None and parent_time <= session.start_time:
+            parent_time = session.start_time + timedelta(milliseconds=120)
+
+        explorer_pid = self._ensure_session_explorer_pid(system, user, parent_time, logon_id)
+        if explorer_pid is None:
+            return None
+
+        config = get_parent_config("windows", process_exe)
+        templates = config.get("command_templates", [])
+        parent_command = templates[0] if templates else ""
+        parent_command = parent_command.replace("{username}", user.username)
+        parent_image = resolve_image_path(process_exe, "windows", username=user.username)
+        if not parent_image:
+            parent_image = _extract_image_from_command(parent_command) or process_name
+        parent_image = parent_image.replace("{username}", user.username)
+        if not parent_command:
+            parent_command = f'"{parent_image}"'
+
+        return self.generate_process(
+            user=user,
+            system=system,
+            time=parent_time,
+            logon_id=logon_id,
+            process_name=parent_image,
+            command_line=parent_command,
+            parent_pid=explorer_pid,
+            allow_existing_browser_reuse=False,
+        )
 
     def _ensure_parent_chain(
         self,
