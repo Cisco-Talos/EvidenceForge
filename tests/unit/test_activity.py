@@ -3161,7 +3161,7 @@ class TestActivityGenerator:
             orig_bytes=200,
             resp_bytes=100,
             conn_state="SF",
-            hostname="example.com",
+            hostname="pypi.org",
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]

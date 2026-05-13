@@ -108,11 +108,66 @@ class TestSslContextPopulation:
             assert event.ssl.version in {"TLSv12", "TLSv13"}
             assert event.ssl.cipher != ""
             assert event.ssl.established is True
-            assert event.x509 is not None
-            assert event.x509.fuid.startswith("F")
-            assert event.x509_chain
-            assert event.x509_chain[0] is event.x509
-            assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
+            if event.ssl.version == "TLSv13":
+                assert event.x509 is None
+                assert event.x509_chain == []
+                assert event.ssl.cert_chain_fuids == []
+            else:
+                assert event.x509 is not None
+                assert event.x509.fuid.startswith("F")
+                assert event.x509_chain
+                assert event.x509_chain[0] is event.x509
+                assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
+
+    def test_tls13_omits_passive_certificate_artifacts(self, activity_gen):
+        """Passive Zeek should not emit certificate FUIds or x509 rows for TLS 1.3."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="140.82.112.5",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            hostname="www.gstatic.com",
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.ssl is not None
+        assert event.ssl.version == "TLSv13"
+        assert event.x509 is None
+        assert event.x509_chain == []
+        assert event.ssl.cert_chain_fuids == []
+
+    def test_tls12_preserves_passive_certificate_artifacts(self, activity_gen):
+        """TLS 1.2 handshakes still expose certificates to passive Zeek."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="151.101.0.223",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            hostname="pypi.org",
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.ssl is not None
+        assert event.ssl.version == "TLSv12"
+        assert event.x509 is not None
+        assert event.x509_chain
+        assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
     def test_explicit_successful_tls_does_not_fail_handshake(self, activity_gen):
         """A caller-pinned SF TLS connection should not be downgraded by SSL failure noise."""
@@ -708,7 +763,7 @@ class TestSslContextPopulation:
             duration=2.0,
             orig_bytes=1024,
             resp_bytes=4096,
-            hostname="www.gstatic.com",
+            hostname="pypi.org",
             conn_state="SF",
         )
 
@@ -726,7 +781,7 @@ class TestSslContextPopulation:
         gen, events = activity_gen
 
         gen.generate_connection(
-            src_ip="10.0.10.50",
+            src_ip="10.30.40.1",
             dst_ip="93.184.216.34",
             time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             dst_port=443,
@@ -759,16 +814,16 @@ class TestSslContextPopulation:
             duration=2.0,
             orig_bytes=1024,
             resp_bytes=4096,
-            hostname="www.gstatic.com",
+            hostname="pypi.org",
             conn_state="SF",
         )
 
         event = events[-1]
         assert event.ssl is not None
         assert event.x509 is not None
-        assert event.ssl.server_name == "www.gstatic.com"
-        assert event.x509.certificate_subject == "CN=www.gstatic.com"
-        assert event.x509.san_dns == ["www.gstatic.com", "*.gstatic.com"]
+        assert event.ssl.server_name == "pypi.org"
+        assert event.x509.certificate_subject == "CN=pypi.org"
+        assert event.x509.san_dns == ["pypi.org", "*.pypi.org"]
         assert event.x509_chain[0] is event.x509
 
     def test_auto_tls_uses_profiled_destination_for_sni_and_dns(self, activity_gen):
@@ -807,8 +862,12 @@ class TestSslContextPopulation:
 
         tls_event = next(event for event in reversed(events) if event.ssl is not None)
         assert tls_event.ssl.server_name
-        assert tls_event.x509 is not None
-        assert tls_event.x509.certificate_subject == f"CN={tls_event.ssl.server_name}"
+        if tls_event.ssl.version == "TLSv13":
+            assert tls_event.x509 is None
+            assert tls_event.ssl.cert_chain_fuids == []
+        else:
+            assert tls_event.x509 is not None
+            assert tls_event.x509.certificate_subject == f"CN={tls_event.ssl.server_name}"
         assert not tls_event.ssl.server_name.startswith("host-")
 
     def test_tls_certificate_chains_include_intermediates_across_sample(self, activity_gen):
@@ -854,7 +913,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="www.gstatic.com",
+                hostname="pypi.org",
                 conn_state="SF",
             )
 
@@ -881,7 +940,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="www.gstatic.com",
+                hostname="pypi.org",
                 conn_state="SF",
             )
             gen._tls_seen_server_names.clear()
@@ -935,7 +994,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="changelogs.ubuntu.com",
+                hostname="security.ubuntu.com",
                 conn_state="SF",
                 source_system=proxy,
             )
@@ -960,7 +1019,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="www.gstatic.com",
+                hostname="pypi.org",
                 conn_state="SF",
             )
             gen._tls_seen_server_names.clear()

@@ -557,7 +557,7 @@ class TestTlsIssuers:
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.30.40.101",
+                src_ip="10.30.40.3",
                 src_port=50123,
                 dst_ip=web_system.ip,
                 dst_port=443,
@@ -595,7 +595,7 @@ class TestTlsIssuers:
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.30.40.101",
+                src_ip="10.30.40.3",
                 src_port=50123,
                 dst_ip=dc_system.ip,
                 dst_port=443,
@@ -627,7 +627,7 @@ class TestTlsIssuers:
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.30.40.101",
+                src_ip="10.30.40.1",
                 src_port=50123,
                 dst_ip="45.33.32.30",
                 dst_port=443,
@@ -669,7 +669,7 @@ class TestTlsIssuers:
 
         generator._attach_ssl_context(
             event,
-            hostname="ocsp.pki.goog",
+            hostname="github.com",
             dns=None,
             dst_ip="142.250.190.99",
             rng=random.Random(42),
@@ -732,7 +732,7 @@ class TestTlsIssuers:
         for event in (first, second):
             generator._attach_ssl_context(
                 event,
-                hostname="ocsp.pki.goog",
+                hostname="www.cloudflare.com",
                 dns=None,
                 dst_ip="142.250.190.99",
                 rng=random.Random(43),

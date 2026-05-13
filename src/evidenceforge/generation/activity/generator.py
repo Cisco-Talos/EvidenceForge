@@ -2181,6 +2181,13 @@ class ActivityGenerator:
                 net.duration = rng.uniform(0.0, 0.5)
             return
 
+        # Passive Zeek cannot extract the encrypted Certificate message from
+        # ordinary TLS 1.3 handshakes. Keep ssl.log evidence but suppress
+        # cert_chain_fuids plus files.log/x509.log side effects unless the
+        # model grows an explicit TLS decryption context.
+        if tls_version == "TLSv13":
+            return
+
         import hashlib
 
         from evidenceforge.events.contexts import X509Context

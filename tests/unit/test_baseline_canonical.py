@@ -195,7 +195,7 @@ class TestIdsAlertCorrelation:
             orig_bytes=1,
             resp_bytes=1,
             conn_state="SF",
-            hostname="www.example.com",
+            hostname="github.com",
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
