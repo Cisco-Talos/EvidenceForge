@@ -4113,6 +4113,7 @@ class BaselineMixin:
                         _template_user,
                         host_ip=system.ip,
                         host_key=system.hostname,
+                        host_os=system.os,
                     )
                     _vname = materialize_edr_template(
                         _vname,
@@ -4120,6 +4121,7 @@ class BaselineMixin:
                         _template_user,
                         host_ip=system.ip,
                         host_key=system.hostname,
+                        host_os=system.os,
                     )
                     _details = materialize_edr_template(
                         _details,
@@ -4127,6 +4129,7 @@ class BaselineMixin:
                         _template_user,
                         host_ip=system.ip,
                         host_key=system.hostname,
+                        host_os=system.os,
                     )
                     writer_candidates = _registry_writer_candidates(
                         _key,

@@ -57,6 +57,12 @@ win_logger = logging.getLogger(__name__)
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
+_SECURITY_4689_NOISY_GUI_EXES = {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe"}
+
+
+def _windows_path_basename(path: str) -> str:
+    """Return a lowercase basename for Windows or POSIX-looking paths."""
+    return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
 
 
 def _normalize_windows_time_created(
@@ -621,6 +627,8 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
+            return
 
         event_data = {
             "EventID": 4689,

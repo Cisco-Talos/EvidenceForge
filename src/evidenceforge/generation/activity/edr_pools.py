@@ -156,6 +156,30 @@ def normalize_defender_platform_path(path: str, host_key: str) -> str:
     return f"{prefix}{defender_platform_version(host_key)}\\{suffix}"
 
 
+def _windows_component_build(host_os: str, host_key: str) -> str:
+    """Return the CBS package build family for a Windows host."""
+    normalized = host_os.lower()
+    if "server 2022" in normalized or "windows server 2022" in normalized:
+        return "10.0.20348"
+    if "server 2019" in normalized or "windows server 2019" in normalized:
+        return "10.0.17763"
+    if "windows 11" in normalized:
+        return "10.0.22621"
+    if "server" in normalized and "2022" in normalized:
+        return "10.0.20348"
+    if "server" in normalized and "2019" in normalized:
+        return "10.0.17763"
+    if "10" in normalized:
+        return "10.0.19041"
+
+    # Unknown Windows hosts still get a stable build family instead of a single
+    # hardcoded value across the whole environment.
+    fallback = ("10.0.19041", "10.0.17763", "10.0.20348", "10.0.22621")
+    return fallback[
+        _stable_seed(f"windows_component_build:{host_key or 'default'}") % len(fallback)
+    ]
+
+
 def _interface_guid(rng: random.Random, host_key: str, host_ip: str) -> str:
     """Return a stable interface GUID when host context is known."""
     if not host_key and not host_ip:
@@ -183,6 +207,7 @@ def materialize_edr_template(
     *,
     host_ip: str = "",
     host_key: str = "",
+    host_os: str = "",
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -200,6 +225,7 @@ def materialize_edr_template(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "os_build": _windows_component_build(host_os, host_key),
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in template_lower
@@ -239,6 +265,7 @@ def materialize_edr_template_group(
     *,
     host_key: str = "",
     host_ip: str = "",
+    host_os: str = "",
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -256,6 +283,7 @@ def materialize_edr_template_group(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "os_build": _windows_component_build(host_os, host_key),
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in combined_lower

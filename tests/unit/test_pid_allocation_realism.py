@@ -8,7 +8,7 @@ list, producing non-uniform gaps that don't create a statistical fingerprint.
 """
 
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 
@@ -136,6 +136,43 @@ class TestLinuxPidAllocation:
             f"Only {len(unique_gaps)} unique gap values: {sorted(unique_gaps)}. "
             f"Expected varied gaps."
         )
+
+    def test_linux_pids_follow_event_time_when_generated_out_of_order(self, sm):
+        """Linux visible PID order should track process start time, not generator visit order."""
+        boot_time = datetime(2024, 3, 15, 12, 0, 0)
+        sm.register_boot_time("TEST-01", boot_time)
+        sm.set_current_time(boot_time)
+        init_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+        )
+
+        sm.set_current_time(datetime(2024, 3, 18, 12, 20, 0))
+        later_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=init_pid,
+            image="/usr/bin/python3",
+            command_line="python3 /opt/app/worker.py",
+            username="root",
+            integrity_level="System",
+        )
+
+        sm.set_current_time(datetime(2024, 3, 18, 12, 5, 0))
+        earlier_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=init_pid,
+            image="/usr/bin/bash",
+            command_line="bash /usr/local/sbin/rotate.sh",
+            username="root",
+            integrity_level="System",
+        )
+
+        assert earlier_pid < later_pid
+        assert later_pid - earlier_pid >= int(timedelta(minutes=15).total_seconds())
 
 
 class TestPidWraparound:

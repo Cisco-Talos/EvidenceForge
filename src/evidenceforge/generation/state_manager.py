@@ -82,6 +82,8 @@ class StateManager:
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
+        self._pid_time_epochs: dict[str, datetime] = {}
+        self._pid_second_offsets: dict[tuple[str, int], int] = {}
         self._connection_id_counter = 0
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
@@ -510,6 +512,46 @@ class StateManager:
     # Process Management
     # ========================================
 
+    def _linux_pid_epoch(self, system: str, current_time: datetime) -> datetime:
+        """Return the per-host epoch used for Linux time-aware PID allocation."""
+        boot_time = self._system_boot_times.get(system)
+        if boot_time is not None:
+            return ensure_utc(boot_time)
+
+        epoch = self._pid_time_epochs.get(system)
+        if epoch is not None:
+            return epoch
+
+        epoch = ensure_utc(current_time)
+        self._pid_time_epochs[system] = epoch
+        return epoch
+
+    def _allocate_linux_pid(self, system: str, pid_rng: random.Random) -> int:
+        """Allocate a Linux PID from host time rather than generation order."""
+        current_time = ensure_utc(self.state.current_time)
+        epoch = self._linux_pid_epoch(system, current_time)
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        offset_key = (system, elapsed_seconds)
+        offset = self._pid_second_offsets.get(offset_key, 0)
+        pid = self._pid_counters[system] + elapsed_seconds + offset
+
+        # Same-second forks still consume a realistically uneven amount of PID
+        # space, while minute-separated events stay ordered by visible time even
+        # if generation visits them out of chronological order.
+        gap = max(1, int(pid_rng.lognormvariate(0.5, 0.6)))
+        self._pid_second_offsets[offset_key] = offset + gap
+
+        linux_pid_max = 4_194_304
+        if pid > linux_pid_max:
+            pid = 500 + (pid % (linux_pid_max - 500))
+
+        running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
+        while pid <= 0 or pid in running:
+            pid += 1
+            if pid > linux_pid_max:
+                pid = 500
+        return pid
+
     def create_process(
         self,
         system: str,
@@ -569,39 +611,30 @@ class StateManager:
                     self._pid_counters[system] = pid_rng.randint(8000, 42000)
                     self._pid_os[system] = "linux"
 
-            pid = self._pid_counters[system]
-
             # Increment with OS-aware gaps
             if system not in self._pid_rngs:
                 self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
             pid_rng = self._pid_rngs[system]
             if self._pid_os.get(system) == "windows":
+                pid = self._pid_counters[system]
                 # Windows: multiples of 4 with lognormal gap distribution.
                 # Lognormal produces mostly small gaps (4-20) with a heavy tail
                 # (occasionally 100-800+) simulating background process churn
                 # that consumes PIDs between our emitted events.
                 gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
                 self._pid_counters[system] += 4 * gap
-            else:
-                # Linux: lognormal with smaller parameters — mostly +1 with
-                # occasional larger jumps from background daemon activity.
-                gap = max(1, int(pid_rng.lognormvariate(0.5, 0.6)))
-                self._pid_counters[system] += gap
 
-            # Check for PID exhaustion — wrap around to a safe range,
-            # skipping any PIDs still in use by running processes.
-            if self._pid_counters[system] > 65536:
-                base = 4000 if self._pid_os.get(system) == "windows" else 500
-                self._pid_counters[system] = base
-                # Skip past any PIDs still held by running processes
-                running = {
-                    p.pid for (s, _), p in self.state.running_processes.items() if s == system
-                }
-                while self._pid_counters[system] in running:
-                    if self._pid_os.get(system) == "windows":
+                # Check for PID exhaustion — wrap around to a safe range,
+                # skipping any PIDs still in use by running processes.
+                if self._pid_counters[system] > 65536:
+                    self._pid_counters[system] = 4000
+                    running = {
+                        p.pid for (s, _), p in self.state.running_processes.items() if s == system
+                    }
+                    while self._pid_counters[system] in running:
                         self._pid_counters[system] += 4
-                    else:
-                        self._pid_counters[system] += 1
+            else:
+                pid = self._allocate_linux_pid(system, pid_rng)
 
             # Create process
             ecar_object_id = str(uuid.uuid4())

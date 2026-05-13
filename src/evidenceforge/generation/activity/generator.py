@@ -4165,6 +4165,7 @@ class ActivityGenerator:
                     _template_user,
                     host_key=system.hostname,
                     host_ip=system.ip,
+                    host_os=system.os,
                 )
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"

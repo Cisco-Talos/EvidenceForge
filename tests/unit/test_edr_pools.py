@@ -288,6 +288,50 @@ class TestTemplateMaterialization:
         assert "\\125.0\\" not in value
         assert "\\2024.3\\" not in value
 
+    def test_materializes_cbs_package_build_from_host_os(self):
+        import random
+
+        template = (
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
+            r"\Packages\{package}~31bf3856ad364e35~amd64~~{os_build}.{small}"
+        )
+        server_2022 = materialize_edr_template(
+            template,
+            random.Random(9),
+            host_key="DC-01",
+            host_os="Windows Server 2022",
+        )
+        workstation_11 = materialize_edr_template(
+            template,
+            random.Random(9),
+            host_key="WS-01",
+            host_os="Windows 11",
+        )
+
+        assert "~~10.0.20348." in server_2022
+        assert "~~10.0.22621." in workstation_11
+        assert "10.0.19041" not in server_2022
+        assert "10.0.19041" not in workstation_11
+
+    def test_materializes_cbs_package_build_in_template_group(self):
+        import random
+
+        key, value_name, details = materialize_edr_template_group(
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
+                r"\Packages\{package}~31bf3856ad364e35~amd64~~{os_build}.{small}",
+                "CurrentState",
+                "DWORD (0x00000070)",
+            ),
+            random.Random(11),
+            host_key="FILE-SRV-01",
+            host_os="Windows Server 2019",
+        )
+
+        assert "~~10.0.17763." in key
+        assert value_name == "CurrentState"
+        assert details == "DWORD (0x00000070)"
+
     def test_normalizes_defender_platform_version_per_host(self):
         version = defender_platform_version("WS-01")
 

@@ -35,6 +35,7 @@ from evidenceforge.events.contexts import (
     HostContext,
     KerberosContext,
     NetworkContext,
+    ProcessContext,
 )
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
@@ -405,6 +406,76 @@ class TestWindowsEventEmitter:
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
         assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
+
+    def test_browser_process_termination_is_not_rendered_as_security_4689(
+        self, format_def, temp_output
+    ):
+        """Long-lived browser exits should not create brittle Security/Sysmon death conflicts."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="process_terminate",
+            src_host=host,
+            auth=AuthContext(username="jsmith", user_sid="S-1-5-21-1-2-3-1001"),
+            process=ProcessContext(
+                pid=6712,
+                parent_pid=4556,
+                image=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                command_line="msedge.exe --type=renderer",
+                username="jsmith",
+                logon_id="0xabc123",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        assert not temp_output.exists() or "<EventID>4689</EventID>" not in temp_output.read_text()
+
+    def test_non_browser_process_termination_still_renders_security_4689(
+        self, format_def, temp_output
+    ):
+        """Short-lived command tools should still render process-exit audit evidence."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="process_terminate",
+            src_host=host,
+            auth=AuthContext(username="jsmith", user_sid="S-1-5-21-1-2-3-1001"),
+            process=ProcessContext(
+                pid=7420,
+                parent_pid=4556,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="jsmith",
+                logon_id="0xabc123",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>4689</EventID>" in content
+        assert '<Data Name="ProcessName">C:\\Windows\\System32\\cmd.exe</Data>' in content
 
     def test_spooled_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
         """Spooled 4634 fixups should run without materializing all events."""
