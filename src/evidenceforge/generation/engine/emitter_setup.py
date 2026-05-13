@@ -210,6 +210,7 @@ class EmitterSetupMixin:
         # Configure ASA emitters with network topology for interface resolution
         if "cisco_asa" in self.emitters:
             asa_emitter = self.emitters["cisco_asa"]
+            asa_emitter._output_end_time = self.end_time
             if self.scenario.environment.network:
                 asa_emitter._segment_config = [
                     {"name": seg.name, "cidr": seg.cidr}

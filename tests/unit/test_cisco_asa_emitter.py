@@ -28,7 +28,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import FirewallContext, NetworkContext
+from evidenceforge.events.contexts import FirewallContext, NatContext, NetworkContext
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.cisco_asa import CiscoAsaEmitter
 
@@ -266,6 +266,44 @@ class TestPermitRecords:
         assert byte_match is not None
         assert int(byte_match.group(1)) > 5120
         assert "SYN Timeout" not in lines[1]
+
+    def test_teardown_after_collection_end_is_suppressed(self, asa_emitter, tmp_path):
+        """A slice ending before connection close should show a dangling Built record."""
+        asa_emitter._output_end_time = T0 + timedelta(seconds=10)
+        event = _make_connection_event(protocol="tcp", duration=83.5)
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        lines = [line for line in output.strip().split("\n") if line]
+        assert len(lines) == 1
+        assert "%ASA-6-302013:" in lines[0]
+        assert "%ASA-6-302014:" not in output
+
+    def test_nat_teardown_after_collection_end_is_suppressed(self, asa_emitter, tmp_path):
+        """Dynamic NAT should not remain perfectly paired when connection close is out of slice."""
+        asa_emitter._output_end_time = T0 + timedelta(seconds=10)
+        event = _make_connection_event(
+            protocol="tcp",
+            duration=83.5,
+            nat=NatContext(
+                nat_type="dynamic_pat",
+                mapped_src_ip="198.51.100.10",
+                mapped_src_port=62001,
+                mapped_dst_ip="203.0.113.50",
+                mapped_dst_port=443,
+            ),
+        )
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        assert "%ASA-6-302013:" in output
+        assert "%ASA-6-305011:" in output
+        assert "%ASA-6-302014:" not in output
+        assert "%ASA-6-305012:" not in output
 
     def test_teardown_byte_count_is_not_exact_zeek_payload_sum(self, asa_emitter, tmp_path):
         """ASA teardown accounting should not exactly mirror Zeek payload bytes."""
