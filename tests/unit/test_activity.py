@@ -2975,6 +2975,7 @@ class TestActivityGenerator:
             command_line="C:\\Windows\\explorer.exe",
             username=test_user.username,
             integrity_level="Medium",
+            logon_id=logon_id,
         )
 
         activity_gen.generate_process(

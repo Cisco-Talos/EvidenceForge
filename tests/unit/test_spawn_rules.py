@@ -555,6 +555,51 @@ class TestDualSessionParentSelection:
             f"Interactive logon process should parent from explorer, got {parent_proc.image}"
         )
 
+    def test_interactive_parent_uses_matching_session_explorer(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """One explorer.exe PID must not parent children from unrelated LogonIDs."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        state_manager.set_current_time(datetime(2024, 3, 18, 9, 45, 0, tzinfo=UTC))
+        global_explorer_pid = state_manager.create_process(
+            win_system.hostname,
+            pids["userinit"],
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            user.username,
+            "Medium",
+        )
+        pids["explorer"] = global_explorer_pid
+
+        first_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 10, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        second_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 11, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        first_session = state_manager.get_session(first_logon_id)
+        second_session = state_manager.get_session(second_logon_id)
+        assert first_session is not None
+        assert second_session is not None
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            user,
+            datetime(2024, 3, 18, 11, 0, 1, tzinfo=UTC),
+            second_logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        )
+
+        assert parent_pid == second_session.explorer_pid
+        assert parent_pid != first_session.explorer_pid
+        assert parent_pid != global_explorer_pid
+
 
 class TestLinuxParentSelection:
     """Linux process parents should preserve session and service ownership."""

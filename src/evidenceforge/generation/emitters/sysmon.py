@@ -440,6 +440,14 @@ class SysmonEventEmitter(LogEmitter):
         """
         # Handle Windows paths on any OS (backslash is not a separator on Unix)
         basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if basename.endswith((".dll", ".api", ".p5x")):
+            from evidenceforge.generation.activity.dll_load_profiles import (
+                get_module_pe_metadata,
+            )
+
+            result = get_module_pe_metadata(image_path)
+            if result != ("-", "-", "-", "-", "-"):
+                return result
         result = cls._PE_METADATA.get(basename)
         if result:
             return cls._normalize_os_binary_metadata(image_path, result, host)

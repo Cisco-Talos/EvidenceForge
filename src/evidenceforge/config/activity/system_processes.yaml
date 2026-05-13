@@ -180,6 +180,12 @@ process_loaded_modules:
       signed: false
       signature: "-"
       signature_status: "Unavailable"
+      pe_metadata:
+        file_version: "23.01.0.0"
+        description: "7-Zip Shell Extension"
+        product: "7-Zip"
+        company: "Igor Pavlov"
+        original_filename: "7-zip.dll"
     - path: "C:\\Program Files\\Microsoft OneDrive\\FileSyncShell64.dll"
       signature: "Microsoft Corporation"
 

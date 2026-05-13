@@ -134,6 +134,16 @@ class TestPeMetadataLookup:
         fv, desc, prod, company, orig = get_pe_metadata("firefox.exe")
         assert company == "Mozilla Corporation"
 
+    def test_browser_metadata_matches_configured_user_agent_majors(self):
+        """Browser PE versions should not disagree with generated HTTP UA versions."""
+        chrome_fv, *_ = get_pe_metadata("chrome.exe")
+        firefox_fv, *_ = get_pe_metadata("firefox.exe")
+        edge_fv, *_ = get_pe_metadata("msedge.exe")
+
+        assert chrome_fv.startswith("120.")
+        assert firefox_fv.startswith("121.")
+        assert edge_fv.startswith("120.")
+
     def test_outlook_has_metadata(self):
         fv, desc, prod, company, orig = get_pe_metadata("outlook.exe")
         assert company == "Microsoft Corporation"

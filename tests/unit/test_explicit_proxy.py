@@ -804,7 +804,7 @@ class TestExplicitProxyVisibility:
             and call.args[0].network.dst_port == 8080
         )
         proxy_event = emitters["proxy_access"].emit.call_args.args[0]
-        assert client_event.network.orig_bytes == proxy_event.proxy.cs_bytes
+        assert client_event.network.orig_bytes > proxy_event.proxy.cs_bytes
         assert client_event.network.orig_bytes < request_bytes * 2
 
     def test_allowed_proxy_miss_origin_leg_is_established_when_state_is_implicit(self):

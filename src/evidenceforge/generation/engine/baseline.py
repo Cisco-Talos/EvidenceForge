@@ -4368,6 +4368,7 @@ class BaselineMixin:
                         for path in generic_dll_pool:
                             if not _module_matches_process(exe_name, path):
                                 continue
+                            path_lower = path.lower()
                             dll_pool.append(
                                 {
                                     "path": materialize_edr_template(
@@ -4377,8 +4378,8 @@ class BaselineMixin:
                                         host_key=system.hostname,
                                     ),
                                     "signed": not any(
-                                        vendor in path
-                                        for vendor in ["7-Zip", "VideoLAN", "Notepad++"]
+                                        vendor in path_lower
+                                        for vendor in ["7-zip", "videolan", "notepad++"]
                                     ),
                                     "signature": _signature_for_loaded_module(path),
                                     "signature_status": "Valid",

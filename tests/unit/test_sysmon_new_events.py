@@ -591,6 +591,67 @@ class TestRenderEvent7:
         assert '<Data Name="Company">Cisco Systems, Inc.</Data>' in content
         assert '<Data Name="FileVersion">-</Data>' not in content
 
+    def test_program_files_module_metadata_is_not_windows_os_fallback(self, emitter):
+        """Application DLLs should inherit package metadata instead of Windows OS fields."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                command_line="firefox.exe",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\Mozilla Firefox\mozglue.dll",
+                signed=True,
+                signature="Mozilla Corporation",
+                signature_status="Valid",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="FileVersion">121.0</Data>' in content
+        assert '<Data Name="Product">Firefox</Data>' in content
+        assert '<Data Name="Company">Mozilla Corporation</Data>' in content
+        assert '<Data Name="Product">Microsoft Windows Operating System</Data>' not in content
+
+    def test_third_party_shell_extension_metadata_is_consistent(self, emitter):
+        """7-Zip shell extension loads should render stable third-party metadata."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="explorer.exe",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\7-Zip\7-zip.dll",
+                signed=False,
+                signature="-",
+                signature_status="Unavailable",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="FileVersion">23.01.0.0</Data>' in content
+        assert '<Data Name="Product">7-Zip</Data>' in content
+        assert '<Data Name="Company">Igor Pavlov</Data>' in content
+        assert '<Data Name="Signed">false</Data>' in content
+        assert '<Data Name="Product">Microsoft Windows Operating System</Data>' not in content
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""

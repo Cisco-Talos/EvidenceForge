@@ -4740,6 +4740,16 @@ class ActivityGenerator:
                     rng = _get_rng()
                     client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
                     client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
+                else:
+                    framing_rng = random.Random(
+                        _stable_seed(
+                            "proxy_client_tls_framing:"
+                            f"{src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
+                            f"{time.timestamp()}:{proxy_context.method}"
+                        )
+                    )
+                    client_orig_bytes += framing_rng.randint(160, 900)
+                    client_resp_bytes += framing_rng.randint(180, 2400)
             if will_emit_egress:
                 egress_duration = duration or 0.1
                 response_flush = random.Random(
@@ -10226,27 +10236,46 @@ class ActivityGenerator:
             return True
         parent_proc = self.state_manager.get_process(hostname, parent_pid)
         if parent_proc is None or not parent_proc.logon_id:
+            if parent_proc is not None:
+                parent_exe = parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if (
+                    parent_exe == "explorer.exe"
+                    and parent_proc.username not in _SYSTEM_ACCOUNTS
+                    and not parent_proc.username.endswith("$")
+                ):
+                    return False
             return True
         if parent_proc.username in _SYSTEM_ACCOUNTS or parent_proc.username.endswith("$"):
             return True
         return parent_proc.logon_id == logon_id
 
     def _get_session_explorer_pid(
-        self, system: System, user: User, time: datetime | None = None
+        self,
+        system: System,
+        user: User,
+        time: datetime | None = None,
+        logon_id: str = "",
     ) -> int | None:
         """Get the explorer.exe PID for the user's active interactive session.
 
         Returns None if no interactive session exists or explorer PID not set.
         """
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        for session in sessions:
-            if session.system == system.hostname and session.explorer_pid is not None:
-                if time is not None and not self._is_pid_active_at(
-                    system, session.explorer_pid, time
-                ):
-                    continue
-                if self._is_pid_alive(system, session.explorer_pid):
-                    return session.explorer_pid
+        candidates = [
+            session
+            for session in sessions
+            if session.system == system.hostname
+            and session.explorer_pid is not None
+            and (not logon_id or session.logon_id == logon_id)
+        ]
+        candidates.sort(key=lambda session: session.start_time, reverse=True)
+        for session in candidates:
+            if session.explorer_pid is None:
+                continue
+            if time is not None and not self._is_pid_active_at(system, session.explorer_pid, time):
+                continue
+            if self._is_pid_alive(system, session.explorer_pid):
+                return session.explorer_pid
         return None
 
     def _windows_explorer_parent_pid(
@@ -10372,9 +10401,21 @@ class ActivityGenerator:
                 )
 
             # Prefer session-specific explorer PID over system-wide default
-            session_explorer = self._get_session_explorer_pid(system, user, time=time)
-            explorer_pid = session_explorer or sys_pids.get(
-                "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+            session_explorer = self._get_session_explorer_pid(
+                system, user, time=time, logon_id=logon_id
+            )
+            fallback_explorer = sys_pids.get("explorer")
+            if fallback_explorer and not self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=fallback_explorer,
+                logon_id=logon_id,
+                os_category=os_cat,
+            ):
+                fallback_explorer = None
+            explorer_pid = (
+                session_explorer
+                or fallback_explorer
+                or sys_pids.get("winlogon", sys_pids.get("services", 4))
             )
 
             # Shells and terminals spawn from explorer.exe
@@ -10575,6 +10616,13 @@ class ActivityGenerator:
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
             if proc and proc.start_time <= time:
+                if not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=pid,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    continue
                 proc_exe = (
                     proc.image.rsplit("\\", 1)[-1].lower()
                     if "\\" in proc.image
@@ -10672,7 +10720,17 @@ class ActivityGenerator:
             return parent_pid
         for role in ("explorer", "winlogon", "services", "svchost_dcom"):
             candidate = sys_pids.get(role)
-            if candidate and candidate != 4 and self._is_pid_active_at(system, candidate, time):
+            if (
+                candidate
+                and candidate != 4
+                and self._is_pid_active_at(system, candidate, time)
+                and self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=candidate,
+                    logon_id=logon_id,
+                    os_category=os_category,
+                )
+            ):
                 return candidate
         return parent_pid
 
@@ -10709,6 +10767,11 @@ class ActivityGenerator:
         # Safety limit
         if depth > 3:
             if os_cat == "windows":
+                session_explorer = self._get_session_explorer_pid(
+                    system, user, time=time, logon_id=logon_id
+                )
+                if session_explorer is not None:
+                    return session_explorer
                 return sys_pids.get(
                     "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
                 )
@@ -10720,6 +10783,11 @@ class ActivityGenerator:
         possible_parents = reverse.get(child_exe, [])
         if not possible_parents:
             if os_cat == "windows":
+                session_explorer = self._get_session_explorer_pid(
+                    system, user, time=time, logon_id=logon_id
+                )
+                if session_explorer is not None:
+                    return session_explorer
                 return sys_pids.get(
                     "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
                 )
@@ -10759,11 +10827,24 @@ class ActivityGenerator:
 
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux
         chosen_parent = rng.choice(possible_parents)
+        if os_cat == "windows" and chosen_parent.lower() == "explorer.exe":
+            session_explorer = self._get_session_explorer_pid(
+                system, user, time=time, logon_id=logon_id
+            )
+            if session_explorer is not None:
+                return session_explorer
 
         # Check if chosen parent is already a seeded system process
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
             if proc and proc.start_time <= time:
+                if not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=pid,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    continue
                 proc_exe = (
                     proc.image.rsplit("\\", 1)[-1].lower()
                     if "\\" in proc.image

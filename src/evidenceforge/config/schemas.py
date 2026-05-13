@@ -51,6 +51,7 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
     signed: bool = True
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"
+    pe_metadata: dict[str, str] | None = None
 
 
 class PlatformConfig(BaseModel, extra="forbid"):
