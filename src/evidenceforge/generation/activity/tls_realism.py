@@ -16,6 +16,7 @@ from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "tls_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_CLEARTEXT_CERT_INFRA_DOMAIN_CLASSES = {"crl", "ocsp"}
 
 
 def _merge_tls_realism(default: dict, overlay: dict) -> dict:
@@ -284,6 +285,7 @@ def _tls_profile_domains(
 ) -> list[str]:
     """Build a profile domain pool from explicit domains, OS overrides, and DNS tags."""
     from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
+    from evidenceforge.generation.activity.proxy_uri import get_proxy_domain_class
 
     override: dict[str, Any] = {}
     os_overrides = profile.get("os_overrides", {})
@@ -313,6 +315,8 @@ def _tls_profile_domains(
     seen: set[str] = set()
     unique_domains: list[str] = []
     for domain in domains:
+        if get_proxy_domain_class(domain) in _CLEARTEXT_CERT_INFRA_DOMAIN_CLASSES:
+            continue
         if domain not in seen:
             seen.add(domain)
             unique_domains.append(domain)
