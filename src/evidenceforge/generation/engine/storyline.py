@@ -58,6 +58,36 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 logger = logging.getLogger(__name__)
 
 
+def _is_exfil_connection_spec(spec: Any) -> bool:
+    """Return True when a storyline connection describes exfiltration."""
+    desc = (spec.description or "").lower()
+    tech = (spec.technique or "").lower()
+    return "exfil" in desc or "t1041" in tech or "t1048" in tech
+
+
+def _is_round_transfer_size(value: int) -> bool:
+    """Return True for large human-authored round byte counts."""
+    if value < 1_000_000:
+        return False
+    binary_mib = 1024 * 1024
+    decimal_mb = 1000 * 1000
+    return value % binary_mib == 0 or value % decimal_mb == 0 or value & (value - 1) == 0
+
+
+def _deround_storyline_transfer_size(value: int, rng) -> int:
+    """Add archive/package variance so exfil sizes do not land on exact MB boundaries."""
+    delta_min = max(32_768, value // 250)
+    delta_max = max(delta_min + 1, value // 25)
+    delta = rng.randint(delta_min, delta_max) + rng.randint(137, 8191)
+    if value - delta > 1_000_000 and rng.random() < 0.35:
+        adjusted = value - delta
+    else:
+        adjusted = value + delta
+    if _is_round_transfer_size(adjusted):
+        adjusted += rng.randint(139, 8191)
+    return adjusted
+
+
 def _size_storyline_connection(
     spec,
     rng,
@@ -75,9 +105,12 @@ def _size_storyline_connection(
     desc = (spec.description or "").lower()
     tech = (spec.technique or "").lower()
 
-    is_exfil = "exfil" in desc or "t1041" in tech or "t1048" in tech
+    is_exfil = _is_exfil_connection_spec(spec)
     is_c2 = "c2" in desc or "callback" in desc or "beacon" in desc or "t1071" in tech
     is_download = "download" in desc or "stage" in desc or "t1105" in tech
+
+    if ob is not None and is_exfil and _is_round_transfer_size(ob):
+        ob = _deround_storyline_transfer_size(ob, rng)
 
     if ob is None:
         if is_exfil:
@@ -1358,6 +1391,7 @@ class StorylineMixin:
             service = spec.service or (
                 "ssl" if dst_port == 443 else "http" if dst_port == 80 else "ssl"
             )
+            s_ob, s_rb = _size_storyline_connection(spec, rng)
             # Build HttpContext if HTTP fields are provided
             http_ctx = None
             if spec.method or spec.uri:
@@ -1407,9 +1441,7 @@ class StorylineMixin:
 
                 _http_host = spec.hostname or dst_ip
                 request_body_len = (
-                    max(0, spec.orig_bytes or 0)
-                    if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
-                    else 0
+                    max(0, s_ob or 0) if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"} else 0
                 )
                 if request_body_len == 0 and _method == "POST":
                     request_body_len = rng.randint(100, 10000)
@@ -1468,7 +1500,6 @@ class StorylineMixin:
             else:
                 conn_hostname = ""  # suppress — raw IP
                 emit_dns = False
-            s_ob, s_rb = _size_storyline_connection(spec, rng)
             s_conn_state = spec.conn_state or "SF"
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
@@ -2044,7 +2075,7 @@ class StorylineMixin:
 
                     _http_host2 = spec.hostname or spec.dst_ip
                     request_body_len = (
-                        max(0, spec.orig_bytes or 0)
+                        max(0, s_ob or 0)
                         if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
                         else 0
                     )

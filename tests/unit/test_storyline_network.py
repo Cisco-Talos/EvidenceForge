@@ -402,6 +402,48 @@ class TestSizeStorylineConnection:
         assert ob == 999
         assert rb == 111
 
+    def test_round_explicit_exfil_size_gets_archive_variance(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        exact_256_mib = 268_435_456
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            technique="T1041",
+            description="Upload 256 MB staged archive for exfiltration",
+            orig_bytes=exact_256_mib,
+            resp_bytes=2048,
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert ob != exact_256_mib
+        assert abs(ob - exact_256_mib) > 1_000_000
+        assert ob % (1024 * 1024) != 0
+        assert rb == 2048
+
+    def test_nonround_explicit_exfil_size_is_preserved(self):
+        import random
+
+        from evidenceforge.generation.engine.storyline import (
+            _size_storyline_connection,
+        )
+
+        archive_size = 269_781_337
+        spec = ConnectionEventSpec(
+            dst_ip="10.0.0.1",
+            technique="T1041",
+            description="Upload compressed archive for exfiltration",
+            orig_bytes=archive_size,
+            resp_bytes=2048,
+        )
+        rng = random.Random(42)
+        ob, rb = _size_storyline_connection(spec, rng)
+        assert ob == archive_size
+        assert rb == 2048
+
     def test_default_range(self):
         import random
 
