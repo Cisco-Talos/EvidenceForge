@@ -1306,6 +1306,43 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
 
+    def test_wfp_connection_reuses_filter_rtid_per_policy_bucket(self, format_def, temp_output):
+        """WFP 5156 should reuse runtime filter IDs for the same host policy bucket."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC)
+
+        def make_event(src_port: int, dst_ip: str, dst_port: int, protocol: str = "tcp"):
+            return SecurityEvent(
+                timestamp=event_time,
+                event_type="wfp_connection",
+                src_host=HostContext(
+                    hostname="WKS-01",
+                    ip="10.0.0.50",
+                    os="Windows 11",
+                    os_category="windows",
+                    system_type="workstation",
+                    fqdn="WKS-01.corp.local",
+                ),
+                network=NetworkContext(
+                    src_ip="10.0.0.50",
+                    src_port=src_port,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    protocol=protocol,
+                    ip_proto=17 if protocol == "udp" else 6,
+                    initiating_pid=4,
+                ),
+            )
+
+        emitter.emit(make_event(49263, "93.184.216.34", 443))
+        emitter.emit(make_event(49264, "151.101.0.223", 443))
+        emitter.emit(make_event(49265, "10.0.0.10", 53, "udp"))
+
+        filter_ids = [event["FilterRTID"] for event in emitter._event_dicts]
+        assert filter_ids[0] == filter_ids[1]
+        assert filter_ids[2] != filter_ids[0]
+        assert len(set(filter_ids)) == 2
+
     def test_wfp_connection_pid4_renders_system_application(self, format_def, temp_output):
         """WFP 5156 for PID 4 should render System, not a synthetic svchost path."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

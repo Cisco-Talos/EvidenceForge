@@ -59,6 +59,20 @@ win_logger = logging.getLogger(__name__)
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
 _SECURITY_4689_NOISY_GUI_EXES = {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe"}
+_WFP_FILTER_BUCKET_OFFSETS = {
+    "dns": 1,
+    "kerberos": 2,
+    "ldap": 3,
+    "smb": 4,
+    "web": 5,
+    "proxy": 6,
+    "rdp": 7,
+    "ssh": 8,
+    "database": 9,
+    "icmp": 10,
+    "outbound_default": 20,
+    "inbound_default": 21,
+}
 
 
 def _windows_path_basename(path: str) -> str:
@@ -959,13 +973,60 @@ class WindowsEventEmitter(LogEmitter):
             "DestAddress": net.dst_ip,
             "DestPort": net.dst_port,
             "Protocol": net.ip_proto,
-            "FilterRTID": rng.randint(0, 70000),
+            "FilterRTID": self._wfp_filter_rtid(host, net, image, is_outbound),
             "LayerName": "%%14611",
             "LayerRTID": 48,
             "RemoteUserID": "S-1-0-0",
             "RemoteMachineID": "S-1-0-0",
         }
         self.emit_event(event_data)
+
+    @classmethod
+    def _wfp_filter_rtid(
+        cls,
+        host: HostContext,
+        net: Any,
+        image: str,
+        is_outbound: bool,
+    ) -> int:
+        """Return a stable WFP runtime filter ID for a host policy bucket."""
+        bucket = cls._wfp_filter_bucket(net, image, is_outbound)
+        direction = "out" if is_outbound else "in"
+        proto = (net.protocol or "").lower() or str(net.ip_proto)
+        base = 20000 + (_stable_seed(f"wfp_filter_base:{host.hostname}") % 30000)
+        bucket_offset = _WFP_FILTER_BUCKET_OFFSETS.get(bucket, 99)
+        variant = (
+            _stable_seed(f"wfp_filter_policy:{host.hostname}:{direction}:{proto}:{bucket}") % 5
+        )
+        return base + (bucket_offset * 16) + variant
+
+    @staticmethod
+    def _wfp_filter_bucket(net: Any, image: str, is_outbound: bool) -> str:
+        """Classify a 5156 connection into a small, reusable WFP policy bucket."""
+        proto = (net.protocol or "").lower()
+        port = net.dst_port
+        basename = _windows_path_basename(image)
+        if proto == "icmp" or net.ip_proto == 1:
+            return "icmp"
+        if proto == "udp" and port == 53:
+            return "dns"
+        if port in {88, 464}:
+            return "kerberos"
+        if port in {389, 636, 3268, 3269}:
+            return "ldap"
+        if port == 445:
+            return "smb"
+        if port in {80, 443, 8443}:
+            return "web"
+        if port in {8080, 3128, 8000, 8888} or "proxy" in basename:
+            return "proxy"
+        if port == 3389:
+            return "rdp"
+        if port == 22:
+            return "ssh"
+        if port in {1433, 3306, 5432, 1521}:
+            return "database"
+        return "outbound_default" if is_outbound else "inbound_default"
 
     @staticmethod
     def _to_device_path(path: str) -> str:
