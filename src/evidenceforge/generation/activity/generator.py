@@ -101,6 +101,15 @@ from .network import (
 
 logger = logging.getLogger(__name__)
 
+_WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
+    {
+        "spoolsv.exe",
+        "dns.exe",
+        "dfsr.exe",
+        "ismserv.exe",
+        "msdtc.exe",
+    }
+)
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
@@ -7068,6 +7077,12 @@ class ActivityGenerator:
             PID of the new process
         """
         from evidenceforge.events.contexts import ProcessContext
+
+        exe_name = ntpath.basename(process_name).lower()
+        if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:
+            for proc in self.state_manager.get_processes_on_system(system.hostname):
+                if ntpath.basename(proc.image).lower() == exe_name:
+                    return proc.pid
 
         pid = self.state_manager.create_process(
             system=system.hostname,

@@ -23,7 +23,7 @@
 """Unit tests for Phase 5.4: Background Traffic & System Activity."""
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -342,6 +342,80 @@ class TestGenerateSystemProcess:
             if c[0][0].event_type == "system_process_create"
         ]
         assert len(ecar_calls) >= 1
+
+    def test_reuses_active_singleton_windows_service_process(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Singleton Windows services should not overlap as independent processes."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+
+        first_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+        second_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert second_pid == first_pid
+        security_creates = [
+            c
+            for c in mock_emitters["windows_event_security"].emit.call_args_list
+            if c[0][0].event_type == "system_process_create"
+            and c[0][0].process.image.endswith("spoolsv.exe")
+        ]
+        assert len(security_creates) == 1
+
+    def test_allows_multiple_non_singleton_windows_service_processes(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Multi-instance service hosts like WmiPrvSE.exe may create separate processes."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k DcomLaunch",
+            "SYSTEM",
+            "System",
+        )
+
+        first_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\wbem\WmiPrvSE.exe",
+            command_line="WmiPrvSE.exe -Embedding",
+            parent_pid=parent_pid,
+            username="NETWORK SERVICE",
+        )
+        state_manager.set_current_time(timestamp + timedelta(minutes=10))
+        second_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\wbem\WmiPrvSE.exe",
+            command_line="WmiPrvSE.exe -secured -Embedding",
+            parent_pid=parent_pid,
+            username="NETWORK SERVICE",
+        )
+
+        assert second_pid != first_pid
 
 
 class TestInfrastructureDetection:
