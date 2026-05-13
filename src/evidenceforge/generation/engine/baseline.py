@@ -210,22 +210,24 @@ def _pick_non_colliding_account_name(
     """Pick a synthetic account name that does not collide with scenario-defined accounts.
 
     Selection is deterministic for a given RNG state and never loops forever:
-    1. Choose from base names and base+numeric suffix candidates when available.
+    1. Choose from unsuffixed base names when available.
     2. Fall back to deterministic underscore suffixes with a bounded search.
     """
-    candidate_pool = [*base_names]
-    for base_name in base_names:
-        candidate_pool.extend(f"{base_name}{suffix}" for suffix in range(1, max_numeric_suffix + 1))
-
-    available = [candidate for candidate in candidate_pool if candidate not in existing_accounts]
+    available = [candidate for candidate in base_names if candidate not in existing_accounts]
     if available:
         return rng.choice(available)
 
-    fallback_base = base_names[0]
-    for suffix in range(1, 10_001):
-        candidate = f"{fallback_base}_{suffix}"
-        if candidate not in existing_accounts:
-            return candidate
+    for suffix in range(1, max_numeric_suffix + 1):
+        for base_name in base_names:
+            candidate = f"{base_name}_{suffix}"
+            if candidate not in existing_accounts:
+                return candidate
+
+    for suffix in range(max_numeric_suffix + 1, 10_001):
+        for base_name in base_names:
+            candidate = f"{base_name}_{suffix}"
+            if candidate not in existing_accounts:
+                return candidate
 
     msg = "Unable to select non-colliding synthetic account name after bounded fallback search"
     raise ValueError(msg)
@@ -530,6 +532,32 @@ def _generate_web_request(rng: random.Random) -> tuple[str, str, int, str]:
 
     path, method, status, mime = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
     return (path, method, status, normalize_mime_type_for_path(path, mime))
+
+
+def _machine_account_tgs_gap_ms(rng: random.Random, *, first: bool) -> int:
+    """Return a realistic gap before machine-account service-ticket requests."""
+    if first:
+        roll = rng.random()
+        if roll < 0.55:
+            return rng.randint(120, 1_200)
+        if roll < 0.90:
+            return rng.randint(2_000, 45_000)
+        return rng.randint(60_000, 900_000)
+    roll = rng.random()
+    if roll < 0.70:
+        return rng.randint(500, 5_000)
+    if roll < 0.95:
+        return rng.randint(5_000, 60_000)
+    return rng.randint(60_000, 600_000)
+
+
+def _machine_account_ntlm_offset_seconds(tgt_offset_seconds: float, rng: random.Random) -> float:
+    """Place baseline NTLM validation away from same-second Kerberos cycles."""
+    candidate = rng.uniform(0, 3599)
+    if abs(candidate - tgt_offset_seconds) < 2.0:
+        direction = -1 if tgt_offset_seconds > 1800 else 1
+        candidate = tgt_offset_seconds + direction * rng.uniform(30, 300)
+    return max(0.0, min(3599.0, candidate))
 
 
 class BaselineMixin:
@@ -4056,7 +4084,11 @@ class BaselineMixin:
                         pool = dynamic_hkcu if dynamic_hkcu and rng.random() < 0.80 else static_hkcu
                         _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKCU)
                     else:
-                        dynamic_hklm = [entry for entry in _REG_KEYS_HKLM if "{" in entry[0]]
+                        dynamic_hklm = [
+                            entry
+                            for entry in _REG_KEYS_HKLM
+                            if "{" in entry[0] and str(entry[1]).lower() != "driverdesc"
+                        ]
                         noisy_static_hklm = [
                             entry
                             for entry in _REG_KEYS_HKLM
@@ -4081,6 +4113,7 @@ class BaselineMixin:
                         _template_user,
                         host_ip=system.ip,
                         host_key=system.hostname,
+                        host_os=system.os,
                     )
                     _vname = materialize_edr_template(
                         _vname,
@@ -4088,6 +4121,7 @@ class BaselineMixin:
                         _template_user,
                         host_ip=system.ip,
                         host_key=system.hostname,
+                        host_os=system.os,
                     )
                     _details = materialize_edr_template(
                         _details,
@@ -4095,6 +4129,7 @@ class BaselineMixin:
                         _template_user,
                         host_ip=system.ip,
                         host_key=system.hostname,
+                        host_os=system.os,
                     )
                     writer_candidates = _registry_writer_candidates(
                         _key,
@@ -4127,7 +4162,11 @@ class BaselineMixin:
                             timestamp=_reg_ts,
                             event_type="registry_modify",
                             src_host=_host_ctx,
-                            auth=AuthContext(username=_reg_user),
+                            auth=AuthContext(
+                                username=_reg_user,
+                                user_sid=self.activity_generator._get_sid(_reg_user),
+                                logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
+                            ),
                             process=ProcessContext(
                                 pid=_reg_pid,
                                 parent_pid=_reg_proc.parent_pid if _reg_proc is not None else 0,
@@ -4334,6 +4373,7 @@ class BaselineMixin:
                         for path in generic_dll_pool:
                             if not _module_matches_process(exe_name, path):
                                 continue
+                            path_lower = path.lower()
                             dll_pool.append(
                                 {
                                     "path": materialize_edr_template(
@@ -4343,8 +4383,8 @@ class BaselineMixin:
                                         host_key=system.hostname,
                                     ),
                                     "signed": not any(
-                                        vendor in path
-                                        for vendor in ["7-Zip", "VideoLAN", "Notepad++"]
+                                        vendor in path_lower
+                                        for vendor in ["7-zip", "videolan", "notepad++"]
                                     ),
                                     "signature": _signature_for_loaded_module(path),
                                     "signature_status": "Valid",
@@ -4618,7 +4658,7 @@ class BaselineMixin:
                             dc_hostname=dc_hostname,
                             time=ts,
                         )
-                        num_tgs = rng.randint(2, 5)
+                        num_tgs = 0 if rng.random() < 0.22 else rng.randint(1, 5)
                         member_servers = [
                             s.hostname
                             for s in self.scenario.environment.systems
@@ -4638,10 +4678,12 @@ class BaselineMixin:
                                 ]
                             )
                         ] or [dc_hostname]
+                        elapsed_ms = 0
                         for tgs_i in range(num_tgs):
-                            ts2 = ts + timedelta(
-                                milliseconds=rng.randint(50, 200) + tgs_i * rng.randint(100, 500)
-                            )
+                            elapsed_ms += _machine_account_tgs_gap_ms(rng, first=tgs_i == 0)
+                            ts2 = ts + timedelta(milliseconds=elapsed_ms)
+                            if ts2 >= current_hour + timedelta(hours=1):
+                                continue
                             svc = rng.choice(["cifs", "ldap", "http", "host"])
                             if rng.random() < 0.60 and member_servers:
                                 target = rng.choice(member_servers)
@@ -4655,11 +4697,12 @@ class BaselineMixin:
                                 time=ts2,
                             )
                         if rng.random() < 0.10:
+                            ntlm_offset = _machine_account_ntlm_offset_seconds(offset, rng)
                             self.activity_generator.generate_ntlm_validation(
                                 username=username,
                                 workstation=client.hostname,
                                 dc_hostname=dc_hostname,
-                                time=ts,
+                                time=current_hour + timedelta(seconds=ntlm_offset),
                             )
 
         # TGT Renewal
@@ -4891,8 +4934,15 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
+                    _msg_offset = rng.randint(10, 50)
+                    login_times: list[datetime] = []
+                    for _ in range(4):
+                        login_times.append(ts + timedelta(milliseconds=_msg_offset))
+                        _msg_offset += rng.randint(1, 50)
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
-                        system.hostname, rng, ts
+                        system.hostname,
+                        rng,
+                        login_times[-1],
                     )
                     login_msgs = [
                         (
@@ -4912,17 +4962,19 @@ class BaselineMixin:
                             f"New session {ssh_sid} of user {ssh_user}.",
                         ),
                     ]
-                    _msg_offset = rng.randint(10, 50)
-                    for app, pid_val, lm in login_msgs:
+                    for (app, pid_val, lm), login_time in zip(
+                        login_msgs,
+                        login_times,
+                        strict=True,
+                    ):
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + timedelta(milliseconds=_msg_offset),
+                            time=login_time,
                             app_name=app,
                             message=lm,
                             pid=pid_val,
                             facility=10,
                         )
-                        _msg_offset += rng.randint(1, 50)
                     disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
                     if disconnect_time < self.end_time and rng.random() < 0.92:
                         self.activity_generator.generate_syslog_event(

@@ -52,11 +52,32 @@ from evidenceforge.generation.emitters.windows_event import format_windows_syste
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.windows_ids import align_windows_id
 
 win_logger = logging.getLogger(__name__)
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
+_SECURITY_4689_NOISY_GUI_EXES = {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe"}
+_WFP_FILTER_BUCKET_OFFSETS = {
+    "dns": 1,
+    "kerberos": 2,
+    "ldap": 3,
+    "smb": 4,
+    "web": 5,
+    "proxy": 6,
+    "rdp": 7,
+    "ssh": 8,
+    "database": 9,
+    "icmp": 10,
+    "outbound_default": 20,
+    "inbound_default": 21,
+}
+
+
+def _windows_path_basename(path: str) -> str:
+    """Return a lowercase basename for Windows or POSIX-looking paths."""
+    return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
 
 
 def _normalize_windows_time_created(
@@ -288,6 +309,18 @@ class WindowsEventEmitter(LogEmitter):
         if ":" in ip:
             return ip  # Already IPv6
         return f"::ffff:{ip}"
+
+    @staticmethod
+    def _normalize_execution_ids(event_data: dict[str, Any]) -> dict[str, Any]:
+        """Align provider Execution PID/TID values before XML rendering."""
+        normalized = dict(event_data)
+        for field in ("ExecutionProcessID", "ExecutionThreadID"):
+            value = normalized.get(field)
+            if isinstance(value, int):
+                normalized[field] = align_windows_id(value)
+            elif isinstance(value, str) and value.isdecimal():
+                normalized[field] = str(align_windows_id(int(value)))
+        return normalized
 
     # Event types where the Windows host is dst_host (target of the action)
     _DST_HOST_TYPES: set[str] = {
@@ -544,6 +577,11 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
+        ip_address = self._ipv6_mapped(auth.source_ip)
+        has_source_ip = ip_address != "-"
+        ip_port = auth.source_port if has_source_ip else 0
+        if not ip_port and has_source_ip and auth.logon_type == 3:
+            ip_port = rng.randint(49152, 65535)
 
         event_data = {
             "EventID": 4625,
@@ -572,9 +610,8 @@ class WindowsEventEmitter(LogEmitter):
             "KeyLength": 128 if auth.lm_package == "NTLM V2" else 0,
             "ProcessId": f"0x{auth.process_pid:x}" if auth.process_pid else "0x0",
             "ProcessName": auth.process_name or "-",
-            "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": auth.source_port
-            or (rng.randint(49152, 65535) if auth.logon_type == 3 else 0),
+            "IpAddress": ip_address,
+            "IpPort": ip_port,
         }
         self.emit_event(event_data)
 
@@ -617,6 +654,8 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
+            return
 
         event_data = {
             "EventID": 4689,
@@ -934,13 +973,60 @@ class WindowsEventEmitter(LogEmitter):
             "DestAddress": net.dst_ip,
             "DestPort": net.dst_port,
             "Protocol": net.ip_proto,
-            "FilterRTID": rng.randint(0, 70000),
+            "FilterRTID": self._wfp_filter_rtid(host, net, image, is_outbound),
             "LayerName": "%%14611",
             "LayerRTID": 48,
             "RemoteUserID": "S-1-0-0",
             "RemoteMachineID": "S-1-0-0",
         }
         self.emit_event(event_data)
+
+    @classmethod
+    def _wfp_filter_rtid(
+        cls,
+        host: HostContext,
+        net: Any,
+        image: str,
+        is_outbound: bool,
+    ) -> int:
+        """Return a stable WFP runtime filter ID for a host policy bucket."""
+        bucket = cls._wfp_filter_bucket(net, image, is_outbound)
+        direction = "out" if is_outbound else "in"
+        proto = (net.protocol or "").lower() or str(net.ip_proto)
+        base = 20000 + (_stable_seed(f"wfp_filter_base:{host.hostname}") % 30000)
+        bucket_offset = _WFP_FILTER_BUCKET_OFFSETS.get(bucket, 99)
+        variant = (
+            _stable_seed(f"wfp_filter_policy:{host.hostname}:{direction}:{proto}:{bucket}") % 5
+        )
+        return base + (bucket_offset * 16) + variant
+
+    @staticmethod
+    def _wfp_filter_bucket(net: Any, image: str, is_outbound: bool) -> str:
+        """Classify a 5156 connection into a small, reusable WFP policy bucket."""
+        proto = (net.protocol or "").lower()
+        port = net.dst_port
+        basename = _windows_path_basename(image)
+        if proto == "icmp" or net.ip_proto == 1:
+            return "icmp"
+        if proto == "udp" and port == 53:
+            return "dns"
+        if port in {88, 464}:
+            return "kerberos"
+        if port in {389, 636, 3268, 3269}:
+            return "ldap"
+        if port == 445:
+            return "smb"
+        if port in {80, 443, 8443}:
+            return "web"
+        if port in {8080, 3128, 8000, 8888} or "proxy" in basename:
+            return "proxy"
+        if port == 3389:
+            return "rdp"
+        if port == 22:
+            return "ssh"
+        if port in {1433, 3306, 5432, 1521}:
+            return "database"
+        return "outbound_default" if is_outbound else "inbound_default"
 
     @staticmethod
     def _to_device_path(path: str) -> str:
@@ -963,6 +1049,8 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         krb = event.kerberos
         host = self._get_host(event)
+        source_ip = krb.source_ip or "-"
+        source_port = krb.source_port if source_ip not in {"", "-"} else 0
 
         event_data = {
             "EventID": 4771,
@@ -979,8 +1067,8 @@ class WindowsEventEmitter(LogEmitter):
             "TicketOptions": krb.ticket_options,
             "Status": krb.ticket_status,
             "PreAuthType": krb.pre_auth_type,
-            "IpAddress": krb.source_ip,
-            "IpPort": krb.source_port,
+            "IpAddress": source_ip,
+            "IpPort": source_port,
         }
         self.emit_event(event_data)
 
@@ -1248,6 +1336,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
+        event_data = self._normalize_execution_ids(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         if self.threaded:

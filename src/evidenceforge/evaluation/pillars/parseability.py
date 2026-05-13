@@ -346,7 +346,7 @@ def _normalize_for_validation(
             except ValueError:
                 pass
     if format_name in ("web_access", "syslog", "snort_alert", "bash_history"):
-        if "timestamp" not in normalized and parsed_timestamp is not None:
+        if parsed_timestamp is not None:
             normalized["timestamp"] = parsed_timestamp
     return normalized
 

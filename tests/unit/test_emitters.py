@@ -29,7 +29,14 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import AuthContext, DhcpContext, HostContext, NetworkContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    DhcpContext,
+    HostContext,
+    KerberosContext,
+    NetworkContext,
+    ProcessContext,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
@@ -93,6 +100,34 @@ class TestWindowsEventEmitter:
         assert re.search(r"2024-01-15T10:30:45\.123456\dZ", content)
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
+
+    def test_emit_event_aligns_provider_execution_ids(self, format_def, temp_output):
+        """Security XML provider PID/TID values should look Windows-native."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 541,
+            "ExecutionThreadID": 113,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x3e7abc",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "192.168.1.100",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Execution ProcessID="544" ThreadID="116"/>' in content
 
     def test_network_logon_workstation_name_uses_source_host(self, format_def, temp_output):
         """Network 4624 events should name the source workstation, not the destination."""
@@ -399,6 +434,76 @@ class TestWindowsEventEmitter:
             seed_parts=("WIN-TEST-01.corp.local", "0x116c", child_time),
         )
         assert emitter._event_dicts[0]["TimeCreated"] == child_time + expected_delta
+
+    def test_browser_process_termination_is_not_rendered_as_security_4689(
+        self, format_def, temp_output
+    ):
+        """Long-lived browser exits should not create brittle Security/Sysmon death conflicts."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="process_terminate",
+            src_host=host,
+            auth=AuthContext(username="jsmith", user_sid="S-1-5-21-1-2-3-1001"),
+            process=ProcessContext(
+                pid=6712,
+                parent_pid=4556,
+                image=r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+                command_line="msedge.exe --type=renderer",
+                username="jsmith",
+                logon_id="0xabc123",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        assert not temp_output.exists() or "<EventID>4689</EventID>" not in temp_output.read_text()
+
+    def test_non_browser_process_termination_still_renders_security_4689(
+        self, format_def, temp_output
+    ):
+        """Short-lived command tools should still render process-exit audit evidence."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            fqdn="WS-01.example.com",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="process_terminate",
+            src_host=host,
+            auth=AuthContext(username="jsmith", user_sid="S-1-5-21-1-2-3-1001"),
+            process=ProcessContext(
+                pid=7420,
+                parent_pid=4556,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="jsmith",
+                logon_id="0xabc123",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert "<EventID>4689</EventID>" in content
+        assert '<Data Name="ProcessName">C:\\Windows\\System32\\cmd.exe</Data>' in content
 
     def test_spooled_logoff_shifted_after_same_session_dependents(self, format_def, temp_output):
         """Spooled 4634 fixups should run without materializing all events."""
@@ -927,6 +1032,51 @@ class TestWindowsEventEmitter:
         assert "<Task>12544</Task>" in content  # Logon category, not Account Lockout
         assert "<Version>0</Version>" in content  # 4625 is always Version 0
 
+    def test_failed_logon_without_source_ip_does_not_keep_source_port(
+        self, format_def, temp_output
+    ):
+        """4625 source port should not survive when the source address is unavailable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="baduser",
+                user_sid="S-1-0-0",
+                logon_type=3,
+                source_ip="-",
+                source_port=58680,
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                failure_status="0xc000006d",
+                failure_substatus="0xc000006a",
+                failure_reason="%%2313",
+                logon_process="NtLmSsp",
+                auth_package="NTLM",
+                lm_package="NTLM V2",
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">0</Data>' in content
+        assert "58680" not in content
+
     def test_ntlm_field_names(self, format_def, temp_output):
         """Test that 4776 uses correct field names (TargetUserName, Workstation)."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -1156,6 +1306,43 @@ class TestWindowsEventEmitter:
         )
         assert emitter._event_dicts[0]["TimeCreated"] == event_time + expected_delta
 
+    def test_wfp_connection_reuses_filter_rtid_per_policy_bucket(self, format_def, temp_output):
+        """WFP 5156 should reuse runtime filter IDs for the same host policy bucket."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 31, 0, tzinfo=UTC)
+
+        def make_event(src_port: int, dst_ip: str, dst_port: int, protocol: str = "tcp"):
+            return SecurityEvent(
+                timestamp=event_time,
+                event_type="wfp_connection",
+                src_host=HostContext(
+                    hostname="WKS-01",
+                    ip="10.0.0.50",
+                    os="Windows 11",
+                    os_category="windows",
+                    system_type="workstation",
+                    fqdn="WKS-01.corp.local",
+                ),
+                network=NetworkContext(
+                    src_ip="10.0.0.50",
+                    src_port=src_port,
+                    dst_ip=dst_ip,
+                    dst_port=dst_port,
+                    protocol=protocol,
+                    ip_proto=17 if protocol == "udp" else 6,
+                    initiating_pid=4,
+                ),
+            )
+
+        emitter.emit(make_event(49263, "93.184.216.34", 443))
+        emitter.emit(make_event(49264, "151.101.0.223", 443))
+        emitter.emit(make_event(49265, "10.0.0.10", 53, "udp"))
+
+        filter_ids = [event["FilterRTID"] for event in emitter._event_dicts]
+        assert filter_ids[0] == filter_ids[1]
+        assert filter_ids[2] != filter_ids[0]
+        assert len(set(filter_ids)) == 2
+
     def test_wfp_connection_pid4_renders_system_application(self, format_def, temp_output):
         """WFP 5156 for PID 4 should render System, not a synthetic svchost path."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -1367,6 +1554,46 @@ class TestWindowsEventEmitter:
         assert "<Keywords>0x8010000000000000</Keywords>" in content
         assert "<Task>14339</Task>" in content
         assert '<Data Name="Status">0x18</Data>' in content
+
+    def test_kerberos_preauth_without_source_ip_does_not_keep_source_port(
+        self, format_def, temp_output
+    ):
+        """4771 source port should not survive when the source address is unavailable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            fqdn="DC-01.corp.local",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="domain_controller",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="kerberos_preauth_failed",
+            dst_host=host,
+            kerberos=KerberosContext(
+                target_username="aisha.johnson",
+                target_domain="CORP.LOCAL",
+                target_sid="S-1-5-21-123-456-789-1104",
+                service_name="krbtgt",
+                ticket_options="0x40810010",
+                ticket_status="0x18",
+                pre_auth_type=2,
+                source_ip="-",
+                source_port=49888,
+                reporting_pid=732,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="IpAddress">-</Data>' in content
+        assert '<Data Name="IpPort">0</Data>' in content
+        assert "49888" not in content
 
     def test_emit_log_cleared(self, format_def, temp_output):
         """Test emitting 1102 (security log cleared) with UserData structure."""
@@ -2041,6 +2268,50 @@ class TestZeekEmitter:
         print("Raw file content (JSONL/NDJSON format - single line):")
         print(content)
         print(f"{'=' * 80}\n")
+
+    @pytest.mark.parametrize(
+        ("canonical", "expected"),
+        [
+            ("kerberos", "krb"),
+            ("sql", "tds"),
+            ("mssql", "tds"),
+            ("rpc", "dce_rpc"),
+        ],
+    )
+    def test_emit_connection_uses_zeek_native_service_names(
+        self, format_def, temp_output, canonical, expected
+    ):
+        """conn.service should use Zeek analyzer vocabulary."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49152,
+                dst_ip="10.0.0.10",
+                dst_port=88,
+                protocol="tcp",
+                service=canonical,
+                zeek_uid="CNativeSvc12345",
+                duration=0.1,
+                orig_bytes=100,
+                resp_bytes=200,
+                conn_state="SF",
+                history="ShADadfF",
+                orig_pkts=3,
+                orig_ip_bytes=220,
+                resp_pkts=3,
+                resp_ip_bytes=320,
+                ip_proto=6,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["service"] == expected
 
     def test_emit_udp_connection(self, format_def, temp_output):
         """Test emitting a UDP connection (DNS query)."""

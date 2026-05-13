@@ -132,6 +132,35 @@ class TestSysmonProcessAccess:
         assert event.process_access is not None
         assert event.process_access.target_image == r"C:\Windows\System32\lsass.exe"
         assert event.process_access.granted_access == "0x1010"
+        assert event.process_access.source_thread_id % 4 == 0
+
+    def test_create_remote_thread_ids_are_windows_aligned(
+        self, state_manager, activity_gen, mock_emitters, windows_system, test_user
+    ):
+        """CreateRemoteThread canonical thread IDs should match Windows allocation texture."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        source_image = r"C:\Program Files\Microsoft Defender\MsMpEng.exe"
+        target_image = r"C:\Windows\System32\lsass.exe"
+        source_pid, target_pid = _create_test_processes(
+            state_manager, windows_system, test_user, source_image, target_image=target_image
+        )
+
+        emitted = activity_gen.generate_create_remote_thread(
+            user=test_user,
+            system=windows_system,
+            time=ts,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
+            target_image=target_image,
+        )
+
+        assert emitted is True
+        event = mock_emitters["windows_event_sysmon"].emit.call_args[0][0]
+        assert event.remote_thread is not None
+        assert event.remote_thread.new_thread_id % 4 == 0
+        assert event.remote_thread.source_thread_id % 4 == 0
+        assert event.remote_thread.target_thread_id % 4 == 0
 
     def test_process_access_skips_missing_target_pid(
         self, state_manager, activity_gen, mock_emitters, windows_system, test_user

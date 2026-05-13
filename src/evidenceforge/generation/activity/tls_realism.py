@@ -6,16 +6,20 @@
 import fnmatch
 import hashlib
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 _CONFIG_PATH = get_activity_directory() / "tls_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_CLEARTEXT_CERT_INFRA_DOMAIN_CLASSES = {"crl", "ocsp"}
 
 
 def _merge_tls_realism(default: dict, overlay: dict) -> dict:
@@ -48,6 +52,11 @@ def multi_label_public_suffixes() -> set[str]:
     data = load_tls_realism()
     suffixes = data.get("san", {}).get("multi_label_public_suffixes", [])
     return {str(suffix).lower() for suffix in suffixes}
+
+
+def serial_number_config() -> dict[str, Any]:
+    """Return certificate serial-number behavior config."""
+    return load_tls_realism().get("serial_numbers", {})
 
 
 def ocsp_config() -> dict[str, Any]:
@@ -111,12 +120,15 @@ def certificate_analyzer_delay_ms(
 
 def ssl_analyzer_delay_ms(*, zeek_uid: str, event_timestamp: datetime) -> int:
     """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
-    return int(
-        sample_timing_delta(
-            "source.zeek_ssl_analyzer",
-            seed_parts=(zeek_uid, event_timestamp),
-        ).total_seconds()
-        * 1000
+    delay = ssl_analyzer_delay(zeek_uid=zeek_uid, event_timestamp=event_timestamp)
+    return int(delay.total_seconds() * 1000)
+
+
+def ssl_analyzer_delay(*, zeek_uid: str, event_timestamp: datetime) -> timedelta:
+    """Return the deterministic Zeek ssl.log analyzer offset for a flow."""
+    return sample_packet_timing_delta(
+        "source.zeek_ssl_analyzer",
+        seed_parts=(zeek_uid, event_timestamp),
     )
 
 
@@ -279,6 +291,7 @@ def _tls_profile_domains(
 ) -> list[str]:
     """Build a profile domain pool from explicit domains, OS overrides, and DNS tags."""
     from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
+    from evidenceforge.generation.activity.proxy_uri import get_proxy_domain_class
 
     override: dict[str, Any] = {}
     os_overrides = profile.get("os_overrides", {})
@@ -308,6 +321,8 @@ def _tls_profile_domains(
     seen: set[str] = set()
     unique_domains: list[str] = []
     for domain in domains:
+        if get_proxy_domain_class(domain) in _CLEARTEXT_CERT_INFRA_DOMAIN_CLASSES:
+            continue
         if domain not in seen:
             seen.add(domain)
             unique_domains.append(domain)

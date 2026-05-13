@@ -247,3 +247,5 @@ class TestHttpRenderTiming:
 
         data = json.loads(output.read_text().splitlines()[0])
         assert data["ts"] > base_ts.timestamp()
+        offset_us = round((data["ts"] - base_ts.timestamp()) * 1_000_000)
+        assert offset_us % 1000 != 0

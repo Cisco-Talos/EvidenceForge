@@ -71,6 +71,7 @@ class ActiveSession:
     transport_pid: int | None = None
     ecar_object_id: str = ""
     storyline_protected: bool = False
+    logon_guid: str = ""
 
 
 @dataclass

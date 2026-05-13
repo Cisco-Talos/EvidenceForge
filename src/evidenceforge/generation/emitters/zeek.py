@@ -28,6 +28,15 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
+_ZEEK_SERVICE_ALIASES: dict[str, str] = {
+    "kerberos": "krb",
+    "mssql": "tds",
+    "sql": "tds",
+    "sqlserver": "tds",
+    "ms-sql": "tds",
+    "rpc": "dce_rpc",
+}
+
 
 class ZeekEmitter(SensorMultiplexEmitter):
     """Emitter for Zeek conn.log format (JSON).
@@ -52,6 +61,14 @@ class ZeekEmitter(SensorMultiplexEmitter):
         if conn_state == "RSTO" and history:
             return history[:-1] + "R" if history.endswith("r") else history
         return history
+
+    @staticmethod
+    def _render_service_name(service: str | None) -> str | None:
+        """Render canonical services using Zeek analyzer vocabulary."""
+        if not service:
+            return None
+        normalized = service.strip().lower()
+        return _ZEEK_SERVICE_ALIASES.get(normalized, normalized)
 
     def emit(self, event: SecurityEvent) -> None:
         """Render SecurityEvent to Zeek conn.log format."""
@@ -101,7 +118,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "id.resp_h": dst_ip,
             "id.resp_p": dst_port,
             "proto": net.protocol,
-            "service": net.service or None,
+            "service": self._render_service_name(net.service),
             "duration": duration,
             "_min_duration": event.dns.rtt if event.dns is not None else None,
             "_lock_duration": event.dns is not None,
@@ -119,6 +136,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "ip_proto": net.ip_proto,
             "_http_request_body_len": event.http.request_body_len if event.http else None,
             "_http_response_body_len": event.http.response_body_len if event.http else None,
+            "_allow_sensor_observation_variance": True,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:

@@ -60,6 +60,7 @@ class SnortEmitter(SensorMultiplexEmitter):
 
         event_data = {
             "timestamp": ts,
+            "gid": ids.gid,
             "sid": ids.sid,
             "rev": ids.rev,
             "message": ids.message,
@@ -93,6 +94,7 @@ class SnortEmitter(SensorMultiplexEmitter):
 
         context = {
             "timestamp": event_data.get("timestamp") or event_data.get("ts"),
+            "gid": event_data.get("gid", 1),
             "sid": event_data.get("sid"),
             "rev": event_data.get("rev", 1),
             "classification": event_data.get("classification"),

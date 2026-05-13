@@ -88,6 +88,40 @@ class TestSysmonEventEmitter:
         assert '<Data Name="Hashes">SHA1=ABC123' in content
         assert '<Data Name="ParentImage">C:\\Windows\\explorer.exe</Data>' in content
 
+    def test_emit_sysmon_aligns_provider_execution_ids(self, format_def, temp_output):
+        """Sysmon XML provider PID/TID values should be 4-byte aligned."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 1,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": 2753,
+            "ExecutionThreadID": 1543,
+            "UtcTime": "2024-01-15 10:30:00.000",
+            "ProcessGuid": "{12345678-abcd-ef01-2345-678901234567}",
+            "ProcessId": 8052,
+            "Image": r"C:\Windows\System32\cmd.exe",
+            "CommandLine": r"cmd.exe /c whoami",
+            "User": r"CORP\jsmith",
+            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            "LogonId": "0x3e7abc",
+            "IntegrityLevel": "Medium",
+            "Hashes": "SHA1=ABC123,MD5=DEF456,SHA256=GHI789,IMPHASH=JKL012",
+            "ParentProcessGuid": "{87654321-dcba-10fe-5432-109876543210}",
+            "ParentProcessId": 4200,
+            "ParentImage": r"C:\Windows\explorer.exe",
+            "ParentCommandLine": r"C:\Windows\explorer.exe",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Execution ProcessID="2756" ThreadID="1544"/>' in content
+
     def test_emit_sysmon_create_remote_thread(self, format_def, temp_output):
         """Test emitting Sysmon Event 8 (CreateRemoteThread)."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
@@ -201,6 +235,8 @@ class TestSysmonEventEmitter:
         content = output_file.read_text()
         assert "<EventID>5</EventID>" in content
         assert '<Data Name="ProcessId">8052</Data>' in content
+        assert 'SystemTime="2024-01-15T10:30:00.0000000Z"' not in content
+        assert '<Data Name="UtcTime">2024-01-15 10:30:00.000</Data>' not in content
 
     def test_logon_guid_is_stable_per_host_logon_session(self, format_def, temp_output):
         """Sysmon LogonGuid should identify the logon session, not each process."""
@@ -218,6 +254,54 @@ class TestSysmonEventEmitter:
             r"\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}",
             guid_a,
         )
+
+    def test_process_create_uses_state_session_logon_guid(self, format_def, tmp_path):
+        """Sysmon Event 1 should share the canonical session LogonGuid with Security 4624."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+        from evidenceforge.generation.state_manager import StateManager
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
+        logon_id = state_manager.create_session("jsmith", "WKS-01", 3, "10.0.0.20")
+        logon_guid = state_manager.get_or_create_session_logon_guid(logon_id, "WKS-01")
+        emitter._state_manager = state_manager
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 5, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(username="jsmith", logon_id=logon_id),
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="jsmith",
+                logon_id=logon_id,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        output_file = output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml"
+        content = output_file.read_text()
+        assert f'<Data Name="LogonGuid">{logon_guid}</Data>' in content
+        assert f'<Data Name="LogonId">{logon_id}</Data>' in content
 
     def test_create_remote_thread_uses_canonical_context_values(self, format_def, tmp_path):
         """Sysmon Event 8 should not derive fields independently from eCAR."""

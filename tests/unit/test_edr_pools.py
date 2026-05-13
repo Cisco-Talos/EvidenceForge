@@ -288,6 +288,50 @@ class TestTemplateMaterialization:
         assert "\\125.0\\" not in value
         assert "\\2024.3\\" not in value
 
+    def test_materializes_cbs_package_build_from_host_os(self):
+        import random
+
+        template = (
+            r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
+            r"\Packages\{package}~31bf3856ad364e35~amd64~~{os_build}.{small}"
+        )
+        server_2022 = materialize_edr_template(
+            template,
+            random.Random(9),
+            host_key="DC-01",
+            host_os="Windows Server 2022",
+        )
+        workstation_11 = materialize_edr_template(
+            template,
+            random.Random(9),
+            host_key="WS-01",
+            host_os="Windows 11",
+        )
+
+        assert "~~10.0.20348." in server_2022
+        assert "~~10.0.22621." in workstation_11
+        assert "10.0.19041" not in server_2022
+        assert "10.0.19041" not in workstation_11
+
+    def test_materializes_cbs_package_build_in_template_group(self):
+        import random
+
+        key, value_name, details = materialize_edr_template_group(
+            (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing"
+                r"\Packages\{package}~31bf3856ad364e35~amd64~~{os_build}.{small}",
+                "CurrentState",
+                "DWORD (0x00000070)",
+            ),
+            random.Random(11),
+            host_key="FILE-SRV-01",
+            host_os="Windows Server 2019",
+        )
+
+        assert "~~10.0.17763." in key
+        assert value_name == "CurrentState"
+        assert details == "DWORD (0x00000070)"
+
     def test_normalizes_defender_platform_version_per_host(self):
         version = defender_platform_version("WS-01")
 
@@ -350,6 +394,64 @@ class TestFileSideEffectRealism:
         )
 
         assert effect == ("create", "/tmp/patient_claims.sql")
+
+    def test_powershell_compress_archive_uses_destination_path(self):
+        effect = select_file_side_effect(
+            "powershell.exe",
+            (
+                r"powershell.exe -NoProfile -Command Compress-Archive "
+                r"-Path C:\ProgramData\Microsoft\*.log "
+                r"-DestinationPath C:\ProgramData\Microsoft\health-cache.zip"
+            ),
+            "windows",
+            random.Random(7),
+            user="alice",
+        )
+
+        assert effect == ("create", r"C:\ProgramData\Microsoft\health-cache.zip")
+
+    def test_powershell_compress_archive_strips_outer_command_quote(self):
+        effect = select_file_side_effect(
+            "powershell.exe",
+            (
+                r'powershell.exe -NoProfile -Command "Compress-Archive '
+                r"-Path \\FILE-SRV-01\Finance\Q1\*,\\FILE-SRV-01\Patients\Exports\* "
+                r'-DestinationPath C:\ProgramData\Microsoft\health-cache.zip"'
+            ),
+            "windows",
+            random.Random(7),
+            user="svc_sqlreader",
+        )
+
+        assert effect == ("create", r"C:\ProgramData\Microsoft\health-cache.zip")
+
+    def test_cmd_does_not_write_powershell_history_artifact(self):
+        effects = {
+            select_file_side_effect(
+                "cmd.exe",
+                "cmd.exe /c whoami && hostname",
+                "windows",
+                random.Random(seed),
+                user="aisha.johnson",
+            )
+            for seed in range(30)
+        }
+
+        assert all(effect is None or "PSReadLine" not in effect[1] for effect in effects)
+
+    def test_noninteractive_powershell_does_not_write_psreadline_artifact(self):
+        effects = {
+            select_file_side_effect(
+                "powershell.exe",
+                "powershell.exe -NoProfile -EncodedCommand SQBFAFgA",
+                "windows",
+                random.Random(seed),
+                user="SYSTEM",
+            )
+            for seed in range(30)
+        }
+
+        assert all(effect is None or "PSReadLine" not in effect[1] for effect in effects)
 
     def test_noninteractive_web_shell_does_not_write_bash_history_artifact(self):
         effects = {

@@ -28,7 +28,7 @@ scheduled_tasks:
       - "usoclient.exe StartInteractiveScan"
       - "usoclient.exe ResumeUpdate"
     parent: svchost_wusvcs
-  - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_\\TiWorker.exe"
+  - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
     command_templates:
       - "TiWorker.exe -Embedding"
     parent: svchost_netsvcs
@@ -132,9 +132,13 @@ system_services:
       parent: svchost_netsvcs
     - image: "C:\\Windows\\System32\\SearchProtocolHost.exe"
       command_templates:
-        - "SearchProtocolHost.exe Global\\UsGthrFltPipeMssGthrPipe_S-1-5-21 1 {search_filter}"
+        - "SearchProtocolHost.exe {search_pipe_args}"
       params:
-        search_filter: ["Search", "Indexer", "Protocol"]
+        search_pipe_args:
+          - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-18 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-18 1"
+          - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-19 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-19 1"
+          - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-20 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-20 1"
+          - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-21-397955417-626881126-188441444-1001 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-21-397955417-626881126-188441444-1001 1"
       parent: search_indexer
     - image: "C:\\Windows\\System32\\SearchFilterHost.exe"
       command_templates:
@@ -180,8 +184,20 @@ process_loaded_modules:
       signed: false
       signature: "-"
       signature_status: "Unavailable"
+      pe_metadata:
+        file_version: "23.01.0.0"
+        description: "7-Zip Shell Extension"
+        product: "7-Zip"
+        company: "Igor Pavlov"
+        original_filename: "7-zip.dll"
     - path: "C:\\Program Files\\Microsoft OneDrive\\FileSyncShell64.dll"
       signature: "Microsoft Corporation"
+      pe_metadata:
+        file_version: "24.020.0128.0003"
+        description: "Microsoft OneDrive Shell Extension"
+        product: "Microsoft OneDrive"
+        company: "Microsoft Corporation"
+        original_filename: "FileSyncShell64.dll"
 
   lsass.exe:
     - path: "C:\\Windows\\System32\\msv1_0.dll"
@@ -194,9 +210,13 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\negoext.dll"
     # Third-party credential providers
     - path: "C:\\Program Files\\VMware\\VMware Tools\\vmStatsProvider.dll"
-      signed: false
-      signature: "-"
-      signature_status: "Unavailable"
+      signature: "VMware, Inc."
+      pe_metadata:
+        file_version: "1.0.0.0"
+        description: "vmStatsProvider.dll module"
+        product: "VMware, Inc."
+        company: "VMware, Inc."
+        original_filename: "vmStatsProvider.dll"
 
   services.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
@@ -215,6 +235,12 @@ process_loaded_modules:
     # Third-party service DLLs (survive Event 7 exclude filter)
     - path: "C:\\Program Files\\Windows Defender Advanced Threat Protection\\SenseCncProxy.dll"
       signature: "Microsoft Corporation"
+      pe_metadata:
+        file_version: "10.8049.22439.1065"
+        description: "Microsoft Defender for Endpoint Sensor Command Proxy"
+        product: "Microsoft Defender for Endpoint"
+        company: "Microsoft Corporation"
+        original_filename: "SenseCncProxy.dll"
     - path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpClient.dll"
       signature: "Microsoft Corporation"
 
@@ -241,6 +267,12 @@ process_loaded_modules:
     # Third-party task DLLs
     - path: "C:\\Program Files\\Windows Defender\\MpOAV.dll"
       signature: "Microsoft Corporation"
+      pe_metadata:
+        file_version: "4.18.2301.6"
+        description: "IOfficeAntiVirus Module"
+        product: "Microsoft Defender Antivirus"
+        company: "Microsoft Corporation"
+        original_filename: "MpOAV.dll"
 
   MsMpEng.exe:
     - path: "C:\\Windows\\System32\\ole32.dll"
@@ -294,7 +326,7 @@ system_binaries:
 
     # --- Windows Update and telemetry ---
     - {exe: "usoclient.exe",             path: "C:\\Windows\\System32\\usoclient.exe"}
-    - {exe: "TiWorker.exe",             path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_\\TiWorker.exe"}
+    - {exe: "TiWorker.exe",             path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe"}
     - {exe: "cleanmgr.exe",             path: "C:\\Windows\\System32\\cleanmgr.exe"}
     - {exe: "wsqmcons.exe",             path: "C:\\Windows\\System32\\wsqmcons.exe"}
     - {exe: "CompatTelRunner.exe",       path: "C:\\Windows\\System32\\CompatTelRunner.exe"}

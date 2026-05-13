@@ -60,6 +60,19 @@ _INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
     8080: ("squid", "nginx", "apache2", "httpd"),
 }
 
+_ECAR_FAILURE_REASON_BY_SUBSTATUS = {
+    "0xc0000064": "unknown_user",
+    "0xc000006a": "bad_password",
+    "0xc0000072": "account_disabled",
+    "0xc0000234": "account_locked",
+}
+
+_ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
+    "%%2304": "account_locked",
+    "%%2307": "account_disabled",
+    "%%2313": "bad_password",
+}
+
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     """Extract timestamp_ms for chronological per-host eCAR output sorting."""
@@ -69,6 +82,17 @@ def _ecar_sort_key(line: str) -> tuple[int, int, str]:
         return int(record.get("timestamp_ms", 0)), priority, line
     except (TypeError, ValueError, json.JSONDecodeError):
         return 0, 50, line
+
+
+def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
+    """Map native failed-auth codes into stable eCAR reason vocabulary."""
+    if os_category != "windows":
+        return "bad_password"
+    substatus = str(getattr(auth, "failure_substatus", "") or "").lower()
+    if substatus in _ECAR_FAILURE_REASON_BY_SUBSTATUS:
+        return _ECAR_FAILURE_REASON_BY_SUBSTATUS[substatus]
+    reason = str(getattr(auth, "failure_reason", "") or "")
+    return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
 
 
 class EcarEmitter(HostMultiplexEmitter):
@@ -179,7 +203,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
         host = event.dst_host
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._session_timestamp(event, host, "login"),
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
@@ -196,7 +220,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR USER_SESSION/LOGOUT event (logged on dst_host)."""
         host = event.dst_host
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._session_timestamp(event, host, "logout"),
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGOUT",
@@ -210,7 +234,7 @@ class EcarEmitter(HostMultiplexEmitter):
         """Render eCAR failed USER_SESSION/LOGIN attempt on dst_host."""
         host = event.dst_host
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._session_timestamp(event, host, "failed_login"),
             "hostname": self._host_name(host),
             "object": "USER_SESSION",
             "action": "LOGIN",
@@ -218,7 +242,9 @@ class EcarEmitter(HostMultiplexEmitter):
             "src_ip": event.auth.source_ip,
             "outcome": "failure",
             "session_lifecycle": "attempt_failed",
-            "failure_reason": "bad_password",
+            "failure_reason": _ecar_failed_logon_reason(
+                event.auth, getattr(host, "os_category", "")
+            ),
             "_host_fqdn": self._host_fqdn(host),
         }
         if getattr(host, "os_category", "") == "windows":
@@ -226,6 +252,31 @@ class EcarEmitter(HostMultiplexEmitter):
             event_data["sub_status"] = event.auth.failure_substatus
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
+
+    def _session_timestamp(
+        self,
+        event: SecurityEvent,
+        host: HostContext | None,
+        lifecycle: str,
+    ) -> datetime:
+        """Return the eCAR render timestamp for a user-session observation."""
+        auth = event.auth
+        edr = event.edr
+        return event.timestamp + sample_timing_delta(
+            "source.ecar_session",
+            seed_parts=(
+                lifecycle,
+                self._host_name(host),
+                getattr(auth, "username", ""),
+                getattr(auth, "source_ip", ""),
+                getattr(auth, "source_port", ""),
+                getattr(auth, "logon_id", ""),
+                getattr(auth, "logon_type", ""),
+                getattr(edr, "object_id", ""),
+                event.storyline_cluster_id or "",
+                event.timestamp,
+            ),
+        )
 
     def _render_process_create(self, event: SecurityEvent) -> None:
         """Render eCAR PROCESS/CREATE event (logged on src_host)."""
@@ -359,6 +410,13 @@ class EcarEmitter(HostMultiplexEmitter):
         For internal-to-external, emits only the OUTBOUND on src_host.
         """
         net = event.network
+        source_proc = event.process
+        if (
+            (source_proc is None or source_proc.start_time is None)
+            and event.src_host is not None
+            and net.initiating_pid > 0
+        ):
+            source_proc = self._lookup_running_process(event.src_host, net.initiating_pid)
 
         # OUTBOUND FLOW on source host (if source is internal/known)
         if event.src_host:
@@ -375,8 +433,8 @@ class EcarEmitter(HostMultiplexEmitter):
                     event.timestamp,
                 ),
             )
-            if event.process is not None:
-                event_ts = max(event_ts, self._after_process_create_timestamp(event, event.process))
+            if source_proc is not None:
+                event_ts = max(event_ts, self._after_process_create_timestamp(event, source_proc))
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.src_host.hostname,
@@ -434,6 +492,13 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["connection_state"] = net.conn_state
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    def _lookup_running_process(self, host: HostContext, pid: int) -> Any | None:
+        """Read a process from attached state when a connection only carries a PID."""
+        state_manager = getattr(self, "_state_manager", None)
+        if state_manager is None:
+            return None
+        return state_manager.get_process(host.hostname, pid)
 
     @staticmethod
     def _inbound_listener_observed(event: SecurityEvent) -> bool:

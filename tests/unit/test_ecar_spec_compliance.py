@@ -47,6 +47,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.state_manager import StateManager
 
 
 @pytest.fixture
@@ -257,6 +258,85 @@ class TestRemoteThreadRendering:
 
 
 class TestSessionOutcomeRendering:
+    def test_session_source_latency_spreads_same_timestamp_logins(self, emitter, ts):
+        """Independent eCAR session rows should not inherit the exact same millisecond."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        events = [
+            SecurityEvent(
+                timestamp=ts,
+                event_type="logon",
+                dst_host=host,
+                auth=AuthContext(username="alice", source_ip="10.0.0.21", logon_id="0x1001"),
+                edr=EdrContext(object_id="session-alice"),
+            ),
+            SecurityEvent(
+                timestamp=ts,
+                event_type="logon",
+                dst_host=host,
+                auth=AuthContext(username="bob", source_ip="10.0.0.22", logon_id="0x1002"),
+                edr=EdrContext(object_id="session-bob"),
+            ),
+        ]
+
+        rendered_rows = []
+        for event in events:
+            emitter._render_logon(event)
+            rendered_rows.append(emitter.emit_event.call_args.args[0])
+
+        timestamp_ms = [
+            json.loads(emitter._render_event(row))["timestamp_ms"] for row in rendered_rows
+        ]
+        assert all(row["timestamp"] > ts for row in rendered_rows)
+        assert len(set(timestamp_ms)) == len(timestamp_ms)
+
+    def test_session_source_latency_stays_before_same_time_process_create(self, emitter, ts):
+        """eCAR session latency should not move a login after its first process."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        emitter._render_logon(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="logon",
+                dst_host=host,
+                auth=AuthContext(username="alice", logon_id="0x1001"),
+                edr=EdrContext(object_id="session-alice"),
+            )
+        )
+        logon_row = emitter.emit_event.call_args.args[0]
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                process=ProcessContext(
+                    pid=4321,
+                    parent_pid=4,
+                    image=r"C:\Windows\System32\cmd.exe",
+                    command_line="cmd.exe",
+                    username="alice",
+                    start_time=ts,
+                ),
+            )
+        )
+        process_row = emitter.emit_event.call_args.args[0]
+
+        assert logon_row["timestamp"] < process_row["timestamp"]
+
     def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
         """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
         host = HostContext(
@@ -285,8 +365,47 @@ class TestSessionOutcomeRendering:
         rendered = emitter.emit_event.call_args[0][0]
         assert rendered["outcome"] == "failure"
         assert rendered["session_lifecycle"] == "attempt_failed"
+        assert rendered["failure_reason"] == "bad_password"
         assert rendered["status_code"] == "0xC000006D"
         assert rendered["sub_status"] == "0xC000006A"
+
+    @pytest.mark.parametrize(
+        ("substatus", "expected_reason"),
+        [
+            ("0xC0000064", "unknown_user"),
+            ("0xC0000072", "account_disabled"),
+            ("0xC0000234", "account_locked"),
+        ],
+    )
+    def test_failed_logon_maps_windows_substatus_to_reason(
+        self, emitter, ts, substatus, expected_reason
+    ):
+        """eCAR should preserve native failed-auth meaning instead of flattening."""
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="failed_logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jdoe",
+                source_ip="10.0.0.20",
+                failure_status="0xC000006D",
+                failure_substatus=substatus,
+            ),
+        )
+
+        emitter._render_failed_logon(event)
+
+        rendered = emitter.emit_event.call_args[0][0]
+        assert rendered["failure_reason"] == expected_reason
 
     def test_linux_failed_logon_omits_windows_ntstatus_fields(self, emitter, ts):
         """Linux eCAR login failures should not carry Windows-only NTSTATUS details."""
@@ -583,6 +702,67 @@ class TestChronologicalOutput:
         assert emitted[0]["pid"] == -1
         assert emitted[0]["outcome"] == "failure"
         assert emitted[0]["connection_state"] == "REJ"
+
+    def test_outbound_flow_with_pid_only_renders_after_process_create(
+        self, emitter, monkeypatch, ts
+    ):
+        """FLOW actor references should not appear before the visible PROCESS/CREATE row."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts)
+        pid = state.create_process(
+            "WS-01",
+            4,
+            r"C:\Windows\System32\dsquery.exe",
+            r'dsquery.exe computer -name "*-01" -limit 200',
+            "alice",
+            "Medium",
+        )
+        emitter._state_manager = state
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.0.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            fqdn="ws-01.example.org",
+        )
+        process_event = SecurityEvent(
+            timestamp=ts,
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=pid,
+                parent_pid=4,
+                image=r"C:\Windows\System32\dsquery.exe",
+                command_line=r'dsquery.exe computer -name "*-01" -limit 200',
+                username="alice",
+                start_time=ts,
+            ),
+        )
+        flow_event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=host,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=389,
+                protocol="tcp",
+                conn_state="SF",
+                initiating_pid=pid,
+            ),
+            edr=EdrContext(actor_id=state.get_process_object_id("WS-01", pid)),
+        )
+
+        emitter._render_process_create(process_event)
+        emitter._render_connection(flow_event)
+
+        process_create, flow = emitted
+        assert flow["object"] == "FLOW"
+        assert flow["timestamp"] > process_create["timestamp"]
 
     def test_close_sorts_process_create_before_same_ms_children(self, tmp_path, ts):
         """Same-millisecond child telemetry should not sort before PROCESS/CREATE."""

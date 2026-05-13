@@ -39,6 +39,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
@@ -80,6 +81,7 @@ from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.windows_ids import windows_id_randint
 
 from .helpers import _get_os_category, _get_rng, _parameterize_command
 from .network import (
@@ -99,6 +101,15 @@ from .network import (
 
 logger = logging.getLogger(__name__)
 
+_WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
+    {
+        "spoolsv.exe",
+        "dns.exe",
+        "dfsr.exe",
+        "ismserv.exe",
+        "msdtc.exe",
+    }
+)
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
@@ -210,6 +221,7 @@ _LINUX_COMMAND_IMAGE_OVERRIDES = {
     "uptime": "/usr/bin/uptime",
     "vim": "/usr/bin/vim",
     "w": "/usr/bin/w",
+    "wc": "/usr/bin/wc",
     "wget": "/usr/bin/wget",
     "whoami": "/usr/bin/whoami",
 }
@@ -219,12 +231,30 @@ _LINUX_ALIAS_COMMANDS = {
     "l": ("/usr/bin/ls", "ls -CF"),
 }
 _NMAP_PORT_SERVICES = {
+    21: "ftp",
     22: "ssh",
+    25: "smtp",
+    53: "dns",
     80: "http",
     443: "ssl",
     445: "smb",
     3306: "mysql",
     3389: "rdp",
+    5432: "postgresql",
+    8080: "http",
+}
+_NMAP_SERVICE_ALIASES = {
+    21: {"ftp", "vsftpd", "ftpd"},
+    22: {"ssh", "sshd", "openssh"},
+    25: {"smtp", "postfix", "sendmail", "mail"},
+    53: {"dns", "bind", "named", "ad-ds"},
+    80: {"http", "apache", "apache2", "nginx", "httpd", "iis", "gunicorn"},
+    443: {"https", "ssl", "tls", "apache", "apache2", "nginx", "httpd", "iis"},
+    445: {"smb", "samba", "lanmanserver", "ad-ds"},
+    3306: {"mysql", "mariadb"},
+    3389: {"rdp", "termservice", "terminal-services"},
+    5432: {"postgres", "postgresql"},
+    8080: {"http", "apache", "apache2", "nginx", "httpd", "gunicorn", "tomcat", "squid"},
 }
 
 
@@ -288,11 +318,69 @@ def _service_for_port(port: int) -> str | None:
     return _NMAP_PORT_SERVICES.get(port)
 
 
-def _nmap_conn_state(port: int) -> str:
+def _inventory_token(value: str) -> str:
+    """Normalize scenario inventory labels for lightweight matching."""
+    return value.lower().replace(" ", "-").replace("_", "-")
+
+
+def _nmap_target_exposes_port(port: int, target_system: System | None) -> bool:
+    """Return whether target inventory suggests a scanned port is open."""
+    if target_system is None:
+        return False
+    services = {_inventory_token(service) for service in target_system.services}
+    roles = {_inventory_token(role) for role in target_system.roles}
+    system_type = _inventory_token(target_system.type)
+    aliases = _NMAP_SERVICE_ALIASES.get(port, set())
+    if services & aliases:
+        return True
+    if port in {80, 443, 8080} and roles & {"web-server", "app-server", "forward-proxy"}:
+        return True
+    if port == 445 and (system_type == "domain-controller" or "file-server" in roles):
+        return True
+    if port == 3306 and "database" in roles:
+        return True
+    if port == 53 and "dns-server" in roles:
+        return True
+    if port == 3389 and "windows" in target_system.os.lower():
+        return True
+    return False
+
+
+def _nmap_probe_profile(
+    port: int,
+    target_system: System | None,
+    rng: random.Random,
+) -> tuple[str, str, float, int, int]:
+    """Return source-native connection fields for one nmap TCP probe."""
+    if _nmap_target_exposes_port(port, target_system):
+        conn_state = rng.choices(["SF", "RSTO", "RSTR"], weights=[82, 10, 8], k=1)[0]
+        service = _service_for_port(port) or ""
+        if conn_state == "SF":
+            return (
+                conn_state,
+                service,
+                rng.uniform(0.04, 0.9),
+                rng.randint(0, 180),
+                rng.randint(0, 900),
+            )
+        return (
+            conn_state,
+            service,
+            rng.uniform(0.01, 0.35),
+            rng.randint(0, 140),
+            rng.randint(0, 240),
+        )
+
+    conn_state = rng.choices(["REJ", "S0", "RSTO"], weights=[54, 38, 8], k=1)[0]
+    if conn_state == "S0":
+        return conn_state, "", rng.uniform(1.5, 6.0), rng.randint(0, 64), 0
+    return conn_state, "", rng.uniform(0.003, 0.18), rng.randint(0, 96), rng.randint(0, 80)
+
+
+def _nmap_conn_state(port: int, target_system: System | None = None) -> str:
     """Return a plausible Zeek conn_state for a TCP-connect scan probe."""
-    if port in {22, 80, 443, 445, 3306, 3389}:
-        return "SF"
-    return "REJ"
+    rng = random.Random(_stable_seed(f"nmap_conn_state:{port}:{getattr(target_system, 'ip', '')}"))
+    return _nmap_probe_profile(port, target_system, rng)[0]
 
 
 _WINDOWS_USER_SESSION_PROCESSES = {
@@ -307,6 +395,33 @@ _WINDOWS_USER_SESSION_PROCESSES = {
     "shellexperiencehost.exe",
     "applicationframehost.exe",
 }
+_WINDOWS_ONE_SHOT_CLI_EXES = {
+    "dsquery.exe",
+    "gpresult.exe",
+    "gpupdate.exe",
+    "ipconfig.exe",
+    "net.exe",
+    "net1.exe",
+    "nltest.exe",
+    "quser.exe",
+    "qwinsta.exe",
+    "tasklist.exe",
+    "whoami.exe",
+    "wmic.exe",
+}
+_WINDOWS_BROWSER_EXES = frozenset({"chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe"})
+_WINDOWS_BROWSER_CHILD_MARKERS = (
+    "--type=",
+    "--utility-sub-type=",
+    "-contentproc",
+    " -childid ",
+    " /prefetch:",
+)
+_WINDOWS_ELECTRON_CHILD_EXES = frozenset({"teams.exe"})
+_WINDOWS_ELECTRON_CHILD_MARKERS = (
+    "--type=",
+    "--utility-sub-type=",
+)
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -1038,13 +1153,78 @@ def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
 
 def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
     """Infer process image and command line for a Linux shell-history command."""
-    first_stage = command.split("|", 1)[0].strip()
-    if not first_stage:
+    processes = _linux_command_processes_from_shell(command)
+    return processes[0] if processes else None
+
+
+def _linux_command_processes_from_shell(command: str) -> list[tuple[str, str]]:
+    """Infer source-native process argv entries from a Linux shell command."""
+    return [
+        process
+        for stage in _split_linux_pipeline(command)
+        if (process := _linux_command_process_from_stage(stage)) is not None
+    ]
+
+
+def _split_linux_pipeline(command: str) -> list[str]:
+    """Split a shell command on unquoted pipeline/control separators."""
+    stages: list[str] = []
+    current: list[str] = []
+    quote: str | None = None
+    escaped = False
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if escaped:
+            current.append(char)
+            escaped = False
+            index += 1
+            continue
+        if char == "\\" and quote != "'":
+            current.append(char)
+            escaped = True
+            index += 1
+            continue
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in {"'", '"'}:
+            quote = char
+            current.append(char)
+            index += 1
+            continue
+        separator_width = 0
+        if char in {"|", ";"}:
+            separator_width = 2 if command[index : index + 2] == "||" else 1
+        elif command[index : index + 2] == "&&":
+            separator_width = 2
+        if separator_width:
+            stage = "".join(current).strip()
+            if stage:
+                stages.append(stage)
+            current = []
+            index += separator_width
+            continue
+        current.append(char)
+        index += 1
+    stage = "".join(current).strip()
+    if stage:
+        stages.append(stage)
+    return stages
+
+
+def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
+    """Infer a source-native process image/argv pair from one shell pipeline stage."""
+    if not stage:
         return None
     try:
-        parts = shlex.split(first_stage, comments=False, posix=True)
+        raw_parts = shlex.split(stage, comments=False, posix=True)
     except ValueError:
         return None
+    parts = _strip_linux_shell_redirections(raw_parts)
     if not parts:
         return None
 
@@ -1077,12 +1257,39 @@ def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
         if index + 1 < len(parts):
             command_line = f"{command_line} {shlex.join(parts[index + 1 :])}"
         return image, command_line
+    command_line = shlex.join(parts[index:])
     if parts[index].startswith("/"):
-        return parts[index], command
+        return parts[index], command_line
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
     if mapped is not None:
-        return mapped, command
+        return mapped, command_line
     return None
+
+
+def _strip_linux_shell_redirections(parts: list[str]) -> list[str]:
+    """Remove shell redirection operators and targets from argv tokens."""
+    cleaned: list[str] = []
+    skip_next = False
+    redirect_ops = {">", ">>", "<", "<<", "<>", ">|", "&>", "&>>"}
+    redirect_prefix_re = re.compile(r"^(?:\d?>&\d+|\d?>>?|&>>?|<<?|<>|>\|).+")
+    attached_redirect_re = re.compile(r"^(?P<arg>.+?)(?:\d?>>?|>>?|<<?|<>|>\|).+")
+    for token in parts:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in redirect_ops or re.fullmatch(r"\d?>>?", token):
+            skip_next = True
+            continue
+        if redirect_prefix_re.match(token):
+            continue
+        attached = attached_redirect_re.match(token)
+        if attached:
+            arg = attached.group("arg")
+            if arg:
+                cleaned.append(arg)
+            continue
+        cleaned.append(token)
+    return cleaned
 
 
 def _dns_base_ttl(query: str, is_internal: bool) -> int:
@@ -1124,6 +1331,35 @@ def _proxy_request_allows_cache_hit(
     }
 
 
+def _origin_form_uri_from_proxy_url(url: str) -> str:
+    """Return the origin-form URI represented by an explicit-proxy request URL."""
+    parsed = urlsplit(url)
+    if parsed.scheme and parsed.netloc:
+        path = parsed.path or "/"
+        return f"{path}?{parsed.query}" if parsed.query else path
+    if not url:
+        return "/"
+    return url if url.startswith(("/", "*")) else f"/{url}"
+
+
+def _proxy_http_response_body_len(
+    proxy_context: ProxyContext,
+    *,
+    resp_bytes: int | None,
+    http: HttpContext | None = None,
+) -> int:
+    """Return Zeek HTTP entity-body length for an explicit proxy response."""
+    if proxy_context.status_code in {204, 304} or proxy_context.method == "HEAD":
+        return 0
+    if proxy_context.status_code >= 400:
+        return max(0, proxy_context.sc_bytes)
+    if http is not None and http.status_code == proxy_context.status_code:
+        return max(0, http.response_body_len)
+    if resp_bytes is not None:
+        return max(0, resp_bytes)
+    return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
+
+
 _APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]+ \d{4}\]")
 _APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d+)\]")
 
@@ -1158,6 +1394,36 @@ def _is_ip_literal(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _tls_certificate_serial(seed: str) -> str:
+    """Return a stable certificate serial with CA-realistic length variation."""
+    from evidenceforge.generation.activity.tls_realism import serial_number_config
+
+    configured_lengths = serial_number_config().get("byte_lengths", [])
+    lengths: list[int] = []
+    weights: list[int] = []
+    for entry in configured_lengths:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            byte_length = int(entry.get("bytes", 0))
+            weight = int(entry.get("weight", 0))
+        except (TypeError, ValueError):
+            continue
+        if 1 <= byte_length <= 20 and weight > 0:
+            lengths.append(byte_length)
+            weights.append(weight)
+
+    if not lengths:
+        lengths = [8, 9, 10, 12, 16, 18, 20]
+        weights = [8, 6, 6, 14, 40, 12, 14]
+
+    length_rng = random.Random(_stable_seed(f"tls_serial_length:{seed}"))
+    byte_length = length_rng.choices(lengths, weights=weights, k=1)[0]
+    value_rng = random.Random(_stable_seed(f"tls_serial_value:{seed}:{byte_length}"))
+    value = value_rng.getrandbits(byte_length * 8) or 1
+    return f"{value:0{byte_length * 2}X}"
 
 
 def _raw_ip_tls_issuer(cert_name: str) -> dict[str, Any]:
@@ -1348,6 +1614,7 @@ class ActivityGenerator:
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
@@ -1358,6 +1625,12 @@ class ActivityGenerator:
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
         self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
+        self._last_one_shot_cli_launch_by_exe: dict[tuple[str, str, str, str], datetime] = {}
+        self._last_one_shot_cli_launch_by_command: dict[
+            tuple[str, str, str, str, str], datetime
+        ] = {}
+        self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
+        self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -1491,6 +1764,28 @@ class ActivityGenerator:
         self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
         return src_port
 
+    def _disambiguate_icmp_observation_time(
+        self,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        time: datetime,
+    ) -> datetime:
+        """Avoid exact duplicate Zeek ICMP summaries for the same tuple and timestamp."""
+        if len(self._recent_icmp_observations) > 100_000:
+            self._recent_icmp_observations.clear()
+        zeek_type = src_port if src_port else 8
+        zeek_code = dst_port if dst_port else 0
+        adjusted = time
+        while True:
+            ts_us = int(round(adjusted.timestamp() * 1_000_000))
+            key = (src_ip, zeek_type, dst_ip, zeek_code, ts_us)
+            if key not in self._recent_icmp_observations:
+                self._recent_icmp_observations.add(key)
+                return adjusted
+            adjusted += timedelta(milliseconds=11)
+
     def _infer_connection_pid(
         self,
         source_system: System | None,
@@ -1595,7 +1890,10 @@ class ActivityGenerator:
             proxy_hostname = dst_ip
 
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
-        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+        from evidenceforge.generation.activity.proxy_uri import (
+            is_browser_like_proxy_domain,
+            pick_proxy_uri,
+        )
         from evidenceforge.generation.activity.referrer import pick_referrer
 
         domain_tags = get_domain_tags(proxy_hostname)
@@ -1631,10 +1929,15 @@ class ActivityGenerator:
             )
             user_agent = ""
 
-        domain_user_agent = pick_proxy_domain_user_agent(
-            rng,
-            source_system,
-            hostname=proxy_hostname,
+        apply_domain_user_agent = http is None or not is_browser_like_proxy_domain(proxy_hostname)
+        domain_user_agent = (
+            pick_proxy_domain_user_agent(
+                rng,
+                source_system,
+                hostname=proxy_hostname,
+            )
+            if apply_domain_user_agent
+            else None
         )
         if domain_user_agent:
             user_agent = domain_user_agent
@@ -1759,6 +2062,196 @@ class ActivityGenerator:
             proxy_fqdn=self._proxy_fqdn(proxy_sys),
         )
 
+    def _explicit_proxy_client_process_hint(
+        self,
+        *,
+        user_agent: str,
+        hostname: str,
+        dst_port: int,
+        proxy_sys: System,
+    ) -> tuple[str, str] | None:
+        """Map user-owned proxy User-Agents to the process that owns the socket."""
+        ua = (user_agent or "").lower()
+        if not ua:
+            return None
+
+        scheme = "https" if dst_port == 443 else "http"
+        target_url = f"{scheme}://{hostname}/" if hostname else f"{scheme}://"
+        proxy_url = (
+            f"http://{self._proxy_fqdn(proxy_sys)}:{getattr(self, '_proxy_listener_port', 8080)}"
+        )
+
+        if "firefox/" in ua:
+            image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
+            return image, f'"{image}" -osint -url {target_url}'
+        if "edg/" in ua or "edge/" in ua:
+            image = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+            return image, f'"{image}" --single-argument {target_url}'
+        if "chrome/" in ua and "google update" not in ua:
+            image = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            return image, f'"{image}" --single-argument {target_url}'
+        if "trident/" in ua or "msie " in ua:
+            image = r"C:\Program Files\Internet Explorer\iexplore.exe"
+            return image, f'"{image}" {target_url}'
+        if ua.startswith("curl/") or " curl/" in ua:
+            image = r"C:\Windows\System32\curl.exe"
+            return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
+        if "powershell" in ua or "invoke-webrequest" in ua:
+            image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            return image, (
+                f'powershell.exe -NoProfile -Command "Invoke-WebRequest '
+                f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
+            )
+        return None
+
+    def _select_explicit_proxy_client_session(
+        self,
+        source_system: System,
+        time: datetime,
+    ) -> tuple[User, Any] | None:
+        """Pick the user session most likely to own a user-mode proxy request."""
+        known_users = getattr(self, "_users_by_username", {})
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_on_system(source_system.hostname)
+            if session.username in known_users
+            and session.username not in _SYSTEM_ACCOUNTS
+            and not session.username.endswith("$")
+            and session.logon_type in {2, 7, 10, 11}
+            and _session_started_by(session, time)
+        ]
+        if not sessions:
+            return None
+
+        assigned_user = getattr(source_system, "assigned_user", None)
+        if assigned_user:
+            assigned_sessions = [
+                session for session in sessions if session.username == assigned_user
+            ]
+            if assigned_sessions:
+                sessions = assigned_sessions
+
+        session = max(sessions, key=lambda candidate: candidate.start_time)
+        return known_users[session.username], session
+
+    def _ensure_explicit_proxy_client_process(
+        self,
+        *,
+        source_system: System | None,
+        time: datetime,
+        proxy_context: ProxyContext,
+        proxy_sys: System,
+        dst_port: int,
+    ) -> tuple[int, str | None]:
+        """Create or reuse the process that source-natively owns a proxy client socket."""
+        if source_system is None or _get_os_category(source_system.os) != "windows":
+            return -1, None
+
+        hint = self._explicit_proxy_client_process_hint(
+            user_agent=proxy_context.user_agent,
+            hostname=proxy_context.host,
+            dst_port=dst_port,
+            proxy_sys=proxy_sys,
+        )
+        if hint is None:
+            return -1, None
+
+        image, command_line = hint
+        session_info = self._select_explicit_proxy_client_session(source_system, time)
+        if session_info is None:
+            return -1, None
+        user, session = session_info
+
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(source_system.hostname)
+            if proc.username == user.username
+            and proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(
+                source_system.hostname,
+                proc.pid,
+                time,
+            )
+            return proc.pid, proc.image
+
+        process_rng = random.Random(
+            _stable_seed(
+                "explicit_proxy_client_process:"
+                f"{source_system.hostname}:{user.username}:{image}:{proxy_context.host}"
+            )
+        )
+        lead_seconds = process_rng.uniform(12.0, 240.0)
+        process_time = time - timedelta(seconds=lead_seconds)
+        min_process_time = session.start_time + timedelta(milliseconds=500)
+        if process_time < min_process_time:
+            process_time = min_process_time
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+
+        parent_pid = self._select_parent_pid(
+            source_system,
+            user,
+            image,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        pid = self.generate_process(
+            user=user,
+            system=source_system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
+        self._record_user_process(source_system, user, pid, image)
+        self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+        self.state_manager.set_current_time(time)
+        return pid, image
+
+    def _caller_explicit_proxy_process_image(
+        self,
+        *,
+        source_system: System | None,
+        pid: int,
+        process_image: str | None,
+        proxy_context: ProxyContext,
+        proxy_sys: System,
+        dst_port: int,
+    ) -> str | None:
+        """Return the caller process image when it already fits proxy client telemetry."""
+        if pid <= 0 or source_system is None:
+            return None
+
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        candidate_image = running.image if running is not None else process_image
+        if not candidate_image:
+            return None
+
+        if _get_os_category(source_system.os) != "windows":
+            return candidate_image
+
+        hint = self._explicit_proxy_client_process_hint(
+            user_agent=proxy_context.user_agent,
+            hostname=proxy_context.host,
+            dst_port=dst_port,
+            proxy_sys=proxy_sys,
+        )
+        if hint is None:
+            return candidate_image
+
+        expected_image = hint[0]
+        if candidate_image.lower() == expected_image.lower():
+            return candidate_image
+        return None
+
     def _attach_ssl_context(
         self,
         event: SecurityEvent,
@@ -1785,6 +2278,11 @@ class ActivityGenerator:
         # Suppressed hostname -> no SNI (raw-IP C2, etc.)
         if server_name == "":
             server_name = None
+        if event.http is not None:
+            # A visible HTTP transaction over TLS means the handshake completed.
+            # Failed-handshake SSL rows cannot coexist with successful http.log,
+            # web/proxy response bytes, or SF conn.log accounting for the same UID.
+            allow_failure = False
 
         # For suppressed external hostnames (raw-IP C2), use the IP as the cert subject.
         # For internal/private endpoints without explicit SNI, use the known
@@ -1902,6 +2400,13 @@ class ActivityGenerator:
                 net.duration = rng.uniform(0.0, 0.5)
             return
 
+        # Passive Zeek cannot extract the encrypted Certificate message from
+        # ordinary TLS 1.3 handshakes. Keep ssl.log evidence but suppress
+        # cert_chain_fuids plus files.log/x509.log side effects unless the
+        # model grows an explicit TLS decryption context.
+        if tls_version == "TLSv13":
+            return
+
         import hashlib
 
         from evidenceforge.events.contexts import X509Context
@@ -1943,7 +2448,7 @@ class ActivityGenerator:
                 str(validity[1]),
             ]
         )
-        serial_number = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+        serial_number = _tls_certificate_serial(serial_seed)
         cert_hash = hashlib.sha1(
             "|".join(
                 [
@@ -2316,7 +2821,7 @@ class ActivityGenerator:
                         str(validity[1]),
                     ]
                 )
-                serial = f"{random.Random(_stable_seed(serial_seed)).getrandbits(128):032X}"
+                serial = _tls_certificate_serial(serial_seed)
                 cert_hash = hashlib.sha1(
                     "|".join(
                         [
@@ -2516,6 +3021,9 @@ class ActivityGenerator:
                 10: "rdp",
             }.get(logon_type, "interactive")
 
+        # Select auth package (semantic data, not format-specific)
+        auth_pkg = self._select_auth_package(logon_type)
+
         # Phase 1: Allocate or resolve IDs from StateManager
         if logon_id is None:
             logon_id = self.state_manager.create_session(
@@ -2553,8 +3061,15 @@ class ActivityGenerator:
                 time = existing_session.start_time
                 self.state_manager.set_current_time(time)
 
-        # Select auth package (semantic data, not format-specific)
-        auth_pkg = self._select_auth_package(logon_type)
+        requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
+        auth_logon_guid = self.state_manager.get_or_create_session_logon_guid(
+            logon_id,
+            system.hostname,
+            require_nonzero=requires_logon_guid,
+        )
+        session_for_guid = self.state_manager.get_session(logon_id)
+        if requires_logon_guid or not (session_for_guid and session_for_guid.logon_guid):
+            self.state_manager.update_session_metadata(logon_id, logon_guid=auth_logon_guid)
         elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
@@ -2584,7 +3099,7 @@ class ActivityGenerator:
                 elevated=elevated,
                 logon_process=auth_pkg.get("LogonProcessName", ""),
                 lm_package=auth_pkg.get("LmPackageName", "-"),
-                logon_guid=auth_pkg.get("LogonGuid", "{00000000-0000-0000-0000-000000000000}"),
+                logon_guid=auth_logon_guid,
                 subject_sid=self._get_sid("SYSTEM"),
                 subject_username="SYSTEM",
                 subject_domain="NT AUTHORITY",
@@ -2675,64 +3190,43 @@ class ActivityGenerator:
                 os_cat = _get_os_category(system.os)
                 if os_cat == "windows":
                     sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
-                    if logon_type == 10:
-                        # RDP: per-session winlogon → userinit → explorer chain
-                        # Windows creates a new session subsystem for each RDP logon
-                        smss_pid = sys_pids.get("smss")
-                        parent_for_chain = smss_pid or sys_pids.get("wininit")
-                        if parent_for_chain and self.state_manager.get_process(
-                            system.hostname, parent_for_chain
-                        ):
-                            winlogon_pid = self.state_manager.create_process(
-                                system.hostname,
-                                parent_for_chain,
-                                r"C:\Windows\System32\winlogon.exe",
-                                "winlogon.exe",
-                                "SYSTEM",
-                                "System",
-                                logon_id=logon_id,
-                            )
-                            session.session_winlogon_pid = winlogon_pid
-                            userinit_pid = self.state_manager.create_process(
-                                system.hostname,
-                                winlogon_pid,
-                                r"C:\Windows\System32\userinit.exe",
-                                "userinit.exe",
-                                user.username,
-                                "Medium",
-                                logon_id=logon_id,
-                            )
-                            explorer_pid = self.state_manager.create_process(
-                                system.hostname,
-                                userinit_pid,
-                                r"C:\Windows\explorer.exe",
-                                "explorer.exe",
-                                user.username,
-                                "Medium",
-                                logon_id=logon_id,
-                            )
-                            session.explorer_pid = explorer_pid
-                            session.process_tree_root = winlogon_pid
-                    else:
-                        # Interactive/cached: use system-wide userinit/winlogon
-                        parent_pid = None
-                        for candidate in ("userinit", "winlogon", "explorer", "services"):
-                            pid = sys_pids.get(candidate)
-                            if pid and self.state_manager.get_process(system.hostname, pid):
-                                parent_pid = pid
-                                break
-                        if parent_pid is not None:
-                            explorer_pid = self.state_manager.create_process(
-                                system.hostname,
-                                parent_pid,
-                                r"C:\Windows\explorer.exe",
-                                "explorer.exe",
-                                user.username,
-                                "Medium",
-                                logon_id=logon_id,
-                            )
-                            session.explorer_pid = explorer_pid
-                            session.process_tree_root = explorer_pid
+                    parent_for_chain = None
+                    for candidate in ("smss", "wininit", "winlogon", "services"):
+                        pid = sys_pids.get(candidate)
+                        if pid and self.state_manager.get_process(system.hostname, pid):
+                            parent_for_chain = pid
+                            break
+                    if parent_for_chain is not None:
+                        winlogon_pid = self.state_manager.create_process(
+                            system.hostname,
+                            parent_for_chain,
+                            r"C:\Windows\System32\winlogon.exe",
+                            "winlogon.exe",
+                            "SYSTEM",
+                            "System",
+                            logon_id=logon_id,
+                        )
+                        session.session_winlogon_pid = winlogon_pid
+                        userinit_pid = self.state_manager.create_process(
+                            system.hostname,
+                            winlogon_pid,
+                            r"C:\Windows\System32\userinit.exe",
+                            "userinit.exe",
+                            user.username,
+                            "Medium",
+                            logon_id=logon_id,
+                        )
+                        explorer_pid = self.state_manager.create_process(
+                            system.hostname,
+                            userinit_pid,
+                            r"C:\Windows\explorer.exe",
+                            "explorer.exe",
+                            user.username,
+                            "Medium",
+                            logon_id=logon_id,
+                        )
+                        session.explorer_pid = explorer_pid
+                        session.process_tree_root = winlogon_pid
                 session.last_activity_time = time
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
@@ -2824,7 +3318,42 @@ class ActivityGenerator:
             time=tgt_time,
         )
 
-        _svc_template = rng.choices(_KERBEROS_SVC_VALUES, weights=_KERBEROS_SVC_WEIGHTS, k=1)[0]
+        role_names = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
+        service_names = {
+            str(service).lower() for service in (getattr(system, "services", []) or [])
+        }
+        hostname_lower = system.hostname.lower()
+        if "file_server" in role_names or "file" in hostname_lower or "smb" in service_names:
+            service_dist = (
+                ("cifs/{hostname}", 70),
+                ("host/{hostname}", 25),
+                ("ldap/{hostname}", 5),
+            )
+        elif "web_server" in role_names or any("http" in service for service in service_names):
+            service_dist = (
+                ("http/{hostname}", 65),
+                ("host/{hostname}", 30),
+                ("cifs/{hostname}", 5),
+            )
+        elif "dns_server" in role_names or "dns" in service_names:
+            service_dist = (
+                ("DNS/{hostname}", 55),
+                ("host/{hostname}", 35),
+                ("cifs/{hostname}", 10),
+            )
+        else:
+            service_dist = (
+                ("cifs/{hostname}", 45),
+                ("host/{hostname}", 35),
+                ("ldap/{hostname}", 10),
+                ("http/{hostname}", 5),
+                ("DNS/{hostname}", 5),
+            )
+        _svc_template = rng.choices(
+            [entry[0] for entry in service_dist],
+            weights=[entry[1] for entry in service_dist],
+            k=1,
+        )[0]
         service_name = _svc_template.format(
             hostname=system.hostname, domain=getattr(self, "_ad_domain", "CORP.LOCAL")
         )
@@ -3356,6 +3885,170 @@ class ActivityGenerator:
 
         return profile_dir + "\\"
 
+    def _space_one_shot_cli_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> datetime:
+        """Avoid machine-impossible bursts of repeated one-shot admin commands."""
+        if _get_os_category(system.os) != "windows":
+            return time
+
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_ONE_SHOT_CLI_EXES:
+            return time
+
+        normalized_command = " ".join(command_line.lower().split())
+        exe_key = (system.hostname, username, logon_id, exe_name)
+        command_key = (*exe_key, normalized_command)
+        adjusted_time = time
+
+        command_last = self._last_one_shot_cli_launch_by_command.get(command_key)
+        if command_last is not None:
+            min_gap = timedelta(
+                seconds=random.Random(
+                    _stable_seed(
+                        f"one_shot_cli_same_command:{system.hostname}:{username}:"
+                        f"{exe_name}:{normalized_command}:{command_last.isoformat()}"
+                    )
+                ).uniform(18.0, 75.0)
+            )
+            if adjusted_time < command_last + min_gap:
+                adjusted_time = command_last + min_gap
+
+        exe_last = self._last_one_shot_cli_launch_by_exe.get(exe_key)
+        if exe_last is not None:
+            min_gap = timedelta(
+                seconds=random.Random(
+                    _stable_seed(
+                        f"one_shot_cli_same_exe:{system.hostname}:{username}:"
+                        f"{exe_name}:{exe_last.isoformat()}"
+                    )
+                ).uniform(2.5, 9.0)
+            )
+            if adjusted_time < exe_last + min_gap:
+                adjusted_time = exe_last + min_gap
+
+        self._last_one_shot_cli_launch_by_exe[exe_key] = adjusted_time
+        self._last_one_shot_cli_launch_by_command[command_key] = adjusted_time
+        return adjusted_time
+
+    @staticmethod
+    def _is_top_level_browser_launch(process_name: str, command_line: str) -> bool:
+        """Return whether a Windows browser command represents a user-facing process."""
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in _WINDOWS_BROWSER_EXES:
+            return False
+        command = f" {command_line.lower()} "
+        return not any(marker in command for marker in _WINDOWS_BROWSER_CHILD_MARKERS)
+
+    def _existing_user_browser_pid(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> int | None:
+        """Reuse an open browser instead of emitting repeated top-level launches."""
+        if _get_os_category(system.os) != "windows":
+            return None
+        if not self._is_top_level_browser_launch(process_name, command_line):
+            return None
+
+        requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        preferred_key = (system.hostname, username, logon_id)
+        preferred_exe = self._preferred_browser_by_session.get(preferred_key)
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            if proc.username != username:
+                continue
+            if proc.logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if proc_exe not in _WINDOWS_BROWSER_EXES:
+                continue
+            if not self._is_top_level_browser_launch(proc.image, proc.command_line):
+                continue
+            candidates.append(proc)
+
+        if not candidates:
+            self._preferred_browser_by_session[preferred_key] = requested_exe
+            return None
+
+        if preferred_exe:
+            preferred = [proc for proc in candidates if proc.image.lower().endswith(preferred_exe)]
+            if preferred:
+                proc = max(preferred, key=lambda candidate: candidate.start_time)
+                self.state_manager.update_process_activity_time(system.hostname, proc.pid, time)
+                return proc.pid
+
+        same_exe = [
+            proc
+            for proc in candidates
+            if proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == requested_exe
+        ]
+        chosen = max(same_exe or candidates, key=lambda candidate: candidate.start_time)
+        self._preferred_browser_by_session[preferred_key] = (
+            chosen.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        )
+        self.state_manager.update_process_activity_time(system.hostname, chosen.pid, time)
+        return chosen.pid
+
+    def _process_effect_context(
+        self,
+        system: System,
+        pid: int,
+        process_name: str,
+        command_line: str,
+    ) -> tuple[str, str]:
+        """Return the process identity that downstream effects should use."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None:
+            return process_name, command_line
+        return proc.image, proc.command_line
+
+    def _space_browser_launch(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        process_name: str,
+        command_line: str,
+        time: datetime,
+    ) -> datetime:
+        """Avoid rendered bursts of repeated top-level browser process creates."""
+        if _get_os_category(system.os) != "windows":
+            return time
+        if not self._is_top_level_browser_launch(process_name, command_line):
+            return time
+
+        key = (system.hostname, username, logon_id)
+        previous = self._last_browser_launch_by_session.get(key)
+        adjusted_time = time
+        if previous is not None:
+            rng = random.Random(
+                _stable_seed(
+                    f"browser_launch_gap:{system.hostname}:{username}:{logon_id}:"
+                    f"{previous.isoformat()}"
+                )
+            )
+            min_gap = timedelta(seconds=rng.uniform(4.0, 18.0))
+            if adjusted_time < previous + min_gap:
+                adjusted_time = previous + min_gap
+        self._last_browser_launch_by_session[key] = adjusted_time
+        return adjusted_time
+
     def generate_process(
         self,
         user: User,
@@ -3368,6 +4061,7 @@ class ActivityGenerator:
         ensure_file_event: bool = False,
         from_storyline: bool = False,
         suppress_command_file_effect: bool = False,
+        allow_existing_browser_reuse: bool = True,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -3388,6 +4082,9 @@ class ActivityGenerator:
             command_line: Command line string
             parent_pid: Parent process PID (default 4 = System)
             suppress_command_file_effect: Caller already owns command output file artifacts.
+            allow_existing_browser_reuse: Reuse an already-open browser for repeated
+                navigation requests. Parent-repair paths disable this when they need
+                a concrete same-family browser parent for renderer/utility children.
 
         Returns:
             PID of the new process
@@ -3479,6 +4176,40 @@ class ActivityGenerator:
             )
             time = session.start_time + timedelta(milliseconds=offset_ms)
             self.state_manager.set_current_time(time)
+        explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        if explicit_parent is not None and time <= explicit_parent.start_time:
+            offset_ms = 50 + (
+                _stable_seed(
+                    f"process_after_parent:{system.hostname}:{parent_pid}:{process_name}:"
+                    f"{command_line}"
+                )
+                % 450
+            )
+            time = explicit_parent.start_time + timedelta(milliseconds=offset_ms)
+            self.state_manager.set_current_time(time)
+        if not from_storyline:
+            spaced_time = self._space_one_shot_cli_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if spaced_time != time:
+                time = spaced_time
+                self.state_manager.set_current_time(time)
+            spaced_time = self._space_browser_launch(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if spaced_time != time:
+                time = spaced_time
+                self.state_manager.set_current_time(time)
         if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
             _integrity = "Medium"
         if _get_os_category(system.os) == "windows":
@@ -3501,12 +4232,25 @@ class ActivityGenerator:
                     running_proc.last_activity_time = time
             return singleton_pid
 
+        if not from_storyline and allow_existing_browser_reuse:
+            browser_pid = self._existing_user_browser_pid(
+                system=system,
+                username=process_username,
+                logon_id=process_logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                time=time,
+            )
+            if browser_pid is not None:
+                return browser_pid
+
         parent_pid = self._sanitize_user_parent_pid(
             system=system,
             user=user,
             time=time,
             logon_id=process_logon_id,
             process_name=process_name,
+            command_line=command_line,
             parent_pid=parent_pid,
             process_username=process_username,
         )
@@ -3663,8 +4407,50 @@ class ActivityGenerator:
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
-        auth_ctx = AuthContext(username=process_username)
-        if not suppress_command_file_effect and rng.random() < 0.40:
+        auth_ctx = AuthContext(
+            username=process_username,
+            user_sid=self._get_sid(process_username),
+            logon_id=process_logon_id,
+        )
+        semantic_file_effect = None
+        if not suppress_command_file_effect:
+            from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
+
+            semantic_file_effect = select_command_file_side_effect(process_name, command_line)
+            if semantic_file_effect is not None:
+                action, path = semantic_file_effect
+                event_type = {
+                    "create": "file_create",
+                    "modify": "file_modify",
+                    "delete": "file_delete",
+                }[action]
+                self.dispatcher.dispatch(
+                    SecurityEvent(
+                        timestamp=time + timedelta(milliseconds=180),
+                        event_type=event_type,
+                        src_host=host_ctx,
+                        auth=auth_ctx,
+                        process=ProcessContext(
+                            pid=pid,
+                            parent_pid=parent_pid,
+                            image=process_name,
+                            command_line=command_line,
+                            username=process_username,
+                            logon_id=process_logon_id,
+                            start_time=running_proc.start_time
+                            if running_proc is not None
+                            else None,
+                        ),
+                        file=FileContext(path=path, action=action, pid=pid),
+                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        storyline_origin=from_storyline,
+                    ),
+                )
+        if (
+            not suppress_command_file_effect
+            and semantic_file_effect is None
+            and rng.random() < 0.40
+        ):
             from evidenceforge.generation.activity.edr_pools import select_file_side_effect
 
             side_effect = select_file_side_effect(
@@ -3752,7 +4538,13 @@ class ActivityGenerator:
             "dllhost.exe",
         }
         _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if os_category == "windows" and _exe in _REGISTRY_WRITERS and rng.random() < 0.50:
+        _STORYLINE_REGISTRY_WRITERS = {"reg.exe", "regedit.exe", "msiexec.exe"}
+        if (
+            os_category == "windows"
+            and _exe in _REGISTRY_WRITERS
+            and (not from_storyline or _exe in _STORYLINE_REGISTRY_WRITERS)
+            and rng.random() < 0.50
+        ):
             # Service-level processes can write HKLM; user processes only HKCU
             _HKLM_WRITERS = {"svchost.exe", "services.exe", "reg.exe", "regedit.exe", "msiexec.exe"}
             # Emit 1-3 registry events per process (registry activity is high-volume)
@@ -3779,6 +4571,7 @@ class ActivityGenerator:
                     _template_user,
                     host_key=system.hostname,
                     host_ip=system.ip,
+                    host_os=system.os,
                 )
                 # TargetObject = key\value_name (full path as Sysmon shows it)
                 _target = f"{_key}\\{_vname}"
@@ -3839,26 +4632,35 @@ class ActivityGenerator:
         rng = random.Random(
             _stable_seed(f"nmap_effects:{system.hostname}:{pid}:{command_line}:{time.isoformat()}")
         )
-        for idx, target_ip in enumerate(targets[:32]):
-            for port_idx, port in enumerate(ports[:12]):
-                offset = timedelta(milliseconds=180 + idx * 260 + port_idx * rng.randint(45, 140))
-                self.generate_connection(
-                    src_ip=system.ip,
-                    dst_ip=target_ip,
-                    time=time + offset,
-                    dst_port=port,
-                    proto="tcp",
-                    service="",
-                    duration=rng.uniform(0.02, 0.45),
-                    orig_bytes=rng.randint(40, 180),
-                    resp_bytes=rng.randint(0, 900),
-                    emit_dns=False,
-                    pid=pid,
-                    source_system=system,
-                    conn_state=_nmap_conn_state(port),
-                    proxy_bypass=True,
-                    process_image=process_name,
-                )
+        probe_pairs = [(target_ip, port) for target_ip in targets[:32] for port in ports[:12]]
+        rng.shuffle(probe_pairs)
+        elapsed_ms = rng.randint(120, 260)
+        for target_ip, port in probe_pairs:
+            target_system = self._ip_to_system.get(target_ip)
+            conn_state, service, duration, orig_bytes, resp_bytes = _nmap_probe_profile(
+                port,
+                target_system,
+                rng,
+            )
+            offset = timedelta(milliseconds=elapsed_ms)
+            elapsed_ms += rng.randint(35, 260) + int(rng.expovariate(1.0 / 90.0))
+            self.generate_connection(
+                src_ip=system.ip,
+                dst_ip=target_ip,
+                time=time + offset,
+                dst_port=port,
+                proto="tcp",
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                emit_dns=False,
+                pid=pid,
+                source_system=system,
+                conn_state=conn_state,
+                proxy_bypass=True,
+                process_image=process_name,
+            )
 
     def _resolve_nmap_targets(self, command_line: str, system: System) -> list[str]:
         """Resolve nmap CIDR/IP arguments to visible scenario hosts when possible."""
@@ -4294,7 +5096,11 @@ class ActivityGenerator:
                     version=http.version,
                     user_agent=http.user_agent,
                     request_body_len=http.request_body_len,
-                    response_body_len=proxy_context.sc_bytes,
+                    response_body_len=_proxy_http_response_body_len(
+                        proxy_context,
+                        resp_bytes=resp_bytes,
+                        http=http,
+                    ),
                     status_code=proxy_context.status_code,
                     status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
                     referrer=http.referrer,
@@ -4315,7 +5121,10 @@ class ActivityGenerator:
                     version="1.1",
                     user_agent=proxy_context.user_agent,
                     request_body_len=request_body_len,
-                    response_body_len=proxy_context.sc_bytes,
+                    response_body_len=_proxy_http_response_body_len(
+                        proxy_context,
+                        resp_bytes=resp_bytes,
+                    ),
                     status_code=proxy_context.status_code,
                     status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
                     referrer=proxy_context.referrer,
@@ -4375,6 +5184,16 @@ class ActivityGenerator:
                     rng = _get_rng()
                     client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
                     client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
+                else:
+                    framing_rng = random.Random(
+                        _stable_seed(
+                            "proxy_client_tls_framing:"
+                            f"{src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
+                            f"{time.timestamp()}:{proxy_context.method}"
+                        )
+                    )
+                    client_orig_bytes += framing_rng.randint(160, 900)
+                    client_resp_bytes += framing_rng.randint(180, 2400)
             if will_emit_egress:
                 egress_duration = duration or 0.1
                 response_flush = random.Random(
@@ -4389,6 +5208,36 @@ class ActivityGenerator:
                     int(client_duration * 1000),
                 )
 
+            client_pid = pid
+            client_process_image = process_image
+            caller_process_image = self._caller_explicit_proxy_process_image(
+                source_system=source_system,
+                pid=pid,
+                process_image=process_image,
+                proxy_context=proxy_context,
+                proxy_sys=proxy_sys,
+                dst_port=dst_port,
+            )
+            if caller_process_image is not None:
+                client_process_image = caller_process_image
+                if source_system is not None:
+                    self.state_manager.update_process_activity_time(
+                        source_system.hostname,
+                        pid,
+                        time,
+                    )
+            else:
+                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+                    source_system=source_system,
+                    time=time,
+                    proxy_context=proxy_context,
+                    proxy_sys=proxy_sys,
+                    dst_port=dst_port,
+                )
+                if owned_client_pid > 0:
+                    client_pid = owned_client_pid
+                    client_process_image = owned_process_image
+
             client_uid = self.generate_connection(
                 src_ip=src_ip,
                 dst_ip=proxy_sys.ip,
@@ -4401,14 +5250,14 @@ class ActivityGenerator:
                 resp_bytes=client_resp_bytes,
                 src_port=src_port,
                 emit_dns=False,
-                pid=pid,
+                pid=client_pid,
                 source_system=source_system,
                 conn_state=conn_state or "SF",
                 http=client_http,
                 proxy=proxy_context,
                 hostname=self._proxy_fqdn(proxy_sys),
                 proxy_bypass=True,
-                process_image=process_image,
+                process_image=client_process_image,
             )
 
             proxy_terminal_failures = {"DENIED", "AUTH_REQUIRED", "GATEWAY_ERROR"}
@@ -4420,7 +5269,46 @@ class ActivityGenerator:
             egress_http = (
                 http if http is not None and proxy_context.cache_result == "MISS" else None
             )
+            if egress_http is None and dst_port == 80 and proxy_context.cache_result == "MISS":
+                status_messages = {
+                    200: "OK",
+                    301: "Moved Permanently",
+                    302: "Found",
+                    304: "Not Modified",
+                    403: "Forbidden",
+                    407: "Proxy Authentication Required",
+                    500: "Internal Server Error",
+                    502: "Bad Gateway",
+                    503: "Service Unavailable",
+                    504: "Gateway Timeout",
+                }
+                response_body_len = _proxy_http_response_body_len(
+                    proxy_context,
+                    resp_bytes=resp_bytes,
+                )
+                request_body_len = 0
+                if proxy_context.method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:
+                    request_body_len = max(orig_bytes or 0, proxy_context.cs_bytes)
+                egress_http = HttpContext(
+                    method=proxy_context.method,
+                    host=proxy_context.host,
+                    uri=_origin_form_uri_from_proxy_url(proxy_context.url),
+                    version="1.1",
+                    user_agent=proxy_context.user_agent,
+                    request_body_len=request_body_len,
+                    response_body_len=response_body_len,
+                    status_code=proxy_context.status_code,
+                    status_msg=status_messages.get(proxy_context.status_code, "OK"),
+                    referrer=proxy_context.referrer,
+                    trans_depth=client_http.trans_depth if client_http is not None else 1,
+                    tags=[],
+                    resp_mime_types=[proxy_context.content_type]
+                    if proxy_context.content_type and proxy_context.status_code == 200
+                    else [],
+                )
             egress_resp_bytes = resp_bytes
+            if egress_http is not None:
+                egress_resp_bytes = max(resp_bytes or 0, egress_http.response_body_len)
             if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
                 egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
             if proxy_context.host:
@@ -4902,6 +5790,14 @@ class ActivityGenerator:
                 time,
             ),
         )
+        if proto == "icmp":
+            time = self._disambiguate_icmp_observation_time(
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                time,
+            )
 
         if pid > 0 and resolved_source_system:
             activity_time = time
@@ -5219,10 +6115,19 @@ class ActivityGenerator:
                             hostname=proxy_hostname,
                             domain_tags=domain_tags,
                         )
-                domain_user_agent = pick_proxy_domain_user_agent(
-                    rng,
-                    source_system,
-                    hostname=proxy_hostname,
+                from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+
+                apply_domain_user_agent = event.http is None or not is_browser_like_proxy_domain(
+                    proxy_hostname
+                )
+                domain_user_agent = (
+                    pick_proxy_domain_user_agent(
+                        rng,
+                        source_system,
+                        hostname=proxy_hostname,
+                    )
+                    if apply_domain_user_agent
+                    else None
                 )
                 if domain_user_agent:
                     user_agent = domain_user_agent
@@ -5854,12 +6759,6 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            # Session ID: monotonic + unique per host. StateManager owns this
-            # sequence because baseline syslog noise and explicit SSH sessions
-            # both produce systemd-logind messages for the same host.
-            hostname = target_system.hostname
-            session_id = self.state_manager.next_linux_logind_session_id(hostname, rng, time)
-
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
                 timestamp=time - timedelta(seconds=1),
@@ -5896,6 +6795,7 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
+            hostname = target_system.hostname
             pam_event = SecurityEvent(
                 timestamp=time + timedelta(seconds=1),
                 event_type="syslog",
@@ -5914,8 +6814,17 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
+            logind_time = time + timedelta(seconds=2)
+            # Session ID: monotonic + unique per host. StateManager owns this
+            # sequence because baseline syslog noise and explicit SSH sessions
+            # both produce systemd-logind messages for the same host.
+            session_id = self.state_manager.next_linux_logind_session_id(
+                hostname,
+                rng,
+                logind_time,
+            )
             logind_event = SecurityEvent(
-                timestamp=time + timedelta(seconds=2),
+                timestamp=logind_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -6087,10 +6996,9 @@ class ActivityGenerator:
         """Emit process telemetry for interactive Linux shell commands when state supports it."""
         if _get_os_category(system.os) != "linux":
             return
-        process = _linux_command_process_from_shell(command)
-        if process is None:
+        processes = _linux_command_processes_from_shell(command)
+        if not processes:
             return
-        image, process_command_line = process
 
         sessions = [
             session
@@ -6127,29 +7035,30 @@ class ActivityGenerator:
         ):
             return
 
-        parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
-        process_time = time + timedelta(milliseconds=rng.randint(20, 450))
-        pid = self.generate_process(
-            user=user,
-            system=system,
-            time=process_time,
-            logon_id=session.logon_id,
-            process_name=image,
-            command_line=process_command_line,
-            parent_pid=parent_pid,
-            suppress_command_file_effect=True,
-        )
-        self._record_user_process(system, user, pid, image)
-        lifetime = _linux_foreground_lifetime(image, process_command_line)
-        if lifetime is not None:
-            self.generate_process_termination(
+        for index, (image, process_command_line) in enumerate(processes[:4]):
+            parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
+            process_time = time + timedelta(milliseconds=rng.randint(20, 180) + index * 35)
+            pid = self.generate_process(
                 user=user,
                 system=system,
-                time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
-                pid=pid,
-                process_name=image,
+                time=process_time,
                 logon_id=session.logon_id,
+                process_name=image,
+                command_line=process_command_line,
+                parent_pid=parent_pid,
+                suppress_command_file_effect=True,
             )
+            self._record_user_process(system, user, pid, image)
+            lifetime = _linux_foreground_lifetime(image, process_command_line)
+            if lifetime is not None:
+                self.generate_process_termination(
+                    user=user,
+                    system=system,
+                    time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
+                    pid=pid,
+                    process_name=image,
+                    logon_id=session.logon_id,
+                )
 
     def _schedule_bash_history_time(
         self,
@@ -6253,6 +7162,12 @@ class ActivityGenerator:
             PID of the new process
         """
         from evidenceforge.events.contexts import ProcessContext
+
+        exe_name = ntpath.basename(process_name).lower()
+        if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:
+            for proc in self.state_manager.get_processes_on_system(system.hostname):
+                if ntpath.basename(proc.image).lower() == exe_name:
+                    return proc.pid
 
         pid = self.state_manager.create_process(
             system=system.hostname,
@@ -7182,6 +8097,12 @@ class ActivityGenerator:
                     self._record_user_process(system, user, pid, process_name)
                     if active_session:
                         active_session.last_activity_time = process_time
+                    effect_process_name, effect_command_line = self._process_effect_context(
+                        system,
+                        pid,
+                        process_name,
+                        command_line,
+                    )
 
                     # Spawn child/utility processes for apps that have them
                     if activity_type == "process_user_apps":
@@ -7189,9 +8110,9 @@ class ActivityGenerator:
                             get_child_processes,
                         )
 
-                        exe_lower = process_name.rsplit("\\", 1)[-1].lower()
-                        if "/" in process_name:
-                            exe_lower = process_name.rsplit("/", 1)[-1].lower()
+                        exe_lower = effect_process_name.rsplit("\\", 1)[-1].lower()
+                        if "/" in effect_process_name:
+                            exe_lower = effect_process_name.rsplit("/", 1)[-1].lower()
                         child_entries = get_child_processes(os_category, exe_lower)
                         if child_entries:
                             num_children = rng.randint(1, min(3, len(child_entries)))
@@ -7216,32 +8137,48 @@ class ActivityGenerator:
                     # Emit correlated network connection for network-active apps
                     # (tight PID+timestamp coupling alongside profile-driven volume)
                     self._emit_process_network_correlation(
-                        system, process_name, command_line, process_time, pid, rng
+                        system,
+                        effect_process_name,
+                        effect_command_line,
+                        process_time,
+                        pid,
+                        rng,
                     )
 
                     # Also generate bash history for Linux processes from the same
                     # canonical command so eCAR and shell artifacts do not diverge.
                     if os_category == "windows":
-                        lifetime = _windows_foreground_lifetime(process_name, command_line)
+                        lifetime = _windows_foreground_lifetime(
+                            effect_process_name,
+                            effect_command_line,
+                        )
                         if lifetime is not None:
                             self.generate_process_termination(
                                 user=user,
                                 system=system,
                                 time=time + timedelta(seconds=rng.uniform(*lifetime)),
                                 pid=pid,
-                                process_name=process_name,
+                                process_name=effect_process_name,
                                 logon_id=logon_id,
                             )
                     elif os_category == "linux":
-                        self._emit_bash_command_event(user, system, process_time, command_line)
-                        lifetime = _linux_foreground_lifetime(process_name, command_line)
+                        self._emit_bash_command_event(
+                            user,
+                            system,
+                            process_time,
+                            effect_command_line,
+                        )
+                        lifetime = _linux_foreground_lifetime(
+                            effect_process_name,
+                            effect_command_line,
+                        )
                         if lifetime is not None:
                             self.generate_process_termination(
                                 user=user,
                                 system=system,
                                 time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
                                 pid=pid,
-                                process_name=process_name,
+                                process_name=effect_process_name,
                                 logon_id=logon_id,
                             )
 
@@ -7414,8 +8351,7 @@ class ActivityGenerator:
         """
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
-
-        logon_id = f"0x{rng.randint(0x10000, 0xFFFFF):x}"
+        logon_id = self.state_manager.allocate_logon_id(dc_hostname, time)
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
@@ -7613,7 +8549,7 @@ class ActivityGenerator:
         target_username: str,
         target_server: str,
         process_name: str,
-        process_pid: int,
+        process_pid: int | None,
         source_ip: str = "",
         source_port: int = 0,
     ) -> None:
@@ -7630,6 +8566,7 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
         subject = self._account_subject_fields(user.username, system, subject_logon_id)
+        process_pid = process_pid or 0
         if process_pid > 0 and process_name:
             running_process = self.state_manager.get_process(system.hostname, process_pid)
             running_image = running_process.image if running_process is not None else ""
@@ -7975,6 +8912,9 @@ class ActivityGenerator:
         # and Zeek evidence to appear first in a bounded time slice.
         logon_time = observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600))
         if logon_id is not None:
+            reassigned_logon_id = self.state_manager.reassign_session_logon_id(logon_id, logon_time)
+            if reassigned_logon_id is not None:
+                logon_id = reassigned_logon_id
             self.state_manager.update_session_metadata(
                 logon_id,
                 username=user.username,
@@ -8058,12 +8998,12 @@ class ActivityGenerator:
         Each call gets a unique LogonID (real Windows allocates new sessions for service restarts).
         """
         sid = _SYSTEM_ACCOUNT_SIDS.get(service_account, self._get_sid(service_account))
-        # Allocate unique LogonID via StateManager (same as regular logons)
         logon_id = self.state_manager.create_session(
             username=service_account,
             system=system.hostname,
             logon_type=5,
             source_ip="-",
+            start_time=time,
         )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
@@ -8109,6 +9049,11 @@ class ActivityGenerator:
         failure_fields = pick_tgt_failure_fields(rng)
         dc_host = self._build_dc_host_context(dc_hostname)
         reporting_pid = self._get_system_pid(dc_hostname, "lsass", 0x2E0)
+        has_source_ip = source_ip not in {"", "-"}
+        normalized_source_ip = (
+            f"::ffff:{source_ip}" if has_source_ip and ":" not in source_ip else source_ip
+        )
+        source_port = _ephemeral_port(rng, self._os_for_ip(source_ip)) if has_source_ip else 0
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_preauth_failed",
@@ -8121,14 +9066,8 @@ class ActivityGenerator:
                 ticket_options=failure_fields["ticket_options"],
                 ticket_status=status,
                 pre_auth_type=failure_fields["pre_auth_type"],
-                source_ip=(
-                    "-"
-                    if source_ip in {"", "-"}
-                    else f"::ffff:{source_ip}"
-                    if ":" not in source_ip
-                    else source_ip
-                ),
-                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
+                source_ip=normalized_source_ip or "-",
+                source_port=source_port,
                 reporting_pid=reporting_pid,
             ),
         )
@@ -8254,6 +9193,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ServiceContext
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
+        self._emit_remote_service_control_network_evidence(user, system, time)
         if _get_os_category(system.os) == "windows":
             service_path = service_file_name.replace("%SystemRoot%", r"C:\Windows")
             service_path = service_path.replace("%systemroot%", r"C:\Windows")
@@ -8310,6 +9250,56 @@ class ActivityGenerator:
         )
         self.dispatcher.dispatch(event)
 
+    def _emit_remote_service_control_network_evidence(
+        self,
+        user: User,
+        target_system: System,
+        time: datetime,
+    ) -> None:
+        """Emit SMB/RPC flows that usually precede remote Windows service creation."""
+        world_model = getattr(self, "_world_model", None)
+        source_system = None
+        primary_system_name = getattr(user, "primary_system", None)
+        if world_model is not None and primary_system_name:
+            source_system = world_model.systems_by_hostname.get(primary_system_name)
+        if source_system is None:
+            sessions = [
+                session
+                for session in self.state_manager.get_sessions_for_user(user.username)
+                if session.system != target_system.hostname
+            ]
+            if sessions and world_model is not None:
+                newest = max(sessions, key=lambda session: session.start_time)
+                source_system = world_model.systems_by_hostname.get(newest.system)
+        if source_system is None or source_system.ip == target_system.ip:
+            return
+        if _get_os_category(target_system.os) != "windows":
+            return
+        rng = _get_rng()
+        base_src_port = _ephemeral_port(rng, _get_os_category(source_system.os))
+        flow_specs = (
+            (445, "smb", time - timedelta(milliseconds=rng.randint(1100, 1800))),
+            (135, "dce_rpc", time - timedelta(milliseconds=rng.randint(350, 900))),
+        )
+        for idx, (dst_port, service, flow_time) in enumerate(flow_specs):
+            self.generate_connection(
+                src_ip=source_system.ip,
+                dst_ip=target_system.ip,
+                time=flow_time,
+                dst_port=dst_port,
+                proto="tcp",
+                service=service,
+                duration=rng.uniform(0.08, 0.9),
+                orig_bytes=rng.randint(45_000, 160_000)
+                if dst_port == 445
+                else rng.randint(450, 1800),
+                resp_bytes=rng.randint(1500, 7000) if dst_port == 445 else rng.randint(350, 2200),
+                src_port=base_src_port + idx,
+                emit_dns=False,
+                source_system=source_system,
+                conn_state="SF",
+            )
+
     def generate_scheduled_task(
         self,
         user: User,
@@ -8318,6 +9308,7 @@ class ActivityGenerator:
         task_name: str,
         action: str = "created",
         task_content: str = "",
+        source_command_line: str = "",
     ) -> None:
         """Generate scheduled task event (4698/4699/4700/4701) on target system."""
         from evidenceforge.events.contexts import ScheduledTaskContext
@@ -8330,6 +9321,7 @@ class ActivityGenerator:
             actor=user,
             host=host,
             time=time,
+            source_command_line=source_command_line,
         )
         event = SecurityEvent(
             timestamp=time,
@@ -8358,12 +9350,17 @@ class ActivityGenerator:
         actor: User,
         host: HostContext,
         time: datetime,
+        source_command_line: str = "",
     ) -> str:
         """Return a full Task Scheduler XML definition for Security 4698 events."""
         if self._is_complete_task_xml(task_content):
             return task_content
 
-        command, arguments = self._extract_scheduled_task_command(task_content, task_name)
+        command, arguments = self._extract_scheduled_task_command(
+            task_content,
+            task_name,
+            source_command_line=source_command_line,
+        )
         return self._build_scheduled_task_xml(
             task_name=task_name,
             command=command,
@@ -8371,6 +9368,8 @@ class ActivityGenerator:
             actor=actor,
             host=host,
             time=time,
+            schedule=self._extract_schtasks_schedule(source_command_line),
+            principal_name=self._extract_schtasks_option(source_command_line, "ru"),
         )
 
     @staticmethod
@@ -8390,20 +9389,29 @@ class ActivityGenerator:
         )
 
     @classmethod
-    def _extract_scheduled_task_command(cls, task_content: str, task_name: str) -> tuple[str, str]:
+    def _extract_scheduled_task_command(
+        cls,
+        task_content: str,
+        task_name: str,
+        *,
+        source_command_line: str = "",
+    ) -> tuple[str, str]:
         """Extract a command/arguments pair from command text or minimal task XML."""
         import re
         from html import unescape
 
         command = ""
         arguments = ""
+        source_action = cls._extract_schtasks_option(source_command_line, "tr")
         command_match = re.search(
             r"<Command>(?P<command>.*?)</Command>", task_content, flags=re.IGNORECASE | re.DOTALL
         )
         args_match = re.search(
             r"<Arguments>(?P<args>.*?)</Arguments>", task_content, flags=re.IGNORECASE | re.DOTALL
         )
-        if command_match:
+        if source_action:
+            command = source_action
+        elif command_match:
             command = unescape(command_match.group("command")).strip()
         else:
             command = task_content.strip()
@@ -8442,6 +9450,99 @@ class ActivityGenerator:
         return stripped, ""
 
     @staticmethod
+    def _extract_schtasks_option(command_line: str, option: str) -> str:
+        """Extract a quoted or bare schtasks.exe option value."""
+        import re
+
+        if not command_line:
+            return ""
+        option_name = option.lstrip("/")
+        match = re.search(
+            rf'(?:^|\s)/{re.escape(option_name)}\s+(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))',
+            command_line,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return ""
+        return (match.group("quoted") or match.group("bare") or "").strip()
+
+    @classmethod
+    def _extract_schtasks_schedule(cls, command_line: str) -> dict[str, str]:
+        """Extract the subset of schtasks schedule options represented in task XML."""
+        schedule = cls._extract_schtasks_option(command_line, "sc").upper()
+        if not schedule:
+            return {}
+        details = {"sc": schedule}
+        for option in ("mo", "st", "sd"):
+            value = cls._extract_schtasks_option(command_line, option)
+            if value:
+                details[option] = value
+        return details
+
+    @staticmethod
+    def _schedule_modifier(schedule: dict[str, str], default: int = 1) -> int:
+        """Return a safe positive `/MO` schedule modifier."""
+        try:
+            modifier = int(schedule.get("mo", ""))
+        except ValueError:
+            return default
+        return max(1, min(modifier, 365))
+
+    @classmethod
+    def _scheduled_task_trigger_xml(cls, start_boundary: str, schedule: dict[str, str]) -> str:
+        """Render the trigger XML implied by common schtasks schedule options."""
+        schedule_type = schedule.get("sc", "").upper()
+        modifier = cls._schedule_modifier(schedule)
+        if schedule_type == "HOURLY":
+            interval = f"PT{modifier}H"
+            return (
+                "  <Triggers>\n"
+                "    <TimeTrigger>\n"
+                f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+                "      <Enabled>true</Enabled>\n"
+                "      <Repetition>\n"
+                f"        <Interval>{interval}</Interval>\n"
+                "        <StopAtDurationEnd>false</StopAtDurationEnd>\n"
+                "      </Repetition>\n"
+                "    </TimeTrigger>\n"
+                "  </Triggers>\n"
+            )
+        if schedule_type == "MINUTE":
+            interval = f"PT{modifier}M"
+            return (
+                "  <Triggers>\n"
+                "    <TimeTrigger>\n"
+                f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+                "      <Enabled>true</Enabled>\n"
+                "      <Repetition>\n"
+                f"        <Interval>{interval}</Interval>\n"
+                "        <StopAtDurationEnd>false</StopAtDurationEnd>\n"
+                "      </Repetition>\n"
+                "    </TimeTrigger>\n"
+                "  </Triggers>\n"
+            )
+        if schedule_type == "DAILY":
+            return (
+                "  <Triggers>\n"
+                "    <CalendarTrigger>\n"
+                f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+                "      <Enabled>true</Enabled>\n"
+                "      <ScheduleByDay>\n"
+                f"        <DaysInterval>{modifier}</DaysInterval>\n"
+                "      </ScheduleByDay>\n"
+                "    </CalendarTrigger>\n"
+                "  </Triggers>\n"
+            )
+        return (
+            "  <Triggers>\n"
+            "    <TimeTrigger>\n"
+            f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
+            "      <Enabled>true</Enabled>\n"
+            "    </TimeTrigger>\n"
+            "  </Triggers>\n"
+        )
+
+    @staticmethod
     def _build_scheduled_task_xml(
         *,
         task_name: str,
@@ -8450,12 +9551,14 @@ class ActivityGenerator:
         actor: User,
         host: HostContext,
         time: datetime,
+        schedule: dict[str, str] | None = None,
+        principal_name: str = "",
     ) -> str:
         """Build source-native Task Scheduler XML for Windows Security 4698."""
         from xml.sax.saxutils import escape as xml_escape
 
         task_path = task_name if task_name.startswith("\\") else f"\\{task_name}"
-        author = ActivityGenerator._scheduled_task_principal(actor.username, host)
+        author = ActivityGenerator._scheduled_task_principal(principal_name or actor.username, host)
         start_boundary = (
             time.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         )
@@ -8466,6 +9569,7 @@ class ActivityGenerator:
         run_level = (
             "HighestAvailable" if author.upper() == "NT AUTHORITY\\SYSTEM" else "LeastPrivilege"
         )
+        trigger_xml = ActivityGenerator._scheduled_task_trigger_xml(start_boundary, schedule or {})
         return (
             '<?xml version="1.0" encoding="UTF-16"?>\n'
             '<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -8474,12 +9578,7 @@ class ActivityGenerator:
             f"    <Author>{xml_escape(author)}</Author>\n"
             f"    <URI>{xml_escape(task_path)}</URI>\n"
             "  </RegistrationInfo>\n"
-            "  <Triggers>\n"
-            "    <TimeTrigger>\n"
-            f"      <StartBoundary>{start_boundary}</StartBoundary>\n"
-            "      <Enabled>true</Enabled>\n"
-            "    </TimeTrigger>\n"
-            "  </Triggers>\n"
+            f"{trigger_xml}"
             "  <Principals>\n"
             '    <Principal id="Author">\n'
             f"      <UserId>{xml_escape(author)}</UserId>\n"
@@ -8822,12 +9921,12 @@ class ActivityGenerator:
             remote_thread=RemoteThreadContext(
                 target_pid=target_pid,
                 target_image=target_image,
-                new_thread_id=rng.randint(100, 9999),
+                new_thread_id=windows_id_randint(rng, 100, 9999),
                 start_address=start_address,
                 start_module=start_module,
                 start_function=start_function,
-                source_thread_id=rng.randint(1000, 9999),
-                target_thread_id=rng.randint(1000, 9999),
+                source_thread_id=windows_id_randint(rng, 1000, 9999),
+                target_thread_id=windows_id_randint(rng, 1000, 9999),
                 target_process_object_id=target_obj_id,
                 thread_object_id=thread_obj_id,
                 stack_base=stack_base,
@@ -8907,7 +10006,7 @@ class ActivityGenerator:
             source_thread_rng = random.Random(
                 _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
             )
-            source_thread_id = source_thread_rng.randint(1000, 9999)
+            source_thread_id = windows_id_randint(source_thread_rng, 1000, 9999)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",
@@ -9184,7 +10283,7 @@ class ActivityGenerator:
             auth=AuthContext(
                 username="ANONYMOUS LOGON",
                 user_sid="S-1-5-7",
-                logon_id=f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
+                logon_id=self.state_manager.allocate_logon_id(system.hostname, time),
                 logon_type=3,
                 auth_package="NTLM",
                 logon_process="NtLmSsp",
@@ -9489,7 +10588,7 @@ class ActivityGenerator:
                     "LogonProcessName": "Kerberos",
                     "AuthenticationPackageName": "Kerberos",
                     "LmPackageName": "-",
-                    "LogonGuid": f"{{{uuid.uuid4()}}}",
+                    "LogonGuid": "generate",
                 }
             elif roll < 0.90:
                 return {
@@ -9515,7 +10614,7 @@ class ActivityGenerator:
                 "LogonProcessName": "User32",
                 "AuthenticationPackageName": auth_package,
                 "LmPackageName": "NTLM V2" if auth_package == "NTLM" else "-",
-                "LogonGuid": f"{{{uuid.uuid4()}}}"
+                "LogonGuid": "generate"
                 if auth_package == "Kerberos"
                 else "{00000000-0000-0000-0000-000000000000}",
             }
@@ -9779,28 +10878,119 @@ class ActivityGenerator:
             return True
         parent_proc = self.state_manager.get_process(hostname, parent_pid)
         if parent_proc is None or not parent_proc.logon_id:
+            if parent_proc is not None:
+                parent_exe = parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if (
+                    parent_exe == "explorer.exe"
+                    and parent_proc.username not in _SYSTEM_ACCOUNTS
+                    and not parent_proc.username.endswith("$")
+                ):
+                    return False
             return True
         if parent_proc.username in _SYSTEM_ACCOUNTS or parent_proc.username.endswith("$"):
             return True
         return parent_proc.logon_id == logon_id
 
     def _get_session_explorer_pid(
-        self, system: System, user: User, time: datetime | None = None
+        self,
+        system: System,
+        user: User,
+        time: datetime | None = None,
+        logon_id: str = "",
     ) -> int | None:
         """Get the explorer.exe PID for the user's active interactive session.
 
         Returns None if no interactive session exists or explorer PID not set.
         """
         sessions = self.state_manager.get_sessions_for_user(user.username)
-        for session in sessions:
-            if session.system == system.hostname and session.explorer_pid is not None:
-                if time is not None and not self._is_pid_active_at(
-                    system, session.explorer_pid, time
-                ):
-                    continue
-                if self._is_pid_alive(system, session.explorer_pid):
-                    return session.explorer_pid
+        candidates = [
+            session
+            for session in sessions
+            if session.system == system.hostname
+            and session.explorer_pid is not None
+            and (not logon_id or session.logon_id == logon_id)
+        ]
+        candidates.sort(key=lambda session: session.start_time, reverse=True)
+        for session in candidates:
+            if session.explorer_pid is None:
+                continue
+            if time is not None and not self._is_pid_active_at(system, session.explorer_pid, time):
+                continue
+            if self._is_pid_alive(system, session.explorer_pid):
+                return session.explorer_pid
         return None
+
+    def _ensure_session_explorer_pid(
+        self,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+    ) -> int | None:
+        """Return or create the per-session Explorer state for GUI children."""
+        existing = self._get_session_explorer_pid(system, user, time=time, logon_id=logon_id)
+        if existing is not None:
+            return existing
+
+        session = self.state_manager.get_session(logon_id)
+        if session is None:
+            return None
+        if session.system != system.hostname or session.username != user.username:
+            return None
+        if session.logon_type == 3 or session.session_kind == "network":
+            return None
+
+        sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        parent_for_chain = None
+        for candidate in ("smss", "wininit", "winlogon", "services"):
+            pid = sys_pids.get(candidate)
+            if pid and self._is_pid_active_at(system, pid, time):
+                parent_for_chain = pid
+                break
+        if parent_for_chain is None:
+            return None
+
+        original_time = self.state_manager.state.current_time
+        chain_time = max(session.start_time, time - timedelta(milliseconds=250))
+        self.state_manager.set_current_time(chain_time)
+        try:
+            winlogon_pid = session.session_winlogon_pid
+            if winlogon_pid is None or not self._is_pid_active_at(system, winlogon_pid, time):
+                winlogon_pid = self.state_manager.create_process(
+                    system.hostname,
+                    parent_for_chain,
+                    r"C:\Windows\System32\winlogon.exe",
+                    "winlogon.exe",
+                    "SYSTEM",
+                    "System",
+                    logon_id=logon_id,
+                )
+                session.session_winlogon_pid = winlogon_pid
+                session.process_tree_root = winlogon_pid
+
+            userinit_pid = self.state_manager.create_process(
+                system.hostname,
+                winlogon_pid,
+                r"C:\Windows\System32\userinit.exe",
+                "userinit.exe",
+                user.username,
+                "Medium",
+                logon_id=logon_id,
+            )
+            explorer_pid = self.state_manager.create_process(
+                system.hostname,
+                userinit_pid,
+                r"C:\Windows\explorer.exe",
+                "explorer.exe",
+                user.username,
+                "Medium",
+                logon_id=logon_id,
+            )
+            session.explorer_pid = explorer_pid
+            return explorer_pid
+        finally:
+            if original_time is not None:
+                self.state_manager.set_current_time(original_time)
 
     def _windows_explorer_parent_pid(
         self,
@@ -9925,9 +11115,28 @@ class ActivityGenerator:
                 )
 
             # Prefer session-specific explorer PID over system-wide default
-            session_explorer = self._get_session_explorer_pid(system, user, time=time)
-            explorer_pid = session_explorer or sys_pids.get(
-                "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+            session_explorer = self._ensure_session_explorer_pid(
+                system, user, time=time, logon_id=logon_id
+            )
+            fallback_explorer = sys_pids.get("explorer")
+            if fallback_explorer:
+                fallback_proc = self.state_manager.get_process(system.hostname, fallback_explorer)
+                fallback_exe = (
+                    fallback_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                    if fallback_proc is not None
+                    else ""
+                )
+                if fallback_exe != "explorer.exe" or not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=fallback_explorer,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    fallback_explorer = None
+            explorer_pid = (
+                session_explorer
+                or fallback_explorer
+                or sys_pids.get("winlogon", sys_pids.get("services", 4))
             )
 
             # Shells and terminals spawn from explorer.exe
@@ -10128,6 +11337,13 @@ class ActivityGenerator:
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
             if proc and proc.start_time <= time:
+                if not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=pid,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    continue
                 proc_exe = (
                     proc.image.rsplit("\\", 1)[-1].lower()
                     if "\\" in proc.image
@@ -10172,6 +11388,7 @@ class ActivityGenerator:
         time: datetime,
         logon_id: str,
         process_name: str,
+        command_line: str,
         parent_pid: int,
         process_username: str,
     ) -> int:
@@ -10184,13 +11401,38 @@ class ActivityGenerator:
         parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
         parent_image = (parent_proc.image if parent_proc is not None else "").lower()
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        is_browser_child = process_exe in _WINDOWS_BROWSER_EXES and not (
+            self._is_top_level_browser_launch(process_name, command_line)
+        )
+        is_same_exe_gui_child = self._is_windows_same_exe_gui_child(
+            process_name,
+            command_line,
+        )
         if os_category == "windows" and process_exe == "explorer.exe":
             return self._windows_explorer_parent_pid(system, user, time, logon_id)
 
         if os_category == "windows":
+            if is_same_exe_gui_child:
+                same_exe_parent = self._windows_same_exe_gui_parent_pid(
+                    system=system,
+                    user=user,
+                    time=time,
+                    logon_id=logon_id,
+                    process_name=process_name,
+                    parent_pid=parent_pid,
+                    process_username=process_username,
+                )
+                if same_exe_parent is not None:
+                    return same_exe_parent
+            if process_exe in self._WINDOWS_GUI_APPS and not is_browser_child:
+                explorer_pid = self._ensure_session_explorer_pid(system, user, time, logon_id)
+                if explorer_pid is not None:
+                    return explorer_pid
             if (
                 parent_pid != 4
                 and parent_image not in {"system", "ntoskrnl.exe"}
+                and parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+                not in {"winlogon.exe", "userinit.exe"}
                 and self._is_pid_active_at(system, parent_pid, time)
                 and self._parent_process_matches_logon(
                     hostname=system.hostname,
@@ -10225,9 +11467,119 @@ class ActivityGenerator:
             return parent_pid
         for role in ("explorer", "winlogon", "services", "svchost_dcom"):
             candidate = sys_pids.get(role)
-            if candidate and candidate != 4 and self._is_pid_active_at(system, candidate, time):
+            candidate_proc = self.state_manager.get_process(system.hostname, candidate or -1)
+            candidate_exe = (
+                candidate_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+                if candidate_proc is not None
+                else ""
+            )
+            if process_exe in self._WINDOWS_GUI_APPS and candidate_exe != "explorer.exe":
+                continue
+            if (
+                candidate
+                and candidate != 4
+                and self._is_pid_active_at(system, candidate, time)
+                and self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=candidate,
+                    logon_id=logon_id,
+                    os_category=os_category,
+                )
+            ):
                 return candidate
         return parent_pid
+
+    def _is_windows_same_exe_gui_child(self, process_name: str, command_line: str) -> bool:
+        """Return whether a Windows GUI command should be parented by its own executable."""
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        command = f" {command_line.lower()} "
+        if process_exe in _WINDOWS_BROWSER_EXES:
+            return not self._is_top_level_browser_launch(process_name, command_line)
+        if process_exe in _WINDOWS_ELECTRON_CHILD_EXES:
+            return any(marker in command for marker in _WINDOWS_ELECTRON_CHILD_MARKERS)
+        return False
+
+    def _windows_same_exe_gui_parent_pid(
+        self,
+        *,
+        system: System,
+        user: User,
+        time: datetime,
+        logon_id: str,
+        process_name: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int | None:
+        """Return or create a same-family parent for browser/Electron child processes."""
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if (
+            parent_proc is not None
+            and parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() == process_exe
+            and not self._is_windows_same_exe_gui_child(parent_proc.image, parent_proc.command_line)
+            and self._is_pid_active_at(system, parent_pid, time)
+            and self._parent_process_matches_logon(
+                hostname=system.hostname,
+                parent_pid=parent_pid,
+                logon_id=logon_id,
+                os_category="windows",
+            )
+        ):
+            return parent_pid
+
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_exe = proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+            if proc_exe != process_exe:
+                continue
+            if self._is_windows_same_exe_gui_child(proc.image, proc.command_line):
+                continue
+            if proc.username != process_username:
+                continue
+            if proc.logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, time):
+                continue
+            candidates.append(proc)
+        if candidates:
+            return max(candidates, key=lambda candidate: candidate.start_time or time).pid
+
+        from evidenceforge.generation.activity.application_catalog import resolve_image_path
+        from evidenceforge.generation.activity.spawn_rules import get_parent_config
+
+        parent_time = time - timedelta(
+            milliseconds=150
+            + (_stable_seed(f"same_exe_gui_parent:{system.hostname}:{process_exe}:{time}") % 850)
+        )
+        session = self.state_manager.get_session(logon_id)
+        if session is not None and parent_time <= session.start_time:
+            parent_time = session.start_time + timedelta(milliseconds=120)
+
+        explorer_pid = self._ensure_session_explorer_pid(system, user, parent_time, logon_id)
+        if explorer_pid is None:
+            return None
+
+        config = get_parent_config("windows", process_exe)
+        templates = config.get("command_templates", [])
+        parent_command = templates[0] if templates else ""
+        parent_command = parent_command.replace("{username}", user.username)
+        parent_image = resolve_image_path(process_exe, "windows", username=user.username)
+        if not parent_image:
+            parent_image = _extract_image_from_command(parent_command) or process_name
+        parent_image = parent_image.replace("{username}", user.username)
+        if not parent_command:
+            parent_command = f'"{parent_image}"'
+
+        return self.generate_process(
+            user=user,
+            system=system,
+            time=parent_time,
+            logon_id=logon_id,
+            process_name=parent_image,
+            command_line=parent_command,
+            parent_pid=explorer_pid,
+            allow_existing_browser_reuse=False,
+        )
 
     def _ensure_parent_chain(
         self,
@@ -10262,9 +11614,12 @@ class ActivityGenerator:
         # Safety limit
         if depth > 3:
             if os_cat == "windows":
-                return sys_pids.get(
-                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+                session_explorer = self._ensure_session_explorer_pid(
+                    system, user, time=time, logon_id=logon_id
                 )
+                if session_explorer is not None:
+                    return session_explorer
+                return sys_pids.get("services", sys_pids.get("wininit", 4))
             return (
                 sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
             )
@@ -10273,9 +11628,12 @@ class ActivityGenerator:
         possible_parents = reverse.get(child_exe, [])
         if not possible_parents:
             if os_cat == "windows":
-                return sys_pids.get(
-                    "explorer", sys_pids.get("winlogon", sys_pids.get("services", 4))
+                session_explorer = self._ensure_session_explorer_pid(
+                    system, user, time=time, logon_id=logon_id
                 )
+                if session_explorer is not None:
+                    return session_explorer
+                return sys_pids.get("services", sys_pids.get("wininit", 4))
             return (
                 sys_pids.get("bash") or sys_pids.get("sshd") or self._linux_anchor_pid(system, time)
             )
@@ -10312,11 +11670,24 @@ class ActivityGenerator:
 
         # Prefer shells for CLI tools on Windows, sshd→bash for Linux
         chosen_parent = rng.choice(possible_parents)
+        if os_cat == "windows" and chosen_parent.lower() == "explorer.exe":
+            session_explorer = self._ensure_session_explorer_pid(
+                system, user, time=time, logon_id=logon_id
+            )
+            if session_explorer is not None:
+                return session_explorer
 
         # Check if chosen parent is already a seeded system process
         for _role, pid in sys_pids.items():
             proc = self.state_manager.get_process(system.hostname, pid)
             if proc and proc.start_time <= time:
+                if not self._parent_process_matches_logon(
+                    hostname=system.hostname,
+                    parent_pid=pid,
+                    logon_id=logon_id,
+                    os_category=os_cat,
+                ):
+                    continue
                 proc_exe = (
                     proc.image.rsplit("\\", 1)[-1].lower()
                     if "\\" in proc.image
@@ -10441,6 +11812,9 @@ class ActivityGenerator:
 
     def _record_user_process(self, system: System, user: User, pid: int, process_name: str) -> None:
         """Record a user process in history for future parent selection."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is not None:
+            process_name = proc.image
         key = (system.hostname, user.username)
         self._user_process_history.setdefault(key, []).append((pid, process_name))
         # Keep only last 10 processes per user/system

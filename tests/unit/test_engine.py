@@ -1212,7 +1212,11 @@ class TestGenerationEngine:
         # Modify storyline to have connection event
         engine.scenario.storyline[0].activity = "Connect to external server"
         engine.scenario.storyline[0].events = [
-            ConnectionEventSpec(dst_ip="159.65.43.201", dst_port=443)
+            ConnectionEventSpec(
+                dst_ip="159.65.43.201",
+                dst_port=443,
+                hostname="cdn-assets-update.com",
+            )
         ]
 
         engine._execute_storyline()
@@ -1221,6 +1225,8 @@ class TestGenerationEngine:
         assert mock_activity_instance.generate_connection.called
         call_args = mock_activity_instance.generate_connection.call_args
         assert call_args[1]["dst_ip"] == "159.65.43.201"
+        assert call_args[1]["hostname"] == "cdn-assets-update.com"
+        assert call_args[1]["preserve_dst_ip"] is True
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

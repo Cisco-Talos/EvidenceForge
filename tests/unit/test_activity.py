@@ -24,6 +24,7 @@
 
 import random
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -168,6 +169,92 @@ class TestActivityGenerator:
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
 
+    def test_interactive_logons_get_distinct_userinit_parents(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Interactive shells should not all inherit one long-lived userinit.exe parent."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+
+        first_logon = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        second_logon = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=30),
+            logon_type=2,
+        )
+
+        sessions = {
+            session.logon_id: session for session in state_manager.get_sessions_for_user("testuser")
+        }
+        first_explorer = state_manager.get_process(
+            test_system.hostname, sessions[first_logon].explorer_pid
+        )
+        second_explorer = state_manager.get_process(
+            test_system.hostname, sessions[second_logon].explorer_pid
+        )
+        assert first_explorer.parent_pid != second_explorer.parent_pid
+
+    def test_repeated_one_shot_cli_processes_get_human_scale_spacing(
+        self, activity_gen, test_user, test_system, state_manager
+    ):
+        """Repeated dsquery launches should not collapse into sub-millisecond bursts."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp - timedelta(minutes=10),
+            logon_type=2,
+        )
+
+        first_pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery.exe user -samid testuser",
+            parent_pid=4,
+        )
+        second_pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(milliseconds=1),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line="dsquery.exe user -samid testuser",
+            parent_pid=4,
+        )
+        third_pid = activity_gen.generate_process(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(milliseconds=2),
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\dsquery.exe",
+            command_line='dsquery.exe group -samid "*admin*" -limit 50',
+            parent_pid=4,
+        )
+
+        first_proc = state_manager.get_process(test_system.hostname, first_pid)
+        second_proc = state_manager.get_process(test_system.hostname, second_pid)
+        third_proc = state_manager.get_process(test_system.hostname, third_pid)
+
+        assert first_proc is not None
+        assert second_proc is not None
+        assert third_proc is not None
+        assert (second_proc.start_time - first_proc.start_time).total_seconds() >= 18.0
+        assert (third_proc.start_time - second_proc.start_time).total_seconds() >= 2.5
+
     def test_generate_scheduled_task_builds_full_task_xml(
         self, activity_gen, test_user, test_system, mock_emitters
     ):
@@ -198,6 +285,57 @@ class TestActivityGenerator:
         assert '<Actions Context="Author">' in task_content
         assert r"<Command>C:\Windows\Temp\payload.exe</Command>" in task_content
         assert "<Arguments>--sync</Arguments>" in task_content
+
+    def test_generate_scheduled_task_reflects_hourly_schtasks_command(
+        self, activity_gen, test_system, mock_emitters
+    ):
+        """Task XML should reflect `/SC HOURLY` and `/RU SYSTEM` from schtasks.exe."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        system_user = User(username="SYSTEM", full_name="System", email="system@example.local")
+
+        activity_gen.generate_scheduled_task(
+            user=system_user,
+            system=test_system,
+            time=timestamp,
+            task_name=r"\Microsoft\Windows\Maintenance\SystemHealthCheck",
+            task_content=(
+                r"<Task><Actions><Exec><Command>C:\Windows\System32\cmd.exe</Command>"
+                r"</Exec></Actions></Task>"
+            ),
+            source_command_line=(
+                r'schtasks.exe /Create /TN "\Microsoft\Windows\Maintenance\SystemHealthCheck" '
+                r'/SC HOURLY /TR "C:\Windows\System32\HealthMonitorSvc.exe" /RU SYSTEM'
+            ),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        task_content = event.scheduled_task.task_content
+        assert "<Repetition>" in task_content
+        assert "<Interval>PT1H</Interval>" in task_content
+        assert r"<Command>C:\Windows\System32\HealthMonitorSvc.exe</Command>" in task_content
+        assert "<UserId>NT AUTHORITY\\SYSTEM</UserId>" in task_content
+        assert "<LogonType>ServiceAccount</LogonType>" in task_content
+
+    def test_generate_scheduled_task_reflects_hourly_modifier(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """Hourly `/MO` values should become Task Scheduler repetition intervals."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        activity_gen.generate_scheduled_task(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            task_name=r"\Ops\QuarterHourly",
+            task_content=r"C:\Windows\System32\cmd.exe /c whoami",
+            source_command_line=(
+                r'schtasks.exe /Create /TN "\Ops\QuarterHourly" /SC HOURLY /MO 4 '
+                r'/TR "C:\Windows\System32\cmd.exe /c whoami"'
+            ),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args.args[0]
+        assert "<Interval>PT4H</Interval>" in event.scheduled_task.task_content
 
     def test_generate_logon_existing_session_renders_canonical_start_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -707,8 +845,8 @@ class TestActivityGenerator:
         session = state_manager.get_session(preallocated_logon_id)
 
         assert logon_event.auth.username == "aisha.johnson"
-        assert logon_event.auth.logon_id == preallocated_logon_id
         assert session is not None
+        assert logon_event.auth.logon_id == session.logon_id
         assert session.username == logon_event.auth.username
 
     def test_generate_rdp_session_fallback_user_tolerates_malformed_ad_domain(
@@ -760,12 +898,16 @@ class TestActivityGenerator:
             ip="10.10.2.30",
             os="Ubuntu 22.04",
             type="server",
+            services=["ssh", "apache2", "mysql"],
+            roles=["app_server"],
         )
         target_b = System(
             hostname="FILE-01",
             ip="10.10.2.20",
             os="Windows Server 2019",
             type="server",
+            services=["smb"],
+            roles=["file_server"],
         )
         activity_gen._ip_to_system = {
             source.ip: source,
@@ -794,6 +936,14 @@ class TestActivityGenerator:
         assert scan_events
         assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
         assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445, 3306}
+        assert len({event.network.conn_state for event in scan_events}) > 1
+        assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
+        assert {event.network.service for event in scan_events if event.network.service} >= {
+            "ssh",
+            "http",
+            "smb",
+            "mysql",
+        }
 
     def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
         """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
@@ -1394,6 +1544,55 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp < service_event.timestamp
 
+    def test_remote_service_install_emits_smb_and_rpc_network_evidence(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """PsExec-style service creation should have matching SMB/RPC flows."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Admin",
+            email="alice@example.com",
+            primary_system=source.hostname,
+        )
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={source.hostname: source, target.hostname: target}
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_service_installed(
+            user,
+            target,
+            timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert {(event.network.dst_port, event.network.service) for event in network_events} >= {
+            (445, "smb"),
+            (135, "dce_rpc"),
+        }
+        assert all(event.network.src_ip == source.ip for event in network_events)
+        assert all(event.network.dst_ip == target.ip for event in network_events)
+
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1535,6 +1734,56 @@ class TestActivityGenerator:
         ]
         assert registry_events
         assert registry_events[-1].registry.key.startswith("HKLM\\")
+
+    def test_storyline_powershell_does_not_receive_generic_registry_noise(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Storyline tool processes should not inherit unrelated user registry noise."""
+
+        class RegistryOnlyRandom:
+            def __init__(self):
+                self.random_calls = 0
+
+            def random(self):
+                self.random_calls += 1
+                return 0.1 if self.random_calls == 3 else 0.99
+
+            def choice(self, values):
+                return values[0]
+
+            def choices(self, population, weights=None, k=1):
+                return [population[0]]
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def uniform(self, lower, _upper):
+                return lower
+
+            def getrandbits(self, bits):
+                return (1 << min(bits, 8)) - 1
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+
+        with patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom):
+            activity_gen.generate_process(
+                test_user,
+                test_system,
+                timestamp + timedelta(seconds=1),
+                logon_id,
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "powershell.exe Compress-Archive C:\\Exports C:\\ProgramData\\health-cache.zip",
+                from_storyline=True,
+            )
+
+        registry_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "registry_modify"
+        ]
+        assert registry_events == []
 
     def test_image_load_is_clamped_after_process_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1691,6 +1940,7 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "kerberos_preauth_failed"
         assert event.kerberos.source_ip == "-"
+        assert event.kerberos.source_port == 0
 
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -2617,6 +2867,31 @@ class TestActivityGenerator:
         assert explicit.auth.process_pid > 0
         assert process.timestamp < explicit.timestamp
 
+    def test_generate_explicit_credentials_handles_missing_caller_pid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A baseline session without an explorer PID should still render 4648."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=None,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.process_pid == process.process.pid
+        assert explicit.auth.process_pid > 0
+
     def test_generate_explicit_credentials_replaces_mismatched_caller_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -2764,6 +3039,7 @@ class TestActivityGenerator:
             command_line="C:\\Windows\\explorer.exe",
             username=test_user.username,
             integrity_level="Medium",
+            logon_id=logon_id,
         )
 
         activity_gen.generate_process(
@@ -2948,7 +3224,7 @@ class TestActivityGenerator:
             orig_bytes=200,
             resp_bytes=100,
             conn_state="SF",
-            hostname="example.com",
+            hostname="pypi.org",
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
@@ -3493,6 +3769,102 @@ class TestActivityGenerator:
         assert process_events
         assert process_events[-1].process.image == "/usr/bin/python3"
         assert process_events[-1].process.command_line == command
+
+    def test_linux_shell_pipeline_uses_source_native_process_argv(self):
+        """Linux process telemetry should not attach shell operators to child argv."""
+        processes = generator_module._linux_command_processes_from_shell(
+            "ss -ltnp | grep postfix | wc -l"
+        )
+
+        assert processes == [
+            ("/usr/sbin/ss", "ss -ltnp"),
+            ("/usr/bin/grep", "grep postfix"),
+            ("/usr/bin/wc", "wc -l"),
+        ]
+
+    def test_linux_shell_redirection_removed_from_process_argv(self):
+        """Redirection targets belong to the shell/file effect, not process argv."""
+        process = generator_module._linux_command_process_from_shell(
+            "mysqldump --single-transaction ehr patients > /tmp/patient_claims.sql"
+        )
+
+        assert process == (
+            "/usr/bin/mysqldump",
+            "mysqldump --single-transaction ehr patients",
+        )
+
+    def test_linux_shell_control_operators_split_process_argv(self):
+        """Shell control operators should separate child process argv entries."""
+        processes = generator_module._linux_command_processes_from_shell(
+            "whoami && id || df; uptime"
+        )
+
+        assert processes == [
+            ("/usr/bin/whoami", "whoami"),
+            ("/usr/bin/id", "id"),
+            ("/usr/bin/df", "df"),
+            ("/usr/bin/uptime", "uptime"),
+        ]
+
+    def test_generate_bash_command_emits_pipeline_children_with_clean_argv(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Pipeline commands should emit separate child processes without pipe syntax."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            "0xabc123",
+        )
+        session.session_shell_pid = bash_pid
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "cat /etc/shadow | head -5",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_events = [
+            event
+            for event in events
+            if event.event_type == "process_create" and event.process is not None
+        ]
+        command_lines = [event.process.command_line for event in process_events]
+        assert "cat /etc/shadow" in command_lines
+        assert "head -5" in command_lines
+        assert all("|" not in command for command in command_lines)
 
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters

@@ -1,6 +1,7 @@
 # Tests for remaining expert review fixes (#15, #34).
 
 import random
+import re
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -61,6 +62,18 @@ class TestBaselineFailedLogonPatterns:
             base_names=["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"],
         )
         assert _sched_acct not in _existing
+
+    def test_scheduled_task_account_prefers_available_unsuffixed_alias(self):
+        """Stale service-account noise should avoid generated-looking numeric suffixes."""
+        _existing = {"alice.admin", "bob.dev", "svc_backup", "svc_monitor"}
+        _sched_acct = _pick_non_colliding_account_name(
+            rng=random.Random(42),
+            existing_accounts=_existing,
+            base_names=["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"],
+        )
+
+        assert _sched_acct in {"svc_report", "svc_deploy", "svc_scan"}
+        assert not re.fullmatch(r"svc_backup\d+", _sched_acct)
 
     def test_scheduled_task_account_bounded_when_default_pool_exhausted(self):
         """Account selection should terminate with fallback naming if default pool is exhausted."""

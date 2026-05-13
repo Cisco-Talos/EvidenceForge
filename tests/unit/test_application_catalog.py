@@ -4,13 +4,16 @@
 """Tests for Theme 1: unified application catalog (P0-1, P0-3, P1-2, P1-3)."""
 
 import random
+from collections import Counter
 
 from evidenceforge.generation.activity.application_catalog import (
+    _USER_BROWSER_AFFINITY,
     get_apps_for_persona,
     get_pe_metadata,
     load_catalog,
     pick_app_and_command,
 )
+from evidenceforge.generation.activity.helpers import _parameterize_command
 
 
 class TestCatalogLoading:
@@ -71,6 +74,21 @@ class TestCatalogLoading:
             windows = app.get("platforms", {}).get("windows", {})
             for template in windows.get("command_templates", []):
                 assert not any(marker in template for marker in child_markers)
+
+    def test_docker_go_template_braces_render_source_native(self):
+        """Docker Go-template braces should not be escaped into generated telemetry."""
+        data = load_catalog()
+        docker = next(app for app in data["applications"] if app["id"] == "docker")
+        templates = docker["platforms"]["windows"]["command_templates"]
+        template = next(t for t in templates if "images --format" in t)
+
+        rendered = _parameterize_command(random.Random(42), template, username="developer")
+
+        assert "{{.Repository}}" in rendered
+        assert "{{.Tag}}" in rendered
+        assert "{{.Size}}" in rendered
+        assert "{{{{" not in rendered
+        assert "}}}}" not in rendered
 
 
 class TestPersonaFiltering:
@@ -133,6 +151,16 @@ class TestPeMetadataLookup:
     def test_firefox_has_metadata(self):
         fv, desc, prod, company, orig = get_pe_metadata("firefox.exe")
         assert company == "Mozilla Corporation"
+
+    def test_browser_metadata_matches_configured_user_agent_majors(self):
+        """Browser PE versions should not disagree with generated HTTP UA versions."""
+        chrome_fv, *_ = get_pe_metadata("chrome.exe")
+        firefox_fv, *_ = get_pe_metadata("firefox.exe")
+        edge_fv, *_ = get_pe_metadata("msedge.exe")
+
+        assert chrome_fv.startswith("120.")
+        assert firefox_fv.startswith("121.")
+        assert edge_fv.startswith("120.")
 
     def test_outlook_has_metadata(self):
         fv, desc, prod, company, orig = get_pe_metadata("outlook.exe")
@@ -210,3 +238,27 @@ class TestPickAppAndCommand:
                     bare_count += 1
         # Allow some bare commands (e.g., OneDrive) but most should have args
         assert bare_count / max(total, 1) < 0.5, f"{bare_count}/{total} commands were bare words"
+
+    def test_user_app_browser_launches_keep_user_affinity(self):
+        """Browser affinity applies even when browsers are picked from user_app activity."""
+        _USER_BROWSER_AFFINITY.pop("affinity.user", None)
+        browser_exes = {"chrome.exe", "firefox.exe", "msedge.exe"}
+        seen = []
+        for seed in range(300):
+            result = pick_app_and_command(
+                random.Random(seed),
+                "default",
+                "windows",
+                "user_app",
+                username="affinity.user",
+            )
+            assert result is not None
+            image, _ = result
+            exe = image.rsplit("\\", 1)[-1].lower()
+            if exe in browser_exes:
+                seen.append(exe)
+
+        assert len(seen) > 20
+        counts = Counter(seen)
+        _exe, count = counts.most_common(1)[0]
+        assert count / len(seen) >= 0.75

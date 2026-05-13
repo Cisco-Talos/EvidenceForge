@@ -591,6 +591,67 @@ class TestRenderEvent7:
         assert '<Data Name="Company">Cisco Systems, Inc.</Data>' in content
         assert '<Data Name="FileVersion">-</Data>' not in content
 
+    def test_program_files_module_metadata_is_not_windows_os_fallback(self, emitter):
+        """Application DLLs should inherit package metadata instead of Windows OS fields."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                command_line="firefox.exe",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\Mozilla Firefox\mozglue.dll",
+                signed=True,
+                signature="Mozilla Corporation",
+                signature_status="Valid",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="FileVersion">121.0</Data>' in content
+        assert '<Data Name="Product">Firefox</Data>' in content
+        assert '<Data Name="Company">Mozilla Corporation</Data>' in content
+        assert '<Data Name="Product">Microsoft Windows Operating System</Data>' not in content
+
+    def test_third_party_shell_extension_metadata_is_consistent(self, emitter):
+        """7-Zip shell extension loads should render stable third-party metadata."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Windows\explorer.exe",
+                command_line="explorer.exe",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Program Files\7-Zip\7-zip.dll",
+                signed=False,
+                signature="-",
+                signature_status="Unavailable",
+            ),
+        )
+        emitter.emit(event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        assert '<Data Name="FileVersion">23.01.0.0</Data>' in content
+        assert '<Data Name="Product">7-Zip</Data>' in content
+        assert '<Data Name="Company">Igor Pavlov</Data>' in content
+        assert '<Data Name="Signed">false</Data>' in content
+        assert '<Data Name="Product">Microsoft Windows Operating System</Data>' not in content
+
 
 class TestRenderEvent11:
     """Test Event 11 (FileCreate) rendering."""
@@ -680,6 +741,7 @@ class TestRenderEventRegistry:
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
+            auth=AuthContext(username="admin", user_sid="S-1-5-21-111-222-333-1001"),
             process=ProcessContext(
                 pid=4567,
                 parent_pid=1,
@@ -702,6 +764,8 @@ class TestRenderEventRegistry:
         assert "SetValue" in content
         assert "HideFileExt" in content
         assert "DWORD (0x00000001)" in content
+        assert "HKCU\\" not in content
+        assert r"HKU\S-1-5-21-111-222-333-1001\Software" in content
 
 
 class TestProcessCreateMetadata:
@@ -791,8 +855,8 @@ class TestProcessCreateMetadata:
             image, workstation
         ) == SysmonEventEmitter._generate_hashes(image, server)
 
-    def test_image_load_hashes_include_rendered_signature_identity(self):
-        """Same DLL path with different rendered signer metadata must not share hashes."""
+    def test_image_load_hashes_follow_rendered_file_identity(self):
+        """Same DLL path with different rendered PE metadata must not share hashes."""
         image = r"C:\Program Files\Mozilla Firefox\lgpllibs.dll"
 
         mozilla_hashes = SysmonEventEmitter._generate_hashes(
@@ -804,8 +868,6 @@ class TestProcessCreateMetadata:
                 "Mozilla Corporation",
                 "Mozilla Corporation",
                 "lgpllibs.dll",
-                "Mozilla Corporation",
-                "Valid",
             ),
         )
         microsoft_hashes = SysmonEventEmitter._generate_hashes(
@@ -817,12 +879,67 @@ class TestProcessCreateMetadata:
                 "Microsoft Windows Operating System",
                 "Microsoft Corporation",
                 "lgpllibs.dll",
-                "Microsoft Windows",
-                "Valid",
             ),
         )
 
         assert mozilla_hashes != microsoft_hashes
+
+    def test_image_load_hashes_ignore_signature_evaluation_state(self):
+        """The same loaded module path/version keeps hashes across signer status changes."""
+        image = r"C:\Program Files\Microsoft OneDrive\FileSyncShell64.dll"
+        identity = (
+            "24.020.0128.0003",
+            "Microsoft OneDrive Shell Extension",
+            "Microsoft OneDrive",
+            "Microsoft Corporation",
+            "FileSyncShell64.dll",
+        )
+
+        microsoft_windows_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(*identity, "Microsoft Windows", "Valid"),
+        )
+        microsoft_corporation_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(*identity, "Microsoft Corporation", "Valid"),
+        )
+        unavailable_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(*identity, "-", "Unavailable"),
+        )
+
+        assert microsoft_windows_hashes == microsoft_corporation_hashes
+        assert microsoft_windows_hashes == unavailable_hashes
+
+    @pytest.mark.parametrize(
+        ("image", "expected_product"),
+        [
+            (
+                r"C:\Program Files\Windows Defender Advanced Threat Protection\SenseCncProxy.dll",
+                "Microsoft Defender for Endpoint",
+            ),
+            (
+                r"C:\Program Files\Windows Defender\MpOAV.dll",
+                "Microsoft Defender Antivirus",
+            ),
+            (
+                r"C:\Program Files\Microsoft OneDrive\24.020.0128.0003\FileSyncShell64.dll",
+                "Microsoft OneDrive",
+            ),
+        ],
+    )
+    def test_microsoft_program_files_modules_use_product_metadata(
+        self, image: str, expected_product: str
+    ):
+        """Program Files module loads should not fall back to Windows OS metadata."""
+        metadata = SysmonEventEmitter._get_pe_metadata(image, _win_host())
+
+        assert metadata[2] == expected_product
+        assert metadata[2] != "Microsoft Windows Operating System"
+        assert metadata[4] == image.rsplit("\\", 1)[-1]
 
 
 class TestRenderEvent22:

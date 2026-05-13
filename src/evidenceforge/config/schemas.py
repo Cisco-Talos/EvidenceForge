@@ -51,6 +51,7 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
     signed: bool = True
     signature: str = "Microsoft Windows"
     signature_status: str = "Valid"
+    pe_metadata: dict[str, str] | None = None
 
 
 class PlatformConfig(BaseModel, extra="forbid"):
@@ -165,6 +166,40 @@ class TlsSanConfig(BaseModel, extra="forbid"):
     """SAN generation settings in tls_realism.yaml."""
 
     multi_label_public_suffixes: list[str]
+
+
+class TlsSerialLength(BaseModel, extra="forbid"):
+    """Weighted serial-number byte length in tls_realism.yaml."""
+
+    bytes: int
+    weight: int
+
+    @field_validator("bytes")
+    @classmethod
+    def bytes_within_rfc_limit(cls, v: int) -> int:
+        if not 1 <= v <= 20:
+            raise ValueError("serial byte length must be between 1 and 20")
+        return v
+
+    @field_validator("weight")
+    @classmethod
+    def weight_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("weight must be positive")
+        return v
+
+
+class TlsSerialNumberConfig(BaseModel, extra="forbid"):
+    """Certificate serial-number behavior settings in tls_realism.yaml."""
+
+    byte_lengths: list[TlsSerialLength]
+
+    @field_validator("byte_lengths")
+    @classmethod
+    def byte_lengths_non_empty(cls, v: list[TlsSerialLength]) -> list[TlsSerialLength]:
+        if not v:
+            raise ValueError("byte_lengths must not be empty")
+        return v
 
 
 class TlsOcspResponder(BaseModel, extra="forbid"):
@@ -326,6 +361,7 @@ class TlsRealismConfig(BaseModel, extra="forbid"):
     """Root schema for tls_realism.yaml."""
 
     san: TlsSanConfig
+    serial_numbers: TlsSerialNumberConfig
     ocsp: TlsOcspConfig
     certificate_chains: TlsCertificateChainConfig
     destinations: TlsDestinationsConfig
@@ -679,6 +715,13 @@ class DnsTunnelRttConfig(BaseModel, extra="forbid"):
         if self.max_seconds > 10.0:
             raise ValueError("max_seconds should stay within realistic DNS transaction timing")
         return self
+
+
+class DnsTunnelTtlEntry(BaseModel, extra="forbid"):
+    """A weighted DNS tunnel response TTL choice in network_params.yaml."""
+
+    value: int = Field(ge=0, le=3600)
+    weight: float = Field(gt=0)
 
 
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):

@@ -4,6 +4,7 @@
 """Tests for bulk/periodic event types and shared timing engine."""
 
 import random
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -15,6 +16,9 @@ from evidenceforge.generation.engine.storyline import (
     _effective_rate_interval,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
+    _observed_web_scan_status,
+    _port_scan_connection_profile,
+    _scan_target_exposes_port,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
 )
@@ -355,6 +359,79 @@ class TestIterPeriodicTicks:
         assert engine.activity_generator.generate_connection.call_count == 5
         assert malicious_event["attempt_count"] == 5
 
+    def test_service_backed_beacon_uses_installed_service_process(self, monkeypatch):
+        """A SYSTEM beacon after service persistence should not fall back to svchost."""
+        from unittest.mock import Mock
+
+        from evidenceforge.generation.engine import storyline
+
+        start = datetime(2026, 4, 16, 16, 30, 0, tzinfo=UTC)
+        system = System(
+            hostname="DC-01",
+            ip="10.0.2.10",
+            os="Windows Server 2019",
+            type="server",
+            roles=["domain_controller"],
+        )
+        actor = User(username="SYSTEM", full_name="SYSTEM", email="system@example.com")
+
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.state_manager = Mock()
+        engine.state_manager.get_processes_on_system.return_value = []
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {system.ip: system}
+        engine.activity_generator._proxy_routes = {}
+        engine.activity_generator._proxy_mode = "transparent"
+        engine.activity_generator._get_system_pid.return_value = 700
+        engine.activity_generator.generate_process.return_value = 4242
+
+        engine._record_storyline_service_install(
+            system=system,
+            service_name="HealthMonitorSvc",
+            service_file_name=r"C:\Windows\System32\HealthMonitorSvc.exe",
+            service_account="LocalSystem",
+            time=start - timedelta(minutes=10),
+        )
+        monkeypatch.setattr(storyline, "_iter_periodic_ticks", Mock(return_value=iter([start])))
+
+        spec = BeaconEventSpec(
+            dst_ip="45.33.32.30",
+            dst_port=443,
+            hostname="cdn-assets-update.com",
+            service="http",
+            method="GET",
+            uri="/api/v2/checkin",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/121.0.0.0 Safari/537.36"
+            ),
+            interval="10m",
+            count=1,
+            action="allow",
+            jitter=0.0,
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=start,
+            activity="Allowed HTTPS beacon from DC-01",
+            explicit_types={"beacon"},
+        )
+
+        engine.activity_generator.generate_process.assert_called_once()
+        process_kwargs = engine.activity_generator.generate_process.call_args.kwargs
+        assert process_kwargs["process_name"] == r"C:\Windows\System32\HealthMonitorSvc.exe"
+        assert process_kwargs["parent_pid"] == 700
+        assert process_kwargs["logon_id"] == "0x3e7"
+
+        connection_kwargs = engine.activity_generator.generate_connection.call_args.kwargs
+        assert connection_kwargs["pid"] == 4242
+        assert connection_kwargs["process_image"] == r"C:\Windows\System32\HealthMonitorSvc.exe"
+
 
 class TestEffectiveRateInterval:
     def test_count_based_rate_stays_exact(self):
@@ -409,6 +486,14 @@ class TestWebScanConnectionProfile:
         assert max(durations) - min(durations) > 4.0
         assert max(resp_bytes) - min(resp_bytes) > 6000
 
+    def test_scan_statuses_have_sparse_runtime_drift(self):
+        rng = random.Random(42)
+        statuses = [
+            _observed_web_scan_status({"uri": "/admin", "status": 404}, rng) for _ in range(300)
+        ]
+        assert 404 in statuses
+        assert set(statuses) & {403, 429, 500}
+
     def test_referrer_only_allowed_for_crawl_like_successes(self):
         assert _web_scan_path_allows_referrer({"uri": "/", "status": 200})
         assert not _web_scan_path_allows_referrer({"uri": "/.git/HEAD", "status": 404})
@@ -416,6 +501,71 @@ class TestWebScanConnectionProfile:
         assert not _web_scan_path_allows_referrer(
             {"uri": "/robots.txt", "status": 200, "ids": {"sid": 1}}
         )
+
+
+class TestPortScanConnectionProfile:
+    def test_profile_uses_target_services_for_open_ports(self):
+        rng = random.Random(7)
+        target = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["apache2", "ssh"],
+            roles=["web_server"],
+        )
+
+        assert _scan_target_exposes_port(target, 80, external=True)
+        assert not _scan_target_exposes_port(target, 22, external=True)
+        assert _scan_target_exposes_port(
+            System(
+                hostname="APP-01",
+                ip="10.0.0.21",
+                os="Ubuntu 22.04",
+                type="server",
+                services=[],
+                roles=["web_server"],
+            ),
+            80,
+            external=True,
+        )
+        denied, conn_state, service, _duration, _orig_bytes, _resp_bytes = (
+            _port_scan_connection_profile(
+                rng,
+                port=80,
+                target_system=target,
+                external=True,
+                default_deny_state="S0",
+            )
+        )
+
+        assert not denied
+        assert conn_state in {"SF", "RSTO", "RSTR"}
+        assert service == "http"
+
+    def test_profile_includes_filtered_and_rejected_closed_ports(self):
+        rng = random.Random(42)
+        target = System(
+            hostname="DB-01",
+            ip="10.0.0.30",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["mysql"],
+            roles=["database"],
+        )
+        samples = [
+            _port_scan_connection_profile(
+                rng,
+                port=3389,
+                target_system=target,
+                external=False,
+                default_deny_state="S0",
+            )
+            for _ in range(120)
+        ]
+
+        assert all(sample[0] for sample in samples)
+        assert {sample[1] for sample in samples} >= {"S0", "REJ"}
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────
@@ -925,10 +1075,56 @@ class TestDnsTunnelEventSpec:
             for earlier, later in zip(captured, captured[1:], strict=False)
         ]
         label_lengths = {len(dns.query.split(".", 1)[0]) for _ts, dns in captured}
+        label_depths = {len(dns.query.split(".")) for _ts, dns in captured}
 
         assert len(captured) < 451
         assert max(intervals) > 8.0
         assert len(label_lengths) > 1
+        assert len(label_depths) > 1
+
+    def test_dns_tunnel_generation_skews_ttls_and_expands_answer_vocabulary(self):
+        engine = object.__new__(StorylineMixin)
+        captured = []
+
+        def capture_connection(**kwargs):
+            captured.append(kwargs["dns"])
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=30,
+            payload_size=2048,
+            interval="2s",
+            count=140,
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=System(hostname="WS-01", ip="10.0.0.10", os="Windows 10", type="workstation"),
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        noerror_dns = [dns for dns in captured if dns.answers and dns.TTLs]
+        ttl_counts = Counter(int(dns.TTLs[0]) for dns in noerror_dns)
+        answers = [dns.answers[0] for dns in noerror_dns]
+
+        assert len(noerror_dns) > 90
+        assert len(ttl_counts) >= 3
+        assert ttl_counts.most_common(1)[0][1] > len(noerror_dns) * 0.35
+        assert all("{" not in answer and "}" not in answer for answer in answers)
+        assert not any(
+            answer.startswith(("status=", "node=", "cdn=", "cache=", "edge-", "ack."))
+            or "ttl=30" in answer
+            for answer in answers
+        )
 
 
 # ── ExplicitCredentialsEventSpec ──────────────────────────────────────────

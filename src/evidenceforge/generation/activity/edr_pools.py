@@ -156,6 +156,30 @@ def normalize_defender_platform_path(path: str, host_key: str) -> str:
     return f"{prefix}{defender_platform_version(host_key)}\\{suffix}"
 
 
+def _windows_component_build(host_os: str, host_key: str) -> str:
+    """Return the CBS package build family for a Windows host."""
+    normalized = host_os.lower()
+    if "server 2022" in normalized or "windows server 2022" in normalized:
+        return "10.0.20348"
+    if "server 2019" in normalized or "windows server 2019" in normalized:
+        return "10.0.17763"
+    if "windows 11" in normalized:
+        return "10.0.22621"
+    if "server" in normalized and "2022" in normalized:
+        return "10.0.20348"
+    if "server" in normalized and "2019" in normalized:
+        return "10.0.17763"
+    if "10" in normalized:
+        return "10.0.19041"
+
+    # Unknown Windows hosts still get a stable build family instead of a single
+    # hardcoded value across the whole environment.
+    fallback = ("10.0.19041", "10.0.17763", "10.0.20348", "10.0.22621")
+    return fallback[
+        _stable_seed(f"windows_component_build:{host_key or 'default'}") % len(fallback)
+    ]
+
+
 def _interface_guid(rng: random.Random, host_key: str, host_ip: str) -> str:
     """Return a stable interface GUID when host context is known."""
     if not host_key and not host_ip:
@@ -183,6 +207,7 @@ def materialize_edr_template(
     *,
     host_ip: str = "",
     host_key: str = "",
+    host_os: str = "",
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -200,6 +225,7 @@ def materialize_edr_template(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "os_build": _windows_component_build(host_os, host_key),
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in template_lower
@@ -239,6 +265,7 @@ def materialize_edr_template_group(
     *,
     host_key: str = "",
     host_ip: str = "",
+    host_os: str = "",
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
@@ -256,6 +283,7 @@ def materialize_edr_template_group(
         "small": str(rng.randint(1, 80)),
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
+        "os_build": _windows_component_build(host_os, host_key),
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in combined_lower
@@ -327,22 +355,36 @@ def select_file_side_effect(
         if not paths or not actions:
             return None
         action = str(rng.choice(actions)).lower()
-        path = materialize_edr_template(str(rng.choice(paths)), rng, user=user)
+        path_templates = list(paths)
+        path = materialize_edr_template(str(rng.choice(path_templates)), rng, user=user)
         if (
             exe in {"bash", "sh"}
             and user.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}
             and path.endswith("/.bash_history")
         ):
-            non_history_paths = [
-                candidate for candidate in paths if not str(candidate).endswith("/.bash_history")
-            ]
+            non_history_paths = _exclude_paths(path_templates, ("/.bash_history",))
             if not non_history_paths:
                 return None
             path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
+        if os_category == "windows" and _is_windows_powershell_history_path(path):
+            if not _allows_psreadline_history(exe, command_line, user):
+                non_history_paths = _exclude_paths(
+                    path_templates,
+                    ("\\PowerShell\\PSReadLine\\ConsoleHost_history.txt",),
+                )
+                if not non_history_paths:
+                    return None
+                path = materialize_edr_template(str(rng.choice(non_history_paths)), rng, user=user)
         if os_category == "linux" and user == "root":
             path = path.replace("/home/root/", "/root/")
         return action, path
     return None
+
+
+def select_command_file_side_effect(process_name: str, command_line: str) -> tuple[str, str] | None:
+    """Return a guaranteed command-owned file artifact when the syntax identifies one."""
+    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    return _select_command_semantic_file_effect(exe, command_line)
 
 
 def _select_command_semantic_file_effect(
@@ -350,10 +392,24 @@ def _select_command_semantic_file_effect(
     command_line: str,
 ) -> tuple[str, str] | None:
     """Return command-owned file artifacts for common shell tools."""
+    command_lower = command_line.lower()
     if exe == "mysqldump":
         match = re.search(r">\s*(?P<path>\S+)", command_line)
         if match:
-            return "create", match.group("path")
+            return "create", _clean_extracted_path(match.group("path"))
+
+    if exe in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"} and "compress-archive" in (
+        command_lower
+    ):
+        match = re.search(
+            r"-(?:DestinationPath|Destination)\s+(?:'(?P<sq>[^']+)'|\"(?P<dq>[^\"]+)\"|(?P<bare>\S+))",
+            command_line,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            return "create", _clean_extracted_path(
+                match.group("sq") or match.group("dq") or match.group("bare")
+            )
 
     if exe == "gzip":
         try:
@@ -362,7 +418,7 @@ def _select_command_semantic_file_effect(
             parts = command_line.split()
         operands = [part for part in parts[1:] if not part.startswith("-")]
         if operands:
-            return "create", f"{operands[-1]}.gz"
+            return "create", f"{_clean_extracted_path(operands[-1])}.gz"
 
     if exe in {"tar", "zip"}:
         try:
@@ -371,8 +427,45 @@ def _select_command_semantic_file_effect(
             parts = command_line.split()
         for idx, part in enumerate(parts):
             if part in {"-f", "--file"} and idx + 1 < len(parts):
-                return "create", parts[idx + 1]
+                return "create", _clean_extracted_path(parts[idx + 1])
             if part.endswith((".tar", ".tar.gz", ".tgz", ".zip")):
-                return "create", part
+                return "create", _clean_extracted_path(part)
 
     return None
+
+
+def _clean_extracted_path(path: str) -> str:
+    """Trim command-shell quoting artifacts from a path captured by syntax."""
+    return path.strip().strip("\"'")
+
+
+def _exclude_paths(paths: list[Any], suffixes: tuple[str, ...]) -> list[Any]:
+    """Return path templates that do not end with any forbidden suffix."""
+    normalized_suffixes = tuple(suffix.replace("/", "\\").lower() for suffix in suffixes)
+    return [
+        candidate
+        for candidate in paths
+        if not str(candidate).replace("/", "\\").lower().endswith(normalized_suffixes)
+    ]
+
+
+def _is_windows_powershell_history_path(path: str) -> bool:
+    normalized = path.replace("/", "\\").lower()
+    return normalized.endswith("\\powershell\\psreadline\\consolehost_history.txt")
+
+
+def _allows_psreadline_history(exe: str, command_line: str, user: str) -> bool:
+    """Return whether a Windows process can realistically write PSReadLine history."""
+    if exe not in {"powershell.exe", "powershell", "pwsh.exe", "pwsh"}:
+        return False
+    if user.lower() in {"system", "local service", "network service"}:
+        return False
+    command_lower = command_line.lower()
+    noninteractive_markers = (
+        "-command",
+        "-encodedcommand",
+        "-enc",
+        "-file",
+        "-noninteractive",
+    )
+    return not any(marker in command_lower for marker in noninteractive_markers)

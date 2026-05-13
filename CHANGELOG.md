@@ -4,6 +4,29 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.6.3 (2026-05-13)
+
+This patch release packages the latest `dev` branch realism work since v0.6.2. The branch contains only `fix:` and `docs:` commits, so the version moves from `0.6.2` to `0.6.3` under the pre-1.0 semver policy.
+
+**Loop 65-95 source-native realism fixes**
+
+- Reduced recurring synthetic tells across network, proxy, TLS, ASA, DNS tunnel, shell, browser, Snort, Kerberos, Windows auth, and endpoint identity evidence (`aa82652`, `7975e3f`, `4751fc3`, `4313c6a`, `cd263e9`, `1bde596`, `a3a28af`, `84d8962`, `98a427c`, `bf36641`, `f7874a8`, `c74fae4`, `fa97120`, `a59c7b4`, `11f3e73`, `d4c0a1b`, `996f7c0`, `5a1751f`, `560c50f`, `2665cef`, `ba976a0`, `605c3aa`, `833e5eb`, `a690d9f`).
+- Removed clock-derived and lifecycle-derived fingerprints by improving Windows LUID/logon ID behavior, Linux PID/session allocation, singleton Windows service lifecycle, syslog session monotonicity, and Sysmon module identity stability (`cc8d295`, `225f286`, `3dec4f6`, `9e6185f`, `9d71c0b`, `30bc103`, `6f5df29`, `96a4070`, `0454d64`, `ff5ce1c`, `6e37ef4`, `c0b08d5`, `74f33d7`, `c110e6f`, `28bbcda`, `92e99d0`).
+
+**Post-loop 95 sprint stack**
+
+- Addressed immediate realism defects, lifecycle/timing fingerprints, scan and DNS tunnel regularity, and Windows scheduled-task source-native XML rendering (`c568082`, `2f75757`, `5b03831`, `099665f`).
+- Recorded the post-loop roadmap, Loop 95 and Loop 96 assessment results, slow-inclusive pytest verification, and follow-up TODOs for web session realism, well-synced Zeek sensor timing, endpoint/eCAR variance, and deferred observation coverage (`e7ff866`, `50204f5`, `3778e25`, `505f17a`).
+
+**Scenario authoring guidance**
+
+- Tightened attacker-controlled naming guidance so plausible domains, services, accounts, scheduled tasks, processes, and staging archives do not become semantic breadcrumbs that reveal the attack narrative (`505f17a`).
+
+**Validation**
+
+- The sprint stack was validated with focused tests, repo-wide Ruff checks, `eforge validate-config`, normal pytest runs, regenerated iteration-test data, quantitative eval, and a slow-inclusive pytest pass recorded in TODO.
+- Release-prep validation ran `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest tests/unit/test_install_skills.py -q --no-cov` before opening the dev-to-main PR.
+
 ## v0.6.2 (2026-05-12)
 
 This patch release packages the `dev` branch hardening work since v0.6.1. The branch contains only `fix:` and `docs:` commits, so the version moves from `0.6.1` to `0.6.2` under the pre-1.0 semver policy.

@@ -373,6 +373,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "task_content": (
                             f"<Actions><Exec><Command>{task_action}</Command></Exec></Actions>"
                         ),
+                        "source_command_line": cmd,
                     },
                     timing=timing,
                     description="4698 scheduled task from schtasks /create",

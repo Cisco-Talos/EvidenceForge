@@ -22,12 +22,14 @@
 
 """Tests for activity generator SSL/HTTP/FileTransfer context population."""
 
+import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
-from evidenceforge.events.contexts import HttpContext
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -106,11 +108,66 @@ class TestSslContextPopulation:
             assert event.ssl.version in {"TLSv12", "TLSv13"}
             assert event.ssl.cipher != ""
             assert event.ssl.established is True
-            assert event.x509 is not None
-            assert event.x509.fuid.startswith("F")
-            assert event.x509_chain
-            assert event.x509_chain[0] is event.x509
-            assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
+            if event.ssl.version == "TLSv13":
+                assert event.x509 is None
+                assert event.x509_chain == []
+                assert event.ssl.cert_chain_fuids == []
+            else:
+                assert event.x509 is not None
+                assert event.x509.fuid.startswith("F")
+                assert event.x509_chain
+                assert event.x509_chain[0] is event.x509
+                assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
+
+    def test_tls13_omits_passive_certificate_artifacts(self, activity_gen):
+        """Passive Zeek should not emit certificate FUIds or x509 rows for TLS 1.3."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="140.82.112.5",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            hostname="www.gstatic.com",
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.ssl is not None
+        assert event.ssl.version == "TLSv13"
+        assert event.x509 is None
+        assert event.x509_chain == []
+        assert event.ssl.cert_chain_fuids == []
+
+    def test_tls12_preserves_passive_certificate_artifacts(self, activity_gen):
+        """TLS 1.2 handshakes still expose certificates to passive Zeek."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="151.101.0.223",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=1024,
+            resp_bytes=4096,
+            hostname="pypi.org",
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.ssl is not None
+        assert event.ssl.version == "TLSv12"
+        assert event.x509 is not None
+        assert event.x509_chain
+        assert event.ssl.cert_chain_fuids == [cert.fuid for cert in event.x509_chain]
 
     def test_explicit_successful_tls_does_not_fail_handshake(self, activity_gen):
         """A caller-pinned SF TLS connection should not be downgraded by SSL failure noise."""
@@ -135,6 +192,50 @@ class TestSslContextPopulation:
         assert event.network.resp_bytes >= 1840
         assert event.ssl is not None
         assert event.ssl.established is True
+
+    def test_http_over_tls_forces_established_ssl_context(self, activity_gen, monkeypatch):
+        """Successful HTTP evidence on TLS cannot coexist with failed ssl.log state."""
+        gen, _ = activity_gen
+        monkeypatch.setattr(
+            "evidenceforge.generation.activity.generator._SSL_FAILURE_RATE",
+            1.0,
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51432,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            http=HttpContext(
+                method="GET",
+                host="example.com",
+                uri="/index.html",
+                status_code=200,
+                status_msg="OK",
+                response_body_len=4096,
+            ),
+        )
+
+        gen._attach_ssl_context(
+            event,
+            hostname="example.com",
+            dns=None,
+            dst_ip="93.184.216.34",
+            rng=random.Random(7),
+            allow_failure=True,
+        )
+
+        assert event.network.conn_state == "SF"
+        assert event.ssl is not None
+        assert event.ssl.established is True
+        assert event.ssl.cipher
 
     def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
         """Proxy egress should preserve canonical POST body size for exfil-style uploads."""
@@ -188,6 +289,69 @@ class TestSslContextPopulation:
         egress = egress_events[-1]
         assert egress.network.conn_state == "SF"
         assert egress.network.orig_bytes >= body_bytes
+
+    def test_explicit_proxy_http_origin_leg_preserves_forwarded_request(self, activity_gen):
+        """Plain HTTP proxy egress should render the forwarded request, not invent a new one."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Firefox/121.0"
+        proxy_context = ProxyContext(
+            client_ip=source.ip,
+            method="GET",
+            url="http://www.google.com/complete/search?q=vpn+configuration",
+            host="www.google.com",
+            status_code=200,
+            tunnel_status_code=200,
+            sc_bytes=4250,
+            cs_bytes=620,
+            time_taken=1400,
+            user_agent=user_agent,
+            content_type="application/json",
+            cache_result="MISS",
+            referrer="",
+            proxy_fqdn=gen._proxy_fqdn(proxy),
+        )
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="142.250.80.46",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=180,
+            resp_bytes=4000,
+            conn_state="SF",
+            source_system=source,
+            hostname="www.google.com",
+            proxy=proxy_context,
+        )
+
+        http_events = [event for event in events if event.http is not None and event.network]
+        client = next(
+            event
+            for event in http_events
+            if event.network.src_ip == source.ip and event.network.dst_ip == proxy.ip
+        )
+        egress = next(event for event in http_events if event.network.src_ip == proxy.ip)
+
+        assert client.http.uri == "http://www.google.com/complete/search?q=vpn+configuration"
+        assert egress.http.uri == "/complete/search?q=vpn+configuration"
+        assert egress.http.host == "www.google.com"
+        assert egress.http.user_agent == client.http.user_agent == user_agent
+        assert egress.http.status_code == client.http.status_code == 200
+        assert egress.http.response_body_len == client.http.response_body_len == 4000
 
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""
@@ -599,7 +763,7 @@ class TestSslContextPopulation:
             duration=2.0,
             orig_bytes=1024,
             resp_bytes=4096,
-            hostname="www.gstatic.com",
+            hostname="pypi.org",
             conn_state="SF",
         )
 
@@ -617,7 +781,7 @@ class TestSslContextPopulation:
         gen, events = activity_gen
 
         gen.generate_connection(
-            src_ip="10.0.10.50",
+            src_ip="10.30.40.1",
             dst_ip="93.184.216.34",
             time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
             dst_port=443,
@@ -650,16 +814,16 @@ class TestSslContextPopulation:
             duration=2.0,
             orig_bytes=1024,
             resp_bytes=4096,
-            hostname="www.gstatic.com",
+            hostname="pypi.org",
             conn_state="SF",
         )
 
         event = events[-1]
         assert event.ssl is not None
         assert event.x509 is not None
-        assert event.ssl.server_name == "www.gstatic.com"
-        assert event.x509.certificate_subject == "CN=www.gstatic.com"
-        assert event.x509.san_dns == ["www.gstatic.com", "*.gstatic.com"]
+        assert event.ssl.server_name == "pypi.org"
+        assert event.x509.certificate_subject == "CN=pypi.org"
+        assert event.x509.san_dns == ["pypi.org", "*.pypi.org"]
         assert event.x509_chain[0] is event.x509
 
     def test_auto_tls_uses_profiled_destination_for_sni_and_dns(self, activity_gen):
@@ -698,8 +862,12 @@ class TestSslContextPopulation:
 
         tls_event = next(event for event in reversed(events) if event.ssl is not None)
         assert tls_event.ssl.server_name
-        assert tls_event.x509 is not None
-        assert tls_event.x509.certificate_subject == f"CN={tls_event.ssl.server_name}"
+        if tls_event.ssl.version == "TLSv13":
+            assert tls_event.x509 is None
+            assert tls_event.ssl.cert_chain_fuids == []
+        else:
+            assert tls_event.x509 is not None
+            assert tls_event.x509.certificate_subject == f"CN={tls_event.ssl.server_name}"
         assert not tls_event.ssl.server_name.startswith("host-")
 
     def test_tls_certificate_chains_include_intermediates_across_sample(self, activity_gen):
@@ -745,7 +913,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="www.gstatic.com",
+                hostname="pypi.org",
                 conn_state="SF",
             )
 
@@ -772,7 +940,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="www.gstatic.com",
+                hostname="pypi.org",
                 conn_state="SF",
             )
             gen._tls_seen_server_names.clear()
@@ -826,7 +994,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="changelogs.ubuntu.com",
+                hostname="security.ubuntu.com",
                 conn_state="SF",
                 source_system=proxy,
             )
@@ -851,7 +1019,7 @@ class TestSslContextPopulation:
                 duration=2.0,
                 orig_bytes=1024,
                 resp_bytes=4096,
-                hostname="www.gstatic.com",
+                hostname="pypi.org",
                 conn_state="SF",
             )
             gen._tls_seen_server_names.clear()
@@ -1054,6 +1222,39 @@ class TestHttpContextPopulation:
         assert event.network.resp_bytes <= 1520
         assert event.network.resp_bytes == event.network.orig_bytes
         assert event.network.duration <= 0.15
+
+    def test_duplicate_icmp_tuple_times_are_disambiguated(self, activity_gen):
+        """Repeated ICMP observations should not render exact same tuple and microsecond."""
+        gen, events = activity_gen
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        for requested_size in (64, 84, 120):
+            gen.generate_connection(
+                src_ip="10.10.4.10",
+                dst_ip="10.10.3.20",
+                time=timestamp,
+                proto="icmp",
+                service="icmp",
+                duration=0.02,
+                orig_bytes=requested_size,
+                resp_bytes=requested_size,
+            )
+
+        icmp_events = [
+            event for event in events if event.network and event.network.protocol == "icmp"
+        ]
+        assert len(icmp_events) == 3
+        rendered_keys = {
+            (
+                event.timestamp,
+                event.network.src_ip,
+                event.network.src_port or 8,
+                event.network.dst_ip,
+                event.network.dst_port or 0,
+            )
+            for event in icmp_events
+        }
+        assert len(rendered_keys) == 3
 
 
 class TestFileTransferContext:

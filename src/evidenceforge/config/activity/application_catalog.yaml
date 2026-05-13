@@ -26,7 +26,7 @@ applications:
       windows:
         image_path: 'C:\Program Files\Google\Chrome\Application\chrome.exe'
         pe_metadata:
-          file_version: "125.0.6422.112"
+          file_version: "120.0.6099.225"
           description: "Google Chrome"
           product: "Google Chrome"
           company: "Google LLC"
@@ -63,7 +63,7 @@ applications:
       windows:
         image_path: 'C:\Program Files\Mozilla Firefox\firefox.exe'
         pe_metadata:
-          file_version: "126.0"
+          file_version: "121.0"
           description: "Firefox"
           product: "Firefox"
           company: "Mozilla Corporation"
@@ -175,7 +175,7 @@ applications:
       windows:
         image_path: 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
         pe_metadata:
-          file_version: "125.0.2535.51"
+          file_version: "120.0.2210.144"
           description: "Microsoft Edge"
           product: "Microsoft Edge"
           company: "Microsoft Corporation"
@@ -441,7 +441,7 @@ applications:
           original_filename: "docker.exe"
         command_templates:
           - 'docker.exe ps'
-          - 'docker.exe images --format "table {{{{.Repository}}}}\t{{{{.Tag}}}}\t{{{{.Size}}}}"'
+          - 'docker.exe images --format "table {{.Repository}}\t{{.Tag}}\t{{.Size}}"'
       linux:
         image_path: "/usr/bin/docker"
         command_templates:

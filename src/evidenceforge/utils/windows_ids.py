@@ -20,12 +20,24 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""EvidenceForge: Realistic synthetic security log generator.
+"""Helpers for source-native Windows process and thread identifiers."""
 
-This package provides tools for generating realistic synthetic security logs
-for cybersecurity threat hunting training and research. It uses a two-phase
-architecture combining LLM-driven scenario creation with deterministic log generation.
-"""
+import random
 
-__version__ = "0.6.3"
-__all__ = []  # Will be expanded as modules are implemented
+
+def align_windows_id(value: int) -> int:
+    """Return a Windows-native PID/TID-style value aligned to a 4-byte boundary."""
+    if value <= 0:
+        return value
+    return ((value + 3) // 4) * 4
+
+
+def windows_id_randint(rng: random.Random, minimum: int, maximum: int) -> int:
+    """Return a random aligned Windows PID/TID-style integer within the range."""
+    if minimum > maximum:
+        raise ValueError("minimum must be less than or equal to maximum")
+    aligned_minimum = align_windows_id(minimum)
+    aligned_maximum = maximum - (maximum % 4)
+    if aligned_minimum > aligned_maximum:
+        return align_windows_id(minimum)
+    return rng.randrange(aligned_minimum, aligned_maximum + 1, 4)

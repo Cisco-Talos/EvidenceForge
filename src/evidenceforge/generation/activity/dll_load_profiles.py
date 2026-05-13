@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 _VALID_SIGNATURE_STATUSES = {"Valid", "Expired", "Revoked", "Unavailable"}
 
 _CACHED_PROFILES: dict[str, list[dict[str, Any]]] | None = None
+_CACHED_MODULE_PE: dict[str, tuple[str, str, str, str, str]] | None = None
 
 
 def _apply_defaults(entry: dict[str, Any]) -> dict[str, Any]:
@@ -30,6 +31,7 @@ def _apply_defaults(entry: dict[str, Any]) -> dict[str, Any]:
         "signed": entry.get("signed", True),
         "signature": entry.get("signature", "Microsoft Windows"),
         "signature_status": entry.get("signature_status", "Valid"),
+        "pe_metadata": entry.get("pe_metadata"),
     }
 
 
@@ -177,6 +179,93 @@ def load_dll_profiles() -> dict[str, list[dict[str, Any]]]:
 
     _CACHED_PROFILES = profiles
     return profiles
+
+
+def _metadata_tuple(pe: dict[str, str], fallback_name: str) -> tuple[str, str, str, str, str]:
+    """Convert a PE metadata mapping to the tuple shape used by Sysmon rendering."""
+    return (
+        pe.get("file_version", "-"),
+        pe.get("description", f"{fallback_name} module"),
+        pe.get("product", "-"),
+        pe.get("company", "-"),
+        pe.get("original_filename", fallback_name),
+    )
+
+
+def _inherit_application_module_metadata(
+    module: dict[str, Any],
+    app_pe: dict[str, str],
+) -> tuple[str, str, str, str, str] | None:
+    """Return module metadata inherited from the owning application package."""
+    module_name = _extract_exe_basename(module.get("path", ""))
+    if not module_name or not app_pe:
+        return None
+    explicit = module.get("pe_metadata")
+    if explicit:
+        return _metadata_tuple(explicit, module_name)
+    company = module.get("signature") or app_pe.get("company", "-")
+    return (
+        app_pe.get("file_version", "-"),
+        f"{module_name} module",
+        app_pe.get("product", "-"),
+        company,
+        module_name,
+    )
+
+
+def load_module_pe_metadata() -> dict[str, tuple[str, str, str, str, str]]:
+    """Build a loaded-module path/name → PE metadata index from config data."""
+    global _CACHED_MODULE_PE
+    if _CACHED_MODULE_PE is not None:
+        return _CACHED_MODULE_PE
+
+    from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.generation.activity.system_processes import load_system_processes
+
+    index: dict[str, tuple[str, str, str, str, str]] = {}
+
+    def add(path: str, metadata: tuple[str, str, str, str, str]) -> None:
+        normalized = path.replace("/", "\\").lower()
+        basename = _extract_exe_basename(path)
+        index[normalized] = metadata
+        index.setdefault(basename, metadata)
+
+    catalog = load_catalog()
+    for app in catalog.get("applications") or []:
+        win_platform = (app.get("platforms") or {}).get("windows") or {}
+        app_pe = win_platform.get("pe_metadata") or {}
+        for module in win_platform.get("loaded_modules") or []:
+            metadata = _inherit_application_module_metadata(module, app_pe)
+            if metadata:
+                add(module["path"], metadata)
+
+    sys_data = load_system_processes()
+    module_groups: list[list[dict[str, Any]]] = []
+    module_groups.append((sys_data.get("common_loaded_modules") or {}).get("windows") or [])
+    module_groups.extend((sys_data.get("process_loaded_modules") or {}).values())
+    for services in (sys_data.get("system_services") or {}).values():
+        for svc in services or []:
+            modules = svc.get("loaded_modules")
+            if modules:
+                module_groups.append(modules)
+    for modules in module_groups:
+        for module in modules or []:
+            explicit = module.get("pe_metadata")
+            if explicit:
+                add(
+                    module["path"], _metadata_tuple(explicit, _extract_exe_basename(module["path"]))
+                )
+
+    _CACHED_MODULE_PE = index
+    return index
+
+
+def get_module_pe_metadata(image_path: str) -> tuple[str, str, str, str, str]:
+    """Look up PE metadata for a loaded DLL/module path."""
+    index = load_module_pe_metadata()
+    normalized = image_path.replace("/", "\\").lower()
+    basename = _extract_exe_basename(image_path)
+    return index.get(normalized) or index.get(basename) or ("-", "-", "-", "-", "-")
 
 
 def get_dlls_for_process(exe_basename: str) -> list[dict[str, Any]]:

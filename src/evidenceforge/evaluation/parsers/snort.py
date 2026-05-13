@@ -30,10 +30,10 @@ from pathlib import Path
 from . import LogParser, ParsedRecord, register_parser
 
 # Snort fast alert format:
-# MM/DD-HH:MM:SS.ffffff [**] [sid:rev:gid] message [**] [Classification: class] [Priority: pri] {PROTO} src:port -> dst:port
+# MM/DD-HH:MM:SS.ffffff [**] [gid:sid:rev] message [**] [Classification: class] [Priority: pri] {PROTO} src:port -> dst:port
 SNORT_PATTERN = re.compile(
     r"^(\d{2}/\d{2}-\d{2}:\d{2}:\d{2}\.\d+)\s+"  # timestamp
-    r"\[\*\*\]\s+\[(\d+):\d+:\d+\]\s+"  # [sid:rev:gid]
+    r"\[\*\*\]\s+\[(\d+):(\d+):(\d+)\]\s+"  # [gid:sid:rev]
     r"(.*?)\s+\[\*\*\]\s+"  # message
     r"\[Classification:\s*(.*?)\]\s+"  # classification
     r"\[Priority:\s*(\d+)\]\s+"  # priority
@@ -47,7 +47,7 @@ class SnortAlertParser(LogParser):
     format_name = "snort_alert"
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == "snort_alert.alert"
+        return path.name in {"snort_alert.log", "snort_alert.alert"}
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         with path.open(encoding="utf-8") as f:
@@ -74,7 +74,9 @@ class SnortAlertParser(LogParser):
                 line_number=line_num,
             )
 
-        ts_str, sid, message, classification, priority, protocol, src, dst = match.groups()
+        ts_str, gid, sid, rev, message, classification, priority, protocol, src, dst = (
+            match.groups()
+        )
 
         # Parse timestamp (MM/DD-HH:MM:SS.ffffff — no year)
         try:
@@ -84,7 +86,9 @@ class SnortAlertParser(LogParser):
             errors.append(f"Invalid timestamp: {ts_str}")
 
         fields["timestamp"] = ts_str
+        fields["gid"] = int(gid)
         fields["sid"] = int(sid)
+        fields["rev"] = int(rev)
         fields["message"] = message.strip()
         fields["classification"] = classification.strip()
         fields["priority"] = int(priority)

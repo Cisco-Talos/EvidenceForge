@@ -22,13 +22,18 @@
 
 """Unit tests for Phase 5.4: Background Traffic & System Activity."""
 
-from datetime import UTC, datetime
+import random
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.engine.baseline import _registry_writer_candidates
+from evidenceforge.generation.engine.baseline import (
+    _machine_account_ntlm_offset_seconds,
+    _machine_account_tgs_gap_ms,
+    _registry_writer_candidates,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -338,6 +343,80 @@ class TestGenerateSystemProcess:
         ]
         assert len(ecar_calls) >= 1
 
+    def test_reuses_active_singleton_windows_service_process(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Singleton Windows services should not overlap as independent processes."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+
+        first_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+        second_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert second_pid == first_pid
+        security_creates = [
+            c
+            for c in mock_emitters["windows_event_security"].emit.call_args_list
+            if c[0][0].event_type == "system_process_create"
+            and c[0][0].process.image.endswith("spoolsv.exe")
+        ]
+        assert len(security_creates) == 1
+
+    def test_allows_multiple_non_singleton_windows_service_processes(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Multi-instance service hosts like WmiPrvSE.exe may create separate processes."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k DcomLaunch",
+            "SYSTEM",
+            "System",
+        )
+
+        first_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp,
+            process_name=r"C:\Windows\System32\wbem\WmiPrvSE.exe",
+            command_line="WmiPrvSE.exe -Embedding",
+            parent_pid=parent_pid,
+            username="NETWORK SERVICE",
+        )
+        state_manager.set_current_time(timestamp + timedelta(minutes=10))
+        second_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\wbem\WmiPrvSE.exe",
+            command_line="WmiPrvSE.exe -secured -Embedding",
+            parent_pid=parent_pid,
+            username="NETWORK SERVICE",
+        )
+
+        assert second_pid != first_pid
+
 
 class TestInfrastructureDetection:
     """Test infrastructure IP detection."""
@@ -536,6 +615,23 @@ class TestParentPidSelection:
 
 class TestInfrastructureTrafficGeneration:
     """Test Kerberos/LDAP/DB traffic detection and generation."""
+
+    def test_machine_account_kerberos_gaps_include_non_immediate_tgs(self):
+        """Machine-account TGS timing should not be locked to tiny millisecond gaps."""
+        rng = random.Random(7)
+        gaps = [_machine_account_tgs_gap_ms(rng, first=True) for _ in range(100)]
+
+        assert any(gap > 2_000 for gap in gaps)
+        assert any(gap > 60_000 for gap in gaps)
+
+    def test_machine_account_ntlm_offset_avoids_same_second_kerberos(self):
+        """Baseline NTLM validation should not share the Kerberos cycle timestamp."""
+        rng = random.Random(11)
+        tgt_offset = 512.5
+        offsets = [_machine_account_ntlm_offset_seconds(tgt_offset, rng) for _ in range(100)]
+
+        assert all(0 <= offset <= 3599 for offset in offsets)
+        assert all(abs(offset - tgt_offset) >= 2.0 for offset in offsets)
 
     def test_detects_mssql_from_services(self):
         """DB servers should be detected from system services list."""

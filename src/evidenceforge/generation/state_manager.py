@@ -41,6 +41,7 @@ from evidenceforge.models.state import (
     RunningProcess,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
+from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class StateManager:
 
     Attributes:
         state: GeneratorState containing all active entities
-        _logon_id_counter: Counter for generating unique LogonIDs
+        _logon_id_host_bases: Per-host base ranges for Windows LogonID/LUID allocation
         _pid_counters: Per-system PID counters dict[system_hostname, int]
         _connection_id_counter: Counter for generating unique connection IDs
         _lock: Reentrant lock for thread-safe access to state and counters
@@ -70,19 +71,31 @@ class StateManager:
     def __init__(self) -> None:
         """Initialize StateManager with empty state."""
         self.state = GeneratorState()
-        self._logon_id_rngs: dict[str, random.Random] = {}  # Per-host LogonID RNGs
+        self._logon_id_host_bases: dict[str, int] = {}
+        self._logon_id_used_host_bases: set[int] = set()
+        self._logon_id_epochs: dict[str, datetime] = {}
+        self._logon_id_second_ordinals: dict[tuple[str, int, int], int] = {}
+        self._logon_id_block_offsets: dict[str, dict[int, int]] = {}
         self._used_logon_ids: set[int] = set()
+        self._logon_id_aliases: dict[str, str] = {}
         # Well-known LogonIDs to avoid (SYSTEM=0x3e7, LOCAL SERVICE=0x3e5, NETWORK SERVICE=0x3e4)
         self._reserved_logon_ids = {0x3E4, 0x3E5, 0x3E6, 0x3E7}
         self._pid_counters: dict[str, int] = {}  # Per-system PID counters
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
+        self._pid_time_epochs: dict[str, datetime] = {}
+        self._pid_bucket_offsets: dict[tuple[str, int, int], int] = {}
+        self._linux_pid_block_offsets: dict[str, dict[int, int]] = {}
+        self._linux_pid_used_ids: dict[str, set[int]] = {}
+        self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
+        self._linux_logind_session_block_offsets: dict[str, dict[int, int]] = {}
         self._linux_logind_session_last_ids: dict[str, int] = {}
         self._linux_logind_session_used_ids: dict[str, set[int]] = {}
+        self._linux_logind_session_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._lock = RLock()  # Reentrant lock for thread safety
 
         # Entity lifecycle: per-system boot times for temporal validation
@@ -94,6 +107,119 @@ class StateManager:
     # Session Management
     # ========================================
 
+    def _host_logon_base(self, system: str) -> int:
+        """Return a stable host-local LUID range base.
+
+        ``GeneratorState.active_sessions`` still keys sessions by LogonID, so
+        each host receives a disjoint high-order range while visible values
+        remain monotonic inside that host's range.
+        """
+        base = self._logon_id_host_bases.get(system)
+        if base is not None:
+            return base
+
+        for salt in range(512):
+            # Keep values in the 32-bit LUID-looking space while leaving enough
+            # room for boot-relative growth during multi-day uptime windows.
+            bucket = 0x10 + (_stable_seed(f"logon_luid_host_{system}_{salt}") % 0xE0)
+            candidate = bucket << 24
+            if candidate not in self._logon_id_used_host_bases:
+                self._logon_id_host_bases[system] = candidate
+                self._logon_id_used_host_bases.add(candidate)
+                return candidate
+
+        raise StateError("LogonID host range allocation exhausted")
+
+    def _host_logon_epoch(self, system: str, current_time: datetime) -> datetime:
+        """Return the boot/uptime epoch used for host-local LUID allocation."""
+        boot_time = self._system_boot_times.get(system)
+        if boot_time is not None:
+            return ensure_utc(boot_time)
+
+        epoch = self._logon_id_epochs.get(system)
+        if epoch is not None:
+            return epoch
+
+        uptime_seconds = 3600 + (_stable_seed(f"logon_luid_uptime_{system}") % (3 * 86400))
+        epoch = ensure_utc(current_time) - timedelta(seconds=uptime_seconds)
+        self._logon_id_epochs[system] = epoch
+        return epoch
+
+    def _logon_luid_block_stride(self, system: str, block: int) -> int:
+        """Return background LSA allocation churn for one minute-scale block."""
+        return 56 + (_stable_seed(f"logon_luid_stride:{system}:{block}") % 73)
+
+    def _logon_luid_block_offset(self, system: str, block: int) -> int:
+        """Return cumulative per-host LUID churn before a minute-scale block."""
+        offsets = self._logon_id_block_offsets.setdefault(system, {0: 0})
+        if block in offsets:
+            return offsets[block]
+
+        last_block = max(offsets)
+        offset = offsets[last_block]
+        for current_block in range(last_block, block):
+            gap = 17 + (_stable_seed(f"logon_luid_block_gap:{system}:{current_block}") % 61)
+            offset += (60 * self._logon_luid_block_stride(system, current_block)) + gap
+            offsets[current_block + 1] = offset
+        return offsets[block]
+
+    def _allocate_logon_luid(self, system: str, event_time: datetime) -> int:
+        """Allocate a deterministic host-local Windows LogonID.
+
+        Real LSA LUIDs are host-local allocator values, not a direct wall-clock
+        encoding. Generation can visit events out of visible order, so the
+        allocator uses event-time buckets plus deterministic background churn to
+        preserve chronological sanity without exposing a fixed per-second stride.
+        """
+        current_time = ensure_utc(event_time)
+        base = self._host_logon_base(system)
+        epoch = self._host_logon_epoch(system, current_time)
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        block = elapsed_seconds // 60
+        second_in_block = elapsed_seconds % 60
+        subsecond_bucket = min(15, current_time.microsecond // 62500)
+        ordinal_key = (system, elapsed_seconds, subsecond_bucket)
+        ordinal = self._logon_id_second_ordinals.get(ordinal_key, 0)
+        self._logon_id_second_ordinals[ordinal_key] = ordinal + 1
+
+        stride = self._logon_luid_block_stride(system, block)
+        candidate = base + self._logon_luid_block_offset(system, block)
+        candidate += (second_in_block * stride) + (subsecond_bucket * 3) + ordinal
+        candidate += (
+            _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 3
+        )
+        while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
+            candidate += 1
+        self._used_logon_ids.add(candidate)
+        return candidate
+
+    @staticmethod
+    def _stable_logon_guid(system: str, logon_id: str) -> str:
+        """Return a deterministic Windows LogonGuid for a host-local LogonID."""
+        value = uuid.uuid5(uuid.NAMESPACE_DNS, f"windows_logon_guid:{system}:{logon_id}")
+        return f"{{{value}}}"
+
+    def allocate_logon_id(self, system: str, event_time: datetime | None = None) -> str:
+        """Allocate a standalone host-local LogonID without registering a session."""
+        with self._lock:
+            if event_time is None:
+                if self.state.current_time is None:
+                    raise StateError("Cannot allocate LogonID: current_time not set")
+                event_time = self.state.current_time
+            return f"0x{self._allocate_logon_luid(system, event_time):x}"
+
+    def _mark_logon_id_used(self, logon_id: str) -> None:
+        """Record externally supplied LogonIDs so generated sessions avoid reuse."""
+        try:
+            val = int(logon_id, 16)
+        except (TypeError, ValueError):
+            return
+        self._used_logon_ids.add(val)
+
+    def _resolve_logon_id(self, logon_id: str) -> str:
+        """Resolve a preplanned session LogonID to its final rendered value."""
+        return self._logon_id_aliases.get(logon_id, logon_id)
+
     def create_session(
         self,
         username: str,
@@ -103,6 +229,8 @@ class StateManager:
         source_port: int = 0,
         session_kind: str = "logon",
         transport_pid: int | None = None,
+        start_time: datetime | None = None,
+        logon_guid: str = "",
     ) -> str:
         """Create a new active session.
 
@@ -111,6 +239,10 @@ class StateManager:
             system: System hostname where session is active
             logon_type: Windows logon type (2=interactive, 3=network, 10=RDP, etc.)
             source_ip: Source IP address for logon
+            source_port: Source port for remote logons
+            session_kind: Semantic session category, such as interactive, network, rdp, or ssh
+            transport_pid: Optional transport process PID tied to the session
+            start_time: Optional session start time. Defaults to current generator time.
 
         Returns:
             Generated LogonID (hex string like "0x3e7")
@@ -119,23 +251,11 @@ class StateManager:
             StateError: If current_time is not set or LogonID counter exhausted
         """
         with self._lock:
-            if self.state.current_time is None:
+            if start_time is None and self.state.current_time is None:
                 raise StateError("Cannot create session: current_time not set")
 
-            # Generate high-entropy LogonID (real LSASS uses random 32-bit values)
-            # Per-host RNG ensures different hosts produce different LogonID sequences
-            if system not in self._logon_id_rngs:
-                from evidenceforge.utils.rng import _stable_seed
-
-                self._logon_id_rngs[system] = random.Random(_stable_seed(f"logon_ids_{system}"))
-            host_rng = self._logon_id_rngs[system]
-            for _ in range(100):
-                val = host_rng.randint(0x10000, 0xFFFFFFFF)
-                if val not in self._used_logon_ids and val not in self._reserved_logon_ids:
-                    break
-            else:
-                raise StateError("LogonID generation exhausted (100 collisions)")
-            self._used_logon_ids.add(val)
+            session_start_time = ensure_utc(start_time or self.state.current_time)
+            val = self._allocate_logon_luid(system, session_start_time)
             logon_id = f"0x{val:x}"
 
             # Create session
@@ -144,15 +264,17 @@ class StateManager:
                 username=username,
                 system=system,
                 logon_type=logon_type,
-                start_time=ensure_utc(self.state.current_time),
+                start_time=session_start_time,
                 source_ip=source_ip,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
                 ecar_object_id=str(uuid.uuid4()),
+                logon_guid=logon_guid,
             )
 
             self.state.active_sessions[logon_id] = session
+            self._logon_id_aliases.pop(logon_id, None)
             self._ended_sessions.pop(logon_id, None)
             logger.debug(f"Created session {logon_id} for {username}@{system}")
             return logon_id
@@ -167,7 +289,9 @@ class StateManager:
             ActiveSession if found, None otherwise
         """
         with self._lock:
-            return self.state.active_sessions.get(logon_id)
+            return self.state.active_sessions.get(logon_id) or self.state.active_sessions.get(
+                self._resolve_logon_id(logon_id)
+            )
 
     def get_sessions_for_user(self, username: str) -> list[ActiveSession]:
         """Get all active sessions for a user.
@@ -204,6 +328,7 @@ class StateManager:
         source_port: int = 0,
         session_kind: str = "logon",
         transport_pid: int | None = None,
+        logon_guid: str = "",
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -215,6 +340,7 @@ class StateManager:
             existing = self.state.active_sessions.get(logon_id)
             if existing is not None:
                 return existing
+            self._mark_logon_id_used(logon_id)
 
             session = ActiveSession(
                 logon_id=logon_id,
@@ -227,8 +353,10 @@ class StateManager:
                 session_kind=session_kind,
                 transport_pid=transport_pid,
                 ecar_object_id=str(uuid.uuid4()),
+                logon_guid=logon_guid,
             )
             self.state.active_sessions[logon_id] = session
+            self._logon_id_aliases.pop(logon_id, None)
             self._ended_sessions.pop(logon_id, None)
             logger.debug("Registered external session %s for %s@%s", logon_id, username, system)
             return session
@@ -244,10 +372,11 @@ class StateManager:
         session_kind: str | None = None,
         transport_pid: int | None = None,
         network_close_time: datetime | None = None,
+        logon_guid: str | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
-            session = self.state.active_sessions.get(logon_id)
+            session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
             if session is None:
                 return False
             if username is not None:
@@ -264,7 +393,48 @@ class StateManager:
                 session.transport_pid = transport_pid
             if network_close_time is not None:
                 session.network_close_time = ensure_utc(network_close_time)
+            if logon_guid is not None:
+                session.logon_guid = logon_guid
             return True
+
+    def get_or_create_session_logon_guid(
+        self,
+        logon_id: str,
+        system: str,
+        *,
+        require_nonzero: bool = True,
+    ) -> str:
+        """Return the canonical LogonGuid for a session, creating it if needed."""
+        null_guid = "{00000000-0000-0000-0000-000000000000}"
+        if not require_nonzero:
+            return null_guid
+        with self._lock:
+            resolved = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved)
+            if session is None:
+                ended = self._ended_sessions.get(resolved) or self._ended_sessions.get(logon_id)
+                session = ended[0] if ended is not None else None
+            if session is not None and session.logon_guid:
+                return session.logon_guid
+            guid = self._stable_logon_guid(system, resolved or logon_id)
+            if session is not None:
+                session.logon_guid = guid
+            return guid
+
+    def reassign_session_logon_id(self, logon_id: str, event_time: datetime) -> str | None:
+        """Re-key an active session after its final source-native start time is known."""
+        with self._lock:
+            session = self.state.active_sessions.pop(logon_id, None)
+            if session is None:
+                return None
+            new_logon_id = f"0x{self._allocate_logon_luid(session.system, event_time):x}"
+            session.logon_id = new_logon_id
+            session.start_time = ensure_utc(event_time)
+            self.state.active_sessions[new_logon_id] = session
+            self._logon_id_aliases[logon_id] = new_logon_id
+            self._ended_sessions.pop(logon_id, None)
+            self._ended_sessions.pop(new_logon_id, None)
+            return new_logon_id
 
     def end_session(self, logon_id: str, end_time: datetime | None = None) -> bool:
         """End an active session.
@@ -277,29 +447,39 @@ class StateManager:
             True if session was found and removed, False if not found
         """
         with self._lock:
-            session = self.state.active_sessions.pop(logon_id, None)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.pop(resolved_logon_id, None)
             if session is not None:
                 if end_time is None:
                     end_time = self.state.current_time
                 if end_time is not None:
-                    self._ended_sessions[logon_id] = (session, ensure_utc(end_time))
-                logger.debug(f"Ended session {logon_id}")
+                    ended = (session, ensure_utc(end_time))
+                    self._ended_sessions[resolved_logon_id] = ended
+                    if resolved_logon_id != logon_id:
+                        self._ended_sessions[logon_id] = ended
+                logger.debug("Ended session %s", resolved_logon_id)
                 return True
             return False
 
     def get_session_logon_type(self, logon_id: str) -> int | None:
         """Return the original logon type for an active or recently ended session."""
         with self._lock:
-            session = self.state.active_sessions.get(logon_id)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
             if session is not None:
                 return session.logon_type
-            ended = self._ended_sessions.get(logon_id)
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
             return ended[0].logon_type if ended is not None else None
 
     def get_session_end_time(self, logon_id: str) -> datetime | None:
         """Return the visible end time for a recently ended session."""
         with self._lock:
-            ended = self._ended_sessions.get(logon_id)
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
             return ended[1] if ended is not None else None
 
     def list_active_sessions(self) -> list[ActiveSession]:
@@ -325,7 +505,7 @@ class StateManager:
         """
         with self._lock:
             if event_time is not None:
-                normalized_time = ensure_utc(event_time)
+                normalized_time = ensure_utc(event_time).replace(microsecond=0)
                 initial = self._linux_logind_session_initials.setdefault(
                     system,
                     rng.randint(20, 250),
@@ -336,18 +516,49 @@ class StateManager:
                         system,
                         normalized_time,
                     )
-                elapsed_seconds = max(0, int((normalized_time - ensure_utc(epoch)).total_seconds()))
-                # Use timestamp-derived spacing rather than generation-order
-                # counters. Baseline and storyline syslog paths can dispatch
-                # out of chronological order before emitters sort the file; a
-                # one-second stride leaves enough room that earlier visible
-                # events cannot collide into later session IDs.
-                candidate = initial + elapsed_seconds
+                elapsed_seconds = max(
+                    0,
+                    int((normalized_time - ensure_utc(epoch)).total_seconds()),
+                )
+                elapsed_quarters = elapsed_seconds // 900
+                minute_in_quarter = (elapsed_seconds % 900) // 60
+                block = elapsed_quarters // 16
+                quarter_in_block = elapsed_quarters % 16
+                block_offsets = self._linux_logind_session_block_offsets.setdefault(
+                    system,
+                    {0: 0},
+                )
+                if block not in block_offsets:
+                    last_block = max(block_offsets)
+                    offset = block_offsets[last_block]
+                    for current_block in range(last_block, block):
+                        stride = 4 + (
+                            _stable_seed(f"logind_session_stride:{system}:{current_block}") % 3
+                        )
+                        gap = _stable_seed(f"logind_session_gap:{system}:{current_block}") % 3
+                        offset += (16 * stride) + gap
+                        block_offsets[current_block + 1] = offset
+                stride = 4 + (_stable_seed(f"logind_session_stride:{system}:{block}") % 3)
+                candidate = (
+                    initial
+                    + block_offsets[block]
+                    + (quarter_in_block * stride)
+                    + (minute_in_quarter // 5)
+                )
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
-                if candidate in used:
-                    while candidate in used:
-                        candidate += 1
+                allocations = self._linux_logind_session_allocations.setdefault(system, [])
+                salt = 0
+                while candidate in used or self._linux_logind_matches_elapsed_delta(
+                    allocations,
+                    normalized_time,
+                    candidate,
+                ):
+                    candidate += 7 + (
+                        _stable_seed(f"logind_session_collision:{system}:{candidate}:{salt}") % 7
+                    )
+                    salt += 1
                 used.add(candidate)
+                allocations.append((normalized_time, candidate))
                 self._linux_logind_session_last_ids[system] = max(
                     candidate, self._linux_logind_session_last_ids.get(system, candidate)
                 )
@@ -358,9 +569,110 @@ class StateManager:
             self._linux_logind_session_counters[system] += rng.randint(1, 4)
             return self._linux_logind_session_counters[system]
 
+    @staticmethod
+    def _linux_logind_matches_elapsed_delta(
+        allocations: list[tuple[datetime, int]],
+        event_time: datetime,
+        candidate: int,
+    ) -> bool:
+        """Return True when a session ID would exactly encode elapsed seconds."""
+        for allocated_time, allocated_id in allocations:
+            elapsed_seconds = abs(int((event_time - allocated_time).total_seconds()))
+            if elapsed_seconds > 0 and abs(candidate - allocated_id) == elapsed_seconds:
+                return True
+        return False
+
     # ========================================
     # Process Management
     # ========================================
+
+    def _linux_pid_epoch(self, system: str, current_time: datetime) -> datetime:
+        """Return the per-host epoch used for Linux time-aware PID allocation."""
+        boot_time = self._system_boot_times.get(system)
+        if boot_time is not None:
+            return ensure_utc(boot_time)
+
+        epoch = self._pid_time_epochs.get(system)
+        if epoch is not None:
+            return epoch
+
+        epoch = ensure_utc(current_time)
+        self._pid_time_epochs[system] = epoch
+        return epoch
+
+    def _linux_pid_block_stride(self, system: str, block: int) -> int:
+        """Return background process churn for one coarse Linux PID time block."""
+        return 997 + (_stable_seed(f"linux_pid_stride:{system}:{block}") % 311)
+
+    def _linux_pid_block_offset(self, system: str, block: int) -> int:
+        """Return cumulative per-host Linux PID churn before a coarse time block."""
+        offsets = self._linux_pid_block_offsets.setdefault(system, {0: 0})
+        if block in offsets:
+            return offsets[block]
+
+        last_block = max(offsets)
+        offset = offsets[last_block]
+        for current_block in range(last_block, block):
+            gap = 37 + (_stable_seed(f"linux_pid_block_gap:{system}:{current_block}") % 61)
+            offset += self._linux_pid_block_stride(system, current_block) + gap
+            offsets[current_block + 1] = offset
+        return offsets[block]
+
+    @staticmethod
+    def _normalize_linux_pid(pid: int) -> int:
+        """Keep a PID inside the ordinary Linux pid_max range."""
+        linux_pid_max = 4_194_304
+        if pid > linux_pid_max:
+            return 500 + (pid % (linux_pid_max - 500))
+        if pid <= 0:
+            return 500
+        return pid
+
+    @staticmethod
+    def _linux_pid_matches_elapsed_delta(
+        allocations: list[tuple[datetime, int]],
+        event_time: datetime,
+        candidate: int,
+    ) -> bool:
+        """Return True when a PID would visibly encode elapsed wall-clock seconds."""
+        for allocated_time, allocated_id in allocations:
+            elapsed_seconds = abs((event_time - allocated_time).total_seconds())
+            pid_delta = abs(candidate - allocated_id)
+            if elapsed_seconds >= 1.0 and abs(pid_delta - elapsed_seconds) <= 1.0:
+                return True
+        return False
+
+    def _allocate_linux_pid(self, system: str, pid_rng: random.Random) -> int:
+        """Allocate a Linux PID without exposing wall-clock elapsed seconds."""
+        current_time = ensure_utc(self.state.current_time)
+        epoch = self._linux_pid_epoch(system, current_time)
+        elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
+        block = elapsed_seconds // 300
+        slot = (elapsed_seconds % 300) // 10
+        ordinal_key = (system, block, slot)
+        ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
+        gap = 23 + max(1, int(pid_rng.lognormvariate(0.7, 0.8)))
+        self._pid_bucket_offsets[ordinal_key] = ordinal + gap
+
+        pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
+        pid += (slot * 29) + ordinal
+        pid = self._normalize_linux_pid(pid)
+
+        running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
+        used = self._linux_pid_used_ids.setdefault(system, set())
+        allocations = self._linux_pid_allocations.setdefault(system, [])
+        collision_salt = 0
+        while (
+            pid in running
+            or pid in used
+            or self._linux_pid_matches_elapsed_delta(allocations, current_time, pid)
+        ):
+            bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
+            pid = self._normalize_linux_pid(pid + bump)
+            collision_salt += 1
+        used.add(pid)
+        allocations.append((current_time, pid))
+        return pid
 
     def create_process(
         self,
@@ -404,8 +716,6 @@ class StateManager:
 
             # Allocate PID for this system — OS-aware allocation (Phase 6.0)
             if system not in self._pid_counters:
-                from evidenceforge.utils.rng import _stable_seed
-
                 self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
                 pid_rng = self._pid_rngs[system]
                 # Detect OS from image path: backslash = Windows, forward slash = Linux
@@ -423,41 +733,30 @@ class StateManager:
                     self._pid_counters[system] = pid_rng.randint(8000, 42000)
                     self._pid_os[system] = "linux"
 
-            pid = self._pid_counters[system]
-
             # Increment with OS-aware gaps
             if system not in self._pid_rngs:
-                from evidenceforge.utils.rng import _stable_seed
-
                 self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
             pid_rng = self._pid_rngs[system]
             if self._pid_os.get(system) == "windows":
+                pid = self._pid_counters[system]
                 # Windows: multiples of 4 with lognormal gap distribution.
                 # Lognormal produces mostly small gaps (4-20) with a heavy tail
                 # (occasionally 100-800+) simulating background process churn
                 # that consumes PIDs between our emitted events.
                 gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
                 self._pid_counters[system] += 4 * gap
-            else:
-                # Linux: lognormal with smaller parameters — mostly +1 with
-                # occasional larger jumps from background daemon activity.
-                gap = max(1, int(pid_rng.lognormvariate(0.5, 0.6)))
-                self._pid_counters[system] += gap
 
-            # Check for PID exhaustion — wrap around to a safe range,
-            # skipping any PIDs still in use by running processes.
-            if self._pid_counters[system] > 65536:
-                base = 4000 if self._pid_os.get(system) == "windows" else 500
-                self._pid_counters[system] = base
-                # Skip past any PIDs still held by running processes
-                running = {
-                    p.pid for (s, _), p in self.state.running_processes.items() if s == system
-                }
-                while self._pid_counters[system] in running:
-                    if self._pid_os.get(system) == "windows":
+                # Check for PID exhaustion — wrap around to a safe range,
+                # skipping any PIDs still in use by running processes.
+                if self._pid_counters[system] > 65536:
+                    self._pid_counters[system] = 4000
+                    running = {
+                        p.pid for (s, _), p in self.state.running_processes.items() if s == system
+                    }
+                    while self._pid_counters[system] in running:
                         self._pid_counters[system] += 4
-                    else:
-                        self._pid_counters[system] += 1
+            else:
+                pid = self._allocate_linux_pid(system, pid_rng)
 
             # Create process
             ecar_object_id = str(uuid.uuid4())

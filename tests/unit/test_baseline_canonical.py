@@ -195,7 +195,7 @@ class TestIdsAlertCorrelation:
             orig_bytes=1,
             resp_bytes=1,
             conn_state="SF",
-            hostname="www.example.com",
+            hostname="github.com",
         )
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
@@ -835,6 +835,7 @@ class TestBaselineRegistryRealism:
         assert "Office\\\\16.0\\\\Word\\\\Reading Locations\\\\Document 1" in source
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
+        assert "driverdesc" in source
 
 
 class TestSensorStartup:

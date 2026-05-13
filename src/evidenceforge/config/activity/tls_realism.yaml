@@ -20,6 +20,16 @@ san:
     - org.au
     - org.uk
 
+serial_numbers:
+  byte_lengths:
+    - {bytes: 8, weight: 8}
+    - {bytes: 9, weight: 6}
+    - {bytes: 10, weight: 6}
+    - {bytes: 12, weight: 14}
+    - {bytes: 16, weight: 40}
+    - {bytes: 18, weight: 12}
+    - {bytes: 20, weight: 14}
+
 ocsp:
   cache_bucket_seconds: 14400
   this_update_max_skew_seconds: 3600

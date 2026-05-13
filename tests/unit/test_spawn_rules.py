@@ -163,6 +163,311 @@ class TestWindowsProcessTreeRealism:
             f"GUI app parent should be explorer, got {parent_proc.image}"
         )
 
+    def test_gui_app_repairs_missing_session_explorer(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """GUI apps should not fall back to winlogon when session Explorer state is absent."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.explorer_pid = None
+        pids["explorer"] = pids["winlogon"]
+
+        created_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+            parent_pid=pids["winlogon"],
+        )
+
+        created_proc = state_manager.get_process(win_system.hostname, created_pid)
+        assert created_proc is not None
+        parent_proc = state_manager.get_process(win_system.hostname, created_proc.parent_pid)
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\explorer.exe")
+        assert session.explorer_pid == parent_proc.pid
+
+    def test_top_level_browser_reuses_existing_session_browser(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Repeated navigations in one session should reuse the open browser process."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+
+        first_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+        )
+        second_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
+        )
+
+        assert second_pid == first_pid
+        browser_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(win_system.hostname)
+            if proc.username == user.username
+            and proc.image.rsplit("\\", 1)[-1].lower()
+            in {"chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe"}
+        ]
+        assert len(browser_processes) == 1
+
+    def test_browser_launch_spacing_avoids_same_second_duplicates(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Out-of-order generation should not leave same-second browser launch bursts."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = "0xabc123"
+        first = datetime(2024, 3, 18, 12, 0, 10, tzinfo=UTC)
+        second = datetime(2024, 3, 18, 12, 0, 9, tzinfo=UTC)
+
+        first_adjusted = ag._space_browser_launch(
+            system=win_system,
+            username=user.username,
+            logon_id=logon_id,
+            process_name=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line=r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+            time=first,
+        )
+        second_adjusted = ag._space_browser_launch(
+            system=win_system,
+            username=user.username,
+            logon_id=logon_id,
+            process_name=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            command_line=r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.org/',
+            time=second,
+        )
+
+        assert first_adjusted == first
+        assert (second_adjusted - first_adjusted).total_seconds() >= 4.0
+
+    def test_browser_renderer_children_are_not_reused_as_top_level_browser(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Browser child processes should still get distinct child PIDs."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        parent_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+        )
+
+        child_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer --enable-features=NetworkService',
+            parent_pid=parent_pid,
+        )
+
+        assert child_pid != parent_pid
+        child_proc = state_manager.get_process(win_system.hostname, child_pid)
+        assert child_proc is not None
+        assert child_proc.parent_pid == parent_pid
+
+    def test_browser_child_rejects_cross_family_explicit_parent(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Browser utility children should not inherit a different browser family as parent."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        firefox_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
+        )
+
+        chrome_child_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --type=renderer',
+            parent_pid=firefox_pid,
+        )
+
+        chrome_child = state_manager.get_process(win_system.hostname, chrome_child_pid)
+        assert chrome_child is not None
+        parent_proc = state_manager.get_process(win_system.hostname, chrome_child.parent_pid)
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\chrome.exe")
+        assert chrome_child.parent_pid != firefox_pid
+
+    def test_electron_child_keeps_same_family_parent(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """Electron utility children should parent to their owning app, not Explorer."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        teams_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            logon_id,
+            r"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe",
+            r'"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe" --processStart Teams.exe',
+        )
+
+        utility_pid = ag.generate_process(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 3, tzinfo=UTC),
+            logon_id,
+            r"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe",
+            r'"C:\Users\test.user\AppData\Local\Microsoft\Teams\current\Teams.exe" --type=utility',
+            parent_pid=teams_pid,
+        )
+
+        utility_proc = state_manager.get_process(win_system.hostname, utility_pid)
+        assert utility_proc is not None
+        assert utility_proc.parent_pid == teams_pid
+
+    def test_reused_browser_effects_spawn_actual_browser_family_children(
+        self, state_manager, mock_emitters, win_system, user, monkeypatch
+    ):
+        """Baseline child effects should follow the reused browser PID's actual image."""
+        from evidenceforge.generation.activity import application_catalog
+
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        calls = iter(
+            [
+                (
+                    r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                    r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.org/',
+                ),
+                (
+                    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                    r'"C:\Program Files\Google\Chrome\Application\chrome.exe" --single-argument https://example.com/',
+                ),
+            ]
+        )
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: next(calls),
+        )
+
+        def fake_children(os_category: str, parent_exe: str) -> list[dict[str, str]]:
+            if os_category != "windows":
+                return []
+            if parent_exe == "firefox.exe":
+                return [
+                    {
+                        "image": r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                        "command_line": (
+                            r'"C:\Program Files\Mozilla Firefox\firefox.exe" '
+                            r"-contentproc -childID 3 -isForBrowser"
+                        ),
+                    }
+                ]
+            if parent_exe == "chrome.exe":
+                return [
+                    {
+                        "image": r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                        "command_line": (
+                            r'"C:\Program Files\Google\Chrome\Application\chrome.exe" '
+                            r"--type=renderer"
+                        ),
+                    }
+                ]
+            return []
+
+        monkeypatch.setattr(application_catalog, "get_child_processes", fake_children)
+        monkeypatch.setattr(ag, "_emit_process_network_correlation", lambda *args: None)
+
+        ag.execute_baseline_activity(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC),
+            "process_user_apps",
+        )
+        ag.execute_baseline_activity(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC),
+            "process_user_apps",
+        )
+
+        user_processes = [
+            proc
+            for proc in state_manager.get_processes_on_system(win_system.hostname)
+            if proc.username == user.username
+        ]
+        chrome_children = [
+            proc
+            for proc in user_processes
+            if proc.image.lower().endswith(r"\chrome.exe")
+            and "--type=renderer" in proc.command_line
+        ]
+        firefox_children = [
+            proc
+            for proc in user_processes
+            if proc.image.lower().endswith(r"\firefox.exe") and "-contentproc" in proc.command_line
+        ]
+
+        assert not chrome_children
+        assert len(firefox_children) == 2
+        parent_pids = {proc.parent_pid for proc in firefox_children}
+        assert len(parent_pids) == 1
+        parent_proc = state_manager.get_process(win_system.hostname, next(iter(parent_pids)))
+        assert parent_proc is not None
+        assert parent_proc.image.lower().endswith(r"\firefox.exe")
+
     def test_explorer_process_cannot_parent_from_browser_renderer(
         self, state_manager, mock_emitters, win_system, user
     ):
@@ -554,6 +859,51 @@ class TestDualSessionParentSelection:
         assert "explorer.exe" in parent_proc.image.lower(), (
             f"Interactive logon process should parent from explorer, got {parent_proc.image}"
         )
+
+    def test_interactive_parent_uses_matching_session_explorer(
+        self, state_manager, mock_emitters, win_system, user
+    ):
+        """One explorer.exe PID must not parent children from unrelated LogonIDs."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        state_manager.set_current_time(datetime(2024, 3, 18, 9, 45, 0, tzinfo=UTC))
+        global_explorer_pid = state_manager.create_process(
+            win_system.hostname,
+            pids["userinit"],
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            user.username,
+            "Medium",
+        )
+        pids["explorer"] = global_explorer_pid
+
+        first_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 10, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        second_logon_id = ag.generate_logon(
+            user,
+            win_system,
+            datetime(2024, 3, 18, 11, 0, 0, tzinfo=UTC),
+            logon_type=2,
+        )
+        first_session = state_manager.get_session(first_logon_id)
+        second_session = state_manager.get_session(second_logon_id)
+        assert first_session is not None
+        assert second_session is not None
+
+        parent_pid = ag._resolve_parent(
+            win_system,
+            user,
+            datetime(2024, 3, 18, 11, 0, 1, tzinfo=UTC),
+            second_logon_id,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        )
+
+        assert parent_pid == second_session.explorer_pid
+        assert parent_pid != first_session.explorer_pid
+        assert parent_pid != global_explorer_pid
 
 
 class TestLinuxParentSelection:

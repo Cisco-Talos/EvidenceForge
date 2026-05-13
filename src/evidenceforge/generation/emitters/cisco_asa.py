@@ -97,6 +97,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._sensor_interfaces: dict[str, dict[str, str]] = {}
         # VIP→real_ip for interface resolution (set by emitter_setup)
         self._vip_to_real_ip: dict[str, str] = {}
+        self._output_end_time: datetime | None = None
 
         # Threat detection: per-(sensor, src_ip) deny rate tracking
         self._deny_timestamps: dict[tuple[str, str], deque[datetime]] = {}
@@ -241,6 +242,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         seconds = CiscoAsaEmitter._teardown_duration_seconds(net, protocol, reason, conn_id)
         return CiscoAsaEmitter._format_duration(seconds)
 
+    def _is_after_output_end(self, timestamp: datetime) -> bool:
+        """Return whether a source-native timestamp falls beyond the collection window."""
+        if self._output_end_time is None:
+            return False
+        ts = timestamp
+        gate = self._output_end_time
+        if ts.tzinfo is not None and gate.tzinfo is None:
+            ts = ts.replace(tzinfo=None)
+        elif ts.tzinfo is None and gate.tzinfo is not None:
+            gate = gate.replace(tzinfo=None)
+        return ts > gate
+
     @staticmethod
     def _teardown_byte_count(net: Any, protocol: str, conn_id: int) -> int:
         """Return ASA source-native byte accounting for a connection teardown."""
@@ -334,7 +347,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     self._emit_nat_built(
                         event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
                     )
-                self._emit_teardown(
+                teardown_emitted = self._emit_teardown(
                     event,
                     net,
                     protocol,
@@ -345,9 +358,10 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                     fw_hostname,
                 )
                 if event.nat and event.nat.nat_type != "static":
-                    self._emit_nat_teardown(
-                        event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
-                    )
+                    if teardown_emitted:
+                        self._emit_nat_teardown(
+                            event, net, protocol, src_iface, dst_iface, sensor_hostname, fw_hostname
+                        )
 
     def _emit_built(
         self,
@@ -433,13 +447,15 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         dst_iface: str,
         sensor_hostname: str,
         fw_hostname: str,
-    ) -> None:
+    ) -> bool:
         """Emit a Teardown connection record (302014/302016/302021)."""
         reason = self._teardown_reason(net, protocol, conn_id)
         duration_seconds = self._teardown_duration_seconds(net, protocol, reason, conn_id)
         duration = self._format_duration(duration_seconds)
         total_bytes = self._teardown_byte_count(net, protocol, conn_id)
         teardown_ts = event.timestamp + timedelta(seconds=duration_seconds)
+        if self._is_after_output_end(teardown_ts):
+            return False
 
         if protocol == "icmp":
             msg_id = 302021
@@ -491,6 +507,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             "_sensor_hostnames": [sensor_hostname] if sensor_hostname else None,
         }
         self._dispatch(event_data)
+        return True
 
     def _emit_deny(
         self,
@@ -623,6 +640,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         teardown_ts = event.timestamp
         if net.duration and net.duration > 0:
             teardown_ts = event.timestamp + timedelta(seconds=net.duration)
+        if self._is_after_output_end(teardown_ts):
+            return
         is_src_nat = nat.mapped_src_ip != net.src_ip
         if is_src_nat:
             mapped_src_iface = self._sensor_interfaces.get(sensor_hostname, {}).get(

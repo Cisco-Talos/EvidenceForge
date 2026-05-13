@@ -125,7 +125,7 @@ class TestDCKerberosOnLogon:
             # Service ticket should target a valid service on WKS-01
             tgs_event = next(e for e in events if e.event_type == "kerberos_service")
             svc = tgs_event.kerberos.service_name
-            assert svc.endswith("/WKS-01") or svc.startswith("krbtgt/"), f"Unexpected: {svc}"
+            assert svc.endswith("/WKS-01") and not svc.startswith("krbtgt/"), f"Unexpected: {svc}"
             assert tgs_event.dst_host.hostname == "DC-01"
 
             # TGT timestamp should be before logon, service ticket between TGT and logon
@@ -133,6 +133,37 @@ class TestDCKerberosOnLogon:
             assert tgt_event.timestamp < logon_event.timestamp
             assert tgs_event.timestamp > tgt_event.timestamp
             assert tgs_event.timestamp < logon_event.timestamp
+
+    def test_network_logon_service_ticket_targets_member_server_spn(
+        self, activity_gen, mock_emitters, test_user
+    ):
+        """Member-server Kerberos logons should request a target SPN, not krbtgt again."""
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.20.15",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+        )
+
+        activity_gen._emit_dc_kerberos_for_logon(
+            user=test_user,
+            system=file_server,
+            time=ts,
+            auth_package="Kerberos",
+            source_ip="10.10.10.50",
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        tgs_event = next(e for e in events if e.event_type == "kerberos_service")
+        service_name = tgs_event.kerberos.service_name
+
+        assert service_name.endswith("/FILE-SRV-01")
+        assert service_name.startswith(("cifs/", "host/", "ldap/"))
+        assert not service_name.startswith("krbtgt/")
 
     def test_kerberos_logon_produces_dc_events_deterministically(
         self, activity_gen, mock_emitters, windows_system, test_user

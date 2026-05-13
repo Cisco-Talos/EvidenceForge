@@ -50,6 +50,7 @@ from evidenceforge.generation.emitters.windows_event import format_windows_syste
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.windows_ids import align_windows_id, windows_id_randint
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -440,6 +441,14 @@ class SysmonEventEmitter(LogEmitter):
         """
         # Handle Windows paths on any OS (backslash is not a separator on Unix)
         basename = image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if basename.endswith((".dll", ".api", ".p5x")):
+            from evidenceforge.generation.activity.dll_load_profiles import (
+                get_module_pe_metadata,
+            )
+
+            result = get_module_pe_metadata(image_path)
+            if result != ("-", "-", "-", "-", "-"):
+                return result
         result = cls._PE_METADATA.get(basename)
         if result:
             return cls._normalize_os_binary_metadata(image_path, result, host)
@@ -526,10 +535,20 @@ class SysmonEventEmitter(LogEmitter):
         cache = getattr(self, "_sysmon_thread_pools", None)
         if cache is None:
             cache = self._sysmon_thread_pools = {}
+        offsets = getattr(self, "_sysmon_thread_pool_offsets", None)
+        if offsets is None:
+            offsets = self._sysmon_thread_pool_offsets = {}
         if hostname not in cache:
             rng = random.Random(_stable_seed(f"sysmon_threads_{hostname}"))
-            cache[hostname] = [rng.randint(1000, 5000) for _ in range(rng.randint(3, 5))]
-        return random.choice(cache[hostname])
+            cache[hostname] = [
+                windows_id_randint(rng, 1000, 5000) for _ in range(rng.randint(3, 5))
+            ]
+            offsets[hostname] = _stable_seed(f"sysmon_thread_offset_{hostname}") % len(
+                cache[hostname]
+            )
+        offset = offsets[hostname]
+        offsets[hostname] = (offset + 1) % len(cache[hostname])
+        return cache[hostname][offset]
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
@@ -544,7 +563,7 @@ class SysmonEventEmitter(LogEmitter):
             h = int(
                 hashlib.md5(f"sysmon:{hostname}".encode(), usedforsecurity=False).hexdigest(), 16
             )
-            cache[hostname] = 1800 + (h % 1200)  # range 1800-2999
+            cache[hostname] = align_windows_id(1800 + (h % 1200))  # range 1800-3000
         return cache[hostname]
 
     def _get_call_trace(self, hostname: str) -> str:
@@ -664,6 +683,36 @@ class SysmonEventEmitter(LogEmitter):
         domain = _subject_domain(username, netbios_domain)
         return f"{domain}\\{username}"
 
+    @staticmethod
+    def _fallback_user_sid(username: str) -> str:
+        """Return a deterministic SID when older callers omit AuthContext.user_sid."""
+        normalized = username.split("\\")[-1].upper()
+        well_known = {
+            "SYSTEM": "S-1-5-18",
+            "LOCAL SERVICE": "S-1-5-19",
+            "NETWORK SERVICE": "S-1-5-20",
+        }
+        if normalized in well_known:
+            return well_known[normalized]
+        rid = 1000 + (_stable_seed(f"sysmon_hku_sid:{normalized.lower()}") % 50000)
+        return f"S-1-5-21-0-0-0-{rid}"
+
+    def _native_registry_target_object(self, target_object: str, event: SecurityEvent) -> str:
+        """Render user-hive aliases as Sysmon-native HKU\\SID paths."""
+        if not target_object.startswith("HKCU\\"):
+            return target_object
+        username = ""
+        sid = ""
+        if event.auth is not None:
+            username = event.auth.username or ""
+            sid = event.auth.user_sid or ""
+        if not username and event.process is not None:
+            username = event.process.username or ""
+        if not sid:
+            sid = self._fallback_user_sid(username or "user")
+        suffix = target_object.removeprefix("HKCU\\")
+        return f"HKU\\{sid}\\{suffix}"
+
     def _generate_process_guid(self, hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
@@ -708,14 +757,16 @@ class SysmonEventEmitter(LogEmitter):
     ) -> str:
         """Generate deterministic fake file hashes from image path.
 
-        Hashes are keyed by rendered binary identity. That keeps identical
-        Image/FileVersion/OriginalFileName tuples stable across the fleet while
-        still allowing different Windows builds or app versions to differ.
+        Hashes are keyed by rendered file identity, not signature validation
+        state. That keeps identical Image/FileVersion/OriginalFileName tuples
+        stable across the fleet while still allowing different Windows builds
+        or app versions to differ.
         """
         normalized_image = image.replace("/", "\\").lower()
         seed = normalized_image
         if rendered_identity is not None:
-            seed = f"{normalized_image}:{':'.join(str(part) for part in rendered_identity)}"
+            file_identity = rendered_identity[:5]
+            seed = f"{normalized_image}:{':'.join(str(part) for part in file_identity)}"
         elif host is not None and not isinstance(host, str):
             fv, _desc, prod, company, orig = cls._get_pe_metadata(image, host)
             seed = f"{normalized_image}:{fv}:{prod}:{company}:{orig}"
@@ -734,6 +785,17 @@ class SysmonEventEmitter(LogEmitter):
             usedforsecurity=False,
         ).hexdigest()
         return f"{{{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}}}"
+
+    def _resolve_logon_guid(self, hostname: str, logon_id: str, auth: Any | None) -> str:
+        """Resolve the canonical Windows LogonGuid for Sysmon process telemetry."""
+        if auth is not None and getattr(auth, "logon_guid", ""):
+            return auth.logon_guid
+        sm = getattr(self, "_state_manager", None)
+        if sm is not None and logon_id:
+            session = sm.get_session(logon_id)
+            if session is not None and getattr(session, "logon_guid", ""):
+                return session.logon_guid
+        return self._generate_logon_guid(hostname, logon_id)
 
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
@@ -796,7 +858,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": proc.image,
             "CommandLine": proc.command_line,
             "User": user,
-            "LogonGuid": self._generate_logon_guid(host.hostname, logon_id),
+            "LogonGuid": self._resolve_logon_guid(host.hostname, logon_id, auth),
             "LogonId": logon_id,
             "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,
@@ -855,8 +917,16 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
+        render_time = event.timestamp + self._source_offset(
+            "process_terminate",
+            host.hostname,
+            proc.pid,
+            event.timestamp,
+            minimum_ms=12,
+            maximum_ms=180,
+        )
 
-        utc_time = _format_sysmon_utc_time(event.timestamp)
+        utc_time = _format_sysmon_utc_time(render_time)
         process_guid = self._get_stable_process_guid(
             host.hostname, proc.pid, proc.start_time or event.timestamp
         )
@@ -868,7 +938,7 @@ class SysmonEventEmitter(LogEmitter):
 
         event_data = {
             "EventID": 5,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Microsoft-Windows-Sysmon/Operational",
             "Level": 4,
@@ -1314,8 +1384,6 @@ class SysmonEventEmitter(LogEmitter):
                 prod,
                 company,
                 orig,
-                il.signature if il.signed else "-",
-                signature_status,
             ),
         )
 
@@ -1436,7 +1504,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": image,
             "User": user,
             "EventType": event_type,
-            "TargetObject": reg.key,
+            "TargetObject": self._native_registry_target_object(reg.key, event),
         }
 
         # Event 13 includes the Details field
@@ -1567,6 +1635,13 @@ class SysmonEventEmitter(LogEmitter):
         self._get_host_writer("").write(rendered)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
+        event_data = dict(event_data)
+        for field in ("ExecutionProcessID", "ExecutionThreadID"):
+            value = event_data.get(field)
+            if isinstance(value, int):
+                event_data[field] = align_windows_id(value)
+            elif isinstance(value, str) and value.isdecimal():
+                event_data[field] = str(align_windows_id(int(value)))
         if self.threaded:
             self._emit_threaded(event_data)
         else:

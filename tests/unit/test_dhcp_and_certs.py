@@ -4,6 +4,7 @@
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
 import random
+import re
 from datetime import UTC, datetime
 
 import yaml
@@ -15,6 +16,7 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _ntp_stratum_and_ref_id,
     _ocsp_status_for_certificate,
+    _tls_certificate_serial,
     _tls_san_dns_names,
 )
 from evidenceforge.generation.activity.tls_issuers import (
@@ -181,6 +183,16 @@ class TestTlsIssuers:
             statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
             assert "revoked" not in statuses
 
+    def test_tls_certificate_serial_lengths_vary_but_remain_stable(self):
+        """Certificate serials should not all look like fixed 128-bit generated values."""
+        serials = [_tls_certificate_serial(f"cert-{idx}") for idx in range(120)]
+
+        assert _tls_certificate_serial("stable-cert") == _tls_certificate_serial("stable-cert")
+        assert len({len(serial) for serial in serials}) >= 3
+        assert all(16 <= len(serial) <= 40 for serial in serials)
+        assert all(len(serial) % 2 == 0 for serial in serials)
+        assert all(re.fullmatch(r"[0-9A-F]+", serial) for serial in serials)
+
     def test_ocsp_responder_selection_is_issuer_aware(self):
         """OCSP responders should come from issuer-specific config."""
         assert pick_ocsp_responder("CN=R3, O=Let's Encrypt, C=US", random.Random(1)) in {
@@ -281,11 +293,21 @@ class TestTlsIssuers:
     def test_tls_destination_picker_is_host_stable_but_not_globally_flat(self):
         """Different hosts should draw from overlapping but distinct TLS preferences."""
         host_a = [
-            pick_tls_destination(random.Random(seed), src_host="WKS-01", source_os="windows")[0]
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-01",
+                source_os="windows",
+                system_type="workstation",
+            )[0]
             for seed in range(80)
         ]
         host_b = [
-            pick_tls_destination(random.Random(seed), src_host="WKS-02", source_os="windows")[0]
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-02",
+                source_os="windows",
+                system_type="workstation",
+            )[0]
             for seed in range(80)
         ]
 
@@ -318,6 +340,26 @@ class TestTlsIssuers:
 
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
         assert "download.windowsupdate.com" not in linux_domains
+
+    def test_tls_destination_picker_excludes_cleartext_cert_infra_domains(self):
+        """OCSP/CRL responders are HTTP objects, not direct TLS SNI destinations."""
+        from evidenceforge.generation.activity.proxy_uri import get_proxy_domain_class
+
+        domains = {
+            pick_tls_destination(
+                random.Random(seed),
+                src_host="WKS-01",
+                source_os="windows",
+                system_type="workstation",
+                purpose_tags=("background",),
+            )[0]
+            for seed in range(1200)
+        }
+
+        assert "ctldl.windowsupdate.com" in domains
+        assert not {
+            domain for domain in domains if get_proxy_domain_class(domain) in {"ocsp", "crl"}
+        }
 
     def test_public_ca_chain_templates_keep_issuer_family(self):
         """Public CA intermediates should not fall through to an unrelated root family."""
@@ -506,6 +548,30 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_dns_tunnel_ttl_choices_are_loaded_from_network_params_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response TTL weights should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_ttl_choices,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_ttl_choices": [{"value": 9, "weight": 5}]},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert (9, 5.0) in dns_tunnel_ttl_choices()
+        finally:
+            reset_network_params_cache()
+
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
         generator = ActivityGenerator(StateManager(), {})
@@ -521,7 +587,7 @@ class TestTlsIssuers:
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.30.40.101",
+                src_ip="10.30.40.3",
                 src_port=50123,
                 dst_ip=web_system.ip,
                 dst_port=443,
@@ -559,7 +625,7 @@ class TestTlsIssuers:
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.30.40.101",
+                src_ip="10.30.40.3",
                 src_port=50123,
                 dst_ip=dc_system.ip,
                 dst_port=443,
@@ -591,7 +657,7 @@ class TestTlsIssuers:
             timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
             event_type="connection",
             network=NetworkContext(
-                src_ip="10.30.40.101",
+                src_ip="10.30.40.1",
                 src_port=50123,
                 dst_ip="45.33.32.30",
                 dst_port=443,
@@ -633,7 +699,7 @@ class TestTlsIssuers:
 
         generator._attach_ssl_context(
             event,
-            hostname="ocsp.pki.goog",
+            hostname="github.com",
             dns=None,
             dst_ip="142.250.190.99",
             rng=random.Random(42),
@@ -696,7 +762,7 @@ class TestTlsIssuers:
         for event in (first, second):
             generator._attach_ssl_context(
                 event,
-                hostname="ocsp.pki.goog",
+                hostname="www.cloudflare.com",
                 dns=None,
                 dst_ip="142.250.190.99",
                 rng=random.Random(43),

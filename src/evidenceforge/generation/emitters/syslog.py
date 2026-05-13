@@ -33,6 +33,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 _SYSLOG_MONTHS = {
     "Jan": 1,
@@ -49,6 +50,14 @@ _SYSLOG_MONTHS = {
     "Dec": 12,
 }
 _SYSLOG_TS_RE = re.compile(r"^(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<hms>\d\d:\d\d:\d\d)")
+_LOGIND_NEW_SESSION_RE = re.compile(
+    r"(?P<prefix>\bsystemd-logind\[(?P<pid>\d+)\]: New session )"
+    r"(?P<session>\d+)(?P<suffix> of user .*)"
+)
+_LOGIND_REMOVED_SESSION_RE = re.compile(
+    r"(?P<prefix>\bsystemd-logind\[(?P<pid>\d+)\]: Removed session )"
+    r"(?P<session>\d+)(?P<suffix>\.)"
+)
 
 
 def _ssh_lifecycle_priority(line: str) -> int:
@@ -193,3 +202,101 @@ class SyslogEmitter(HostMultiplexEmitter):
         }
         rendered = self._template.render(**context)
         return rendered.strip()
+
+    def close(self) -> None:
+        """Close emitter after normalizing source-native logind session order."""
+        if self.threaded:
+            self.stop_thread()
+        self._normalize_logind_session_ids()
+        self.flush(force=True)
+
+    def _normalize_logind_session_ids(self) -> None:
+        """Rewrite visible logind New-session IDs in final rendered order.
+
+        systemd-logind session IDs are source-local syslog presentation state.
+        The generator can emit events out of final sorted order, so the final
+        syslog renderer owns the last mile: preserve the original relative
+        regime, make New-session rows monotonic per host/logind PID, and carry
+        the rewritten ID into matching Removed-session rows when both are
+        visible in the collection window.
+        """
+        with self._writers_lock:
+            for host_key, writer in self._writers.items():
+                with writer._lock:
+                    if not writer.buffer:
+                        continue
+                    lines = sorted(writer.buffer, key=_syslog_sort_key)
+                    writer.buffer = self._normalize_logind_session_ids_for_lines(
+                        lines,
+                        host_key,
+                    )
+
+    @staticmethod
+    def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:
+        """Return lines with monotonic logind New-session IDs for one host."""
+        first_by_pid: dict[str, int] = {}
+        for line in lines:
+            match = _LOGIND_NEW_SESSION_RE.search(line)
+            if match is None:
+                continue
+            pid = match.group("pid")
+            session = int(match.group("session"))
+            first_by_pid[pid] = min(session, first_by_pid.get(pid, session))
+
+        if not first_by_pid:
+            return lines
+
+        next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
+        prewindow_next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
+        rewritten_by_original: dict[tuple[str, str], int] = {}
+        prewindow_removed_by_original: dict[tuple[str, str], int] = {}
+        normalized: list[str] = []
+        for index, line in enumerate(lines):
+            new_match = _LOGIND_NEW_SESSION_RE.search(line)
+            if new_match is not None:
+                pid = new_match.group("pid")
+                original_session = new_match.group("session")
+                step_seed = _stable_seed(
+                    f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
+                )
+                next_by_pid[pid] = next_by_pid.get(pid, first_by_pid[pid] - 1) + 1 + (step_seed % 3)
+                rewritten = next_by_pid[pid]
+                rewritten_by_original[(pid, original_session)] = rewritten
+                line = (
+                    f"{line[: new_match.start('session')]}"
+                    f"{rewritten}"
+                    f"{line[new_match.end('session') :]}"
+                )
+                normalized.append(line)
+                continue
+
+            removed_match = _LOGIND_REMOVED_SESSION_RE.search(line)
+            if removed_match is not None:
+                key = (removed_match.group("pid"), removed_match.group("session"))
+                rewritten = rewritten_by_original.get(key)
+                if rewritten is None:
+                    pid = removed_match.group("pid")
+                    session = int(removed_match.group("session"))
+                    first_visible = max(2, first_by_pid.get(pid, session + 1))
+                    if session >= first_visible:
+                        rewritten = prewindow_removed_by_original.get(key)
+                        if rewritten is None:
+                            step_seed = _stable_seed(
+                                "syslog_logind_prewindow_session_step:"
+                                f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
+                            )
+                            prewindow_next_by_pid[pid] = (
+                                prewindow_next_by_pid.get(pid, first_visible - 1)
+                                - 1
+                                - (step_seed % 3)
+                            )
+                            rewritten = prewindow_next_by_pid[pid]
+                            prewindow_removed_by_original[key] = rewritten
+                if rewritten is not None:
+                    line = (
+                        f"{line[: removed_match.start('session')]}"
+                        f"{rewritten}"
+                        f"{line[removed_match.end('session') :]}"
+                    )
+            normalized.append(line)
+        return normalized
