@@ -8,7 +8,7 @@ list, producing non-uniform gaps that don't create a statistical fingerprint.
 """
 
 import statistics
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 
@@ -172,7 +172,48 @@ class TestLinuxPidAllocation:
         )
 
         assert earlier_pid < later_pid
-        assert later_pid - earlier_pid >= int(timedelta(minutes=15).total_seconds())
+        assert abs((later_pid - earlier_pid) - 900) > 1.0
+
+    def test_linux_pids_do_not_encode_elapsed_wall_clock_seconds(self, sm):
+        """Adjacent Linux process PIDs should not reveal elapsed seconds."""
+        boot_time = datetime(2024, 3, 18, 8, 0, 0)
+        sm.register_boot_time("TEST-01", boot_time)
+        sm.set_current_time(boot_time)
+        init_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+        )
+
+        first_time = datetime(2024, 3, 18, 12, 11, 22, 855000)
+        sm.set_current_time(first_time)
+        first_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=init_pid,
+            image="/usr/bin/bash",
+            command_line="bash /usr/local/sbin/backup.sh",
+            username="root",
+            integrity_level="System",
+        )
+
+        second_time = datetime(2024, 3, 18, 12, 13, 44, 641000)
+        sm.set_current_time(second_time)
+        second_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=init_pid,
+            image="/usr/bin/python3",
+            command_line="python3 /opt/app/worker.py",
+            username="root",
+            integrity_level="System",
+        )
+
+        elapsed_seconds = (second_time - first_time).total_seconds()
+        pid_delta = second_pid - first_pid
+        assert second_pid > first_pid
+        assert abs(pid_delta - elapsed_seconds) > 1.0
 
 
 class TestPidWraparound:

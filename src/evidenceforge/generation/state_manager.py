@@ -84,7 +84,10 @@ class StateManager:
         self._pid_os: dict[str, str] = {}  # Per-system OS type for PID allocation
         self._pid_rngs: dict[str, random.Random] = {}  # Per-system PID RNGs
         self._pid_time_epochs: dict[str, datetime] = {}
-        self._pid_second_offsets: dict[tuple[str, int], int] = {}
+        self._pid_bucket_offsets: dict[tuple[str, int, int], int] = {}
+        self._linux_pid_block_offsets: dict[str, dict[int, int]] = {}
+        self._linux_pid_used_ids: dict[str, set[int]] = {}
+        self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
@@ -597,30 +600,78 @@ class StateManager:
         self._pid_time_epochs[system] = epoch
         return epoch
 
+    def _linux_pid_block_stride(self, system: str, block: int) -> int:
+        """Return background process churn for one coarse Linux PID time block."""
+        return 997 + (_stable_seed(f"linux_pid_stride:{system}:{block}") % 311)
+
+    def _linux_pid_block_offset(self, system: str, block: int) -> int:
+        """Return cumulative per-host Linux PID churn before a coarse time block."""
+        offsets = self._linux_pid_block_offsets.setdefault(system, {0: 0})
+        if block in offsets:
+            return offsets[block]
+
+        last_block = max(offsets)
+        offset = offsets[last_block]
+        for current_block in range(last_block, block):
+            gap = 37 + (_stable_seed(f"linux_pid_block_gap:{system}:{current_block}") % 61)
+            offset += self._linux_pid_block_stride(system, current_block) + gap
+            offsets[current_block + 1] = offset
+        return offsets[block]
+
+    @staticmethod
+    def _normalize_linux_pid(pid: int) -> int:
+        """Keep a PID inside the ordinary Linux pid_max range."""
+        linux_pid_max = 4_194_304
+        if pid > linux_pid_max:
+            return 500 + (pid % (linux_pid_max - 500))
+        if pid <= 0:
+            return 500
+        return pid
+
+    @staticmethod
+    def _linux_pid_matches_elapsed_delta(
+        allocations: list[tuple[datetime, int]],
+        event_time: datetime,
+        candidate: int,
+    ) -> bool:
+        """Return True when a PID would visibly encode elapsed wall-clock seconds."""
+        for allocated_time, allocated_id in allocations:
+            elapsed_seconds = abs((event_time - allocated_time).total_seconds())
+            pid_delta = abs(candidate - allocated_id)
+            if elapsed_seconds >= 1.0 and abs(pid_delta - elapsed_seconds) <= 1.0:
+                return True
+        return False
+
     def _allocate_linux_pid(self, system: str, pid_rng: random.Random) -> int:
-        """Allocate a Linux PID from host time rather than generation order."""
+        """Allocate a Linux PID without exposing wall-clock elapsed seconds."""
         current_time = ensure_utc(self.state.current_time)
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
-        offset_key = (system, elapsed_seconds)
-        offset = self._pid_second_offsets.get(offset_key, 0)
-        pid = self._pid_counters[system] + elapsed_seconds + offset
+        block = elapsed_seconds // 300
+        slot = (elapsed_seconds % 300) // 10
+        ordinal_key = (system, block, slot)
+        ordinal = self._pid_bucket_offsets.get(ordinal_key, 0)
+        gap = 23 + max(1, int(pid_rng.lognormvariate(0.7, 0.8)))
+        self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
-        # Same-second forks still consume a realistically uneven amount of PID
-        # space, while minute-separated events stay ordered by visible time even
-        # if generation visits them out of chronological order.
-        gap = max(1, int(pid_rng.lognormvariate(0.5, 0.6)))
-        self._pid_second_offsets[offset_key] = offset + gap
-
-        linux_pid_max = 4_194_304
-        if pid > linux_pid_max:
-            pid = 500 + (pid % (linux_pid_max - 500))
+        pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
+        pid += (slot * 29) + ordinal
+        pid = self._normalize_linux_pid(pid)
 
         running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
-        while pid <= 0 or pid in running:
-            pid += 1
-            if pid > linux_pid_max:
-                pid = 500
+        used = self._linux_pid_used_ids.setdefault(system, set())
+        allocations = self._linux_pid_allocations.setdefault(system, [])
+        collision_salt = 0
+        while (
+            pid in running
+            or pid in used
+            or self._linux_pid_matches_elapsed_delta(allocations, current_time, pid)
+        ):
+            bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
+            pid = self._normalize_linux_pid(pid + bump)
+            collision_salt += 1
+        used.add(pid)
+        allocations.append((current_time, pid))
         return pid
 
     def create_process(
