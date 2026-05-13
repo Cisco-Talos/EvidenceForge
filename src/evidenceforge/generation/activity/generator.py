@@ -2033,6 +2033,42 @@ class ActivityGenerator:
         self.state_manager.set_current_time(time)
         return pid, image
 
+    def _caller_explicit_proxy_process_image(
+        self,
+        *,
+        source_system: System | None,
+        pid: int,
+        process_image: str | None,
+        proxy_context: ProxyContext,
+        proxy_sys: System,
+        dst_port: int,
+    ) -> str | None:
+        """Return the caller process image when it already fits proxy client telemetry."""
+        if pid <= 0 or source_system is None:
+            return None
+
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        candidate_image = running.image if running is not None else process_image
+        if not candidate_image:
+            return None
+
+        if _get_os_category(source_system.os) != "windows":
+            return candidate_image
+
+        hint = self._explicit_proxy_client_process_hint(
+            user_agent=proxy_context.user_agent,
+            hostname=proxy_context.host,
+            dst_port=dst_port,
+            proxy_sys=proxy_sys,
+        )
+        if hint is None:
+            return candidate_image
+
+        expected_image = hint[0]
+        if candidate_image.lower() == expected_image.lower():
+            return candidate_image
+        return None
+
     def _attach_ssl_context(
         self,
         event: SecurityEvent,
@@ -4965,16 +5001,33 @@ class ActivityGenerator:
 
             client_pid = pid
             client_process_image = process_image
-            owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+            caller_process_image = self._caller_explicit_proxy_process_image(
                 source_system=source_system,
-                time=time,
+                pid=pid,
+                process_image=process_image,
                 proxy_context=proxy_context,
                 proxy_sys=proxy_sys,
                 dst_port=dst_port,
             )
-            if owned_client_pid > 0:
-                client_pid = owned_client_pid
-                client_process_image = owned_process_image
+            if caller_process_image is not None:
+                client_process_image = caller_process_image
+                if source_system is not None:
+                    self.state_manager.update_process_activity_time(
+                        source_system.hostname,
+                        pid,
+                        time,
+                    )
+            else:
+                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+                    source_system=source_system,
+                    time=time,
+                    proxy_context=proxy_context,
+                    proxy_sys=proxy_sys,
+                    dst_port=dst_port,
+                )
+                if owned_client_pid > 0:
+                    client_pid = owned_client_pid
+                    client_process_image = owned_process_image
 
             client_uid = self.generate_connection(
                 src_ip=src_ip,

