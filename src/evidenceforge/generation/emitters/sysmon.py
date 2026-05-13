@@ -757,14 +757,16 @@ class SysmonEventEmitter(LogEmitter):
     ) -> str:
         """Generate deterministic fake file hashes from image path.
 
-        Hashes are keyed by rendered binary identity. That keeps identical
-        Image/FileVersion/OriginalFileName tuples stable across the fleet while
-        still allowing different Windows builds or app versions to differ.
+        Hashes are keyed by rendered file identity, not signature validation
+        state. That keeps identical Image/FileVersion/OriginalFileName tuples
+        stable across the fleet while still allowing different Windows builds
+        or app versions to differ.
         """
         normalized_image = image.replace("/", "\\").lower()
         seed = normalized_image
         if rendered_identity is not None:
-            seed = f"{normalized_image}:{':'.join(str(part) for part in rendered_identity)}"
+            file_identity = rendered_identity[:5]
+            seed = f"{normalized_image}:{':'.join(str(part) for part in file_identity)}"
         elif host is not None and not isinstance(host, str):
             fv, _desc, prod, company, orig = cls._get_pe_metadata(image, host)
             seed = f"{normalized_image}:{fv}:{prod}:{company}:{orig}"
@@ -1382,8 +1384,6 @@ class SysmonEventEmitter(LogEmitter):
                 prod,
                 company,
                 orig,
-                il.signature if il.signed else "-",
-                signature_status,
             ),
         )
 

@@ -855,8 +855,8 @@ class TestProcessCreateMetadata:
             image, workstation
         ) == SysmonEventEmitter._generate_hashes(image, server)
 
-    def test_image_load_hashes_include_rendered_signature_identity(self):
-        """Same DLL path with different rendered signer metadata must not share hashes."""
+    def test_image_load_hashes_follow_rendered_file_identity(self):
+        """Same DLL path with different rendered PE metadata must not share hashes."""
         image = r"C:\Program Files\Mozilla Firefox\lgpllibs.dll"
 
         mozilla_hashes = SysmonEventEmitter._generate_hashes(
@@ -868,8 +868,6 @@ class TestProcessCreateMetadata:
                 "Mozilla Corporation",
                 "Mozilla Corporation",
                 "lgpllibs.dll",
-                "Mozilla Corporation",
-                "Valid",
             ),
         )
         microsoft_hashes = SysmonEventEmitter._generate_hashes(
@@ -881,12 +879,40 @@ class TestProcessCreateMetadata:
                 "Microsoft Windows Operating System",
                 "Microsoft Corporation",
                 "lgpllibs.dll",
-                "Microsoft Windows",
-                "Valid",
             ),
         )
 
         assert mozilla_hashes != microsoft_hashes
+
+    def test_image_load_hashes_ignore_signature_evaluation_state(self):
+        """The same loaded module path/version keeps hashes across signer status changes."""
+        image = r"C:\Program Files\Microsoft OneDrive\FileSyncShell64.dll"
+        identity = (
+            "24.020.0128.0003",
+            "Microsoft OneDrive Shell Extension",
+            "Microsoft OneDrive",
+            "Microsoft Corporation",
+            "FileSyncShell64.dll",
+        )
+
+        microsoft_windows_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(*identity, "Microsoft Windows", "Valid"),
+        )
+        microsoft_corporation_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(*identity, "Microsoft Corporation", "Valid"),
+        )
+        unavailable_hashes = SysmonEventEmitter._generate_hashes(
+            image,
+            _win_host(),
+            rendered_identity=(*identity, "-", "Unavailable"),
+        )
+
+        assert microsoft_windows_hashes == microsoft_corporation_hashes
+        assert microsoft_windows_hashes == unavailable_hashes
 
     @pytest.mark.parametrize(
         ("image", "expected_product"),

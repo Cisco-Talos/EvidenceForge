@@ -206,9 +206,13 @@ process_loaded_modules:
     - path: "C:\\Windows\\System32\\negoext.dll"
     # Third-party credential providers
     - path: "C:\\Program Files\\VMware\\VMware Tools\\vmStatsProvider.dll"
-      signed: false
-      signature: "-"
-      signature_status: "Unavailable"
+      signature: "VMware, Inc."
+      pe_metadata:
+        file_version: "1.0.0.0"
+        description: "vmStatsProvider.dll module"
+        product: "VMware, Inc."
+        company: "VMware, Inc."
+        original_filename: "vmStatsProvider.dll"
 
   services.exe:
     - path: "C:\\Windows\\System32\\user32.dll"
