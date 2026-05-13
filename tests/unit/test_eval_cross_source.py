@@ -748,7 +748,7 @@ class TestPortScanSourceIp:
 
 
 class TestSyslogYearInference:
-    """Syslog BSD parser must infer year from file mtime, not datetime.now()."""
+    """Legacy BSD syslog eval fallback must infer year from file metadata."""
 
     def test_bsd_timestamp_uses_file_mtime_year(self, tmp_path):
         """SyslogParser should infer year from file modification time."""

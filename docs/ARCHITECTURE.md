@@ -251,7 +251,7 @@ LogEmitter (ABC)
 │   ├── ZeekSslEmitter               # ssl.log
 │   └── ... (10 more Zeek types)
 ├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EdrContext)
-├── SyslogEmitter                    # Linux syslog (BSD format)
+├── SyslogEmitter                    # Linux syslog (RFC 5424)
 ├── BashHistoryEmitter               # Per-user bash history
 ├── SnortEmitter                     # Snort IDS alerts
 ├── CiscoAsaEmitter                  # Cisco ASA firewall syslog (Built/Teardown/Deny)

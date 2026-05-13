@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Parser for syslog (RFC 5424 / BSD) text files."""
+"""Parser for generated RFC 5424 syslog plus legacy BSD eval input."""
 
 import re
 from collections.abc import Iterator
@@ -29,17 +29,28 @@ from pathlib import Path
 
 from . import LogParser, ParsedRecord, register_parser
 
-# BSD syslog format: "Mon DD HH:MM:SS hostname app[pid]: message"
-# Also handles "Mon DD HH:MM:SS hostname app: message" (no PID, e.g., kernel)
-SYSLOG_PATTERN = re.compile(
+RFC5424_PATTERN = re.compile(
+    r"^<(?P<pri>\d{1,3})>(?P<version>\d+)\s+"
+    r"(?P<timestamp>\S+)\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<app_name>\S+)\s+"
+    r"(?P<procid>\S+)\s+"
+    r"(?P<msgid>\S+)\s+"
+    r"(?P<structured_data>-|(?:\[[^\]]*\])+)"
+    r"(?:\s(?P<message>.*))?$"
+)
+
+# Legacy BSD/RFC3164 syslog format: "Mon DD HH:MM:SS hostname app[pid]: message".
+# Kept only so `eforge eval` can ingest older generated datasets.
+LEGACY_BSD_SYSLOG_PATTERN = re.compile(
     r"^(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+"  # timestamp (BSD)
     r"(\S+)\s+"  # hostname
     r"(\S+?)(?:\[([^\]]*)\])?:\s+"  # app_name[pid]: or app_name:
     r"(.*)$"  # message
 )
 
-# ISO 8601 variant: "2026-03-15T10:15:00Z hostname app[pid]: message"
-SYSLOG_ISO_PATTERN = re.compile(
+# Legacy ISO variant: "2026-03-15T10:15:00Z hostname app[pid]: message".
+LEGACY_ISO_SYSLOG_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*)\s+"  # ISO timestamp
     r"(\S+)\s+"  # hostname
     r"(\S+?)(?:\[([^\]]*)\])?:\s+"  # app_name[pid]: or app_name:
@@ -138,36 +149,62 @@ class SyslogParser(LogParser):
         if seed_year is None:
             seed_year = datetime.now(UTC).year
 
-        # Try ISO format first, then BSD
-        match = SYSLOG_ISO_PATTERN.match(raw)
+        match = RFC5424_PATTERN.match(raw)
         if match:
-            ts_str, hostname, app_name, pid_str, message = match.groups()
+            groups = match.groupdict()
+            ts_str = groups["timestamp"]
             try:
                 timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
             except ValueError:
-                errors.append(f"Invalid ISO timestamp: {ts_str}")
+                errors.append(f"Invalid RFC 5424 timestamp: {ts_str}")
+            pri = int(groups["pri"])
+            fields["pri"] = pri
+            fields["version"] = int(groups["version"])
+            fields["hostname"] = groups["hostname"]
+            fields["app_name"] = groups["app_name"]
+            fields["procid"] = groups["procid"]
+            fields["msgid"] = groups["msgid"]
+            fields["structured_data"] = groups["structured_data"]
+            fields["message"] = groups["message"] or ""
+            fields["facility"] = pri // 8
+            fields["severity"] = pri % 8
+            fields["syslog_protocol"] = "rfc5424"
+            pid_str = groups["procid"]
         else:
-            match = SYSLOG_PATTERN.match(raw)
+            match = LEGACY_ISO_SYSLOG_PATTERN.match(raw)
             if match:
                 ts_str, hostname, app_name, pid_str, message = match.groups()
-                timestamp = _resolve_bsd_year(ts_str, seed_year, last_ts)
-                if timestamp is None:
-                    errors.append(f"Invalid BSD timestamp: {ts_str}")
+                try:
+                    timestamp = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                except ValueError:
+                    errors.append(f"Invalid legacy ISO timestamp: {ts_str}")
+                fields["hostname"] = hostname
+                fields["app_name"] = app_name
+                fields["message"] = message
+                fields["syslog_protocol"] = "iso_legacy"
             else:
-                errors.append("Line does not match syslog format")
-                return ParsedRecord(
-                    source_format=self.format_name,
-                    raw=raw,
-                    fields={},
-                    timestamp=None,
-                    parse_errors=errors,
-                    line_number=line_num,
-                )
+                match = LEGACY_BSD_SYSLOG_PATTERN.match(raw)
+                if match:
+                    ts_str, hostname, app_name, pid_str, message = match.groups()
+                    timestamp = _resolve_bsd_year(ts_str, seed_year, last_ts)
+                    if timestamp is None:
+                        errors.append(f"Invalid legacy BSD timestamp: {ts_str}")
+                    fields["hostname"] = hostname
+                    fields["app_name"] = app_name
+                    fields["message"] = message
+                    fields["syslog_protocol"] = "rfc3164_legacy"
+                else:
+                    errors.append("Line does not match RFC 5424 or legacy syslog format")
+                    return ParsedRecord(
+                        source_format=self.format_name,
+                        raw=raw,
+                        fields={},
+                        timestamp=None,
+                        parse_errors=errors,
+                        line_number=line_num,
+                    )
 
         fields["timestamp"] = str(timestamp) if timestamp else ts_str
-        fields["hostname"] = hostname
-        fields["app_name"] = app_name
-        fields["message"] = message
 
         if pid_str is not None and pid_str != "-":
             try:

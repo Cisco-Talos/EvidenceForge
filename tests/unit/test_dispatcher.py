@@ -468,8 +468,8 @@ class TestCanHandleDefault:
         emitter.close()
 
         lines = output_path.read_text(encoding="utf-8").splitlines()
-        assert "19:00:53" in lines[0]
-        assert "20:01:25" in lines[1]
+        assert lines[0].startswith("<86>1 2024-10-14T19:00:53.000000Z")
+        assert lines[1].startswith("<86>1 2024-10-14T20:01:25.000000Z")
 
     def test_syslog_normalizes_logind_session_ids_in_rendered_order(self, tmp_path):
         """Rendered New-session IDs should not move backward after final syslog sort."""

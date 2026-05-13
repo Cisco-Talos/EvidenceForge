@@ -24,7 +24,7 @@ output/
     files.json                             # Zeek files.log
     ...                                    # Other Zeek logs
   ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
-  syslog.log                               # Linux syslog (BSD format)
+  syslog.log                               # Linux syslog (RFC 5424)
   snort_alert.log                          # Snort/Suricata IDS alerts
   <fw-hostname>/                           # Per-firewall directories
     cisco_asa.log                          # Cisco ASA firewall syslog
@@ -173,9 +173,9 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 ## Linux Syslog
 
 **File:** `syslog.log`
-**Format:** BSD syslog (RFC 3164 text format)
+**Format:** RFC 5424 syslog
 
-Authentication and system logs from Linux hosts. All syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
+Authentication and system logs from Linux hosts. Generated syslog uses RFC 5424 with year-bearing ISO/RFC3339 timestamps. `eforge eval` still accepts older BSD/RFC3164-style syslog as a legacy ingest fallback. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
 
 | Program | Description | Notes |
 |---------|-------------|-------|

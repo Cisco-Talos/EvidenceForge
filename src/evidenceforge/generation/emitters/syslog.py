@@ -28,6 +28,7 @@ just formats the context fields into the syslog template.
 """
 
 import re
+from datetime import UTC, datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
@@ -35,34 +36,20 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
 
-_SYSLOG_MONTHS = {
-    "Jan": 1,
-    "Feb": 2,
-    "Mar": 3,
-    "Apr": 4,
-    "May": 5,
-    "Jun": 6,
-    "Jul": 7,
-    "Aug": 8,
-    "Sep": 9,
-    "Oct": 10,
-    "Nov": 11,
-    "Dec": 12,
-}
-_SYSLOG_TS_RE = re.compile(r"^(?P<mon>[A-Z][a-z]{2})\s+(?P<day>\d{1,2})\s+(?P<hms>\d\d:\d\d:\d\d)")
+_RFC5424_TS_RE = re.compile(r"^<\d{1,3}>1\s+(?P<timestamp>\S+)")
 _LOGIND_NEW_SESSION_RE = re.compile(
-    r"(?P<prefix>\bsystemd-logind\[(?P<pid>\d+)\]: New session )"
+    r"(?P<prefix>\bsystemd-logind\s+(?P<pid>\d+)\s+\S+\s+\S+\s+New session )"
     r"(?P<session>\d+)(?P<suffix> of user .*)"
 )
 _LOGIND_REMOVED_SESSION_RE = re.compile(
-    r"(?P<prefix>\bsystemd-logind\[(?P<pid>\d+)\]: Removed session )"
+    r"(?P<prefix>\bsystemd-logind\s+(?P<pid>\d+)\s+\S+\s+\S+\s+Removed session )"
     r"(?P<session>\d+)(?P<suffix>\.)"
 )
 
 
 def _ssh_lifecycle_priority(line: str) -> int:
     """Order same-second SSH lifecycle messages after timestamp precision is lost."""
-    if " sshd[" not in line:
+    if " sshd " not in line and " sshd[" not in line:
         return 50
     if "Connection from " in line:
         return 10
@@ -75,45 +62,54 @@ def _ssh_lifecycle_priority(line: str) -> int:
 
 def _systemd_lifecycle_priority(line: str) -> int:
     """Order same-second systemd unit lifecycle messages after second-precision render."""
-    if " systemd[" not in line or ".service" not in line:
+    if (" systemd " not in line and " systemd[" not in line) or ".service" not in line:
         return 50
-    if ": Starting " in line:
+    if " Starting " in line:
         return 10
-    if ": Started " in line:
+    if " Started " in line:
         return 20
-    if ": Stopping " in line:
+    if " Stopping " in line:
         return 30
-    if ": Stopped " in line or ": Finished " in line:
+    if " Stopped " in line or " Finished " in line:
         return 40
     return 50
 
 
 def _dhclient_lifecycle_priority(line: str) -> int:
     """Order same-second DHCP client messages after timestamp precision is lost."""
-    if " dhclient[" not in line:
+    if " dhclient " not in line and " dhclient[" not in line:
         return 50
-    if ": DHCPDISCOVER " in line:
+    if " DHCPDISCOVER " in line:
         return 10
-    if ": DHCPOFFER " in line:
+    if " DHCPOFFER " in line:
         return 20
-    if ": DHCPREQUEST " in line:
+    if " DHCPREQUEST " in line:
         return 30
-    if ": DHCPACK " in line:
+    if " DHCPACK " in line:
         return 40
-    if ": bound to " in line:
+    if " bound to " in line:
         return 50
     return 60
 
 
-def _syslog_sort_key(line: str) -> tuple[int, int, str, int, str]:
-    """Sort traditional syslog lines by their rendered month/day/time prefix."""
-    match = _SYSLOG_TS_RE.match(line)
+def _parse_rfc5424_timestamp(value: str) -> datetime:
+    """Parse an RFC 5424 timestamp into UTC, returning datetime.max on failure."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.max.replace(tzinfo=UTC)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _syslog_sort_key(line: str) -> tuple[datetime, int, str]:
+    """Sort RFC 5424 syslog lines by timestamp plus same-time lifecycle order."""
+    match = _RFC5424_TS_RE.match(line)
     if match is None:
-        return (13, 32, "99:99:99", 99, line)
+        return (datetime.max.replace(tzinfo=UTC), 99, line)
     return (
-        _SYSLOG_MONTHS.get(match.group("mon"), 13),
-        int(match.group("day")),
-        match.group("hms"),
+        _parse_rfc5424_timestamp(match.group("timestamp")),
         min(
             _ssh_lifecycle_priority(line),
             _systemd_lifecycle_priority(line),
@@ -191,17 +187,49 @@ class SyslogEmitter(HostMultiplexEmitter):
             from evidenceforge.utils.time import parse_iso8601
 
             ts = parse_iso8601(ts)
+        if not isinstance(ts, datetime):
+            raise ValueError("Syslog events require a datetime timestamp")
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        ts = ts.astimezone(UTC)
+
+        facility = self._bounded_int(event_data.get("facility"), default=3, minimum=0, maximum=23)
+        severity = self._bounded_int(event_data.get("severity"), default=6, minimum=0, maximum=7)
+        pid = event_data.get("pid")
         context = {
-            "timestamp": ts,
+            "pri": facility * 8 + severity,
+            "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "hostname": event_data.get("hostname") or "",
             "facility": event_data.get("facility"),
             "severity": event_data.get("severity"),
-            "app_name": event_data.get("app_name"),
-            "pid": event_data.get("pid"),
+            "app_name": self._rfc5424_token(event_data.get("app_name"), default="-"),
+            "pid": pid,
+            "procid": str(pid) if pid not in (None, "") else "-",
+            "msgid": self._rfc5424_token(event_data.get("msgid"), default="-"),
+            "structured_data": event_data.get("structured_data") or "-",
             "message": event_data.get("message"),
         }
         rendered = self._template.render(**context)
         return rendered.strip()
+
+    @staticmethod
+    def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
+        """Return value as an int clamped to the RFC-supported range."""
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(minimum, min(maximum, parsed))
+
+    @staticmethod
+    def _rfc5424_token(value: Any, *, default: str) -> str:
+        """Render an RFC 5424 header token, replacing whitespace with underscores."""
+        if value is None:
+            return default
+        token = str(value).strip()
+        if not token:
+            return default
+        return re.sub(r"\s+", "_", token)
 
     def close(self) -> None:
         """Close emitter after normalizing source-native logind session order."""

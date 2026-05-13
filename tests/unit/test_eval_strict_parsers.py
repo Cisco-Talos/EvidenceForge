@@ -30,43 +30,57 @@ from evidenceforge.formats.validator import STRICT_FORMATS, validate_strict
 
 
 class TestStrictSyslog:
-    def test_valid_bsd_no_pri(self):
-        """BSD syslog without PRI: Mon DD HH:MM:SS host msg — valid."""
+    def test_bsd_without_legacy_marker_is_invalid(self):
+        """Generated syslog strict mode requires RFC 5424."""
         raw = "Mar 18 12:00:00 PROXY-01 sudo[50424]: root : TTY=pts/1"
         result = validate_strict("syslog", raw, {})
+        assert not result.valid
+        assert any("rfc 5424" in e.lower() for e in result.errors)
+
+    def test_legacy_bsd_parser_records_are_valid(self):
+        """Legacy BSD remains acceptable when the parser marks it as eval fallback input."""
+        raw = "Mar 18 12:00:00 PROXY-01 sudo[50424]: root : TTY=pts/1"
+        result = validate_strict("syslog", raw, {"syslog_protocol": "rfc3164_legacy"})
         assert result.valid, result.errors
 
     def test_valid_rfc5424_with_pri(self):
-        """RFC 5424 / BSD with PRI < 192 — valid."""
-        raw = "<166>Mar 18 12:00:00 PROXY-01 sudo: message"
+        """RFC 5424 with PRI < 192 — valid."""
+        raw = "<86>1 2026-03-18T12:00:00.000000Z PROXY-01 sudo 50424 - - message"
         result = validate_strict("syslog", raw, {})
         assert result.valid, result.errors
 
     def test_valid_pri_boundary_191(self):
         """PRI == 191 is the maximum valid priority."""
-        raw = "<191>Mar 18 12:00:00 host app: msg"
+        raw = "<191>1 2026-03-18T12:00:00Z host app 123 - - msg"
         result = validate_strict("syslog", raw, {})
         assert result.valid, result.errors
 
     def test_invalid_bsd_no_pri_wrong_format(self):
-        """Plain text that matches neither BSD nor RFC pattern — fails."""
+        """Plain text that is not RFC 5424 — fails."""
         raw = "not a syslog line"
         result = validate_strict("syslog", raw, {})
         assert not result.valid
-        assert any("syslog" in e.lower() or "bsd" in e.lower() for e in result.errors)
+        assert any("rfc 5424" in e.lower() for e in result.errors)
 
     def test_invalid_pri_exceeds_191(self):
         """PRI > 191 — fails."""
-        raw = "<200>Mar 18 12:00:00 host app: msg"
+        raw = "<200>1 2026-03-18T12:00:00Z host app 123 - - msg"
         result = validate_strict("syslog", raw, {})
         assert not result.valid
         assert any("192" in e or "200" in e or "191" in e for e in result.errors)
 
     def test_invalid_malformed_pri_bracket(self):
         """Opening angle bracket without digits — fails."""
-        raw = "<>Mar 18 12:00:00 host app: msg"
+        raw = "<>1 2026-03-18T12:00:00Z host app 123 - - msg"
         result = validate_strict("syslog", raw, {})
         assert not result.valid
+
+    def test_invalid_rfc5424_version(self):
+        """RFC 5424 VERSION must be 1."""
+        raw = "<86>2 2026-03-18T12:00:00Z host app 123 - - msg"
+        result = validate_strict("syslog", raw, {})
+        assert not result.valid
+        assert any("version" in e.lower() for e in result.errors)
 
 
 # ---------------------------------------------------------------------------

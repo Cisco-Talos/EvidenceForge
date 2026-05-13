@@ -68,7 +68,7 @@ Present a clear summary of the evaluation results. The report shows two tiers fo
 For each pillar, explain what the score means in practical terms:
 
 **Pillar 1: Parseability (weight 0.30)**
-- Spec Conformance: Does every record parse cleanly under strict-mode rules? Missing required fields? Type violations? RFC5424 strict for syslog; typed columns for Zeek; schema-strict for eCAR; XML-schema for Windows EventLog.
+- Spec Conformance: Does every record parse cleanly under strict-mode rules? Missing required fields? Type violations? RFC 5424 strict for generated syslog with legacy BSD/RFC3164 eval fallback; typed columns for Zeek; schema-strict for eCAR; XML-schema for Windows EventLog.
 - Format Constraints: Do records satisfy `FormatDefinition` constraints (field ranges, enum values, structural rules)?
 
 **Pillar 2: Plausibility (weight 0.25)**

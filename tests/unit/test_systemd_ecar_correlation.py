@@ -218,8 +218,8 @@ class TestSystemdProcessLifecycle:
 def test_syslog_sort_orders_same_second_systemd_start_before_finish():
     """Second-precision syslog sorting should preserve systemd unit lifecycle order."""
     lines = [
-        "Mar 18 12:04:02 WEB-EXT-01 systemd[1]: Finished phpsessionclean.service - Clean PHP session files.",
-        "Mar 18 12:04:02 WEB-EXT-01 systemd[1]: Starting phpsessionclean.service - Clean PHP session files.",
+        "<30>1 2024-03-18T12:04:02.000000Z WEB-EXT-01 systemd 1 - - Finished phpsessionclean.service - Clean PHP session files.",
+        "<30>1 2024-03-18T12:04:02.000000Z WEB-EXT-01 systemd 1 - - Starting phpsessionclean.service - Clean PHP session files.",
     ]
 
     assert sorted(lines, key=_syslog_sort_key)[0].endswith(
