@@ -664,6 +664,36 @@ class SysmonEventEmitter(LogEmitter):
         domain = _subject_domain(username, netbios_domain)
         return f"{domain}\\{username}"
 
+    @staticmethod
+    def _fallback_user_sid(username: str) -> str:
+        """Return a deterministic SID when older callers omit AuthContext.user_sid."""
+        normalized = username.split("\\")[-1].upper()
+        well_known = {
+            "SYSTEM": "S-1-5-18",
+            "LOCAL SERVICE": "S-1-5-19",
+            "NETWORK SERVICE": "S-1-5-20",
+        }
+        if normalized in well_known:
+            return well_known[normalized]
+        rid = 1000 + (_stable_seed(f"sysmon_hku_sid:{normalized.lower()}") % 50000)
+        return f"S-1-5-21-0-0-0-{rid}"
+
+    def _native_registry_target_object(self, target_object: str, event: SecurityEvent) -> str:
+        """Render user-hive aliases as Sysmon-native HKU\\SID paths."""
+        if not target_object.startswith("HKCU\\"):
+            return target_object
+        username = ""
+        sid = ""
+        if event.auth is not None:
+            username = event.auth.username or ""
+            sid = event.auth.user_sid or ""
+        if not username and event.process is not None:
+            username = event.process.username or ""
+        if not sid:
+            sid = self._fallback_user_sid(username or "user")
+        suffix = target_object.removeprefix("HKCU\\")
+        return f"HKU\\{sid}\\{suffix}"
+
     def _generate_process_guid(self, hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
@@ -1436,7 +1466,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": image,
             "User": user,
             "EventType": event_type,
-            "TargetObject": reg.key,
+            "TargetObject": self._native_registry_target_object(reg.key, event),
         }
 
         # Event 13 includes the Details field

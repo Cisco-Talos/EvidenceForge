@@ -2087,6 +2087,50 @@ class TestZeekEmitter:
         print(content)
         print(f"{'=' * 80}\n")
 
+    @pytest.mark.parametrize(
+        ("canonical", "expected"),
+        [
+            ("kerberos", "krb"),
+            ("sql", "tds"),
+            ("mssql", "tds"),
+            ("rpc", "dce_rpc"),
+        ],
+    )
+    def test_emit_connection_uses_zeek_native_service_names(
+        self, format_def, temp_output, canonical, expected
+    ):
+        """conn.service should use Zeek analyzer vocabulary."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.50",
+                src_port=49152,
+                dst_ip="10.0.0.10",
+                dst_port=88,
+                protocol="tcp",
+                service=canonical,
+                zeek_uid="CNativeSvc12345",
+                duration=0.1,
+                orig_bytes=100,
+                resp_bytes=200,
+                conn_state="SF",
+                history="ShADadfF",
+                orig_pkts=3,
+                orig_ip_bytes=220,
+                resp_pkts=3,
+                resp_ip_bytes=320,
+                ip_proto=6,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["service"] == expected
+
     def test_emit_udp_connection(self, format_def, temp_output):
         """Test emitting a UDP connection (DNS query)."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)

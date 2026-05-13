@@ -1392,6 +1392,7 @@ class ActivityGenerator:
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
@@ -1538,6 +1539,28 @@ class ActivityGenerator:
         src_port = _ephemeral_port(rng, os_category)
         self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
         return src_port
+
+    def _disambiguate_icmp_observation_time(
+        self,
+        src_ip: str,
+        src_port: int,
+        dst_ip: str,
+        dst_port: int,
+        time: datetime,
+    ) -> datetime:
+        """Avoid exact duplicate Zeek ICMP summaries for the same tuple and timestamp."""
+        if len(self._recent_icmp_observations) > 100_000:
+            self._recent_icmp_observations.clear()
+        zeek_type = src_port if src_port else 8
+        zeek_code = dst_port if dst_port else 0
+        adjusted = time
+        while True:
+            ts_us = int(round(adjusted.timestamp() * 1_000_000))
+            key = (src_ip, zeek_type, dst_ip, zeek_code, ts_us)
+            if key not in self._recent_icmp_observations:
+                self._recent_icmp_observations.add(key)
+                return adjusted
+            adjusted += timedelta(milliseconds=11)
 
     def _infer_connection_pid(
         self,
@@ -3957,7 +3980,11 @@ class ActivityGenerator:
         rng = _get_rng()
         os_category = _get_os_category(system.os)
         host_ctx = self._build_host_context(system)
-        auth_ctx = AuthContext(username=process_username)
+        auth_ctx = AuthContext(
+            username=process_username,
+            user_sid=self._get_sid(process_username),
+            logon_id=process_logon_id,
+        )
         semantic_file_effect = None
         if not suppress_command_file_effect:
             from evidenceforge.generation.activity.edr_pools import select_command_file_side_effect
@@ -4084,7 +4111,13 @@ class ActivityGenerator:
             "dllhost.exe",
         }
         _exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        if os_category == "windows" and _exe in _REGISTRY_WRITERS and rng.random() < 0.50:
+        _STORYLINE_REGISTRY_WRITERS = {"reg.exe", "regedit.exe", "msiexec.exe"}
+        if (
+            os_category == "windows"
+            and _exe in _REGISTRY_WRITERS
+            and (not from_storyline or _exe in _STORYLINE_REGISTRY_WRITERS)
+            and rng.random() < 0.50
+        ):
             # Service-level processes can write HKLM; user processes only HKCU
             _HKLM_WRITERS = {"svchost.exe", "services.exe", "reg.exe", "regedit.exe", "msiexec.exe"}
             # Emit 1-3 registry events per process (registry activity is high-volume)
@@ -5247,6 +5280,14 @@ class ActivityGenerator:
                 time,
             ),
         )
+        if proto == "icmp":
+            time = self._disambiguate_icmp_observation_time(
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                time,
+            )
 
         if pid > 0 and resolved_source_system:
             activity_time = time

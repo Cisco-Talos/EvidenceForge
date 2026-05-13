@@ -680,6 +680,7 @@ class TestRenderEventRegistry:
             timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
             event_type="registry_modify",
             src_host=_win_host(),
+            auth=AuthContext(username="admin", user_sid="S-1-5-21-111-222-333-1001"),
             process=ProcessContext(
                 pid=4567,
                 parent_pid=1,
@@ -702,6 +703,8 @@ class TestRenderEventRegistry:
         assert "SetValue" in content
         assert "HideFileExt" in content
         assert "DWORD (0x00000001)" in content
+        assert "HKCU\\" not in content
+        assert r"HKU\S-1-5-21-111-222-333-1001\Software" in content
 
 
 class TestProcessCreateMetadata:

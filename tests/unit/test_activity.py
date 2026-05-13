@@ -1672,6 +1672,56 @@ class TestActivityGenerator:
         assert registry_events
         assert registry_events[-1].registry.key.startswith("HKLM\\")
 
+    def test_storyline_powershell_does_not_receive_generic_registry_noise(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Storyline tool processes should not inherit unrelated user registry noise."""
+
+        class RegistryOnlyRandom:
+            def __init__(self):
+                self.random_calls = 0
+
+            def random(self):
+                self.random_calls += 1
+                return 0.1 if self.random_calls == 3 else 0.99
+
+            def choice(self, values):
+                return values[0]
+
+            def choices(self, population, weights=None, k=1):
+                return [population[0]]
+
+            def randint(self, lower, _upper):
+                return lower
+
+            def uniform(self, lower, _upper):
+                return lower
+
+            def getrandbits(self, bits):
+                return (1 << min(bits, 8)) - 1
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+
+        with patch("evidenceforge.generation.activity.generator._get_rng", RegistryOnlyRandom):
+            activity_gen.generate_process(
+                test_user,
+                test_system,
+                timestamp + timedelta(seconds=1),
+                logon_id,
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "powershell.exe Compress-Archive C:\\Exports C:\\ProgramData\\health-cache.zip",
+                from_storyline=True,
+            )
+
+        registry_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "registry_modify"
+        ]
+        assert registry_events == []
+
     def test_image_load_is_clamped_after_process_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

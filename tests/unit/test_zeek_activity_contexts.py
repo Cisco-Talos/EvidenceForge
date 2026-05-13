@@ -1101,6 +1101,39 @@ class TestHttpContextPopulation:
         assert event.network.resp_bytes == event.network.orig_bytes
         assert event.network.duration <= 0.15
 
+    def test_duplicate_icmp_tuple_times_are_disambiguated(self, activity_gen):
+        """Repeated ICMP observations should not render exact same tuple and microsecond."""
+        gen, events = activity_gen
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        for requested_size in (64, 84, 120):
+            gen.generate_connection(
+                src_ip="10.10.4.10",
+                dst_ip="10.10.3.20",
+                time=timestamp,
+                proto="icmp",
+                service="icmp",
+                duration=0.02,
+                orig_bytes=requested_size,
+                resp_bytes=requested_size,
+            )
+
+        icmp_events = [
+            event for event in events if event.network and event.network.protocol == "icmp"
+        ]
+        assert len(icmp_events) == 3
+        rendered_keys = {
+            (
+                event.timestamp,
+                event.network.src_ip,
+                event.network.src_port or 8,
+                event.network.dst_ip,
+                event.network.dst_port or 0,
+            )
+            for event in icmp_events
+        }
+        assert len(rendered_keys) == 3
+
 
 class TestFileTransferContext:
     """Verify FileTransferContext populated probabilistically for HTTP."""

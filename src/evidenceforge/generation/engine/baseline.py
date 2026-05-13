@@ -4082,7 +4082,11 @@ class BaselineMixin:
                         pool = dynamic_hkcu if dynamic_hkcu and rng.random() < 0.80 else static_hkcu
                         _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKCU)
                     else:
-                        dynamic_hklm = [entry for entry in _REG_KEYS_HKLM if "{" in entry[0]]
+                        dynamic_hklm = [
+                            entry
+                            for entry in _REG_KEYS_HKLM
+                            if "{" in entry[0] and str(entry[1]).lower() != "driverdesc"
+                        ]
                         noisy_static_hklm = [
                             entry
                             for entry in _REG_KEYS_HKLM
@@ -4153,7 +4157,11 @@ class BaselineMixin:
                             timestamp=_reg_ts,
                             event_type="registry_modify",
                             src_host=_host_ctx,
-                            auth=AuthContext(username=_reg_user),
+                            auth=AuthContext(
+                                username=_reg_user,
+                                user_sid=self.activity_generator._get_sid(_reg_user),
+                                logon_id=_reg_proc.logon_id if _reg_proc is not None else "",
+                            ),
                             process=ProcessContext(
                                 pid=_reg_pid,
                                 parent_pid=_reg_proc.parent_pid if _reg_proc is not None else 0,

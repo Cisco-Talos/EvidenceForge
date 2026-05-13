@@ -943,6 +943,7 @@ class StorylineMixin:
                 )
 
         elif spec.type == "process":
+            os_category = _get_os_category(system.os)
             if hasattr(self, "world_planner"):
                 # Built-in/service accounts (SYSTEM, LOCAL SERVICE, etc.) run
                 # locally — don't fabricate remote logon evidence for them.
@@ -953,20 +954,24 @@ class StorylineMixin:
                     actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
                 )
                 if is_local_account:
-                    # Use existing system session or create a service logon
-                    sessions = self.state_manager.get_sessions_for_user(actor.username)
-                    target_session = next(
-                        (s for s in sessions if s.system == system.hostname), None
-                    )
-                    if target_session:
-                        logon_id = target_session.logon_id
+                    linux_daemon_users = {"apache", "www-data", "nginx", "httpd", "tomcat"}
+                    if os_category == "linux" and actor.username.lower() in linux_daemon_users:
+                        logon_id = ""
                     else:
-                        logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
-                        logon_id = self.activity_generator.generate_service_logon(
-                            system=system,
-                            time=logon_time,
-                            service_account=actor.username,
+                        # Use existing system session or create a service logon.
+                        sessions = self.state_manager.get_sessions_for_user(actor.username)
+                        target_session = next(
+                            (s for s in sessions if s.system == system.hostname), None
                         )
+                        if target_session:
+                            logon_id = target_session.logon_id
+                        else:
+                            logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
+                            logon_id = self.activity_generator.generate_service_logon(
+                                system=system,
+                                time=logon_time,
+                                service_account=actor.username,
+                            )
                 else:
                     logon_id = self._last_storyline_logon_for_actor_system(actor, system)
                     if logon_id is None:
@@ -999,7 +1004,6 @@ class StorylineMixin:
                 else:
                     logon_id = target_session.logon_id
 
-            os_category = _get_os_category(system.os)
             process_name = _normalize_storyline_process_image(
                 spec.process_name,
                 os_category,
