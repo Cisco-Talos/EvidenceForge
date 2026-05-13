@@ -773,6 +773,17 @@ class SysmonEventEmitter(LogEmitter):
         ).hexdigest()
         return f"{{{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}}}"
 
+    def _resolve_logon_guid(self, hostname: str, logon_id: str, auth: Any | None) -> str:
+        """Resolve the canonical Windows LogonGuid for Sysmon process telemetry."""
+        if auth is not None and getattr(auth, "logon_guid", ""):
+            return auth.logon_guid
+        sm = getattr(self, "_state_manager", None)
+        if sm is not None and logon_id:
+            session = sm.get_session(logon_id)
+            if session is not None and getattr(session, "logon_guid", ""):
+                return session.logon_guid
+        return self._generate_logon_guid(hostname, logon_id)
+
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
         random.Random()
@@ -834,7 +845,7 @@ class SysmonEventEmitter(LogEmitter):
             "Image": proc.image,
             "CommandLine": proc.command_line,
             "User": user,
-            "LogonGuid": self._generate_logon_guid(host.hostname, logon_id),
+            "LogonGuid": self._resolve_logon_guid(host.hostname, logon_id, auth),
             "LogonId": logon_id,
             "TerminalSessionId": self._terminal_session_id(auth, logon_id),
             "IntegrityLevel": integrity,

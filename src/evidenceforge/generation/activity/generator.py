@@ -2754,6 +2754,9 @@ class ActivityGenerator:
                 10: "rdp",
             }.get(logon_type, "interactive")
 
+        # Select auth package (semantic data, not format-specific)
+        auth_pkg = self._select_auth_package(logon_type)
+
         # Phase 1: Allocate or resolve IDs from StateManager
         if logon_id is None:
             logon_id = self.state_manager.create_session(
@@ -2791,8 +2794,15 @@ class ActivityGenerator:
                 time = existing_session.start_time
                 self.state_manager.set_current_time(time)
 
-        # Select auth package (semantic data, not format-specific)
-        auth_pkg = self._select_auth_package(logon_type)
+        requires_logon_guid = auth_pkg.get("LogonGuid") != "{00000000-0000-0000-0000-000000000000}"
+        auth_logon_guid = self.state_manager.get_or_create_session_logon_guid(
+            logon_id,
+            system.hostname,
+            require_nonzero=requires_logon_guid,
+        )
+        session_for_guid = self.state_manager.get_session(logon_id)
+        if requires_logon_guid or not (session_for_guid and session_for_guid.logon_guid):
+            self.state_manager.update_session_metadata(logon_id, logon_guid=auth_logon_guid)
         elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
@@ -2822,7 +2832,7 @@ class ActivityGenerator:
                 elevated=elevated,
                 logon_process=auth_pkg.get("LogonProcessName", ""),
                 lm_package=auth_pkg.get("LmPackageName", "-"),
-                logon_guid=auth_pkg.get("LogonGuid", "{00000000-0000-0000-0000-000000000000}"),
+                logon_guid=auth_logon_guid,
                 subject_sid=self._get_sid("SYSTEM"),
                 subject_username="SYSTEM",
                 subject_domain="NT AUTHORITY",
@@ -3783,6 +3793,17 @@ class ActivityGenerator:
                 % 1400
             )
             time = session.start_time + timedelta(milliseconds=offset_ms)
+            self.state_manager.set_current_time(time)
+        explicit_parent = self.state_manager.get_process(system.hostname, parent_pid)
+        if explicit_parent is not None and time <= explicit_parent.start_time:
+            offset_ms = 50 + (
+                _stable_seed(
+                    f"process_after_parent:{system.hostname}:{parent_pid}:{process_name}:"
+                    f"{command_line}"
+                )
+                % 450
+            )
+            time = explicit_parent.start_time + timedelta(milliseconds=offset_ms)
             self.state_manager.set_current_time(time)
         if not from_storyline:
             spaced_time = self._space_one_shot_cli_launch(
@@ -9947,7 +9968,7 @@ class ActivityGenerator:
                     "LogonProcessName": "Kerberos",
                     "AuthenticationPackageName": "Kerberos",
                     "LmPackageName": "-",
-                    "LogonGuid": f"{{{uuid.uuid4()}}}",
+                    "LogonGuid": "generate",
                 }
             elif roll < 0.90:
                 return {
@@ -9973,7 +9994,7 @@ class ActivityGenerator:
                 "LogonProcessName": "User32",
                 "AuthenticationPackageName": auth_package,
                 "LmPackageName": "NTLM V2" if auth_package == "NTLM" else "-",
-                "LogonGuid": f"{{{uuid.uuid4()}}}"
+                "LogonGuid": "generate"
                 if auth_package == "Kerberos"
                 else "{00000000-0000-0000-0000-000000000000}",
             }

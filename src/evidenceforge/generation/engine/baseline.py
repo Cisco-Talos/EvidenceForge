@@ -210,22 +210,24 @@ def _pick_non_colliding_account_name(
     """Pick a synthetic account name that does not collide with scenario-defined accounts.
 
     Selection is deterministic for a given RNG state and never loops forever:
-    1. Choose from base names and base+numeric suffix candidates when available.
+    1. Choose from unsuffixed base names when available.
     2. Fall back to deterministic underscore suffixes with a bounded search.
     """
-    candidate_pool = [*base_names]
-    for base_name in base_names:
-        candidate_pool.extend(f"{base_name}{suffix}" for suffix in range(1, max_numeric_suffix + 1))
-
-    available = [candidate for candidate in candidate_pool if candidate not in existing_accounts]
+    available = [candidate for candidate in base_names if candidate not in existing_accounts]
     if available:
         return rng.choice(available)
 
-    fallback_base = base_names[0]
-    for suffix in range(1, 10_001):
-        candidate = f"{fallback_base}_{suffix}"
-        if candidate not in existing_accounts:
-            return candidate
+    for suffix in range(1, max_numeric_suffix + 1):
+        for base_name in base_names:
+            candidate = f"{base_name}_{suffix}"
+            if candidate not in existing_accounts:
+                return candidate
+
+    for suffix in range(max_numeric_suffix + 1, 10_001):
+        for base_name in base_names:
+            candidate = f"{base_name}_{suffix}"
+            if candidate not in existing_accounts:
+                return candidate
 
     msg = "Unable to select non-colliding synthetic account name after bounded fallback search"
     raise ValueError(msg)

@@ -131,6 +131,33 @@ class TestSessionManagement:
 
         assert int(id1, 16) < int(id2, 16) < int(id3, 16)
 
+    def test_create_session_varies_low_luid_nibble(self):
+        """Boot-relative LogonIDs should not all expose a fixed trailing hex digit."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("WS-01", boot)
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        ids = [sm.create_session(f"user{i}", "WS-01", 3, f"192.168.1.{i}") for i in range(12)]
+
+        assert len({int(logon_id, 16) & 0xF for logon_id in ids}) > 1
+        assert ids == [f"0x{value:x}" for value in sorted(int(logon_id, 16) for logon_id in ids)]
+
+    def test_session_logon_guid_is_stable_per_logon_id(self):
+        """Session LogonGuid should be canonical state, not per-emitter derivation."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+        logon_id = sm.create_session("jdoe", "WS-01", 3, "192.168.1.50")
+
+        guid_a = sm.get_or_create_session_logon_guid(logon_id, "WS-01")
+        guid_b = sm.get_or_create_session_logon_guid(logon_id, "WS-01")
+        session = sm.get_session(logon_id)
+
+        assert guid_a == guid_b
+        assert session is not None
+        assert session.logon_guid == guid_a
+        assert guid_a != "{00000000-0000-0000-0000-000000000000}"
+
     def test_create_session_uses_explicit_start_time_for_luid(self):
         """Explicit session start time should drive LogonID order despite stale state time."""
         sm = StateManager()

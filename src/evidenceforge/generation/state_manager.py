@@ -149,12 +149,23 @@ class StateManager:
         self._logon_id_second_ordinals[ordinal_key] = ordinal + 1
 
         # Use boot-relative time for monotonic visible ordering. Low bits carry
-        # coarse subsecond placement plus an ordinal for same-bucket bursts.
-        candidate = base + (elapsed_seconds * 256) + (subsecond_bucket * 16) + ordinal
+        # deterministic per-session variation so LUIDs do not all share the same
+        # trailing hex digit when events happen on exact-second boundaries.
+        low_nibble = (
+            _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 16
+        )
+        candidate = base + (elapsed_seconds * 4096) + (subsecond_bucket * 256)
+        candidate += (ordinal * 16) + low_nibble
         while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
             candidate += 1
         self._used_logon_ids.add(candidate)
         return candidate
+
+    @staticmethod
+    def _stable_logon_guid(system: str, logon_id: str) -> str:
+        """Return a deterministic Windows LogonGuid for a host-local LogonID."""
+        value = uuid.uuid5(uuid.NAMESPACE_DNS, f"windows_logon_guid:{system}:{logon_id}")
+        return f"{{{value}}}"
 
     def allocate_logon_id(self, system: str, event_time: datetime | None = None) -> str:
         """Allocate a standalone host-local LogonID without registering a session."""
@@ -187,6 +198,7 @@ class StateManager:
         session_kind: str = "logon",
         transport_pid: int | None = None,
         start_time: datetime | None = None,
+        logon_guid: str = "",
     ) -> str:
         """Create a new active session.
 
@@ -226,6 +238,7 @@ class StateManager:
                 session_kind=session_kind,
                 transport_pid=transport_pid,
                 ecar_object_id=str(uuid.uuid4()),
+                logon_guid=logon_guid,
             )
 
             self.state.active_sessions[logon_id] = session
@@ -283,6 +296,7 @@ class StateManager:
         source_port: int = 0,
         session_kind: str = "logon",
         transport_pid: int | None = None,
+        logon_guid: str = "",
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -307,6 +321,7 @@ class StateManager:
                 session_kind=session_kind,
                 transport_pid=transport_pid,
                 ecar_object_id=str(uuid.uuid4()),
+                logon_guid=logon_guid,
             )
             self.state.active_sessions[logon_id] = session
             self._logon_id_aliases.pop(logon_id, None)
@@ -325,6 +340,7 @@ class StateManager:
         session_kind: str | None = None,
         transport_pid: int | None = None,
         network_close_time: datetime | None = None,
+        logon_guid: str | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -345,7 +361,33 @@ class StateManager:
                 session.transport_pid = transport_pid
             if network_close_time is not None:
                 session.network_close_time = ensure_utc(network_close_time)
+            if logon_guid is not None:
+                session.logon_guid = logon_guid
             return True
+
+    def get_or_create_session_logon_guid(
+        self,
+        logon_id: str,
+        system: str,
+        *,
+        require_nonzero: bool = True,
+    ) -> str:
+        """Return the canonical LogonGuid for a session, creating it if needed."""
+        null_guid = "{00000000-0000-0000-0000-000000000000}"
+        if not require_nonzero:
+            return null_guid
+        with self._lock:
+            resolved = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved)
+            if session is None:
+                ended = self._ended_sessions.get(resolved) or self._ended_sessions.get(logon_id)
+                session = ended[0] if ended is not None else None
+            if session is not None and session.logon_guid:
+                return session.logon_guid
+            guid = self._stable_logon_guid(system, resolved or logon_id)
+            if session is not None:
+                session.logon_guid = guid
+            return guid
 
     def reassign_session_logon_id(self, logon_id: str, event_time: datetime) -> str | None:
         """Re-key an active session after its final source-native start time is known."""

@@ -219,6 +219,54 @@ class TestSysmonEventEmitter:
             guid_a,
         )
 
+    def test_process_create_uses_state_session_logon_guid(self, format_def, tmp_path):
+        """Sysmon Event 1 should share the canonical session LogonGuid with Security 4624."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+        from evidenceforge.generation.state_manager import StateManager
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
+        logon_id = state_manager.create_session("jsmith", "WKS-01", 3, "10.0.0.20")
+        logon_guid = state_manager.get_or_create_session_logon_guid(logon_id, "WKS-01")
+        emitter._state_manager = state_manager
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 5, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            auth=AuthContext(username="jsmith", logon_id=logon_id),
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line="cmd.exe /c whoami",
+                username="jsmith",
+                logon_id=logon_id,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        output_file = output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml"
+        content = output_file.read_text()
+        assert f'<Data Name="LogonGuid">{logon_guid}</Data>' in content
+        assert f'<Data Name="LogonId">{logon_id}</Data>' in content
+
     def test_create_remote_thread_uses_canonical_context_values(self, format_def, tmp_path):
         """Sysmon Event 8 should not derive fields independently from eCAR."""
         from evidenceforge.events.base import SecurityEvent
