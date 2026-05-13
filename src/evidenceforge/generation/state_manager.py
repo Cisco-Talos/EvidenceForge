@@ -136,12 +136,9 @@ class StateManager:
         self._logon_id_epochs[system] = epoch
         return epoch
 
-    def _allocate_logon_luid(self, system: str) -> int:
+    def _allocate_logon_luid(self, system: str, event_time: datetime) -> int:
         """Allocate a deterministic host-local, boot-relative Windows LogonID."""
-        if self.state.current_time is None:
-            raise StateError("Cannot create session: current_time not set")
-
-        current_time = ensure_utc(self.state.current_time)
+        current_time = ensure_utc(event_time)
         base = self._host_logon_base(system)
         epoch = self._host_logon_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
@@ -157,6 +154,15 @@ class StateManager:
             candidate += 1
         self._used_logon_ids.add(candidate)
         return candidate
+
+    def allocate_logon_id(self, system: str, event_time: datetime | None = None) -> str:
+        """Allocate a standalone host-local LogonID without registering a session."""
+        with self._lock:
+            if event_time is None:
+                if self.state.current_time is None:
+                    raise StateError("Cannot allocate LogonID: current_time not set")
+                event_time = self.state.current_time
+            return f"0x{self._allocate_logon_luid(system, event_time):x}"
 
     def _mark_logon_id_used(self, logon_id: str) -> None:
         """Record externally supplied LogonIDs so generated sessions avoid reuse."""
@@ -175,6 +181,7 @@ class StateManager:
         source_port: int = 0,
         session_kind: str = "logon",
         transport_pid: int | None = None,
+        start_time: datetime | None = None,
     ) -> str:
         """Create a new active session.
 
@@ -183,6 +190,10 @@ class StateManager:
             system: System hostname where session is active
             logon_type: Windows logon type (2=interactive, 3=network, 10=RDP, etc.)
             source_ip: Source IP address for logon
+            source_port: Source port for remote logons
+            session_kind: Semantic session category, such as interactive, network, rdp, or ssh
+            transport_pid: Optional transport process PID tied to the session
+            start_time: Optional session start time. Defaults to current generator time.
 
         Returns:
             Generated LogonID (hex string like "0x3e7")
@@ -191,10 +202,11 @@ class StateManager:
             StateError: If current_time is not set or LogonID counter exhausted
         """
         with self._lock:
-            if self.state.current_time is None:
+            if start_time is None and self.state.current_time is None:
                 raise StateError("Cannot create session: current_time not set")
 
-            val = self._allocate_logon_luid(system)
+            session_start_time = ensure_utc(start_time or self.state.current_time)
+            val = self._allocate_logon_luid(system, session_start_time)
             logon_id = f"0x{val:x}"
 
             # Create session
@@ -203,7 +215,7 @@ class StateManager:
                 username=username,
                 system=system,
                 logon_type=logon_type,
-                start_time=ensure_utc(self.state.current_time),
+                start_time=session_start_time,
                 source_ip=source_ip,
                 source_port=source_port,
                 session_kind=session_kind,

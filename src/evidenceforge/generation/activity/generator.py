@@ -7819,8 +7819,7 @@ class ActivityGenerator:
         """
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
-
-        logon_id = f"0x{rng.randint(0x10000, 0xFFFFF):x}"
+        logon_id = self.state_manager.allocate_logon_id(dc_hostname, time)
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
@@ -8464,12 +8463,12 @@ class ActivityGenerator:
         Each call gets a unique LogonID (real Windows allocates new sessions for service restarts).
         """
         sid = _SYSTEM_ACCOUNT_SIDS.get(service_account, self._get_sid(service_account))
-        # Allocate unique LogonID via StateManager (same as regular logons)
         logon_id = self.state_manager.create_session(
             username=service_account,
             system=system.hostname,
             logon_type=5,
             source_ip="-",
+            start_time=time,
         )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
@@ -9641,7 +9640,7 @@ class ActivityGenerator:
             auth=AuthContext(
                 username="ANONYMOUS LOGON",
                 user_sid="S-1-5-7",
-                logon_id=f"0x{rng.randint(0x10000, 0xFFFFFFFF):x}",
+                logon_id=self.state_manager.allocate_logon_id(system.hostname, time),
                 logon_type=3,
                 auth_package="NTLM",
                 logon_process="NtLmSsp",

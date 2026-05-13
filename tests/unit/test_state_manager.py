@@ -131,6 +131,46 @@ class TestSessionManagement:
 
         assert int(id1, 16) < int(id2, 16) < int(id3, 16)
 
+    def test_create_session_uses_explicit_start_time_for_luid(self):
+        """Explicit session start time should drive LogonID order despite stale state time."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("WS-01", boot)
+        sm.set_current_time(datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
+
+        later = sm.create_session(
+            "svc-late",
+            "WS-01",
+            5,
+            "-",
+            start_time=datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC),
+        )
+        earlier = sm.create_session(
+            "svc-early",
+            "WS-01",
+            5,
+            "-",
+            start_time=datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC),
+        )
+
+        assert int(earlier, 16) < int(later, 16)
+        assert sm.get_session(earlier).start_time == datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
+        assert sm.get_session(later).start_time == datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+
+    def test_allocate_logon_id_uses_event_time_without_session(self):
+        """Standalone 4624 records should use the same boot-relative LUID model."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("DC-01", boot)
+        sm.set_current_time(datetime(2024, 1, 15, 12, 0, 0, tzinfo=UTC))
+
+        later = sm.allocate_logon_id("DC-01", datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC))
+        earlier = sm.allocate_logon_id("DC-01", datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC))
+
+        assert int(earlier, 16) < int(later, 16)
+        assert sm.get_session(earlier) is None
+        assert sm.get_session(later) is None
+
     def test_create_session_keeps_host_ranges_unique(self):
         """Host-local LUID sequences should not collide in global state."""
         sm = StateManager()
