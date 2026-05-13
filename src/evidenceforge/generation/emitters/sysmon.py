@@ -50,6 +50,7 @@ from evidenceforge.generation.emitters.windows_event import format_windows_syste
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.windows_ids import align_windows_id, windows_id_randint
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -534,10 +535,20 @@ class SysmonEventEmitter(LogEmitter):
         cache = getattr(self, "_sysmon_thread_pools", None)
         if cache is None:
             cache = self._sysmon_thread_pools = {}
+        offsets = getattr(self, "_sysmon_thread_pool_offsets", None)
+        if offsets is None:
+            offsets = self._sysmon_thread_pool_offsets = {}
         if hostname not in cache:
             rng = random.Random(_stable_seed(f"sysmon_threads_{hostname}"))
-            cache[hostname] = [rng.randint(1000, 5000) for _ in range(rng.randint(3, 5))]
-        return random.choice(cache[hostname])
+            cache[hostname] = [
+                windows_id_randint(rng, 1000, 5000) for _ in range(rng.randint(3, 5))
+            ]
+            offsets[hostname] = _stable_seed(f"sysmon_thread_offset_{hostname}") % len(
+                cache[hostname]
+            )
+        offset = offsets[hostname]
+        offsets[hostname] = (offset + 1) % len(cache[hostname])
+        return cache[hostname][offset]
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
@@ -552,7 +563,7 @@ class SysmonEventEmitter(LogEmitter):
             h = int(
                 hashlib.md5(f"sysmon:{hostname}".encode(), usedforsecurity=False).hexdigest(), 16
             )
-            cache[hostname] = 1800 + (h % 1200)  # range 1800-2999
+            cache[hostname] = align_windows_id(1800 + (h % 1200))  # range 1800-3000
         return cache[hostname]
 
     def _get_call_trace(self, hostname: str) -> str:
@@ -1624,6 +1635,13 @@ class SysmonEventEmitter(LogEmitter):
         self._get_host_writer("").write(rendered)
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
+        event_data = dict(event_data)
+        for field in ("ExecutionProcessID", "ExecutionThreadID"):
+            value = event_data.get(field)
+            if isinstance(value, int):
+                event_data[field] = align_windows_id(value)
+            elif isinstance(value, str) and value.isdecimal():
+                event_data[field] = str(align_windows_id(int(value)))
         if self.threaded:
             self._emit_threaded(event_data)
         else:

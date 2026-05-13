@@ -52,6 +52,7 @@ from evidenceforge.generation.emitters.windows_event import format_windows_syste
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.windows_ids import align_windows_id
 
 win_logger = logging.getLogger(__name__)
 
@@ -294,6 +295,18 @@ class WindowsEventEmitter(LogEmitter):
         if ":" in ip:
             return ip  # Already IPv6
         return f"::ffff:{ip}"
+
+    @staticmethod
+    def _normalize_execution_ids(event_data: dict[str, Any]) -> dict[str, Any]:
+        """Align provider Execution PID/TID values before XML rendering."""
+        normalized = dict(event_data)
+        for field in ("ExecutionProcessID", "ExecutionThreadID"):
+            value = normalized.get(field)
+            if isinstance(value, int):
+                normalized[field] = align_windows_id(value)
+            elif isinstance(value, str) and value.isdecimal():
+                normalized[field] = str(align_windows_id(int(value)))
+        return normalized
 
     # Event types where the Windows host is dst_host (target of the action)
     _DST_HOST_TYPES: set[str] = {
@@ -1262,6 +1275,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def emit_event(self, event_data: dict[str, Any]) -> None:
         """Buffer a Windows Event dict for deferred rendering."""
+        event_data = self._normalize_execution_ids(event_data)
         if getattr(self, "_current_storyline_origin", False):
             event_data["_storyline_origin"] = True
         if self.threaded:

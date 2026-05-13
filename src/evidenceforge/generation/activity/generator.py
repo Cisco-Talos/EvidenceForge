@@ -81,6 +81,7 @@ from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
+from evidenceforge.utils.windows_ids import windows_id_randint
 
 from .helpers import _get_os_category, _get_rng, _parameterize_command
 from .network import (
@@ -9510,12 +9511,12 @@ class ActivityGenerator:
             remote_thread=RemoteThreadContext(
                 target_pid=target_pid,
                 target_image=target_image,
-                new_thread_id=rng.randint(100, 9999),
+                new_thread_id=windows_id_randint(rng, 100, 9999),
                 start_address=start_address,
                 start_module=start_module,
                 start_function=start_function,
-                source_thread_id=rng.randint(1000, 9999),
-                target_thread_id=rng.randint(1000, 9999),
+                source_thread_id=windows_id_randint(rng, 1000, 9999),
+                target_thread_id=windows_id_randint(rng, 1000, 9999),
                 target_process_object_id=target_obj_id,
                 thread_object_id=thread_obj_id,
                 stack_base=stack_base,
@@ -9595,7 +9596,7 @@ class ActivityGenerator:
             source_thread_rng = random.Random(
                 _stable_seed(f"process_access_thread:{system.hostname}:{source_pid}:{time}")
             )
-            source_thread_id = source_thread_rng.randint(1000, 9999)
+            source_thread_id = windows_id_randint(source_thread_rng, 1000, 9999)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_access",

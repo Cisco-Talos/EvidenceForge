@@ -101,6 +101,34 @@ class TestWindowsEventEmitter:
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
+    def test_emit_event_aligns_provider_execution_ids(self, format_def, temp_output):
+        """Security XML provider PID/TID values should look Windows-native."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+
+        event_data = {
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": 541,
+            "ExecutionThreadID": 113,
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x3e7abc",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "192.168.1.100",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Execution ProcessID="544" ThreadID="116"/>' in content
+
     def test_network_logon_workstation_name_uses_source_host(self, format_def, temp_output):
         """Network 4624 events should name the source workstation, not the destination."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
