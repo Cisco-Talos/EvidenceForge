@@ -57,6 +57,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
+| Modify inbound web visitor mix | `web_session_profiles.yaml` | `site_maps.yaml`, `traffic_rates.yaml`, `timing_profiles.yaml` |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names; keep `typo_model` rates/counts realistic |
 | Modify traffic rate defaults | `traffic_rates.yaml` | (standalone — intensity-based rate table for all system traffic) |
 | Modify systemd schedules | `systemd_schedules.yaml` | (standalone) |

@@ -156,6 +156,7 @@ Configuration files are interconnected. When you add an entry to one file, other
 | A new domain | `proxy_uri_templates.yaml` (URI paths), `site_maps.yaml` (browsing depth) |
 | Certificate/update/telemetry proxy behavior | `proxy_uri_templates.yaml` (`domain_class`, infra-specific paths/content types, and `referrer_policy: none`; non-browser classes are excluded from site-map browsing sessions) |
 | New proxy User-Agent behavior | `proxy_user_agents.yaml` (workstation/server UA pools, package-manager host bindings, domain-specific update/cert/telemetry overrides) |
+| Inbound web visitor mix | `web_session_profiles.yaml` (visitor classes, configured tool/API requests, and User-Agent pools). Human visitor sessions use `site_maps.yaml`; timing lives in `timing_profiles.yaml`; `traffic_rates.yaml` `web` counts top-level actions only. |
 | New TLS issuer behavior | `tls_issuers.yaml` (issuer validity, key-type weights, and domain CA overrides). RSA-branded issuer names should only advertise RSA key types unless the chain/signature model is also updated to distinguish issuer signature algorithm from leaf public-key algorithm. |
 | New TLS OCSP responder behavior | `tls_realism.yaml` (`ocsp.responders`) plus `dns_registry.yaml` for each responder hostname |
 | Kerberos TGT pre-auth realism | `kerberos_realism.yaml` (`tgt_success.pre_auth_types`, ticket options, encryption types, and PKINIT certificate profiles). Run `eforge validate-config`; PKINIT (`PreAuthType: 15`) requires populated certificate profile support. |

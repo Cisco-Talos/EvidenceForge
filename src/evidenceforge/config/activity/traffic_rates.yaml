@@ -14,7 +14,7 @@
 
 low:
   user_activity: [5, 5]           # events/user/hr
-  web: [10, 30]                   # requests/web_server/hr
+  web: [10, 30]                   # top-level web actions/web_server/hr
   dns_interval: [600, 1800]       # seconds between DNS queries
   ntp: [1, 1]                     # syncs/host/hr
   smb_interval: [1200, 3000]      # seconds between SMB ops

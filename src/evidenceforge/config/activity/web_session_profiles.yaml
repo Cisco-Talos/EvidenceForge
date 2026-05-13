@@ -1,0 +1,109 @@
+# Web server visitor profiles for inbound web_access baseline traffic.
+#
+# Human visitors use site_maps.yaml to generate page + subresource sessions.
+# Synthetic tools use the request lists below so crawlers, health checks, API
+# clients, and scanners keep source-native path/status/User-Agent behavior.
+#
+# Overlay behavior: nested dicts merge and lists extend. Project overlays can
+# add visitor classes or append requests/User-Agents without copying this file.
+
+visitor_classes:
+  human_browser:
+    weight: 70
+    kind: session
+    external: true
+    internal: true
+    browsing_intensity: normal
+    user_agent_pool: browser_any
+    user_agent_pool_by_os:
+      windows: browser_windows
+      linux: browser_linux
+
+  crawler:
+    weight: 8
+    kind: requests
+    external: true
+    internal: false
+    request_count: [1, 3]
+    user_agent_pool: crawler
+    referrer_mode: none
+    requests:
+      - {path: "/robots.txt", method: "GET", status: 200, type: "text/plain", weight: 45}
+      - {path: "/sitemap.xml", method: "GET", status: 200, type: "application/xml", weight: 35}
+      - {path: "/.well-known/security.txt", method: "GET", status: 200, type: "text/plain", weight: 20}
+
+  health_check:
+    weight: 10
+    kind: requests
+    external: false
+    internal: true
+    request_count: [1, 2]
+    user_agent_pool: health_check
+    referrer_mode: none
+    requests:
+      - {path: "/health", method: "GET", status: 200, type: "application/json", weight: 40}
+      - {path: "/api/v1/health", method: "GET", status: 200, type: "application/json", weight: 35}
+      - {path: "/status", method: "GET", status: 200, type: "text/plain", weight: 25}
+
+  api_client:
+    weight: 7
+    kind: requests
+    external: true
+    internal: true
+    request_count: [1, 4]
+    user_agent_pool: api_client
+    referrer_mode: same_origin
+    requests:
+      - {path: "/api/v1/status", method: "GET", status: 200, type: "application/json", weight: 35}
+      - {path: "/api/v1/data", method: "POST", status: 200, type: "application/json", weight: 35}
+      - {path: "/api/v2/events", method: "POST", status: 200, type: "application/json", weight: 20}
+      - {path: "/api/v1/auth/token", method: "POST", status: 200, type: "application/json", weight: 10}
+
+  opportunistic_probe:
+    weight: 5
+    kind: requests
+    external: true
+    internal: false
+    request_count: [1, 5]
+    user_agent_pool: scanner
+    referrer_mode: none
+    requests:
+      - {path: "/wp-login.php", method: "GET", status: 404, type: "text/html", weight: 22}
+      - {path: "/wp-admin/", method: "GET", status: 404, type: "text/html", weight: 18}
+      - {path: "/xmlrpc.php", method: "POST", status: 404, type: "text/html", weight: 14}
+      - {path: "/phpmyadmin/", method: "GET", status: 404, type: "text/html", weight: 14}
+      - {path: "/.env", method: "GET", status: 403, type: "text/html", weight: 14}
+      - {path: "/admin", method: "GET", status: 403, type: "text/html", weight: 10}
+      - {path: "/backup.sql", method: "GET", status: 404, type: "text/html", weight: 8}
+
+user_agent_pools:
+  browser_any:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
+  browser_windows:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+  browser_linux:
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0"
+  crawler:
+    - "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+    - "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)"
+    - "Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)"
+  health_check:
+    - "ELB-HealthChecker/2.0"
+    - "kube-probe/1.28"
+    - "Prometheus/2.47.0"
+  api_client:
+    - "python-requests/2.31.0"
+    - "Go-http-client/1.1"
+    - "Apache-HttpClient/4.5.14 (Java/17.0.9)"
+    - "curl/7.88.1"
+  scanner:
+    - "curl/7.88.1"
+    - "python-requests/2.31.0"
+    - "Mozilla/5.0 zgrab/0.x"

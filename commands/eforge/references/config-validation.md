@@ -81,6 +81,7 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 34 | create_remote_thread_patterns.yaml structure | ERROR | Baseline pair missing source/target PID keys, image paths, or positive weight |
 | 35 | smb_file_transfers.yaml structure | ERROR | Missing SMB file-analysis thresholds/probabilities, invalid probability ranges, empty MIME/analyzer lists, invalid filename templates, or non-positive weights |
 | 36 | kerberos_realism.yaml structure | ERROR | Invalid Kerberos 4768 pre-auth/ticket/encryption distribution, unsupported hex values, PKINIT without certificate profile, non-PKINIT with certificate fields, excessive no-preauth/PKINIT/RC4 weights, or malformed certificate profile fields |
+| 37 | web_session_profiles.yaml structure | ERROR | Invalid inbound web visitor class, missing User-Agent pool, malformed configured request, or invalid request-count range |
 
 ## Scenario Validation: traffic_rates
 

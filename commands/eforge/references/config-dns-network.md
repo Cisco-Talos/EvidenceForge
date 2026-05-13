@@ -12,10 +12,11 @@ Schema documentation for the network-related config files. User customizations g
 2. [traffic_profiles.yaml](#traffic_profilesyaml)
 3. [proxy_uri_templates.yaml](#proxy_uri_templatesyaml)
 4. [site_maps.yaml](#site_mapsyaml)
-5. [network_params.yaml](#network_paramsyaml)
-6. [tls_issuers.yaml](#tls_issuersyaml)
-7. [tls_realism.yaml](#tls_realismyaml)
-8. [smb_file_transfers.yaml](#smb_file_transfersyaml)
+5. [web_session_profiles.yaml](#web_session_profilesyaml)
+6. [network_params.yaml](#network_paramsyaml)
+7. [tls_issuers.yaml](#tls_issuersyaml)
+8. [tls_realism.yaml](#tls_realismyaml)
+9. [smb_file_transfers.yaml](#smb_file_transfersyaml)
 
 ---
 
@@ -338,6 +339,59 @@ Minimal single-page structure for domains with no curated or tag-based match.
 
 ---
 
+## web_session_profiles.yaml
+
+Visitor-class definitions for inbound `web_server` baseline traffic. Human visitors use `site_maps.yaml` to emit a top-level page request plus required JS/CSS/images/fonts/API fanout. Crawler, health-check, API-client, and opportunistic-probe visitors use configured request lists so tool traffic keeps realistic paths, status codes, referrers, and User-Agents.
+
+The `traffic_rates.yaml` `web` value counts top-level visitor actions only. Subresources required to render a human page load do not consume that budget.
+
+### Structure
+
+```yaml
+visitor_classes:
+  human_browser:
+    weight: 70
+    kind: session              # session|requests
+    external: true
+    internal: true
+    browsing_intensity: normal
+    user_agent_pool: browser_any
+    user_agent_pool_by_os:
+      linux: browser_linux
+
+  opportunistic_probe:
+    weight: 5
+    kind: requests
+    external: true
+    internal: false
+    request_count: [1, 5]
+    user_agent_pool: scanner
+    referrer_mode: none
+    requests:
+      - {path: "/wp-login.php", method: "GET", status: 404, type: "text/html", weight: 22}
+
+user_agent_pools:
+  browser_any:
+    - "Mozilla/5.0 (...) Chrome/120.0.0.0 Safari/537.36"
+  scanner:
+    - "python-requests/2.31.0"
+```
+
+### Field Reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `visitor_classes.<name>.weight` | number | yes | Relative visitor-class frequency |
+| `visitor_classes.<name>.kind` | string | yes | `session` for site-map browsing, `requests` for configured tool/API paths |
+| `external` / `internal` | bool | no | Whether the class can be used for external or internal clients |
+| `browsing_intensity` | string | session | Site-map session depth (`light`, `normal`, `heavy`) |
+| `request_count` | `[min, max]` | requests | Number of configured requests per visitor action |
+| `requests[].path` / `method` / `status` / `type` | mixed | requests | Source-native HTTP request shape |
+| `user_agent_pool` | string | yes | Pool name under `user_agent_pools` |
+| `user_agent_pool_by_os` | mapping | no | OS-specific override pools for known internal clients |
+
+---
+
 ## network_params.yaml
 
 MAC OUI (vendor) prefixes, public NTP server defaults, and DNS tunnel transaction timing. Scenario-defined internal/domain NTP servers are preferred at generation time; `public_ntp_servers` is the fallback pool for non-domain environments and for upstream refids on internal NTP servers.
@@ -480,7 +534,7 @@ Three top-level keys (`low`, `medium`, `high`), each containing the same traffic
 | Key | Unit | Description |
 |-----|------|-------------|
 | `user_activity` | events/user/hr | Endpoint user activity (logons, processes, connections) |
-| `web` | requests/web_server/hr | Background HTTP requests to web_server hosts |
+| `web` | top-level actions/web_server/hr | User-driven page/API/tool requests to web_server hosts; page assets are emitted as dependent requests and do not consume this budget |
 | `dns_interval` | seconds between queries | Lower = more DNS traffic |
 | `ntp` | syncs/host/hr | NTP time sync frequency |
 | `smb_interval` | seconds between SMB ops | Lower = more SMB/file share traffic |

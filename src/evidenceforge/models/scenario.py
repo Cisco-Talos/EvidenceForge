@@ -314,7 +314,7 @@ class BaselineActivity(BaseModel):
 
     Defines the baseline ("normal") activity level and variation for the environment.
     The intensity field scales ALL background traffic types (user activity, web server
-    requests, DNS, SMB, Kerberos, LDAP, persona connections) via traffic_rates.yaml.
+    top-level actions, DNS, SMB, Kerberos, LDAP, persona connections) via traffic_rates.yaml.
 
     Attributes:
         description: Natural language description of baseline activity

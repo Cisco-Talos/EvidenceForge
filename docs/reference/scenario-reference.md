@@ -115,7 +115,7 @@ If `proxy_access` is requested and `environment.proxy` is omitted, validation wa
 
 The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
 
-- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users
+- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users. Human inbound traffic is generated as browsing sessions: top-level page views consume the `web` traffic-rate budget, and required assets/API calls fan out from each page load.
 - `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
 - `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
 - `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations. File-server roles also increase baseline SMB target selection beyond normal DC SYSVOL/GPO traffic.
@@ -306,7 +306,7 @@ Work hours are automatically parsed into a `work_hours_parsed` dict containing:
 
 ### Browsing Intensity
 
-The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity.
+The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity. Inbound `web_server` background traffic uses the separate `web_session_profiles.yaml` visitor mix: `traffic_rates.web` counts top-level visitor actions, then page assets and same-origin API calls fan out automatically.
 
 ```yaml
 personas:
@@ -524,7 +524,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **NTP time synchronization:** In AD environments, all domain-joined workstations sync NTP from the domain controller (W32Time service), not from external NIST servers. NTP stratum is stable per server — a DC serving as NTP always reports the same stratum value. External NTP servers are only used for non-domain environments.
 
-**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records have a deterministic propagation delay (100-500 microseconds) based on the sensor's position. Sensors farther from the packet source see events slightly later. Byte and packet counts are identical across sensors (both see the same packets on the wire), but timestamps and durations differ.
+**Multi-sensor timing realism:** When multiple Zeek sensors observe the same connection, each sensor's records use the well-synced network sensor timing profile in `config/activity/timing_profiles.yaml`. The default profile keeps stable per-sensor clock skew within +/-1.5 ms and per-flow path/capture delay within 50-2000 microseconds. Byte and packet counts remain canonical unless sensor observation variance is explicitly allowed for that source-native row.
 
 **Linux syslog depth:** Linux hosts generate 18 categories of syslog messages: SSH login/key exchange (70% key / 30% password), package management, systemd timer execution, logrotate detail, journald statistics, plus systemd lifecycle, cron, UFW, logind, and more. Distro-aware (Ubuntu vs RHEL) with appropriate daemon names and paths.
 
