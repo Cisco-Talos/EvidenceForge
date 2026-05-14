@@ -547,6 +547,8 @@ class FirewallContext:
     access_group: str = ""  # ACL name for deny logs
     bytes_sent: int = 0  # For teardown records
     duration: str = ""  # "H:MM:SS" for teardown
+    deny_hash_a: str = "0x0"  # ASA deny metadata hash field
+    deny_hash_b: str = "0x0"  # ASA deny metadata hash field
 
 
 @dataclass(slots=True)

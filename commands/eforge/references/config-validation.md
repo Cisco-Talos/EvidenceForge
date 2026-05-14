@@ -85,7 +85,8 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 38 | auth_noise.yaml structure | ERROR | Invalid stale scheduled-credential account pool, host-count range, recurrence interval range, jitter range, skip probability, or backoff bounds |
 | 39 | endpoint_noise.yaml structure | ERROR | Invalid Windows scheduled-process timing bounds, skip probability, or DHCP registry emission policy |
 | 40 | observation_profiles.yaml structure | ERROR | Invalid source-family name, missing `complete` profile, invalid missingness probability, or inverted delay/host multiplier range |
-| 41 | tls_realism.yaml chain metadata | ERROR | Invalid TLS subject-key profile fields or RSA/ECDSA child signature algorithm mismatch |
+| 41 | host_activity_profiles.yaml structure | ERROR | Invalid host/persona/role rate-family name, missing core host type, malformed multiplier/bounds range, malformed firewall deny burst settings, or invalid artifact variant pools |
+| 42 | tls_realism.yaml chain metadata | ERROR | Invalid TLS subject-key profile fields or RSA/ECDSA child signature algorithm mismatch |
 
 ## Scenario Validation: traffic_rates
 

@@ -8,6 +8,8 @@
   first minute of output is realistic rather than cold-start).
   logon_grace_period: "30m" (suppresses "no prior logon" warnings for users assumed already
   at their desk at time_window.start).
+  observation_profile: complete (explicit default — preserves training-friendly complete source
+  coverage; use non-default profiles only when specifically testing collection gaps).
 
   Systems (mix of Windows and Linux, ~20+ total):
   - One workstation per user, distributed across departments: dev, IT,
@@ -80,7 +82,7 @@
   - Service account (svc_backup) authenticating from an unusual host (not its normal server) —
     legitimate scheduled task migration, but looks like lateral movement.
 
-  All 10 log format groups: windows, zeek, ecar, syslog, bash_history, snort_alert, cisco_asa,
+  All 9 log format groups: windows, zeek, ecar, syslog, bash_history, snort_alert, cisco_asa,
    web_access, proxy_access.
   (Note: "windows" expands to windows_event_security + windows_event_sysmon; "zeek" expands to
    zeek_conn, zeek_dns, zeek_http, zeek_ssl, zeek_files, zeek_dhcp, zeek_ntp, zeek_weird,
@@ -238,6 +240,7 @@
   - 4634 logoff pairs with 4624 on matching TargetLogonId, including type 3 network logons
     and DC machine-account logons (after short delays)
   - Certificate validity periods match issuer (Let's Encrypt = 90 days, DigiCert = 397 days)
+  - X.509 child certificate signatures are compatible with the issuer key family and CA profile
   - Certificate chain depth and CA reuse driven by tls_realism.yaml/tls_issuers.yaml —
     intermediate CAs appear as shared profiles, not unique per leaf
   - MAC addresses use diverse OUI prefixes from network_params.yaml (Dell, HP, Lenovo,
@@ -288,7 +291,8 @@
     process terminations with realistic delays (recon: 0.3-5s, attack tools: 5-30s, persistent/C2: no termination);
     paired 1:1 with Security 4689 + eCAR PROCESS/TERMINATE for the same exit
   - Event 7 (ImageLoad): baseline DLL loads (ntdll.dll, kernel32.dll, etc.) with
-    signing status and signature details
+    signing status and signature details. Third-party DLLs preserve source-native signer,
+    company, product, and version metadata instead of falling back to Microsoft identity.
   - Event 8 (CreateRemoteThread): baseline benign pairs 1-3/hr (MsMpEng->explorer,
     csrss->svchost, etc.) plus storyline mimikatz create_remote_thread targeting lsass;
     correlated with eCAR THREAD/REMOTE_CREATE
@@ -315,6 +319,9 @@
   - Correct interface resolution: internal IPs -> "inside", DMZ IPs -> "dmz", external IPs -> "outside"
   - Per-sensor directory output: fw-perimeter/cisco_asa.log
   - Deny baseline volume proportional to deny_ratio (~5x allows)
+  - Deny baseline timing uses burst/quiet cadence from host_activity_profiles.yaml, not evenly
+    spaced attempts; 106023 hash pairs should vary when the profile calls for it, not always
+    render as [0x0, 0x0]
   - Firewall policy enforcement: external -> corporate_lan denied, external -> dmz:80/443 allowed
   - Storyline connections through the firewall produce ASA allow records correlated with Zeek conn records
   - 305011 (Built NAT translation) present when nat_rules configured
@@ -334,6 +341,9 @@
     Verify DNS-to-TCP offsets are not uniform; verify Sysmon Events 1/5/8/10 for the same
     process chain are not bucketed at identical timestamps.
   - Hawkes temporal model: user events show bursty clusters (CV > 1.0 in eval), not uniform spacing
+  - Host activity profiles: host type, roles, and persona shape broad rate families after
+    traffic_rates/scenario overrides. Verify DC/file/web/proxy/server hosts and user workstations
+    have distinct event-volume profiles rather than uniform per-host counts.
   - Typing cadence: multi-event storyline steps (e.g., step 4 discovery commands, step 10 AD enum)
     have 1-15 second gaps between events, not identical timestamps
   - Day-of-week variation: if scenario spans a weekend, Saturday/Sunday activity near-zero
@@ -353,6 +363,8 @@
   - Entity lifecycle: no process_access events targeting PIDs that don't exist in running_processes
   - Workstation lock/unlock (4800/4801): persona-driven lock frequency during work hours
   - Explicit credentials (4648): RunAs and scheduled task execution with alternate credentials
+  - Observation profile: `complete` keeps cross-source coverage training-friendly; source gaps,
+    delays, and partial collection belong to named non-default profiles and should not appear here.
 
   Proxy coverage (verify in generated data):
   - Forward proxy (PROXY-01 with roles: [forward_proxy]) routes web traffic for internal systems
@@ -377,6 +389,8 @@
     dirb/nmap_http always blank
   - Nikto User-Agent rotates per request via @NIKTO_TESTID@ token (6-digit IDs unique per
     request), not a single static string
+  - Browser-like page loads fan out into realistic CSS/JS/image/API subresource requests; the
+    top-level request budget counts user-driven page/tool requests, not every render component
   - Event-specific jitter defaults: beacon 0.15 (tight), web_scan 0.4 (wide), credential_spray
     0.5 (self-pacing), dga_queries 0.3, dns_tunnel 0.25 — can be overridden per event
 

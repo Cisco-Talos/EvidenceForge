@@ -30,11 +30,13 @@ Configurable via baseline_activity.suspicious_noise:
   low=~1/hr, medium=~2/hr, high=~3/hr, ludicrous=~5/hr
 """
 
-import base64
 import logging
 import random
 from datetime import datetime, timedelta
 
+from evidenceforge.generation.activity.host_activity_profiles import (
+    generate_encoded_powershell_command,
+)
 from evidenceforge.models.scenario import Persona, System, User
 
 logger = logging.getLogger(__name__)
@@ -523,43 +525,22 @@ def generate_temp_dir_execution(
     }
 
 
-# Benign PowerShell command templates for base64-encoded commands.
-# Each invocation picks a template, substitutes parameters, then encodes
-# as UTF-16LE + base64 (matching real PowerShell -EncodedCommand format).
-_ENCODED_PS_TEMPLATES = [
-    "Get-Service -Name {svc}",
-    "Get-EventLog -LogName {log} -Newest {n}",
-    "Test-NetConnection {host} -Port {port}",
-    "Get-Process -Name {proc}",
-    "Get-ChildItem -Path C:\\{dir} -Recurse | Measure-Object",
-    "Get-WmiObject Win32_LogicalDisk | Select-Object DeviceID, FreeSpace",
-    "Get-HotFix | Sort-Object InstalledOn -Descending | Select-Object -First {n}",
-]
-
-_ENCODED_PS_PARAMS: dict[str, list[str]] = {
-    "svc": ["Spooler", "W32Time", "wuauserv", "BITS", "WinRM", "Dhcp", "Dnscache", "EventLog"],
-    "log": ["System", "Application", "Security", "Setup"],
-    "n": ["10", "25", "50", "100"],
-    "host": ["dc01", "fileserver", "10.0.0.1", "localhost", "gateway"],
-    "port": ["80", "443", "3389", "5985", "22"],
-    "proc": ["svchost", "explorer", "chrome", "outlook", "code", "winlogon"],
-    "dir": ["Logs", "Temp", "Reports", "Users\\Public"],
-}
-
-
-def _generate_encoded_command(rng: random.Random) -> str:
+def _generate_encoded_command(
+    rng: random.Random,
+    *,
+    hostname: str = "",
+    username: str = "",
+) -> str:
     """Generate a unique base64-encoded benign PowerShell command.
 
-    Picks a random template, substitutes parameters, then encodes as
-    UTF-16LE base64 — matching real Windows PowerShell -EncodedCommand format.
+    Uses data-driven host-biased templates and encodes as UTF-16LE base64,
+    matching real Windows PowerShell -EncodedCommand format.
     """
-    template = rng.choice(_ENCODED_PS_TEMPLATES)
-    cmd = template
-    for key, values in _ENCODED_PS_PARAMS.items():
-        placeholder = "{" + key + "}"
-        if placeholder in cmd:
-            cmd = cmd.replace(placeholder, rng.choice(values))
-    return base64.b64encode(cmd.encode("utf-16-le")).decode("ascii")
+    return generate_encoded_powershell_command(
+        rng=rng,
+        hostname=hostname or "unknown",
+        username=username or "unknown",
+    )
 
 
 def generate_unusual_powershell(
@@ -603,7 +584,8 @@ def generate_unusual_powershell(
 
     suspicious_ps = [
         rf'powershell.exe -WindowStyle Hidden -Command "Get-WinEvent -LogName Security -MaxEvents {rng.choice([50, 100, 200, 500])} | Export-Csv C:\Reports\{report}.csv"',
-        f"powershell.exe -EncodedCommand {_generate_encoded_command(rng)}",
+        "powershell.exe -EncodedCommand "
+        f"{_generate_encoded_command(rng, hostname=system.hostname, username=user.username)}",
         rf"powershell.exe -Exec Bypass -File C:\Scripts\{script}",
         rf'powershell.exe -NonInteractive -Command "Invoke-RestMethod -Uri https://{internal_api}{api_path}"',
         rf'powershell.exe -WindowStyle Hidden -Command "Compress-Archive -Path C:\{log_dir}\*.log -DestinationPath C:\Backups\{backup}.zip"',

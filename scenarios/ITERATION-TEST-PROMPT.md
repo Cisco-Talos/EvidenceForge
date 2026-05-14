@@ -10,6 +10,8 @@
   warmup: "2h" (minimum viable to pre-populate DNS cache, process trees, and sessions —
   cold-start artifacts are immediately visible to forensic reviewers).
   logon_grace_period: "30m"
+  observation_profile: enterprise_standard (intentionally exercises realistic source-level
+  observation gaps, delays, and coverage variation for blind-review improvement loops).
 
   Systems (mix of Windows and Linux, ~15 total):
   - 8 workstations, one per user (1:1 mapping — create one workstation per user):
@@ -253,6 +255,7 @@
     LDAP/RPC connections to DC, type 3 logon on DC — all within seconds
   - 4634 logoff pairs with 4624 on matching TargetLogonId
   - Certificate validity periods match issuer (Let's Encrypt = 90 days, DigiCert = 397 days)
+  - X.509 child certificate signatures are compatible with the issuer key family and CA profile
   - PID 4 resolves to "System" in parent process lookups
   - NAT rules produce: dynamic PAT for outbound (mapped_src_ip + translated port), static NAT
     for WEB-EXT-01 VIP. Outside Zeek sensors see post-NAT IPs; inside sensors see real IPs
@@ -284,7 +287,9 @@
     command line; ParentImage reflects spawn_rules.yaml chains
   - Event 3 (NetworkConnect): outbound connections attributed to originating process
   - Event 5 (ProcessTerminate): paired 1:1 with Security 4689 + eCAR PROCESS/TERMINATE
-  - Event 7 (ImageLoad): baseline DLL loads with signing status
+  - Event 7 (ImageLoad): baseline DLL loads with signing status. Third-party DLLs preserve
+    source-native signer, company, product, and version metadata instead of falling back to
+    Microsoft identity.
   - Event 8 (CreateRemoteThread): baseline benign pairs (1-3/hr) plus storyline mimikatz
   - Event 10 (ProcessAccess): baseline benign pairs (3-8/hr) plus storyline mimikatz on lsass
   - Event 11/12/13: emitted for persistence steps (service install, scheduled task)
@@ -296,6 +301,9 @@
   - Built/Teardown pairs (302013/302014) for permitted TCP connections
   - Built/Teardown pairs (302015/302016) for permitted UDP connections (DNS, NTP)
   - Deny records (106023) for blocked traffic
+  - Deny baseline timing uses burst/quiet cadence from host_activity_profiles.yaml, not evenly
+    spaced attempts; 106023 hash pairs should vary when the profile calls for it, not always
+    render as [0x0, 0x0]
   - 733100 threat-detection alerts during port_scan and web_scan phases (burst exceeds
     threat_detection_rate of 10 drops/sec). Verify rate_id, current_burst, max_burst,
     total_count fields present.
@@ -309,6 +317,9 @@
   - Causal expansion: DNS queries precede TCP connections; Kerberos 4768/4769 precede 4624
     domain logons; process_access follows create_remote_thread targeting lsass
   - Hawkes temporal model: user events show bursty clusters (CV > 1.0), not uniform spacing
+  - Host activity profiles: host type, roles, and persona shape broad rate families after
+    traffic_rates/scenario overrides. Verify DC/file/web/proxy/server hosts and user workstations
+    have distinct event-volume profiles rather than uniform per-host counts.
   - Typing cadence: multi-event storyline steps have 1-15 second gaps, not identical timestamps
   - Process→network correlation: chrome.exe/git/sqlcmd baseline processes produce matching connections
   - Stale account enrichment: Kerberos 4771 (0x12) failures plus failed batch and service logons
@@ -321,6 +332,9 @@
   - Workstation lock/unlock (4800/4801): workstation_lock always precedes workstation_unlock
     for the same session — semantic ordering enforced
   - Explicit credentials (4648): RunAs and scheduled task execution with alternate credentials
+  - Observation profile: `enterprise_standard` introduces realistic source-level gaps, delays,
+    and coverage variation without contradictions. Ground truth should still preserve canonical
+    truth and source-evidence status for reviewer traceability.
 
   Proxy coverage (verify in generated data):
   - PROXY-01 (forward_proxy) routes web traffic for internal systems
@@ -337,6 +351,8 @@
   - Nikto User-Agent rotates per request via @NIKTO_TESTID@ token (unique 6-digit IDs),
     not a single static string
   - Web-scan Referer for nikto: ~30% same-origin; for sqlmap/dirb/nmap_http: always blank
+  - Browser-like page loads fan out into realistic CSS/JS/image/API subresource requests; the
+    top-level request budget counts user-driven page/tool requests, not every render component
 
   Ground truth / answer key:
   - GROUND_TRUTH.md generated automatically from storyline events
