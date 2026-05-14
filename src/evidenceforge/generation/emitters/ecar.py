@@ -32,6 +32,7 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.windows_ids import align_windows_id
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -192,12 +193,37 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["tid"] = event.edr.tid
 
     @staticmethod
-    def _stable_tid(hostname: str, pid: int, timestamp: datetime, salt: str) -> int:
+    def _stable_tid(
+        hostname: str,
+        pid: int,
+        timestamp: datetime,
+        salt: str,
+        os_category: str = "",
+    ) -> int:
         """Return a plausible source thread ID for process-owned eCAR events."""
         if pid <= 0:
             return -1
         bucket_ms = int(timestamp.timestamp() * 1000)
-        return 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
+        tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
+        if os_category == "windows":
+            return align_windows_id(tid)
+        return tid
+
+    def _stable_tid_for_host(
+        self,
+        host: HostContext | None,
+        pid: int,
+        timestamp: datetime,
+        salt: str,
+    ) -> int:
+        """Return a stable eCAR thread ID with host-native morphology."""
+        return self._stable_tid(
+            self._host_name(host),
+            pid,
+            timestamp,
+            salt,
+            getattr(host, "os_category", ""),
+        )
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
@@ -300,7 +326,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), proc.pid, event_ts, "process_create"),
+            self._stable_tid_for_host(host, proc.pid, event_ts, "process_create"),
         )
         self.emit_event(event_data)
 
@@ -321,7 +347,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), proc.pid, event.timestamp, "process_terminate"),
+            self._stable_tid_for_host(host, proc.pid, event.timestamp, "process_terminate"),
         )
         self.emit_event(event_data)
 
@@ -348,7 +374,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "file"),
+            self._stable_tid_for_host(host, event_data["pid"], event.timestamp, "file"),
         )
         self.emit_event(event_data)
 
@@ -370,7 +396,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "registry"),
+            self._stable_tid_for_host(host, event_data["pid"], event.timestamp, "registry"),
         )
         self.emit_event(event_data)
 
@@ -398,7 +424,7 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "module"),
+            self._stable_tid_for_host(host, event_data["pid"], event.timestamp, "module"),
         )
         self.emit_event(event_data)
 

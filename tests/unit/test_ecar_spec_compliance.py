@@ -939,6 +939,7 @@ class TestTidAlwaysPresent:
 
         row = emitter.emit_event.call_args.args[0]
         assert row["tid"] > 0
+        assert row["tid"] % 4 == 0
 
 
 class TestPpidOnlyOnProcess:

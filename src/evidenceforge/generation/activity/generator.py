@@ -576,6 +576,10 @@ def _windows_foreground_lifetime(
         return (0.4, 6.0)
     if exe_name in {"powershell.exe", "pwsh.exe", "cmd.exe", "wmic.exe", "certutil.exe"}:
         return (4.0, 35.0)
+    if exe_name == "docker.exe":
+        if any(token in command for token in (" ps", " images", " info", " version")):
+            return (1.0, 8.0)
+        return (5.0, 90.0)
     if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
         return (2.0, 25.0)
     return None
@@ -4850,6 +4854,31 @@ class ActivityGenerator:
                 )
             )
             time = running_proc.last_activity_time + timedelta(seconds=delay_rng.uniform(2.0, 30.0))
+        if running_proc is not None and running_proc.start_time is not None and not from_storyline:
+            if _get_os_category(system.os) == "windows":
+                foreground_lifetime = _windows_foreground_lifetime(
+                    running_proc.image,
+                    running_proc.command_line,
+                )
+            else:
+                foreground_lifetime = _linux_foreground_lifetime(
+                    running_proc.image,
+                    running_proc.command_line,
+                )
+            if foreground_lifetime is not None:
+                latest_foreground_time = running_proc.start_time + timedelta(
+                    seconds=foreground_lifetime[1] + 2.0
+                )
+                if time > latest_foreground_time:
+                    lifetime_rng = random.Random(
+                        _stable_seed(
+                            "process_terminate_foreground_cap:"
+                            f"{system.hostname}:{pid}:{running_proc.start_time.isoformat()}"
+                        )
+                    )
+                    time = running_proc.start_time + timedelta(
+                        seconds=lifetime_rng.uniform(*foreground_lifetime)
+                    )
         if running_proc is not None:
             process_name = running_proc.image
         process_username = running_proc.username if running_proc is not None else user.username
@@ -5568,15 +5597,17 @@ class ActivityGenerator:
                 and time < resolved_process.start_time
             ):
                 time = resolved_process.start_time + timedelta(milliseconds=1)
-            if (
-                resolved_process
-                and resolved_process.start_time
-                and _get_os_category(resolved_source_system.os) == "windows"
-            ):
-                process_lifetime = _windows_foreground_lifetime(
-                    resolved_process.image,
-                    resolved_process.command_line,
-                )
+            if resolved_process and resolved_process.start_time:
+                if _get_os_category(resolved_source_system.os) == "windows":
+                    process_lifetime = _windows_foreground_lifetime(
+                        resolved_process.image,
+                        resolved_process.command_line,
+                    )
+                else:
+                    process_lifetime = _linux_foreground_lifetime(
+                        resolved_process.image,
+                        resolved_process.command_line,
+                    )
                 if process_lifetime is not None:
                     max_process_time = resolved_process.start_time + timedelta(
                         seconds=process_lifetime[1] + 5.0

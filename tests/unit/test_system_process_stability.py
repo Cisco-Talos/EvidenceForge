@@ -242,6 +242,41 @@ class TestSystemProcessProtection:
                 f"System process '{role}' was incorrectly terminated"
             )
 
+    def test_stale_linux_foreground_command_terminates_near_runtime(
+        self, state_manager, mock_emitters, linux_system
+    ):
+        """Missed foreground-command cleanup should not stretch curl into an hour-scale process."""
+        engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, linux_system)
+
+        test_user = User(username="alice", full_name="Alice", email="a@t.com", enabled=True)
+        engine.scenario.environment.users = [test_user]
+        state_manager.create_session(
+            username="alice", system="LNX-01", logon_type=2, source_ip="10.0.10.2"
+        )
+
+        start = datetime(2024, 3, 15, 8, 10, 0, tzinfo=UTC)
+        state_manager.set_current_time(start)
+        pid = state_manager.create_process(
+            "LNX-01",
+            pids["systemd"],
+            "/usr/bin/curl",
+            "curl -sS -o /dev/null -w '%{http_code}' https://grafana.corp.local/",
+            "alice",
+            "Medium",
+        )
+
+        later = start + timedelta(hours=1)
+        state_manager.set_current_time(later)
+        engine._terminate_stale_processes(later)
+
+        terminate_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "process_terminate" and call.args[0].process.pid == pid
+        ]
+        assert terminate_events
+        assert terminate_events[0].timestamp <= start + timedelta(seconds=20)
+
 
 class TestProtectionListCompleteness:
     """Verify the protection list covers all seeded process names."""

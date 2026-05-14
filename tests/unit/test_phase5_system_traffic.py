@@ -33,6 +33,7 @@ from evidenceforge.generation.engine.baseline import (
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
     _registry_writer_candidates,
+    _windows_user_session_system_exe,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
@@ -96,6 +97,23 @@ class TestWindowsProcessTreeSeeding:
         assert no_desktop_candidates == []
         assert desktop_candidates
         assert {candidate[2] for candidate in desktop_candidates} == {"alice"}
+
+    @pytest.mark.parametrize(
+        "image",
+        [
+            r"C:\Windows\SystemApps\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\SearchHost.exe",
+            r"C:\Windows\System32\RuntimeBroker.exe",
+            r"C:\Windows\System32\backgroundTaskHost.exe",
+            r"C:\Windows\System32\sihost.exe",
+        ],
+    )
+    def test_desktop_shell_helpers_are_user_session_processes(self, image):
+        """Desktop/UWP helpers should not be generated as LocalSystem services."""
+        assert _windows_user_session_system_exe(image)
+
+    def test_server_services_remain_system_processes(self):
+        """Classic service binaries still use the service-process path."""
+        assert not _windows_user_session_system_exe(r"C:\Windows\System32\spoolsv.exe")
 
     def test_windows_tree_has_correct_hierarchy(self, state_manager, win_system):
         """After seeding, services.exe children include svchost instances."""

@@ -33,6 +33,7 @@ Contains the BaselineMixin with methods for:
 
 import logging
 import math
+import ntpath
 import random
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -81,6 +82,13 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
 
+_WINDOWS_USER_SESSION_SYSTEM_EXES = {
+    "backgroundtaskhost.exe",
+    "runtimebroker.exe",
+    "searchhost.exe",
+    "sihost.exe",
+}
+
 
 def _session_started_by(session: Any, time: datetime) -> bool:
     """Return whether a session exists at the given activity time."""
@@ -102,6 +110,18 @@ def _eligible_for_hourly_module_load(proc: Any, time: datetime) -> bool:
         return True
     max_follow_on = proc.start_time + timedelta(seconds=lifetime[1] + 5.0)
     return time <= max_follow_on
+
+
+def _foreground_lifetime_for_process(system: Any, proc: Any) -> tuple[float, float] | None:
+    """Return a source-native foreground lifetime estimate for a running process."""
+    if _get_os_category(system.os) == "windows":
+        return _windows_foreground_lifetime(proc.image, proc.command_line)
+    return _linux_foreground_lifetime(proc.image, proc.command_line)
+
+
+def _windows_user_session_system_exe(image: str) -> bool:
+    """Return whether a Windows OS binary should run in a user desktop session."""
+    return ntpath.basename(image).lower() in _WINDOWS_USER_SESSION_SYSTEM_EXES
 
 
 def _session_logoff_time(
@@ -1872,8 +1892,13 @@ class BaselineMixin:
                 if proc.story_created:
                     continue
 
-                is_short_lived = any(p in image_lower for p in short_lived)
-                if is_short_lived:
+                foreground_lifetime = _foreground_lifetime_for_process(system, proc)
+                is_short_lived = foreground_lifetime is not None or any(
+                    p in image_lower for p in short_lived
+                )
+                if foreground_lifetime is not None:
+                    max_hours = (foreground_lifetime[1] + 5.0) / 3600.0
+                elif is_short_lived:
                     max_hours = rng.uniform(0.08, 0.5)
                 elif any(
                     p in image_lower
@@ -1883,7 +1908,9 @@ class BaselineMixin:
                 else:
                     max_hours = rng.uniform(0.5, 2.0)
 
-                if proc_age_hours > max_hours and rng.random() < 0.85:
+                if proc_age_hours > max_hours and (
+                    foreground_lifetime is not None or rng.random() < 0.85
+                ):
                     actor = self._find_actor(proc.username)
                     if not actor:
                         continue
@@ -1901,7 +1928,11 @@ class BaselineMixin:
                         )
                         logon_id = session.logon_id if session else "0x0"
 
-                    if is_short_lived:
+                    if foreground_lifetime is not None:
+                        term_time = proc.start_time + timedelta(
+                            seconds=rng.uniform(*foreground_lifetime)
+                        )
+                    elif is_short_lived:
                         term_time = proc.start_time + timedelta(seconds=rng.uniform(2.0, 45.0))
                         if term_time > current_hour + timedelta(seconds=3599):
                             continue
@@ -4029,6 +4060,44 @@ class BaselineMixin:
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
+                    if _windows_user_session_system_exe(svc_image):
+                        desktop_user = (
+                            getattr(system, "assigned_user", None)
+                            if system.type not in ("server", "domain_controller")
+                            else None
+                        )
+                        actor = self._find_user(desktop_user) if desktop_user else None
+                        sessions = (
+                            self.state_manager.get_sessions_for_user(desktop_user)
+                            if desktop_user
+                            else []
+                        )
+                        active_session = next(
+                            (
+                                sess
+                                for sess in sessions
+                                if sess.system == system.hostname
+                                and _session_started_by(sess, svc_ts)
+                                and sess.logon_type in (2, 7, 10, 11)
+                            ),
+                            None,
+                        )
+                        if actor is None or active_session is None:
+                            continue
+                        svc_parent = sys_pids.get(
+                            "explorer",
+                            sys_pids.get("userinit", sys_pids.get("winlogon", 4)),
+                        )
+                        self.activity_generator.generate_process(
+                            user=actor,
+                            system=system,
+                            time=svc_ts,
+                            logon_id=active_session.logon_id,
+                            process_name=svc_image,
+                            command_line=svc_cmd,
+                            parent_pid=svc_parent,
+                        )
+                        continue
                     self.activity_generator.generate_system_process(
                         system=system,
                         time=svc_ts,
