@@ -121,108 +121,15 @@ def _apply_sensor_observation_variance(
     hostname: str,
     original_uid: Any,
 ) -> None:
-    """Make multi-sensor Zeek rows look like independent tap observations.
+    """Apply lossless multi-sensor Zeek observation differences.
 
     The canonical event still owns the true connection tuple and protocol
-    facts. This only models source-native observation differences from packet
-    loss, snaplen, tap placement, and analyzer cutoffs.
+    facts. For a well-synced sensor fleet observing the same packets, packet
+    counts and IP-byte totals should remain canonical unless a separate loss
+    model explicitly changes capture visibility.
     """
-    clone_fields = (
-        "duration",
-        "orig_bytes",
-        "resp_bytes",
-        "orig_pkts",
-        "resp_pkts",
-        "orig_ip_bytes",
-        "resp_ip_bytes",
-    )
-    original_observation = {field: render_data.get(field) for field in clone_fields}
-    # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
-    # cleanly. Keep this sparse and small so it reads as capture imperfection.
-    added_missed_bytes = False
-    if "missed_bytes" in render_data:
-        missed = render_data.get("missed_bytes") or 0
-        if isinstance(missed, int):
-            seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
-            if seed % 11 == 0:
-                render_data["missed_bytes"] = missed + 16 + (seed % 496)
-                added_missed_bytes = True
-    if added_missed_bytes:
-        for field in ("orig_pkts", "resp_pkts"):
-            _jitter_numeric_observation(
-                render_data,
-                field,
-                hostname,
-                original_uid,
-                0.018,
-                minimum=1,
-            )
     if not render_data.get("_lock_duration"):
         _jitter_numeric_observation(render_data, "duration", hostname, original_uid, 0.027)
-    for field in ("orig_pkts", "resp_pkts"):
-        _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035, minimum=1)
-    if render_data.get("_http_request_body_len") is None:
-        _jitter_numeric_observation(
-            render_data,
-            "orig_bytes",
-            hostname,
-            original_uid,
-            0.012,
-            minimum=0,
-        )
-    if render_data.get("_http_response_body_len") is None:
-        _jitter_numeric_observation(
-            render_data,
-            "resp_bytes",
-            hostname,
-            original_uid,
-            0.012,
-            minimum=0,
-        )
-    for field in ("orig_ip_bytes", "resp_ip_bytes"):
-        _jitter_numeric_observation(
-            render_data,
-            field,
-            hostname,
-            original_uid,
-            0.024,
-            minimum=0,
-        )
-    _enforce_http_body_invariants(render_data)
-    _enforce_ip_byte_invariants(render_data)
-    if all(render_data.get(field) == original_observation[field] for field in clone_fields):
-        duration = render_data.get("duration")
-        if (
-            not render_data.get("_lock_duration")
-            and isinstance(duration, (int, float))
-            and not isinstance(duration, bool)
-            and duration > 0
-        ):
-            seed = _stable_seed(f"zeek_sensor_duration_floor:{hostname}:{original_uid}")
-            direction = -1 if seed % 2 else 1
-            delta = max(duration * 0.0075, 0.000001)
-            render_data["duration"] = max(0.000001, duration + (direction * delta))
-        else:
-            proto = str(render_data.get("proto") or "").lower()
-            max_header_bytes = {"udp": 68}.get(proto)
-            seed = _stable_seed(f"zeek_sensor_ip_byte_floor:{hostname}:{original_uid}")
-            sides = ("resp", "orig") if seed % 2 else ("orig", "resp")
-            for side in sides:
-                payload = render_data.get(f"{side}_bytes")
-                packets = render_data.get(f"{side}_pkts")
-                ip_bytes = render_data.get(f"{side}_ip_bytes")
-                if not all(isinstance(value, int) for value in (payload, packets, ip_bytes)):
-                    continue
-                if packets <= 0 or ip_bytes < 0:
-                    continue
-                if max_header_bytes is not None:
-                    maximum_ip_bytes = payload + (max_header_bytes * packets)
-                    if ip_bytes >= maximum_ip_bytes:
-                        continue
-                render_data[f"{side}_ip_bytes"] = ip_bytes + 1
-                break
-    _enforce_http_body_invariants(render_data)
-    _enforce_ip_byte_invariants(render_data)
 
 
 def _enforce_http_body_invariants(render_data: dict[str, Any]) -> None:

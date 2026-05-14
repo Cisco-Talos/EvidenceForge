@@ -61,7 +61,7 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | nothing | Standalone timing relationship profile |
-| **depended on by** | Engine (runtime) | Drives causal prerequisite offsets, source-latency offsets, web session/fanout timing, sensor observation timing, teardown margins, and Windows/Sysmon tied-timestamp collision spacing |
+| **depended on by** | Engine (runtime) | Drives causal prerequisite offsets, source-latency offsets, web session/fanout timing, multi-sensor timestamp offsets, teardown margins, and Windows/Sysmon tied-timestamp collision spacing |
 | validated by | `eforge validate-config` | Enforces valid relationship classes, before/after positions, non-negative timing windows, and coherent min/max bounds |
 
 ### kerberos_realism.yaml

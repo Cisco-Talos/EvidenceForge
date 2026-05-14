@@ -412,7 +412,7 @@ windows_event_time:
   the same UID.
 - Use seconds or minutes for human or bulk workflow relationships; do not force everything into microseconds.
 - Web session timing uses `web.session_navigation` for user-driven page-to-page actions and `web.asset_*_after_page` / `web.tool_request_gap` for render fanout and tool/API bursts.
-- Keep the default `network_sensor_observation` profile in low milliseconds for well-synced Zeek fleets; use overlays only when modeling known sensor clock drift or queued/remote capture paths.
+- Keep the default `network_sensor_observation` profile in low milliseconds for well-synced Zeek fleets; use overlays only when modeling known sensor clock drift or queued/remote capture paths. This profile affects timestamps, not lossless payload, packet, or IP-byte counters.
 - Run `eforge validate-config` after overlay changes; it rejects invalid relationship classes, positions, negative windows, and inverted min/max ranges.
 
 ---

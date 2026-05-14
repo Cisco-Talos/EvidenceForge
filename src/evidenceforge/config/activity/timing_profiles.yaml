@@ -165,7 +165,8 @@ relationships:
 network_sensor_observation:
   # Default assumes security infrastructure with good time sync and local tap
   # placement. These bounds apply when multiple Zeek sensors observe the same
-  # packet/flow and should stay in the low-millisecond range.
+  # packet/flow and should stay in the low-millisecond range. Packet and byte
+  # counters remain canonical for lossless observations.
   default_profile: well_synced
   profiles:
     well_synced:

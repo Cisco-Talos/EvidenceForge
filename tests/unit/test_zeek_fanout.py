@@ -406,8 +406,8 @@ class TestMultiSensorFanOut:
             assert uid1.startswith("C")
             assert uid2.startswith("C")
 
-    def test_secondary_sensor_varies_observation_counters(self):
-        """Multi-sensor conn rows should not be byte-for-byte clones with only UID/ts changed."""
+    def test_secondary_sensor_preserves_lossless_packet_accounting(self):
+        """Lossless multi-sensor conn rows preserve shared payload and packet facts."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(
@@ -444,21 +444,25 @@ class TestMultiSensorFanOut:
 
             core = json.loads((base / "core" / "conn.json").read_text())
             dmz = json.loads((base / "dmz" / "conn.json").read_text())
-            varied_fields = {
-                "duration",
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            assert core["duration"] != dmz["duration"]
+            for field in (
                 "orig_bytes",
                 "resp_bytes",
                 "orig_pkts",
                 "resp_pkts",
                 "orig_ip_bytes",
                 "resp_ip_bytes",
-            }
-            assert any(core[field] != dmz[field] for field in varied_fields)
-            assert dmz["orig_ip_bytes"] >= dmz["orig_bytes"] + dmz["orig_pkts"] * 40
-            assert dmz["resp_ip_bytes"] >= dmz["resp_bytes"] + dmz["resp_pkts"] * 40
+                "missed_bytes",
+            ):
+                assert core[field] == dmz[field]
+            for row in (core, dmz):
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + row["orig_pkts"] * 40
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + row["resp_pkts"] * 40
 
-    def test_secondary_sensor_varies_small_locked_observations(self):
-        """Tiny one-packet DNS-like observations should not clone after integer rounding."""
+    def test_secondary_sensor_preserves_locked_dns_accounting(self):
+        """DNS RTT-locked rows keep canonical duration and packet counters."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(
@@ -506,7 +510,9 @@ class TestMultiSensorFanOut:
 
             core = json.loads((base / "core" / "conn.json").read_text())
             dmz = json.loads((base / "dmz" / "conn.json").read_text())
-            clone_fields = (
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            canonical_fields = (
                 "duration",
                 "orig_bytes",
                 "resp_bytes",
@@ -514,5 +520,7 @@ class TestMultiSensorFanOut:
                 "resp_pkts",
                 "orig_ip_bytes",
                 "resp_ip_bytes",
+                "missed_bytes",
             )
-            assert any(core[field] != dmz[field] for field in clone_fields)
+            for field in canonical_fields:
+                assert core[field] == dmz[field]
