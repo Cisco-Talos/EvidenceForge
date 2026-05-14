@@ -673,6 +673,35 @@ class TestSslUidCorrelation:
         assert row["revoketime"] == 1705000000.0
         assert row["revokereason"] == "keyCompromise"
 
+    def test_good_ocsp_status_omits_revocation_metadata(self):
+        """Non-revoked OCSP rows should not render null revocation fields."""
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "ocsp.json"
+            emitter = ZeekOcspEmitter(ocsp_fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="good",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            row = json.loads(output.read_text().splitlines()[0])
+
+        assert row["certStatus"] == "good"
+        assert "revoketime" not in row
+        assert "revokereason" not in row
+
     def test_tls_conn_duration_contains_ssl_analyzer_offset(self):
         """Zeek conn duration for completed TLS should contain ssl/x509 analyzer evidence."""
         conn_fmt = load_format("zeek_conn")

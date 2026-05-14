@@ -81,7 +81,11 @@ output:
       "serialNumber": {{ serialNumber | tojson }},
       "certStatus": {{ certStatus | tojson }},
       "thisUpdate": {{ thisUpdate | tojson }},
-      "nextUpdate": {{ nextUpdate | tojson }},
-      "revoketime": {{ revoketime | tojson }},
+      "nextUpdate": {{ nextUpdate | tojson }}
+      {%- if revoketime is not none %},
+      "revoketime": {{ revoketime | tojson }}
+      {%- endif %}
+      {%- if revokereason is not none %},
       "revokereason": {{ revokereason | tojson }}
+      {%- endif %}
     }
