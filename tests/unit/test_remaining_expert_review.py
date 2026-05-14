@@ -9,6 +9,7 @@ from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
     _pick_non_colliding_account_name,
+    _scheduled_stale_failure_offsets,
 )
 from evidenceforge.models.scenario import AccountCreatedEventSpec, AccountDeletedEventSpec
 from evidenceforge.utils.rng import _stable_seed
@@ -107,6 +108,35 @@ class TestBaselineFailedLogonPatterns:
         n_targets = min(rng.randint(5, 15), len(servers))
         targets = rng.sample(servers, n_targets)
         assert 5 <= len(targets) <= 15
+
+    def test_scheduled_stale_credentials_do_not_use_exact_two_hour_cadence(self):
+        """Stale scheduled-credential noise should not expose modulo-hour timing."""
+        config = {
+            "interval_ranges": [{"min_minutes": 105, "max_minutes": 155, "weight": 1}],
+            "first_occurrence_seconds_min": 0,
+            "first_occurrence_seconds_max": 1200,
+            "jitter_seconds_min": -420,
+            "jitter_seconds_max": 780,
+            "skip_probability": 0.0,
+            "backoff_probability": 0.0,
+            "backoff_seconds_min": 0,
+            "backoff_seconds_max": 0,
+        }
+        event_seconds = []
+        for hour_idx in range(12):
+            for offset in _scheduled_stale_failure_offsets(
+                scenario_name="cadence-test",
+                account_name="svc_deploy",
+                hostname="LNX-01",
+                hour_idx=hour_idx,
+                config=config,
+            ):
+                event_seconds.append(hour_idx * 3600 + offset)
+
+        gaps = [right - left for left, right in zip(event_seconds, event_seconds[1:], strict=False)]
+        assert len(gaps) >= 3
+        assert any(abs(gap - 7200) > 600 for gap in gaps)
+        assert len(set(gaps)) > 1
 
     def test_password_typo_pattern(self):
         """Password typo: 1-2 failures should precede success by seconds."""

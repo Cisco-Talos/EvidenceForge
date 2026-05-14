@@ -285,6 +285,36 @@ Failed-logon profiles control source-native Windows 4625 fields and DC-side vali
 
 ---
 
+## Auth Noise (`auth_noise.yaml`)
+
+Controls baseline authentication noise that is not scenario-authored, especially stale scheduled credentials.
+
+```yaml
+scheduled_stale_credentials:
+  account_base_names: [svc_backup, svc_monitor, svc_report, svc_deploy, svc_scan]
+  host_count_min: 1
+  host_count_max: 2
+  interval_ranges:
+    - min_minutes: 55
+      max_minutes: 95
+      weight: 30
+    - min_minutes: 105
+      max_minutes: 155
+      weight: 45
+  first_occurrence_seconds_min: 0
+  first_occurrence_seconds_max: 2700
+  jitter_seconds_min: -420
+  jitter_seconds_max: 780
+  skip_probability: 0.16
+  backoff_probability: 0.10
+  backoff_seconds_min: 900
+  backoff_seconds_max: 3600
+```
+
+`account_base_names` should be plausible disabled service or automation principals; the engine still avoids collisions with scenario users and service accounts. Interval ranges, jitter, skip probability, and backoff probability produce deterministic but non-modulo recurrence so stale scheduled-task failures do not land on exact hourly or two-hour cadences. Run `eforge validate-config` after overlay changes; ranges must be ordered, weights must be positive, and probabilities must be between 0 and 0.95.
+
+---
+
 ## timing_profiles.yaml
 
 Data-driven timing windows for causal relationships, source-native latency, teardown margins, and Windows/Sysmon same-timestamp collision spacing. Use this when tuning realism of correlated event gaps without changing scenario YAML.

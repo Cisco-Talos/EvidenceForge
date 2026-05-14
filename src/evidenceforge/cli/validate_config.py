@@ -168,6 +168,9 @@ def validate_config() -> ValidationResult:
         "activity/process_access_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
         },
+        "activity/auth_noise.yaml": {
+            "dict_fields": {"scheduled_stale_credentials"},
+        },
         "activity/create_remote_thread_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
             "dict_fields": {"start_locations", "target_overrides"},
@@ -436,6 +439,7 @@ def validate_config() -> ValidationResult:
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
     from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
         load_create_remote_thread_config,
         load_create_remote_thread_patterns,
@@ -464,6 +468,7 @@ def validate_config() -> ValidationResult:
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
     process_access_data = load_process_access_patterns()
+    auth_noise_data = load_auth_noise_config()
     create_remote_thread_data = load_create_remote_thread_patterns()
     create_remote_thread_config = load_create_remote_thread_config()
     proxy_data = load_proxy_uri_templates()
@@ -1676,6 +1681,7 @@ def validate_config() -> ValidationResult:
     # --- Schema validation: validate merged entries against Pydantic models ---
     from evidenceforge.config.schemas import (
         ApplicationEntry,
+        AuthNoiseConfig,
         ConnectionEntry,
         CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
@@ -2044,6 +2050,10 @@ def validate_config() -> ValidationResult:
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:
         result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
+
+    err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
 
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         _SCHEMA_CHECKS.append(

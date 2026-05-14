@@ -39,6 +39,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.generation.activity.auth_noise import scheduled_stale_credentials_config
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_noise_config,
     load_create_remote_thread_patterns,
@@ -231,6 +232,95 @@ def _pick_non_colliding_account_name(
 
     msg = "Unable to select non-colliding synthetic account name after bounded fallback search"
     raise ValueError(msg)
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Return an integer config value or a default."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_probability(value: Any, default: float) -> float:
+    """Return a clamped probability config value."""
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        probability = default
+    return max(0.0, min(probability, 0.95))
+
+
+def _weighted_interval_minutes(
+    rng: random.Random,
+    interval_ranges: list[dict[str, Any]],
+) -> int:
+    """Pick an interval in minutes from weighted config ranges."""
+    ranges = [entry for entry in interval_ranges if isinstance(entry, dict)]
+    if not ranges:
+        ranges = [
+            {"min_minutes": 55, "max_minutes": 95, "weight": 30},
+            {"min_minutes": 105, "max_minutes": 155, "weight": 45},
+            {"min_minutes": 170, "max_minutes": 260, "weight": 25},
+        ]
+    weights = [max(1, _as_int(entry.get("weight"), 1)) for entry in ranges]
+    selected = rng.choices(ranges, weights=weights, k=1)[0]
+    min_minutes = max(1, _as_int(selected.get("min_minutes"), 60))
+    max_minutes = max(min_minutes, _as_int(selected.get("max_minutes"), min_minutes))
+    return rng.randint(min_minutes, max_minutes)
+
+
+def _scheduled_stale_failure_offsets(
+    *,
+    scenario_name: str,
+    account_name: str,
+    hostname: str,
+    hour_idx: int,
+    config: dict[str, Any],
+) -> list[int]:
+    """Return stale scheduled-credential failure offsets for this generation hour."""
+    if hour_idx < 0:
+        return []
+
+    profile_key = f"sched_fail_profile:{scenario_name}:{account_name}:{hostname}"
+    profile_rng = random.Random(_stable_seed(profile_key))
+    first_min = max(0, _as_int(config.get("first_occurrence_seconds_min"), 0))
+    first_max = max(first_min, _as_int(config.get("first_occurrence_seconds_max"), 2700))
+    first_offset = profile_rng.randint(first_min, first_max)
+
+    jitter_min = _as_int(config.get("jitter_seconds_min"), -420)
+    jitter_max = max(jitter_min, _as_int(config.get("jitter_seconds_max"), 780))
+    skip_probability = _as_probability(config.get("skip_probability"), 0.16)
+    backoff_probability = _as_probability(config.get("backoff_probability"), 0.10)
+    backoff_min = max(0, _as_int(config.get("backoff_seconds_min"), 900))
+    backoff_max = max(backoff_min, _as_int(config.get("backoff_seconds_max"), 3600))
+    interval_ranges = config.get("interval_ranges")
+    if not isinstance(interval_ranges, list):
+        interval_ranges = []
+
+    window_start = hour_idx * 3600
+    window_end = window_start + 3600
+    offsets: list[int] = []
+    nominal_second = first_offset
+    occurrence_idx = 0
+    while nominal_second < window_end + max(0, -jitter_min) + backoff_max:
+        occurrence_rng = random.Random(_stable_seed(f"{profile_key}:occurrence:{occurrence_idx}"))
+        observed_second = nominal_second + occurrence_rng.randint(jitter_min, jitter_max)
+        if occurrence_rng.random() < backoff_probability:
+            observed_second += occurrence_rng.randint(backoff_min, backoff_max)
+        if (
+            occurrence_rng.random() >= skip_probability
+            and window_start <= observed_second < window_end
+        ):
+            offsets.append(int(observed_second - window_start))
+
+        interval_minutes = _weighted_interval_minutes(occurrence_rng, interval_ranges)
+        nominal_second += interval_minutes * 60
+        occurrence_idx += 1
+        if occurrence_idx > 10_000:
+            break
+
+    return sorted(set(offsets))
 
 
 def _hawkes_params_from_persona(persona: Persona | None) -> dict:
@@ -1020,10 +1110,25 @@ class BaselineMixin:
                 )
 
         # Pattern 2: Scheduled task with stale creds (deterministic per scenario).
-        # Pick 1-2 hosts and a plausible service account name.
+        # Pick configured hosts and a plausible service account name.
         _sched_seed = _stable_seed(self.scenario.name + "_sched_fail")
         _sched_rng = random.Random(_sched_seed)
-        _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
+        _sched_config = scheduled_stale_credentials_config()
+        configured_names = _sched_config.get("account_base_names", [])
+        _svc_names = [
+            str(name).strip() for name in configured_names if isinstance(name, str) and name.strip()
+        ] or [
+            "svc_backup",
+            "svc_monitor",
+            "svc_report",
+            "svc_deploy",
+            "svc_scan",
+            "svc_patch",
+            "svc_build",
+            "svc_sync",
+            "svc_jobs",
+            "svc_batch",
+        ]
         # Ensure no collision with actual scenario accounts
         _existing = {u.username for u in self.scenario.environment.users} | set(
             self.scenario.environment.service_accounts
@@ -1039,35 +1144,28 @@ class BaselineMixin:
             email=f"{_sched_acct}@system.local",
             enabled=False,
         )
-        n_sched_hosts = min(2, len(servers))
+        host_min = max(1, _as_int(_sched_config.get("host_count_min"), 1))
+        host_max = max(host_min, _as_int(_sched_config.get("host_count_max"), 2))
+        n_sched_hosts = min(_sched_rng.randint(host_min, host_max), len(servers))
         _sched_hosts = _sched_rng.sample(servers, n_sched_hosts)
         hour_idx = int((current_hour - self.start_time).total_seconds() / 3600)
         for host in _sched_hosts:
-            profile_rng = random.Random(
-                _stable_seed(
-                    f"sched_fail_profile:{self.scenario.name}:{_sched_acct}:{host.hostname}"
+            for sched_second in _scheduled_stale_failure_offsets(
+                scenario_name=self.scenario.name,
+                account_name=_sched_acct,
+                hostname=host.hostname,
+                hour_idx=hour_idx,
+                config=_sched_config,
+            ):
+                sched_time = current_hour + timedelta(seconds=sched_second)
+                self.state_manager.set_current_time(sched_time)
+                self.activity_generator.generate_failed_logon(
+                    user=_sched_user,
+                    system=host,
+                    time=sched_time,
+                    logon_type=4,  # batch (scheduled task)
+                    source_ip=host.ip,
                 )
-            )
-            sched_interval = profile_rng.choices([1, 2, 3], weights=[35, 45, 20], k=1)[0]
-            sched_phase = profile_rng.randint(0, sched_interval - 1)
-            if (hour_idx + sched_phase) % sched_interval != 0:
-                continue
-            hour_rng = random.Random(
-                _stable_seed(
-                    f"sched_fail_time:{self.scenario.name}:{_sched_acct}:{host.hostname}:{hour_idx}"
-                )
-            )
-            nominal_second = profile_rng.randint(0, 900)
-            sched_second = max(0, min(3599, nominal_second + hour_rng.randint(-180, 540)))
-            sched_time = current_hour + timedelta(seconds=sched_second)
-            self.state_manager.set_current_time(sched_time)
-            self.activity_generator.generate_failed_logon(
-                user=_sched_user,
-                system=host,
-                time=sched_time,
-                logon_type=4,  # batch (scheduled task)
-                source_ip=host.ip,
-            )
 
         # Pattern 3: Management software sweep (1-2 per business day).
         # Use scenario-local time for business-hour gating.

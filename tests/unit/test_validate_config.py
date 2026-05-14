@@ -380,6 +380,41 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_auth_noise_ranges(self, monkeypatch):
+        from evidenceforge.generation.activity import auth_noise
+
+        def load_invalid_auth_noise_config():
+            return {
+                "scheduled_stale_credentials": {
+                    "account_base_names": ["svc_backup"],
+                    "host_count_min": 3,
+                    "host_count_max": 1,
+                    "interval_ranges": [{"min_minutes": 120, "max_minutes": 60, "weight": 1}],
+                    "first_occurrence_seconds_min": 0,
+                    "first_occurrence_seconds_max": 2700,
+                    "jitter_seconds_min": -420,
+                    "jitter_seconds_max": 780,
+                    "skip_probability": 0.10,
+                    "backoff_probability": 0.10,
+                    "backoff_seconds_min": 900,
+                    "backoff_seconds_max": 3600,
+                }
+            }
+
+        monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "auth_noise.yaml"
+            and (
+                "max_minutes must be greater than or equal to min_minutes" in issue.message
+                or "host_count_max must be greater than or equal to host_count_min" in issue.message
+            )
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_too_short_workstation_unlock_gap(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 

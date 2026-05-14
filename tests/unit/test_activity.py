@@ -39,7 +39,10 @@ from evidenceforge.generation.activity import (
     _is_invalid_network_connection,
 )
 from evidenceforge.generation.activity import generator as generator_module
-from evidenceforge.generation.activity.generator import _extract_image_from_command
+from evidenceforge.generation.activity.generator import (
+    _extract_image_from_command,
+    _jitter_default_connection_duration,
+)
 from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
@@ -3272,6 +3275,32 @@ class TestActivityGenerator:
         net = event.network
         assert net.conn_state == "SF"
         assert net.duration is not None and net.duration >= 0.04
+
+    def test_default_connection_duration_jitter_diversifies_reviewer_anchors(self):
+        """Generator-owned placeholder durations should not render as exact constants."""
+        for anchor in (0.8, 2.0, 0.01):
+            samples = {
+                round(
+                    _jitter_default_connection_duration(
+                        anchor,
+                        caller_provided_duration=False,
+                        seed_parts=("duration-anchor", anchor, idx),
+                    ),
+                    6,
+                )
+                for idx in range(8)
+            }
+            assert len(samples) > 1
+            assert anchor not in samples
+
+            assert (
+                _jitter_default_connection_duration(
+                    anchor,
+                    caller_provided_duration=True,
+                    seed_parts=("authored", anchor),
+                )
+                == anchor
+            )
 
     def test_generate_connection_with_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection with duration sets a valid conn_state."""

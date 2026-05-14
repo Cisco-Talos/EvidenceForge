@@ -588,6 +588,34 @@ class TestWeirdProtocolConstraint:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.duration == 0.35
 
+    def test_dns_conn_duration_exact_anchor_still_uses_rtt(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """DNS RTT locks must not be jittered just because they equal old default anchors."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="anchor.example.com",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["93.184.216.34"],
+                rtt=0.02,
+            ),
+            resp_bytes=120,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.duration == 0.02
+
     def test_explicit_dns_response_state_keeps_responder_accounting(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):

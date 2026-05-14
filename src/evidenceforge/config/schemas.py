@@ -680,6 +680,73 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
         return v
 
 
+# --- Auth Noise ---
+
+
+class AuthNoiseIntervalRange(BaseModel, extra="forbid"):
+    """A weighted interval range for auth-noise recurrence."""
+
+    min_minutes: int = Field(ge=1, le=1440)
+    max_minutes: int = Field(ge=1, le=1440)
+    weight: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def valid_range(self) -> Self:
+        if self.max_minutes < self.min_minutes:
+            raise ValueError("max_minutes must be greater than or equal to min_minutes")
+        return self
+
+
+class ScheduledStaleCredentialsConfig(BaseModel, extra="forbid"):
+    """Stale scheduled-task failed-logon noise profile."""
+
+    account_base_names: list[str] = Field(min_length=1)
+    host_count_min: int = Field(ge=1)
+    host_count_max: int = Field(ge=1)
+    interval_ranges: list[AuthNoiseIntervalRange] = Field(min_length=1)
+    first_occurrence_seconds_min: int = Field(ge=0, le=86_400)
+    first_occurrence_seconds_max: int = Field(ge=0, le=86_400)
+    jitter_seconds_min: int = Field(ge=-86_400, le=86_400)
+    jitter_seconds_max: int = Field(ge=-86_400, le=86_400)
+    skip_probability: float = Field(ge=0.0, le=0.95)
+    backoff_probability: float = Field(ge=0.0, le=0.95)
+    backoff_seconds_min: int = Field(ge=0, le=86_400)
+    backoff_seconds_max: int = Field(ge=0, le=86_400)
+
+    @field_validator("account_base_names")
+    @classmethod
+    def account_base_names_non_empty(cls, v: list[str]) -> list[str]:
+        for name in v:
+            if not name or not name.strip():
+                raise ValueError("account_base_names entries must be non-empty")
+        return v
+
+    @model_validator(mode="after")
+    def valid_ranges(self) -> Self:
+        if self.host_count_max < self.host_count_min:
+            raise ValueError("host_count_max must be greater than or equal to host_count_min")
+        if self.first_occurrence_seconds_max < self.first_occurrence_seconds_min:
+            raise ValueError(
+                "first_occurrence_seconds_max must be greater than or equal to "
+                "first_occurrence_seconds_min"
+            )
+        if self.jitter_seconds_max < self.jitter_seconds_min:
+            raise ValueError(
+                "jitter_seconds_max must be greater than or equal to jitter_seconds_min"
+            )
+        if self.backoff_seconds_max < self.backoff_seconds_min:
+            raise ValueError(
+                "backoff_seconds_max must be greater than or equal to backoff_seconds_min"
+            )
+        return self
+
+
+class AuthNoiseConfig(BaseModel, extra="forbid"):
+    """Root schema for auth_noise.yaml."""
+
+    scheduled_stale_credentials: ScheduledStaleCredentialsConfig
+
+
 # --- Network Params ---
 
 

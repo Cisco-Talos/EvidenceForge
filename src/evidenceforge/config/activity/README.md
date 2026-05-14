@@ -21,6 +21,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `tls_realism.yaml` | `tls_realism.py` | TLS SAN, OCSP, certificate-chain, and destination-profile settings with overlay support. |
 | `kerberos_realism.yaml` | `kerberos_realism.py` | Kerberos 4768 TGT PreAuthType, TicketOptions, encryption, and PKINIT certificate field distributions with overlay support. |
 | `windows_auth_realism.yaml` | `windows_auth_realism.py` | Windows Security authentication realism knobs such as minimum 4800→4801 lock/unlock gap, failed-logon validation paths, companion network evidence, and 4672 privilege profiles. |
+| `auth_noise.yaml` | `auth_noise.py` | Baseline authentication-noise profiles such as stale scheduled-credential account pools and irregular recurrence timing. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, public NTP fallback servers, and DNS tunnel RTT bounds. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |

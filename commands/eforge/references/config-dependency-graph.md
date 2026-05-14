@@ -145,6 +145,12 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone (uses distro/role filters) |
 | **depended on by** | Engine (runtime) | Adds diversity to syslog baseline |
 
+### auth_noise.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone authentication-noise profile data |
+| **depended on by** | Engine (runtime) | Drives stale scheduled-credential account pools, recurrence timing, jitter, skips, and backoff |
+
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

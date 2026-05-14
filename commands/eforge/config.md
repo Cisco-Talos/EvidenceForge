@@ -67,6 +67,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify ProcessAccess masks | `process_access_patterns.yaml` | (standalone — Event 10 baseline source/target pairs and GrantedAccess masks) |
 | Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
 | Modify Windows auth realism | `windows_auth_realism.yaml` | (standalone — Security log auth timing and failed-logon profile knobs) |
+| Modify baseline auth noise | `auth_noise.yaml` | (standalone — stale scheduled-credential accounts and irregular recurrence timing) |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |

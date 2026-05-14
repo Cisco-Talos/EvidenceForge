@@ -175,7 +175,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 **File:** `syslog.log`
 **Format:** RFC 5424 syslog
 
-Authentication and system logs from Linux hosts. Generated syslog uses RFC 5424 with year-bearing ISO/RFC3339 timestamps. `eforge eval` still accepts older BSD/RFC3164-style syslog as a legacy ingest fallback. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
+Authentication and system logs from Linux hosts. Generated syslog uses RFC 5424 with year-bearing ISO/RFC3339 timestamps. `eforge eval` still accepts older BSD/RFC3164-style syslog as a legacy ingest fallback. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows reuse the same source port as the companion Zeek SSH connection tuple.
 
 | Program | Description | Notes |
 |---------|-------------|-------|

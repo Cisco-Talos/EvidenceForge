@@ -27,6 +27,7 @@ multiple emitters, producing correlated cross-source records.
 """
 
 import random
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -510,6 +511,38 @@ class TestSyslogContext:
         assert "Failed password" in event.syslog.message
         assert event.syslog.severity == 4  # Warning level
 
+    def test_remote_linux_failed_logon_reuses_ssh_source_port_for_zeek_tuple(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Remote failed sshd auth should have a matching Zeek SSH tuple."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        source_ip = "10.0.10.99"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(
+            user=User(username="attacker", full_name="Attacker", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+        )
+
+        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        match = re.search(r"from (?P<src>\S+) port (?P<port>\d+) ssh2", syslog_event.syslog.message)
+        assert match is not None
+        ssh_source_port = int(match.group("port"))
+        zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+
+        assert any(
+            event.network.src_ip == source_ip
+            and event.network.src_port == ssh_source_port
+            and event.network.dst_ip == linux.ip
+            and event.network.dst_port == 22
+            and event.network.service == "ssh"
+            and event.timestamp < syslog_event.timestamp
+            for event in zeek_events
+        )
+
     def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -529,6 +562,13 @@ class TestSyslogContext:
         assert event.syslog is not None
         assert event.syslog.app_name == "login"
         assert "from -" not in event.syslog.message
+        zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        assert not any(
+            event.event_type == "connection"
+            and event.network is not None
+            and event.network.dst_port == 22
+            for event in zeek_events
+        )
 
     def test_self_sourced_linux_failed_logon_renders_local_auth(
         self, activity_gen, state_manager, mock_emitters, timestamp
