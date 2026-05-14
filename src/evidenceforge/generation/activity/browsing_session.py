@@ -309,7 +309,7 @@ def generate_browsing_session(
         n_subs = rng.randint(sub_lo, sub_hi)
         subresources = _pick_subresources(rng, page, site_map, n_subs)
 
-        for sub_idx, sub in enumerate(subresources):
+        for sub in subresources:
             sub_hostname = sub.host or hostname
             sub_content_type = normalize_mime_type_for_path(sub.path, sub.content_type)
 
@@ -323,7 +323,7 @@ def generate_browsing_session(
                     method=sub.method,
                     content_type=sub_content_type,
                     referrer=page_url,
-                    trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
+                    trans_depth=1,
                     is_page_load=False,
                     response_body_len=_response_size(
                         rng,

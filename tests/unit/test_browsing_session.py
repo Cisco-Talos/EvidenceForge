@@ -48,6 +48,19 @@ class TestBrowsingSessionBasics:
         offsets = [r.time_offset_ms for r in requests]
         assert offsets == sorted(offsets)
 
+    def test_each_request_uses_first_transaction_depth(self):
+        """Generated requests are emitted as separate TCP UIDs, so Zeek depth stays at 1."""
+        rng = random.Random(42)
+        requests = generate_browsing_session(
+            rng,
+            "outlook.office365.com",
+            [],
+            browsing_intensity="heavy",
+        )
+
+        assert any(not request.is_page_load for request in requests)
+        assert {request.trans_depth for request in requests} == {1}
+
 
 class TestReferrerChains:
     """Referrer chain correctness."""

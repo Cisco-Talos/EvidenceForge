@@ -1188,9 +1188,10 @@ class TestWebAccessExternalVisitors:
             datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
         )
 
-        page_loads = [kw for kw in collected if kw["http"].trans_depth == 1]
+        page_loads = [kw for kw in collected if kw["http"].resp_mime_types == ["text/html"]]
         assert len(page_loads) == 8
         assert len(collected) > len(page_loads)
+        assert {kw["http"].trans_depth for kw in collected} == {1}
         assert {kw["http"].host for kw in collected} == {"portal.example.com"}
         by_client = {}
         for kwargs in collected:
