@@ -91,6 +91,53 @@ certificate_chains:
     - {type: "rsa", length: 2048, weight: 55}
     - {type: "rsa", length: 4096, weight: 20}
     - {type: "ecdsa", length: 256, weight: 25}
+  subject_key_profiles:
+    - subject_patterns:
+        - "CN=R3, O=Let's Encrypt, C=US"
+        - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+        - "CN=DigiCert*"
+        - "CN=Amazon RSA*"
+        - "CN=Amazon Root CA 1*"
+        - "CN=Microsoft RSA Root Certificate Authority 2017*"
+        - "CN=Baltimore CyberTrust Root*"
+        - "CN=GlobalSign Root CA*"
+        - "CN=GlobalSign Root R3*"
+        - "CN=USERTrust RSA Certification Authority*"
+        - "CN=Enterprise Root CA*"
+      issuer_family: rsa_public_ca
+      key_type: rsa
+      key_length: 2048
+      child_signature_algorithms: ["sha256WithRSAEncryption"]
+    - subject_patterns:
+        - "CN=E1, O=Let's Encrypt, C=US"
+        - "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
+        - "CN=Cloudflare Inc ECC*"
+        - "CN=Amazon Root CA 3*"
+        - "CN=Apple Root CA - G3*"
+        - "CN=Apple Public EV Server ECC*"
+      issuer_family: ecdsa_public_ca
+      key_type: ecdsa
+      key_length: 256
+      child_signature_algorithms: ["ecdsa-with-SHA256"]
+    - subject_patterns:
+        - "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
+        - "CN=GTS Root R1, O=Google Trust Services LLC, C=US"
+      issuer_family: google_trust_services_rsa
+      key_type: rsa
+      key_length: 2048
+      child_signature_algorithms: ["sha256WithRSAEncryption"]
+    - subject_patterns:
+        - "CN=GTS Root R4, O=Google Trust Services LLC, C=US"
+      issuer_family: google_trust_services_ecdsa
+      key_type: ecdsa
+      key_length: 384
+      child_signature_algorithms: ["ecdsa-with-SHA384"]
+    - subject_patterns:
+        - "CN=Sectigo Public Server Authentication Root R46*"
+      issuer_family: sectigo_rsa
+      key_type: rsa
+      key_length: 4096
+      child_signature_algorithms: ["sha384WithRSAEncryption"]
   templates:
     - name: lets_encrypt
       issuer_patterns: ["*Let's Encrypt*"]

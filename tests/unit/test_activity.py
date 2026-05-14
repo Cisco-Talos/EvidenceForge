@@ -1788,6 +1788,64 @@ class TestActivityGenerator:
         ]
         assert registry_events == []
 
+    def test_process_module_load_preserves_profile_signature_metadata(
+        self,
+        activity_gen,
+        test_user,
+        test_system,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Probabilistic process ImageLoad events should carry DLL profile signer fields."""
+
+        class ModuleLoadRandom(random.Random):
+            def __init__(self):
+                super().__init__(7)
+                self._random_values = iter([0.99, 0.01])
+
+            def random(self):
+                return next(self._random_values, 0.99)
+
+        import evidenceforge.generation.activity.dll_load_profiles as dll_profiles
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp)
+        monkeypatch.setattr(generator_module, "_get_rng", ModuleLoadRandom)
+        monkeypatch.setattr(
+            dll_profiles,
+            "get_dlls_for_process",
+            lambda _exe: [
+                {
+                    "path": r"C:\Program Files\Mozilla Firefox\mozglue.dll",
+                    "signed": True,
+                    "signature": "Mozilla Corporation",
+                    "signature_status": "Valid",
+                }
+            ],
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=5),
+            logon_id,
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r'"C:\Program Files\Mozilla Firefox\firefox.exe"',
+            parent_pid=4,
+        )
+
+        image_load_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "image_load"
+        ]
+        assert image_load_events
+        assert image_load_events[-1].image_load.image_loaded.endswith("mozglue.dll")
+        assert image_load_events[-1].image_load.signature == "Mozilla Corporation"
+        assert image_load_events[-1].image_load.signature_status == "Valid"
+
     def test_image_load_is_clamped_after_process_start(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

@@ -1571,6 +1571,22 @@ def _tls_key_for_certificate_name(
     return key_type, key_length
 
 
+def _tls_signature_algorithm_for_issuer(
+    issuer_name: str,
+    *,
+    fallback_key_type: str = "rsa",
+    fallback_key_length: int = 2048,
+) -> str:
+    """Return the certificate signature algorithm implied by the issuer key."""
+    from evidenceforge.generation.activity.tls_realism import signature_algorithm_for_issuer
+
+    return signature_algorithm_for_issuer(
+        issuer_name,
+        fallback_type=fallback_key_type,
+        fallback_length=fallback_key_length,
+    )
+
+
 class ActivityGenerator:
     """Generates specific activity events using StateManager and emitters.
 
@@ -2493,7 +2509,11 @@ class ActivityGenerator:
             certificate_not_valid_before=validity[0],
             certificate_not_valid_after=validity[1],
             certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-            certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
+            certificate_sig_alg=_tls_signature_algorithm_for_issuer(
+                issuer_cfg["name"],
+                fallback_key_type=key_type,
+                fallback_key_length=key_length,
+            ),
             certificate_key_type=key_type,
             certificate_key_length=key_length,
             certificate_exponent="65537" if not is_ecdsa else "",
@@ -2764,7 +2784,9 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import X509Context
         from evidenceforge.generation.activity.tls_realism import (
             certificate_chain_config,
+            certificate_subject_key_profile,
             chain_template_for_issuer,
+            signature_algorithm_for_issuer,
         )
 
         chain = [leaf]
@@ -2828,6 +2850,11 @@ class ActivityGenerator:
                 selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
                 key_type = str(selected_key.get("type", "rsa"))
                 key_length = int(selected_key.get("length", 2048))
+                key_type, key_length = certificate_subject_key_profile(
+                    subject,
+                    fallback_type=key_type,
+                    fallback_length=key_length,
+                )
                 key_type, key_length = _tls_key_for_certificate_name(subject, key_type, key_length)
                 serial_seed = "|".join(
                     [
@@ -2870,6 +2897,11 @@ class ActivityGenerator:
             key_type = str(profile["certificate_key_type"])
             key_length = int(profile["certificate_key_length"])
             is_ecdsa = key_type == "ecdsa"
+            signature_alg = signature_algorithm_for_issuer(
+                str(profile["certificate_issuer"]),
+                fallback_type=key_type,
+                fallback_length=key_length,
+            )
             chain.append(
                 X509Context(
                     fuid=generate_stable_zeek_uid(
@@ -2884,9 +2916,7 @@ class ActivityGenerator:
                     certificate_not_valid_before=int(profile["certificate_not_valid_before"]),
                     certificate_not_valid_after=int(profile["certificate_not_valid_after"]),
                     certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-                    certificate_sig_alg="ecdsa-with-SHA256"
-                    if is_ecdsa
-                    else "sha256WithRSAEncryption",
+                    certificate_sig_alg=signature_alg,
                     certificate_key_type=key_type,
                     certificate_key_length=key_length,
                     certificate_exponent="65537" if not is_ecdsa else "",
@@ -4564,7 +4594,8 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 
             dll_profiles = get_dlls_for_process(_exe_lower)
-            dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
+            dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
+            dll_path = dll_profile.get("path", "")
             module_delay_ms = rng.randint(120, 1500)
             process_start = running_proc.start_time if running_proc is not None else None
             if dll_path and self._mark_loaded_module(
@@ -4588,7 +4619,12 @@ class ActivityGenerator:
                             logon_id=process_logon_id,
                             start_time=process_start,
                         ),
-                        image_load=ImageLoadContext(image_loaded=dll_path),
+                        image_load=ImageLoadContext(
+                            image_loaded=dll_path,
+                            signed=bool(dll_profile.get("signed", True)),
+                            signature=str(dll_profile.get("signature", "Microsoft Windows")),
+                            signature_status=str(dll_profile.get("signature_status", "Valid")),
+                        ),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                         storyline_origin=from_storyline,
                     )

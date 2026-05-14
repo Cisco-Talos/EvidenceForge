@@ -90,6 +90,59 @@ def certificate_chain_config() -> dict[str, Any]:
     return load_tls_realism().get("certificate_chains", {})
 
 
+def _subject_key_profile(subject_name: str) -> dict[str, Any] | None:
+    """Return the configured CA key profile matching a subject/issuer name."""
+    for profile in certificate_chain_config().get("subject_key_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        patterns = [str(pattern) for pattern in profile.get("subject_patterns", [])]
+        if any(fnmatch.fnmatch(subject_name, pattern) for pattern in patterns):
+            return profile
+    return None
+
+
+def certificate_subject_key_profile(
+    subject_name: str,
+    fallback_type: str = "rsa",
+    fallback_length: int = 2048,
+) -> tuple[str, int]:
+    """Return the configured key profile for a CA subject or issuer name.
+
+    X.509 ``certificate.sig_alg`` describes the issuer's signing key, not the
+    child certificate's own public key. These profiles let chain construction
+    choose that issuer key from source-owned CA metadata instead of inferring it
+    from the child row.
+    """
+    key_type = fallback_type
+    key_length = fallback_length
+    profile = _subject_key_profile(subject_name)
+    if profile is not None:
+        key_type = str(profile.get("key_type", key_type))
+        key_length = int(profile.get("key_length", key_length))
+    return key_type, key_length
+
+
+def signature_algorithm_for_issuer(
+    issuer_name: str,
+    fallback_type: str = "rsa",
+    fallback_length: int = 2048,
+) -> str:
+    """Return a Zeek x509 ``certificate.sig_alg`` value for an issuer key."""
+    profile = _subject_key_profile(issuer_name)
+    if profile is not None:
+        algorithms = [str(algorithm) for algorithm in profile.get("child_signature_algorithms", [])]
+        if algorithms:
+            return algorithms[0]
+    issuer_key_type, _issuer_key_length = certificate_subject_key_profile(
+        issuer_name,
+        fallback_type=fallback_type,
+        fallback_length=fallback_length,
+    )
+    if issuer_key_type == "ecdsa" and _issuer_key_length >= 384:
+        return "ecdsa-with-SHA384"
+    return "ecdsa-with-SHA256" if issuer_key_type == "ecdsa" else "sha256WithRSAEncryption"
+
+
 def certificate_analyzer_delay_ms(
     *,
     zeek_uid: str,
