@@ -233,6 +233,16 @@ def validate_config() -> ValidationResult:
         "activity/endpoint_noise.yaml": {
             "dict_fields": {"windows_scheduled_processes", "registry_noise"},
         },
+        "activity/host_activity_profiles.yaml": {
+            "dict_fields": {
+                "rate_families",
+                "host_types",
+                "role_profiles",
+                "persona_profiles",
+                "artifact_variants",
+                "firewall_deny",
+            },
+        },
         "activity/ids_signatures.yaml": {
             "list_fields": {"signatures": None},
         },
@@ -450,6 +460,9 @@ def validate_config() -> ValidationResult:
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
     from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
+    from evidenceforge.generation.activity.host_activity_profiles import (
+        load_host_activity_profiles,
+    )
     from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
@@ -481,6 +494,7 @@ def validate_config() -> ValidationResult:
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
     endpoint_noise_data = load_endpoint_noise()
+    host_activity_profiles_data = load_host_activity_profiles()
     observation_profiles_data = load_observation_profiles()
     tls_realism_data = load_tls_realism()
     windows_auth_data = load_windows_auth_realism()
@@ -1697,6 +1711,7 @@ def validate_config() -> ValidationResult:
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
         EndpointNoiseConfig,
+        HostActivityProfilesConfig,
         KerberosRealismConfig,
         ObservationProfilesConfig,
         OuiEntry,
@@ -1829,6 +1844,14 @@ def validate_config() -> ValidationResult:
     if observation_profiles_data:
         _SCHEMA_CHECKS.append(
             ([observation_profiles_data], ObservationProfilesConfig, "observation_profiles.yaml")
+        )
+    if host_activity_profiles_data:
+        _SCHEMA_CHECKS.append(
+            (
+                [host_activity_profiles_data],
+                HostActivityProfilesConfig,
+                "host_activity_profiles.yaml",
+            )
         )
 
     # traffic_profiles.yaml: connection entries

@@ -522,6 +522,8 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         """Emit a Deny record (106023)."""
         protocol = (net.protocol or "tcp").lower()
         acl_name = (fw.access_group if fw else "") or "outside_access_in"
+        deny_hash_a = getattr(fw, "deny_hash_a", "0x0") if fw else "0x0"
+        deny_hash_b = getattr(fw, "deny_hash_b", "0x0") if fw else "0x0"
 
         if protocol == "icmp":
             icmp_type = net.dst_port if net.dst_port else 8
@@ -530,13 +532,13 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
                 f"Deny {protocol} src {src_iface}:{net.src_ip} "
                 f"dst {dst_iface}:{net.dst_ip} "
                 f"(type {icmp_type}, code {icmp_code}) "
-                f'by access-group "{acl_name}" [0x0, 0x0]'
+                f'by access-group "{acl_name}" [{deny_hash_a}, {deny_hash_b}]'
             )
         else:
             message = (
                 f"Deny {protocol} src {src_iface}:{net.src_ip}/{net.src_port} "
                 f"dst {dst_iface}:{net.dst_ip}/{net.dst_port} "
-                f'by access-group "{acl_name}" [0x0, 0x0]'
+                f'by access-group "{acl_name}" [{deny_hash_a}, {deny_hash_b}]'
             )
 
         event_data = {

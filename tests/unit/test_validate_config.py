@@ -113,6 +113,34 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_unknown_host_activity_family(self, monkeypatch):
+        from evidenceforge.generation.activity import host_activity_profiles
+
+        real_loader = host_activity_profiles.load_host_activity_profiles
+
+        def load_invalid_host_activity_profiles():
+            data = real_loader()
+            host_types = dict(data["host_types"])
+            workstation = dict(host_types["workstation"])
+            workstation["families"] = {**workstation.get("families", {}), "zeek_magic": 1.5}
+            host_types["workstation"] = workstation
+            return {**data, "host_types": host_types}
+
+        monkeypatch.setattr(
+            host_activity_profiles,
+            "load_host_activity_profiles",
+            load_invalid_host_activity_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "host_activity_profiles.yaml"
+            and "unknown activity families" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_third_party_module_with_microsoft_identity(self, monkeypatch):
         from evidenceforge.generation.activity import application_catalog
 

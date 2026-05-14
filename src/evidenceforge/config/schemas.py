@@ -1413,6 +1413,170 @@ class TrafficRateLevel(BaseModel, extra="forbid"):
         return v
 
 
+# --- Host Activity Profiles ---
+
+
+_HOST_ACTIVITY_RATE_FAMILIES = frozenset(
+    {
+        "user_activity",
+        "web",
+        "dns_interval",
+        "ntp",
+        "smb_interval",
+        "kerberos",
+        "ldap",
+        "persona_connections",
+        "role_network",
+        "inbound_network",
+        "windows_service_process",
+        "windows_registry",
+        "windows_scheduled_task",
+        "windows_remote_thread",
+        "windows_process_access",
+        "windows_module_load",
+        "windows_remote_admin",
+        "windows_service_logon",
+        "windows_machine_auth",
+        "dc_kerberos",
+        "linux_syslog",
+        "linux_remote_admin",
+        "linux_shell",
+        "firewall_deny",
+        "ids_alert",
+        "icmp_monitoring",
+    }
+)
+
+
+class HostActivityRateFamiliesConfig(BaseModel, extra="forbid"):
+    """Rate-family bounds for host_activity_profiles.yaml."""
+
+    default_bounds: list[float]
+    bounds: dict[str, list[float]] = Field(default_factory=dict)
+
+    @field_validator("default_bounds")
+    @classmethod
+    def default_bounds_valid(cls, v: list[float]) -> list[float]:
+        return _validate_positive_pair(v, "default_bounds")
+
+    @field_validator("bounds")
+    @classmethod
+    def bounds_valid(cls, v: dict[str, list[float]]) -> dict[str, list[float]]:
+        unknown = sorted(set(v) - _HOST_ACTIVITY_RATE_FAMILIES)
+        if unknown:
+            raise ValueError(f"unknown rate family bounds: {unknown}")
+        for family, bounds in v.items():
+            _validate_positive_pair(bounds, f"bounds.{family}")
+        return v
+
+
+def _validate_positive_pair(v: list[float], field_name: str) -> list[float]:
+    """Validate a two-value positive numeric range."""
+    if len(v) != 2:
+        raise ValueError(f"{field_name} must be a two-value [min, max] list")
+    if not all(isinstance(item, int | float) and item > 0 for item in v):
+        raise ValueError(f"{field_name} values must be positive numbers")
+    if v[0] > v[1]:
+        raise ValueError(f"{field_name} min must be <= max")
+    return v
+
+
+class HostActivityProfileEntry(BaseModel, extra="forbid"):
+    """Host type, role, or persona multiplier profile."""
+
+    base_multiplier: float = Field(default=1.0, gt=0)
+    variance: list[float] | None = None
+    families: dict[str, float] = Field(default_factory=dict)
+
+    @field_validator("variance")
+    @classmethod
+    def variance_valid(cls, v: list[float] | None) -> list[float] | None:
+        if v is None:
+            return v
+        return _validate_positive_pair(v, "variance")
+
+    @field_validator("families")
+    @classmethod
+    def families_valid(cls, v: dict[str, float]) -> dict[str, float]:
+        unknown = sorted(set(v) - _HOST_ACTIVITY_RATE_FAMILIES)
+        if unknown:
+            raise ValueError(f"unknown activity families: {unknown}")
+        for family, multiplier in v.items():
+            if not isinstance(multiplier, int | float) or multiplier <= 0:
+                raise ValueError(f"family multiplier {family!r} must be positive")
+        return v
+
+
+class PowerShellEncodedVariantsConfig(BaseModel, extra="forbid"):
+    """Data-driven encoded PowerShell command variants."""
+
+    host_preferred_template_count: int = Field(default=3, gt=0)
+    templates: list[str]
+    params: dict[str, list[str]] = Field(default_factory=dict)
+
+    @field_validator("templates")
+    @classmethod
+    def templates_non_empty(cls, v: list[str]) -> list[str]:
+        if not v or any(not template for template in v):
+            raise ValueError("templates must contain non-empty strings")
+        return v
+
+    @field_validator("params")
+    @classmethod
+    def params_non_empty(cls, v: dict[str, list[str]]) -> dict[str, list[str]]:
+        for key, values in v.items():
+            if not key or not values or any(not value for value in values):
+                raise ValueError("params keys and values must be non-empty")
+        return v
+
+
+class HostActivityArtifactVariantsConfig(BaseModel, extra="forbid"):
+    """Artifact variation config for host_activity_profiles.yaml."""
+
+    powershell_encoded: PowerShellEncodedVariantsConfig
+
+
+class HostActivityFirewallDenyConfig(BaseModel, extra="forbid"):
+    """Firewall deny burst and metadata knobs."""
+
+    burst_window_count: list[int]
+    burst_width_seconds: list[int]
+    quiet_probability: float = Field(ge=0.0, le=1.0)
+    metadata_hash_nonzero_probability: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("burst_window_count", "burst_width_seconds")
+    @classmethod
+    def integer_range_valid(cls, v: list[int]) -> list[int]:
+        if len(v) != 2:
+            raise ValueError("must be a two-value [min, max] list")
+        if not all(isinstance(item, int) and item > 0 for item in v):
+            raise ValueError("values must be positive integers")
+        if v[0] > v[1]:
+            raise ValueError("min must be <= max")
+        return v
+
+
+class HostActivityProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for host_activity_profiles.yaml."""
+
+    rate_families: HostActivityRateFamiliesConfig
+    host_types: dict[str, HostActivityProfileEntry]
+    role_profiles: dict[str, HostActivityProfileEntry] = Field(default_factory=dict)
+    persona_profiles: dict[str, HostActivityProfileEntry] = Field(default_factory=dict)
+    artifact_variants: HostActivityArtifactVariantsConfig
+    firewall_deny: HostActivityFirewallDenyConfig
+
+    @field_validator("host_types")
+    @classmethod
+    def required_host_types_present(
+        cls, v: dict[str, HostActivityProfileEntry]
+    ) -> dict[str, HostActivityProfileEntry]:
+        missing = sorted({"workstation", "server", "domain_controller"} - set(v))
+        if missing:
+            raise ValueError(f"missing host type profiles: {missing}")
+        return v
+
+
 # --- Validation helper ---
 
 

@@ -15,9 +15,10 @@ Schema documentation for host-level activity config files. User customizations g
 5. [windows_auth_realism.yaml](#windows_auth_realismyaml)
 6. [auth_noise.yaml](#auth-noise-auth_noiseyaml)
 7. [endpoint_noise.yaml](#endpoint-noise-endpoint_noiseyaml)
-8. [observation_profiles.yaml](#observation-profiles-observation_profilesyaml)
-9. [timing_profiles.yaml](#timing_profilesyaml)
-10. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
+8. [host_activity_profiles.yaml](#host-activity-profiles-host_activity_profilesyaml)
+9. [observation_profiles.yaml](#observation-profiles-observation_profilesyaml)
+10. [timing_profiles.yaml](#timing_profilesyaml)
+11. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -347,6 +348,55 @@ registry_noise:
 `windows_scheduled_processes` replaces hour-end clamping with profile-driven trigger windows, per-host phase offsets, jitter, and skips. Keep `trigger_window_end_seconds` comfortably below 3599 to avoid synthetic `xx:59:59` clusters.
 
 `registry_noise.dhcp_interface_values` reserves DHCP interface registry writes for actual DHCP lease/reconfigure activity. Static infrastructure roles should stay in `suppress_system_types` or `suppress_roles` so they do not repeatedly rewrite DHCP values as ambient registry noise. Run `eforge validate-config` after overlay changes; it rejects inverted ranges, empty value-name lists, and invalid probabilities.
+
+---
+
+## Host Activity Profiles (`host_activity_profiles.yaml`)
+
+Controls coarse host/persona/role volume multipliers for baseline realism. This layer is intentionally rate-family based rather than event-type based: it keeps scenario authors from managing per-emitter matrices while still making domain controllers, servers, workstations, sysadmins, developers, and exposed roles produce distinct volumes.
+
+```yaml
+rate_families:
+  default_bounds: [0.25, 6.0]
+  bounds:
+    windows_machine_auth: [0.5, 8.0]
+    firewall_deny: [0.4, 5.0]
+
+host_types:
+  workstation:
+    base_multiplier: 1.0
+    variance: [0.75, 1.35]
+    families:
+      inbound_network: 0.65
+  server:
+    base_multiplier: 1.8
+    variance: [0.85, 1.45]
+    families:
+      windows_service_process: 1.15
+  domain_controller:
+    base_multiplier: 4.0
+    variance: [0.9, 1.3]
+    families:
+      dc_kerberos: 1.5
+
+role_profiles:
+  web_server:
+    families:
+      inbound_network: 2.0
+      firewall_deny: 1.35
+
+persona_profiles:
+  sysadmin:
+    families:
+      linux_remote_admin: 1.45
+      windows_remote_admin: 1.35
+```
+
+Resolved multipliers apply after global intensity defaults and scenario `baseline_activity.traffic_rates` overrides. Use `traffic_rates.yaml` for global low/medium/high defaults; use `host_activity_profiles.yaml` when the rate should differ by host type, role, persona, or deterministic per-host variance.
+
+Valid rate families are: `user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`, `role_network`, `inbound_network`, `windows_service_process`, `windows_registry`, `windows_scheduled_task`, `windows_remote_thread`, `windows_process_access`, `windows_module_load`, `windows_remote_admin`, `windows_service_logon`, `windows_machine_auth`, `dc_kerberos`, `linux_syslog`, `linux_remote_admin`, `linux_shell`, `firewall_deny`, `ids_alert`, and `icmp_monitoring`.
+
+`artifact_variants.powershell_encoded` provides data-driven benign encoded PowerShell payload templates and parameter pools. `firewall_deny` controls ASA deny burst windows, quiet periods, and mostly-zero metadata hash frequency. Run `eforge validate-config` after overlay changes; it rejects unknown rate-family names, missing core host types, inverted ranges, invalid probabilities, and empty artifact pools.
 
 ---
 

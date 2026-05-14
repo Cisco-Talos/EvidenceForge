@@ -49,6 +49,14 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone rate table |
 | **depended on by** | Engine (runtime) | Drives all baseline traffic rate calculations (user activity, web top-level actions, DNS, SMB, Kerberos, LDAP, persona connections) |
 
+### host_activity_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | scenario host metadata | Uses system type, roles, assigned users, primary systems, and user personas to resolve coarse activity multipliers |
+| depends on | `traffic_rates.yaml` | Multiplies resolved baseline rates after global intensity and scenario `baseline_activity.traffic_rates` overrides are applied |
+| **depended on by** | Engine (runtime) | Shapes host/persona/role baseline volume, endpoint noise, Linux/syslog shell activity, firewall deny bursts, IDS/ICMP rates, and encoded PowerShell artifact variation |
+| validated by | `eforge validate-config` | Enforces known rate-family names, ordered positive bounds, core host types, firewall deny burst settings, and artifact variant pools |
+
 ### web_session_profiles.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

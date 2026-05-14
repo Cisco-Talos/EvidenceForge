@@ -875,7 +875,9 @@ class TestBaselineRegistryRealism:
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
-        assert "_reg_count = rng.randint(18, 42)" in source
+        assert (
+            '_reg_count = self._scaled_randint(rng, system, "windows_registry", 18, 42)' in source
+        )
         assert "Office\\\\16.0\\\\Word\\\\Reading Locations\\\\Document 1" in source
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source

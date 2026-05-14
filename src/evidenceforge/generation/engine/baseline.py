@@ -54,6 +54,13 @@ from evidenceforge.generation.activity.generator import (
     _windows_foreground_lifetime,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.generation.activity.host_activity_profiles import (
+    firewall_deny_hash_values,
+    pick_firewall_deny_offset,
+    resolve_host_activity_profile,
+    scale_count_range,
+    scale_interval_range,
+)
 from evidenceforge.generation.activity.ids_signatures import (
     load_ids_signatures,
     render_dns_query_template,
@@ -525,6 +532,7 @@ def _windows_scheduled_task_offsets(
     current_hour: datetime,
     system: Any,
     rng: random.Random,
+    count_multiplier: float = 1.0,
 ) -> list[float]:
     """Return config-driven Windows scheduled/background task offsets for this hour."""
     from evidenceforge.generation.activity.endpoint_noise import windows_scheduled_process_config
@@ -532,6 +540,7 @@ def _windows_scheduled_task_offsets(
     cfg = windows_scheduled_process_config()
     count_min = max(0, int(cfg.get("count_min", 2)))
     count_max = max(count_min, int(cfg.get("count_max", 5)))
+    count_min, count_max = scale_count_range(count_min, count_max, count_multiplier)
     start = max(0, min(3599, int(cfg.get("trigger_window_start_seconds", 90))))
     end = max(start + 1, min(3599, int(cfg.get("trigger_window_end_seconds", 3510))))
     spacing = max(1, int(cfg.get("slot_spacing_seconds", 300)))
@@ -725,6 +734,92 @@ class BaselineMixin:
         defaults = get_rates_for_intensity(intensity)
         rate = defaults[traffic_type]
         return (rate[0], rate[1])
+
+    def _activity_roles_for_system(self, system: Any) -> list[str]:
+        """Return canonical roles for host activity profile resolution."""
+        if hasattr(self, "world_model") and system.hostname in self.world_model.hosts:
+            roles = list(self.world_model.hosts[system.hostname].canonical_roles)
+        else:
+            roles = [r.lower() for r in (getattr(system, "roles", None) or [])]
+        host_type = (getattr(system, "type", None) or "workstation").lower()
+        if host_type == "domain_controller" and "domain_controller" not in roles:
+            roles.append("domain_controller")
+        return roles
+
+    def _resolve_activity_profile(self, system: Any, persona: str | None = None) -> Any:
+        """Resolve and cache host activity profile multipliers."""
+        cache = getattr(self, "_host_activity_profile_cache", None)
+        if cache is None:
+            cache = {}
+            self._host_activity_profile_cache = cache
+        key = (getattr(system, "hostname", ""), persona or "")
+        if key not in cache:
+            cache[key] = resolve_host_activity_profile(
+                scenario_name=getattr(self.scenario, "name", "scenario"),
+                system=system,
+                roles=self._activity_roles_for_system(system),
+                persona=persona,
+            )
+        return cache[key]
+
+    def _activity_multiplier(
+        self,
+        system: Any | None,
+        family: str,
+        persona: str | None = None,
+    ) -> float:
+        """Return host/persona multiplier for a broad activity family."""
+        if system is None:
+            return 1.0
+        return self._resolve_activity_profile(system, persona).multiplier(family)
+
+    def _scaled_count_range(
+        self,
+        system: Any | None,
+        family: str,
+        lo: int,
+        hi: int,
+        *,
+        persona: str | None = None,
+    ) -> tuple[int, int]:
+        """Scale a count range for the host activity profile."""
+        return scale_count_range(lo, hi, self._activity_multiplier(system, family, persona))
+
+    def _scaled_randint(
+        self,
+        rng: random.Random,
+        system: Any | None,
+        family: str,
+        lo: int,
+        hi: int,
+        *,
+        persona: str | None = None,
+    ) -> int:
+        """Draw from a count range after applying host activity profile scaling."""
+        scaled_lo, scaled_hi = self._scaled_count_range(system, family, lo, hi, persona=persona)
+        return rng.randint(scaled_lo, scaled_hi)
+
+    def _scaled_interval_range(
+        self,
+        system: Any | None,
+        family: str,
+        lo: int,
+        hi: int,
+    ) -> tuple[int, int]:
+        """Scale a seconds-between-events range for a host activity profile."""
+        return scale_interval_range(lo, hi, self._activity_multiplier(system, family))
+
+    def _activity_system_for_user(self, user: User) -> Any | None:
+        """Return the primary host whose profile should shape user activity."""
+        systems = self.scenario.environment.systems
+        if user.primary_system:
+            primary = next((s for s in systems if s.hostname == user.primary_system), None)
+            if primary is not None:
+                return primary
+        assigned = next((s for s in systems if s.assigned_user == user.username), None)
+        if assigned is not None:
+            return assigned
+        return systems[0] if systems else None
 
     def _emit_dhcp_registry_side_effect(
         self,
@@ -2234,8 +2329,25 @@ class BaselineMixin:
                 offset = rng.randint(1, cidr.num_addresses - 2)
                 return str(cidr.network_address + offset)
 
-            # Estimate allow traffic: ~10-20 connections per internal system per hour
-            estimated_allows = len(internal_ips) * rng.randint(10, 20)
+            sensor_systems = []
+            for candidate in self.scenario.environment.systems:
+                try:
+                    candidate_ip = ipaddress.ip_address(candidate.ip)
+                except ValueError:
+                    continue
+                if any(
+                    seg_name in sensor.monitoring_segments and candidate_ip in cidr
+                    for seg_name, cidr in segment_cidrs.items()
+                ):
+                    sensor_systems.append(candidate)
+            sensor_systems = sensor_systems or self.scenario.environment.systems
+            avg_multiplier = sum(
+                self._activity_multiplier(system, "firewall_deny") for system in sensor_systems
+            ) / max(1, len(sensor_systems))
+
+            # Estimate allow traffic: ~10-20 connections per internal system per hour.
+            allows_lo, allows_hi = scale_count_range(10, 20, avg_multiplier)
+            estimated_allows = len(internal_ips) * rng.randint(allows_lo, allows_hi)
             deny_count = int(estimated_allows * sensor.deny_ratio)
             if deny_count <= 0:
                 continue
@@ -2319,13 +2431,22 @@ class BaselineMixin:
                 ):
                     continue
 
-                offset_sec = rng.uniform(0, 3600)
+                offset_sec = pick_firewall_deny_offset(
+                    rng=rng,
+                    sensor_name=sensor.hostname or sensor.name,
+                    current_hour_epoch=int(current_hour.timestamp()),
+                    generated_index=generated,
+                    multiplier=avg_multiplier,
+                )
+                if offset_sec is None:
+                    continue
                 ts = current_hour + timedelta(seconds=offset_sec)
                 self.state_manager.set_current_time(ts)
 
                 src_iface = _resolve_iface(src_ip)
                 dst_iface = _resolve_iface(dst_ip)
                 acl_name = f"{src_iface}_access_in"
+                deny_hash_a, deny_hash_b = firewall_deny_hash_values(rng)
 
                 fw_ctx = FirewallContext(
                     action="deny",
@@ -2334,6 +2455,8 @@ class BaselineMixin:
                     src_interface=src_iface,
                     dst_interface=dst_iface,
                     access_group=acl_name,
+                    deny_hash_a=deny_hash_a,
+                    deny_hash_b=deny_hash_b,
                 )
 
                 self.activity_generator.generate_connection(
@@ -2543,6 +2666,13 @@ class BaselineMixin:
         """Calculate number of events for user this hour."""
         lo, hi = self._resolve_traffic_rate("user_activity")
         base_events = lo if lo == hi else _get_rng().randint(lo, hi)
+        activity_system = self._activity_system_for_user(user)
+        base_events = int(
+            round(
+                base_events
+                * self._activity_multiplier(activity_system, "user_activity", user.persona)
+            )
+        )
 
         if persona and persona.risk_profile:
             risk_mult = {"low": 0.7, "medium": 1.0, "high": 1.3}
@@ -3365,7 +3495,10 @@ class BaselineMixin:
         if role_conns:
             weights = [c.get("weight", 1) for c in role_conns]
             # Scale connection count by time-of-day (fewer at night)
-            base_count = rng.randint(8, 20) if is_business else rng.randint(2, 6)
+            if is_business:
+                base_count = self._scaled_randint(rng, system, "role_network", 8, 20)
+            else:
+                base_count = self._scaled_randint(rng, system, "role_network", 2, 6)
 
             for _ in range(base_count):
                 conn = rng.choices(role_conns, weights=weights, k=1)[0]
@@ -3492,7 +3625,10 @@ class BaselineMixin:
                 from evidenceforge.events.contexts import FirewallContext as _InboundFwCtx
 
                 inbound_weights = [c.get("weight", 1) for c in inbound_conns]
-                num_inbound = rng.randint(4, 15) if is_business else rng.randint(1, 4)
+                if is_business:
+                    num_inbound = self._scaled_randint(rng, system, "inbound_network", 4, 15)
+                else:
+                    num_inbound = self._scaled_randint(rng, system, "inbound_network", 1, 4)
                 for _ in range(num_inbound):
                     conn = rng.choices(inbound_conns, weights=inbound_weights, k=1)[0]
                     is_external_src = conn["role"] == "_external"
@@ -3566,6 +3702,7 @@ class BaselineMixin:
                         dst_hostname = self.world_model.fqdn_for_system(system)
 
                     if fw_denied and denying_sensor:
+                        deny_hash_a, deny_hash_b = firewall_deny_hash_values(rng)
                         # Emit as a deny record from the actual in-path firewall
                         deny_state = "REJ" if denying_sensor.drop_mode == "reject" else "S0"
                         self.activity_generator.generate_connection(
@@ -3583,6 +3720,8 @@ class BaselineMixin:
                                 src_interface=_fw_iface_for(src_ip, denying_sensor),
                                 dst_interface=_fw_iface_for(system.ip, denying_sensor),
                                 access_group=f"{_fw_iface_for(src_ip, denying_sensor)}_access_in",
+                                deny_hash_a=deny_hash_a,
+                                deny_hash_b=deny_hash_b,
                             ),
                             emit_dns=False,
                         )
@@ -3655,6 +3794,13 @@ class BaselineMixin:
             p_weights = [c.get("weight", 1) for c in persona_conns]
             # Fewer persona connections than role connections; scaled by intensity
             _pc_lo, _pc_hi = self._resolve_traffic_rate("persona_connections")
+            _pc_lo, _pc_hi = self._scaled_count_range(
+                system,
+                "persona_connections",
+                _pc_lo,
+                _pc_hi,
+                persona=persona,
+            )
             num_persona = rng.randint(_pc_lo, _pc_hi) if is_business else 0
             # Clamp timestamps to session lifetime within this hour
             session_start_sec = max(0.0, (session.start_time - current_hour).total_seconds())
@@ -3948,6 +4094,9 @@ class BaselineMixin:
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
                 _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
+                _dns_lo, _dns_hi = self._scaled_interval_range(
+                    system, "dns_interval", _dns_lo, _dns_hi
+                )
                 _dns_range = max(1, _dns_hi - _dns_lo)
                 dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
                 dns_phase = _stable_seed(f"dns_ph_{system.hostname}") % dns_interval
@@ -4064,6 +4213,9 @@ class BaselineMixin:
                 smb_targets, fs_targets = self._build_smb_targets(system, dc_ips)
                 if smb_targets:
                     _smb_lo, _smb_hi = self._resolve_traffic_rate("smb_interval")
+                    _smb_lo, _smb_hi = self._scaled_interval_range(
+                        system, "smb_interval", _smb_lo, _smb_hi
+                    )
                     _smb_range = max(1, _smb_hi - _smb_lo)
                     smb_interval = _smb_lo + (
                         _stable_seed(f"smb_iv_{system.hostname}") % _smb_range
@@ -4143,6 +4295,7 @@ class BaselineMixin:
             # Kerberos
             if "kerberos-client" in services and os_cat == "windows" and dc_targets:
                 _krb_lo, _krb_hi = self._resolve_traffic_rate("kerberos")
+                _krb_lo, _krb_hi = self._scaled_count_range(system, "kerberos", _krb_lo, _krb_hi)
                 num_krb = rng.randint(_krb_lo, _krb_hi)
                 base_interval = 3600 / (num_krb + 1)
                 for i in range(num_krb):
@@ -4168,6 +4321,7 @@ class BaselineMixin:
             # LDAP
             if "ldap-client" in services and os_cat == "windows" and dc_targets:
                 _ldap_lo, _ldap_hi = self._resolve_traffic_rate("ldap")
+                _ldap_lo, _ldap_hi = self._scaled_count_range(system, "ldap", _ldap_lo, _ldap_hi)
                 num_ldap = rng.randint(_ldap_lo, _ldap_hi)
                 base_interval = 3600 / (num_ldap + 1)
                 for i in range(num_ldap):
@@ -4210,7 +4364,7 @@ class BaselineMixin:
                 )
 
                 sys_type_str = (system.type or "workstation").lower()
-                num_svc = rng.randint(3, 8)
+                num_svc = self._scaled_randint(rng, system, "windows_service_process", 3, 8)
                 for _si in range(num_svc):
                     svc_offset = rng.uniform(0, 3599)
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
@@ -4247,7 +4401,7 @@ class BaselineMixin:
 
                 _REG_KEYS_HKCU = get_registry_keys_hkcu()
                 _REG_KEYS_HKLM = get_registry_keys_hklm()
-                _reg_count = rng.randint(18, 42)
+                _reg_count = self._scaled_randint(rng, system, "windows_registry", 18, 42)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
                 _registry_cfg = registry_noise_config()
@@ -4388,7 +4542,15 @@ class BaselineMixin:
                     pick_scheduled_task,
                 )
 
-                for offset in _windows_scheduled_task_offsets(current_hour, system, rng):
+                for offset in _windows_scheduled_task_offsets(
+                    current_hour,
+                    system,
+                    rng,
+                    count_multiplier=self._activity_multiplier(
+                        system,
+                        "windows_scheduled_task",
+                    ),
+                ):
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
@@ -4474,7 +4636,8 @@ class BaselineMixin:
                 noise_cfg = load_create_remote_thread_noise_config()
                 probability = float(noise_cfg.get("probability_per_host_hour", 0.08))
                 max_events = int(noise_cfg.get("max_events_per_hour", 1))
-                if valid_crt and max_events > 0 and rng.random() < probability:
+                probability *= self._activity_multiplier(system, "windows_remote_thread")
+                if valid_crt and max_events > 0 and rng.random() < min(0.95, probability):
                     num_crt = rng.randint(1, max_events)
                     for _ in range(num_crt):
                         pattern = pick_create_remote_thread_pattern(valid_crt, rng)
@@ -4507,7 +4670,7 @@ class BaselineMixin:
                     if p.get("source_pid_key") in sys_pids and p.get("target_pid_key") in sys_pids
                 ]
                 if valid_pa:
-                    num_pa = rng.randint(3, 8)
+                    num_pa = self._scaled_randint(rng, system, "windows_process_access", 3, 8)
                     for _ in range(num_pa):
                         pattern = rng.choice(valid_pa)
                         src_key = pattern["source_pid_key"]
@@ -4546,7 +4709,7 @@ class BaselineMixin:
                 running = self.state_manager.get_processes_on_system(system.hostname)
                 if running:
                     generic_dll_pool = get_dll_pool()
-                    num_dll = rng.randint(20, 45)
+                    num_dll = self._scaled_randint(rng, system, "windows_module_load", 20, 45)
                     for _ in range(num_dll):
                         offset = rng.uniform(0, 3599)
                         ts = current_hour + timedelta(seconds=offset)
@@ -4607,7 +4770,7 @@ class BaselineMixin:
                         pick_bash_command_entry,
                     )
 
-                    num_ssh = rng.randint(1, 3)
+                    num_ssh = self._scaled_randint(rng, system, "linux_remote_admin", 1, 3)
                     for _ in range(num_ssh):
                         ssh_user = rng.choice(roster)
                         offset = rng.uniform(0, 3599)
@@ -4624,11 +4787,32 @@ class BaselineMixin:
 
                         persona_lower = (ssh_user.persona or "").lower()
                         if persona_lower == "sysadmin":
-                            n_cmds = rng.randint(3, 8)
+                            n_cmds = self._scaled_randint(
+                                rng,
+                                system,
+                                "linux_shell",
+                                3,
+                                8,
+                                persona=ssh_user.persona,
+                            )
                         elif persona_lower == "developer":
-                            n_cmds = rng.randint(2, 6)
+                            n_cmds = self._scaled_randint(
+                                rng,
+                                system,
+                                "linux_shell",
+                                2,
+                                6,
+                                persona=ssh_user.persona,
+                            )
                         else:
-                            n_cmds = rng.randint(1, 4)
+                            n_cmds = self._scaled_randint(
+                                rng,
+                                system,
+                                "linux_shell",
+                                1,
+                                4,
+                                persona=ssh_user.persona,
+                            )
                         hour_end = current_hour + timedelta(hours=1)
                         cumulative_gap = 0
                         _SLOW_CMD_KEYWORDS = frozenset(
@@ -4701,7 +4885,14 @@ class BaselineMixin:
                         pick_bash_command_entry,
                     )
 
-                    n_cmds = rng.randint(1, 4)
+                    n_cmds = self._scaled_randint(
+                        rng,
+                        system,
+                        "linux_shell",
+                        1,
+                        4,
+                        persona=ws_user.persona,
+                    )
                     ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     hour_end = current_hour + timedelta(hours=1)
                     cumulative = 0
@@ -4735,8 +4926,9 @@ class BaselineMixin:
             if os_cat_rdp != "windows" or sys_type_rdp not in ("server", "domain_controller"):
                 continue
 
-            # 1-3 RDP admin sessions per hour to servers, ~60% probability
-            if rng.random() > 0.60:
+            # 1-3 RDP admin sessions per hour to servers, shaped by host role/profile.
+            rdp_multiplier = self._activity_multiplier(system, "windows_remote_admin")
+            if rng.random() > min(0.95, 0.60 * rdp_multiplier):
                 continue
 
             if not any(
@@ -4745,7 +4937,7 @@ class BaselineMixin:
             ):
                 continue
 
-            num_rdp = rng.randint(1, 3)
+            num_rdp = self._scaled_randint(rng, system, "windows_remote_admin", 1, 3)
             roster = self._get_server_ssh_users(system)
             if not roster:
                 continue
@@ -4773,7 +4965,10 @@ class BaselineMixin:
                 continue
 
             sys_type_svc = (system.type or "workstation").lower()
-            num_svc = rng.randint(2, 5) if sys_type_svc != "workstation" else rng.randint(1, 2)
+            if sys_type_svc != "workstation":
+                num_svc = self._scaled_randint(rng, system, "windows_service_logon", 2, 5)
+            else:
+                num_svc = self._scaled_randint(rng, system, "windows_service_logon", 1, 2)
             for _ in range(num_svc):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
@@ -4786,7 +4981,7 @@ class BaselineMixin:
                 )
 
             if sys_type_svc in ("server", "domain_controller"):
-                num_anon = rng.randint(1, 3)
+                num_anon = self._scaled_randint(rng, system, "windows_service_logon", 1, 3)
                 for _ in range(num_anon):
                     offset = rng.uniform(0, 3599)
                     ts = current_hour + timedelta(seconds=offset)
@@ -4807,7 +5002,7 @@ class BaselineMixin:
                 if os_cat != "windows" or system.ip in dc_ips:
                     continue
 
-                num_auth = rng.randint(2, 6)
+                num_auth = self._scaled_randint(rng, system, "windows_machine_auth", 2, 6)
                 base_interval = 3600 / (num_auth + 1)
                 for i in range(num_auth):
                     offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.1)
@@ -4832,8 +5027,12 @@ class BaselineMixin:
                 if _get_os_category(s.os) == "windows" and s.ip not in dc_ips
             ]
             for _dc_idx, dc_hostname in enumerate(dc_hostnames):
+                dc_system = next(
+                    (s for s in self.scenario.environment.systems if s.hostname == dc_hostname),
+                    None,
+                )
                 for client in windows_clients:
-                    num_cycles = rng.randint(3, 8)
+                    num_cycles = self._scaled_randint(rng, dc_system, "dc_kerberos", 3, 8)
                     base_interval = 3600 / (num_cycles + 1)
                     for i in range(num_cycles):
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
@@ -4848,7 +5047,16 @@ class BaselineMixin:
                             dc_hostname=dc_hostname,
                             time=ts,
                         )
-                        num_tgs = 0 if rng.random() < 0.22 else rng.randint(1, 5)
+                        if rng.random() < 0.22:
+                            num_tgs = 0
+                        else:
+                            num_tgs = self._scaled_randint(
+                                rng,
+                                dc_system,
+                                "dc_kerberos",
+                                1,
+                                5,
+                            )
                         member_servers = [
                             s.hostname
                             for s in self.scenario.environment.systems
@@ -4935,7 +5143,10 @@ class BaselineMixin:
                 or "web" in system.hostname.lower()
             )
             has_ntp_client = "ntp-client" in self._system_service_defaults.get(system.hostname, [])
-            num_events = rng.randint(100, 300) if is_dmz else rng.randint(50, 120)
+            if is_dmz:
+                num_events = self._scaled_randint(rng, system, "linux_syslog", 100, 300)
+            else:
+                num_events = self._scaled_randint(rng, system, "linux_syslog", 50, 120)
 
             scenario_start = self.scenario.time_window.start
             boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
@@ -5332,7 +5543,11 @@ class BaselineMixin:
         # ICMP ping between systems on same subnet
         systems = self.scenario.environment.systems
         if len(systems) >= 2:
-            num_pings = rng.randint(1, 3)
+            avg_multiplier = sum(
+                self._activity_multiplier(system, "icmp_monitoring") for system in systems
+            ) / len(systems)
+            ping_lo, ping_hi = scale_count_range(1, 3, avg_multiplier)
+            num_pings = rng.randint(ping_lo, ping_hi)
             base_interval = 3600 / (num_pings + 1)
             for i in range(num_pings):
                 src_sys = rng.choice(systems)
@@ -5388,7 +5603,11 @@ class BaselineMixin:
                     monitored_systems.extend(segment_systems.get(seg_name, []))
                 if not monitored_systems:
                     continue
-                num_alerts = rng.randint(5, 15)
+                avg_multiplier = sum(
+                    self._activity_multiplier(system, "ids_alert") for system in monitored_systems
+                ) / len(monitored_systems)
+                alerts_lo, alerts_hi = scale_count_range(5, 15, avg_multiplier)
+                num_alerts = rng.randint(alerts_lo, alerts_hi)
                 # For IDS sensors (typically perimeter), generate alerts with
                 # external source IPs targeting monitored systems.
                 _EXTERNAL_SCAN_IPS = getattr(
@@ -5535,6 +5754,17 @@ class BaselineMixin:
         )
 
         web_lo, web_hi = self._resolve_traffic_rate("web")
+        scale_method = getattr(self, "_scaled_count_range", None)
+        if callable(scale_method):
+            scaled_range: tuple[int, int] | None = None
+            try:
+                candidate = scale_method(sys_obj, "web", web_lo, web_hi)
+            except (AttributeError, TypeError, ValueError):
+                candidate = None
+            if isinstance(candidate, (tuple, list)) and len(candidate) == 2:
+                scaled_range = (int(candidate[0]), int(candidate[1]))
+            if scaled_range is not None:
+                web_lo, web_hi = scaled_range
         top_level_budget = rng.randint(web_lo, web_hi)
         if top_level_budget <= 0:
             return

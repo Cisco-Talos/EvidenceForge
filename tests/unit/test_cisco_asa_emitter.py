@@ -467,6 +467,8 @@ class TestDenyRecords:
                 src_interface="outside",
                 dst_interface="inside",
                 access_group="outside_access_in",
+                deny_hash_a="0x2a1b",
+                deny_hash_b="0x031f",
             ),
         )
         asa_emitter.emit(event)
@@ -479,6 +481,7 @@ class TestDenyRecords:
         assert "Deny tcp src outside:198.51.100.1/54321" in lines[0]
         assert "dst inside:10.0.10.50/445" in lines[0]
         assert 'by access-group "outside_access_in"' in lines[0]
+        assert "[0x2a1b, 0x031f]" in lines[0]
 
     def test_icmp_deny_includes_type_code(self, asa_emitter, tmp_path):
         """ICMP deny should include (type N, code N) in the message."""
