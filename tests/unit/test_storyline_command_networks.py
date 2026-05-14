@@ -7,6 +7,10 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.models.scenario import System, User
 
@@ -168,10 +172,10 @@ class TestStorylineScpCorrelation:
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
         engine.dispatcher = SimpleNamespace(visibility_engine=None)
-        receiver_ports: list[int] = []
+        receiver_kwargs: list[dict[str, Any]] = []
 
         def capture_receiver_artifacts(**kwargs) -> None:
-            receiver_ports.append(kwargs["source_port"])
+            receiver_kwargs.append(kwargs)
 
         engine._emit_scp_receiver_artifacts = capture_receiver_artifacts
         spec = SimpleNamespace(
@@ -191,7 +195,34 @@ class TestStorylineScpCorrelation:
 
         assert engine.activity_generator.reserved_ports == [45678]
         assert engine.activity_generator.connections[0]["src_port"] == 45678
-        assert receiver_ports == [45678]
+        assert [kwargs["source_port"] for kwargs in receiver_kwargs] == [45678]
+
+        receiver = receiver_kwargs[0]
+        transfer_time = receiver["transfer_time"]
+        zeek_start_time = transfer_time + sample_timing_delta(
+            "source.zeek_conn_start",
+            seed_parts=(
+                source.ip,
+                45678,
+                target.ip,
+                22,
+                "tcp",
+                "ssh",
+                transfer_time,
+            ),
+        )
+        expected_connection_log_time = zeek_start_time + sample_packet_timing_delta(
+            "source.sshd_connection_after_zeek",
+            seed_parts=(
+                target.hostname,
+                source.ip,
+                45678,
+                "root",
+                transfer_time.isoformat(),
+            ),
+        )
+        assert receiver["connection_log_time"] == expected_connection_log_time
+        assert receiver["connection_log_time"] > zeek_start_time
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(

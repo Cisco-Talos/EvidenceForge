@@ -6848,10 +6848,28 @@ class ActivityGenerator:
             rng,
             _src_os,
         )
-        duration = rng.uniform(30.0, 3600.0)
+        auth_time = time
+        ssh_timing_seed = (
+            target_system.hostname,
+            source_ip,
+            src_port,
+            user.username,
+            auth_time.isoformat(),
+        )
+        connection_delta = sample_packet_timing_delta(
+            "source.sshd_connection_before_auth",
+            seed_parts=ssh_timing_seed,
+        )
+        connection_log_time = auth_time - connection_delta
+        network_start_time = connection_log_time - sample_packet_timing_delta(
+            "source.sshd_connection_after_zeek",
+            seed_parts=ssh_timing_seed,
+        )
+        auth_to_close_duration = rng.uniform(30.0, 3600.0)
         if min_duration is not None:
-            duration = max(duration, min_duration)
-        close_time = time + timedelta(seconds=duration)
+            auth_to_close_duration = max(auth_to_close_duration, min_duration)
+        close_time = auth_time + timedelta(seconds=auth_to_close_duration)
+        duration = max(0.001, (close_time - network_start_time).total_seconds())
         orig_bytes = rng.randint(2000, 50000)
         resp_bytes = rng.randint(5000, 200000)
         visibility = self._network_visibility or (
@@ -6946,6 +6964,7 @@ class ActivityGenerator:
                 dst_port=22,
                 protocol="tcp",
                 service="ssh",
+                start_time=network_start_time,
                 zeek_uid=uid,
                 conn_id=conn_id,
                 duration=duration,
@@ -6970,21 +6989,9 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            ssh_timing_seed = (
-                target_system.hostname,
-                source_ip,
-                src_port,
-                user.username,
-                time.isoformat(),
-            )
-            connection_delta = sample_packet_timing_delta(
-                "source.sshd_connection_before_auth",
-                seed_parts=ssh_timing_seed,
-            )
-
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
-                timestamp=time - connection_delta,
+                timestamp=connection_log_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -7017,13 +7024,6 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            ssh_timing_seed = (
-                target_system.hostname,
-                source_ip,
-                src_port,
-                user.username,
-                time.isoformat(),
-            )
             pam_delta = sample_packet_timing_delta(
                 "source.sshd_pam_after_auth",
                 seed_parts=ssh_timing_seed,

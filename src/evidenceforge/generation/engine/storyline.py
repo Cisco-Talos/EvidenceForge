@@ -51,6 +51,10 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_status,
 )
 from evidenceforge.generation.activity.network import _is_private_ip
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 from evidenceforge.utils.time import parse_duration, parse_iso8601
@@ -1496,6 +1500,29 @@ class StorylineMixin:
                         and _get_os_category(target_system.os) == "linux"
                         and scp_destination is not None
                     ):
+                        target_user = scp_destination[2] or actor.username
+                        zeek_start_time = transfer_time + sample_timing_delta(
+                            "source.zeek_conn_start",
+                            seed_parts=(
+                                system.ip,
+                                source_port,
+                                dst_ip,
+                                22,
+                                "tcp",
+                                "ssh",
+                                transfer_time,
+                            ),
+                        )
+                        connection_log_time = zeek_start_time + sample_packet_timing_delta(
+                            "source.sshd_connection_after_zeek",
+                            seed_parts=(
+                                target_system.hostname,
+                                system.ip,
+                                source_port,
+                                target_user,
+                                transfer_time.isoformat(),
+                            ),
+                        )
                         self._emit_scp_receiver_artifacts(
                             source_system=system,
                             target_system=target_system,
@@ -1503,9 +1530,10 @@ class StorylineMixin:
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
-                            target_user=scp_destination[2] or actor.username,
+                            target_user=target_user,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
+                            connection_log_time=connection_log_time,
                             source_port=source_port,
                             rng=rng,
                         )
@@ -3390,6 +3418,7 @@ class StorylineMixin:
         target_user: str,
         target_path: str,
         transfer_time: datetime,
+        connection_log_time: datetime,
         source_port: int,
         rng: random.Random,
     ) -> None:
@@ -3402,7 +3431,7 @@ class StorylineMixin:
             ProcessContext,
         )
 
-        self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
+        self.state_manager.set_current_time(connection_log_time + timedelta(milliseconds=40))
         parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
         sshd_pid = self.state_manager.create_process(
             system=target_system.hostname,
@@ -3415,7 +3444,7 @@ class StorylineMixin:
         sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=80),
+            time=connection_log_time,
             app_name="sshd",
             message=(
                 f"Connection from {source_system.ip} port {source_port} "
@@ -3426,15 +3455,16 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=350),
+            time=connection_log_time + timedelta(milliseconds=270),
             app_name="sshd",
             message=f"Accepted publickey for {target_user} from {source_system.ip} port {source_port} ssh2",
             pid=sshd_pid,
             facility=10,
         )
+        session_open_time = connection_log_time + timedelta(milliseconds=820)
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=900),
+            time=session_open_time,
             app_name="sshd",
             message=(
                 f"pam_unix(sshd:session): session opened for user "
@@ -3445,6 +3475,10 @@ class StorylineMixin:
         )
 
         host_ctx = self.activity_generator._build_host_context(target_system)
+        file_create_time = max(
+            transfer_time + timedelta(seconds=rng.uniform(1.2, 3.0)),
+            session_open_time + timedelta(milliseconds=rng.randint(100, 600)),
+        )
         target_proc = ProcessContext(
             pid=sshd_pid,
             parent_pid=parent_pid if parent_pid > 0 else 0,
@@ -3454,7 +3488,7 @@ class StorylineMixin:
         )
         self.dispatcher.dispatch(
             SecurityEvent(
-                timestamp=transfer_time + timedelta(seconds=rng.uniform(1.2, 3.0)),
+                timestamp=file_create_time,
                 event_type="file_create",
                 src_host=host_ctx,
                 auth=AuthContext(username=target_user),

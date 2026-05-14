@@ -343,6 +343,11 @@ relationships:
     position: before
     min_ms: 120
     max_ms: 950
+  source.sshd_connection_after_zeek:
+    class: source_latency
+    position: after
+    min_ms: 3
+    max_ms: 85
   source.sshd_pam_after_auth:
     class: source_latency
     position: after

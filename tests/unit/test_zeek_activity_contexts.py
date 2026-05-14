@@ -482,6 +482,16 @@ class TestSslContextPopulation:
         assert times[1] - times[0] != timedelta(seconds=1)
         assert times[2] - times[1] != timedelta(seconds=1)
         assert len({event_time.microsecond for event_time in times}) > 1
+        ssh_event = next(
+            event
+            for event in events
+            if event.network is not None and event.network.service == "ssh"
+        )
+        assert ssh_event.network.start_time is not None
+        assert ssh_event.network.start_time < times[0]
+        assert (
+            ssh_event.network.duration > (times[1] - ssh_event.network.start_time).total_seconds()
+        )
 
         logind_event = next(
             event for event in events if event.syslog and event.syslog.app_name == "systemd-logind"
@@ -613,7 +623,8 @@ class TestSslContextPopulation:
         )
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        assert session.network_close_time == base_time + timedelta(
+        assert ssh_event.network.start_time is not None
+        assert session.network_close_time == ssh_event.network.start_time + timedelta(
             seconds=ssh_event.network.duration
         )
 
@@ -656,7 +667,8 @@ class TestSslContextPopulation:
         )
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        assert session.network_close_time == base_time + timedelta(
+        assert ssh_event.network.start_time is not None
+        assert session.network_close_time == ssh_event.network.start_time + timedelta(
             seconds=ssh_event.network.duration
         )
 

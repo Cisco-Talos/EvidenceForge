@@ -2315,6 +2315,45 @@ class TestZeekEmitter:
         conn = json.loads(temp_output.read_text().strip())
         assert conn["service"] == expected
 
+    def test_emit_connection_uses_network_start_time_when_present(self, format_def, temp_output):
+        """Zeek conn.ts can be the transport start even when host auth is later."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, 500000, tzinfo=UTC)
+        network_start = event_time - timedelta(milliseconds=420)
+
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="ssh_session",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51111,
+                dst_ip="10.0.20.10",
+                dst_port=22,
+                protocol="tcp",
+                service="ssh",
+                start_time=network_start,
+                zeek_uid="CExample1234567890",
+                duration=60.42,
+                orig_bytes=2048,
+                resp_bytes=8192,
+                conn_state="SF",
+                history="ShADadfF",
+                orig_pkts=4,
+                resp_pkts=8,
+                orig_ip_bytes=2208,
+                resp_ip_bytes=8512,
+                local_orig=True,
+                local_resp=True,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        conn = json.loads(temp_output.read_text().strip())
+        assert conn["ts"] == round(network_start.timestamp(), 6)
+        assert conn["duration"] == 60.42
+
     def test_emit_udp_connection(self, format_def, temp_output):
         """Test emitting a UDP connection (DNS query)."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)

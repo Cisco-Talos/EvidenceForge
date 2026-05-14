@@ -111,7 +111,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             if duration is None or duration < min_duration:
                 duration = min_duration
         event_data = {
-            "ts": event.timestamp,
+            "ts": net.start_time or event.timestamp,
             "uid": net.zeek_uid,
             "id.orig_h": src_ip,
             "id.orig_p": src_port,
@@ -121,7 +121,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "service": self._render_service_name(net.service),
             "duration": duration,
             "_min_duration": event.dns.rtt if event.dns is not None else None,
-            "_lock_duration": event.dns is not None,
+            "_lock_duration": event.dns is not None or net.service == "ssh",
             "orig_bytes": net.orig_bytes,
             "resp_bytes": net.resp_bytes,
             "conn_state": conn_state,
@@ -136,7 +136,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "ip_proto": net.ip_proto,
             "_http_request_body_len": event.http.request_body_len if event.http else None,
             "_http_response_body_len": event.http.response_body_len if event.http else None,
-            "_allow_sensor_observation_variance": True,
+            "_allow_sensor_observation_variance": net.service != "ssh",
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:

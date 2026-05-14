@@ -77,6 +77,10 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
+from evidenceforge.generation.activity.timing_profiles import (
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.models.scenario import Persona, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 
@@ -4951,6 +4955,18 @@ class BaselineMixin:
                         _src_os,
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
+                    zeek_start_time = ts + sample_timing_delta(
+                        "source.zeek_conn_start",
+                        seed_parts=(
+                            ip,
+                            port,
+                            system.ip,
+                            22,
+                            "tcp",
+                            "ssh",
+                            ts,
+                        ),
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=ip,
                         dst_ip=system.ip,
@@ -4997,10 +5013,21 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(10_000, 50_000)
+                    ssh_timing_seed = (
+                        system.hostname,
+                        ip,
+                        port,
+                        ssh_user,
+                        ts.isoformat(),
+                    )
+                    connection_time = zeek_start_time + sample_packet_timing_delta(
+                        "source.sshd_connection_after_zeek",
+                        seed_parts=ssh_timing_seed,
+                    )
+                    _msg_offset = 0
                     login_times: list[datetime] = []
                     for _ in range(4):
-                        login_times.append(ts + timedelta(microseconds=_msg_offset))
+                        login_times.append(connection_time + timedelta(microseconds=_msg_offset))
                         _msg_offset += rng.randint(1_000, 50_000)
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
                         system.hostname,

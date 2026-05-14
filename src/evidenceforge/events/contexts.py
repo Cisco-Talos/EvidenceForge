@@ -147,6 +147,7 @@ class NetworkContext:
     dst_port: int
     protocol: str  # "tcp" | "udp" | "icmp"
     service: str = ""
+    start_time: datetime | None = None
     zeek_uid: str = ""  # From StateManager.open_connection()
     conn_id: str = ""  # From StateManager.open_connection()
     duration: float | None = None
