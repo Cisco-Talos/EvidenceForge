@@ -35,7 +35,11 @@ import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.engine.baseline import _materialize_registry_value_for_time
+from evidenceforge.generation.engine.baseline import (
+    _ambient_registry_entry_allowed,
+    _materialize_registry_value_for_time,
+    _windows_scheduled_task_offsets,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -876,6 +880,84 @@ class TestBaselineRegistryRealism:
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
         assert "driverdesc" in source
+
+    def test_ambient_registry_noise_suppresses_dhcp_values_for_static_hosts(self):
+        """Static infrastructure should not emit DHCP registry churn as ambient noise."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller", "dns_server"],
+        )
+        workstation = System(
+            hostname="WS-01",
+            ip="10.10.2.55",
+            os="Windows 11",
+            type="workstation",
+        )
+        cfg = {
+            "dhcp_interface_values": {
+                "value_names": ["DhcpIPAddress"],
+                "require_dhcp_state": True,
+                "emit_on_lease_events": False,
+                "suppress_system_types": ["server", "domain_controller"],
+                "suppress_roles": ["domain_controller", "dns_server"],
+            }
+        }
+        key = r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}"
+
+        assert not _ambient_registry_entry_allowed(dc, key, "DhcpIPAddress", {}, cfg)
+        assert not _ambient_registry_entry_allowed(workstation, key, "DhcpIPAddress", None, cfg)
+        assert _ambient_registry_entry_allowed(
+            workstation,
+            key,
+            "DhcpIPAddress",
+            {"lease_time": 3600},
+            cfg,
+        )
+
+    def test_dhcp_registry_values_are_reserved_for_lease_side_effects(self):
+        """Default DHCP registry policy should keep lease-owned values out of random pools."""
+        workstation = System(
+            hostname="WS-01",
+            ip="10.10.2.55",
+            os="Windows 11",
+            type="workstation",
+        )
+        cfg = {
+            "dhcp_interface_values": {
+                "value_names": ["DhcpIPAddress"],
+                "require_dhcp_state": True,
+                "emit_on_lease_events": True,
+                "suppress_system_types": ["server", "domain_controller"],
+                "suppress_roles": [],
+            }
+        }
+        key = r"HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}"
+
+        assert not _ambient_registry_entry_allowed(
+            workstation,
+            key,
+            "DhcpIPAddress",
+            {"lease_time": 3600},
+            cfg,
+        )
+
+
+class TestWindowsScheduledProcessNoise:
+    """Regression tests for Windows scheduled/background process timing."""
+
+    def test_scheduled_task_offsets_avoid_hour_boundaries_and_vary(self):
+        system = System(hostname="WS-01", ip="10.10.2.55", os="Windows 11", type="workstation")
+        current_hour = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+
+        offsets = _windows_scheduled_task_offsets(current_hour, system, random.Random(3))
+
+        assert offsets
+        assert all(90 <= offset <= 3510 for offset in offsets)
+        assert not any(int(offset) == 3599 for offset in offsets)
+        assert len({round(offset, 3) for offset in offsets}) == len(offsets)
 
 
 class TestSensorStartup:

@@ -473,6 +473,94 @@ def _materialize_registry_value_for_time(
     return prior_time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def _is_dhcp_managed_registry_value(
+    key: str,
+    value_name: str,
+    policy: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether a registry value belongs to DHCP lease state."""
+    if policy is None:
+        from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
+
+        policy = registry_noise_config().get("dhcp_interface_values", {})
+    key_lower = key.lower()
+    if r"services\tcpip\parameters" not in key_lower:
+        return False
+    managed_names = {str(name).lower() for name in policy.get("value_names", [])}
+    return value_name.lower() in managed_names
+
+
+def _system_suppresses_dhcp_registry_noise(system: Any, policy: dict[str, Any]) -> bool:
+    """Return whether DHCP registry noise should be suppressed for this static host."""
+    system_type = str(getattr(system, "type", "") or "").lower()
+    roles = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
+    suppressed_types = {str(value).lower() for value in policy.get("suppress_system_types", [])}
+    suppressed_roles = {str(value).lower() for value in policy.get("suppress_roles", [])}
+    return system_type in suppressed_types or bool(roles.intersection(suppressed_roles))
+
+
+def _ambient_registry_entry_allowed(
+    system: Any,
+    key: str,
+    value_name: str,
+    dhcp_state: dict[str, Any] | None,
+    registry_cfg: dict[str, Any] | None = None,
+) -> bool:
+    """Return whether an ambient registry pool entry can emit for this host."""
+    if registry_cfg is None:
+        from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
+
+        registry_cfg = registry_noise_config()
+    policy = registry_cfg.get("dhcp_interface_values", {})
+    if not _is_dhcp_managed_registry_value(key, value_name, policy):
+        return True
+    if policy.get("emit_on_lease_events", True):
+        return False
+    if _system_suppresses_dhcp_registry_noise(system, policy):
+        return False
+    return bool(dhcp_state) if policy.get("require_dhcp_state", True) else True
+
+
+def _windows_scheduled_task_offsets(
+    current_hour: datetime,
+    system: Any,
+    rng: random.Random,
+) -> list[float]:
+    """Return config-driven Windows scheduled/background task offsets for this hour."""
+    from evidenceforge.generation.activity.endpoint_noise import windows_scheduled_process_config
+
+    cfg = windows_scheduled_process_config()
+    count_min = max(0, int(cfg.get("count_min", 2)))
+    count_max = max(count_min, int(cfg.get("count_max", 5)))
+    start = max(0, min(3599, int(cfg.get("trigger_window_start_seconds", 90))))
+    end = max(start + 1, min(3599, int(cfg.get("trigger_window_end_seconds", 3510))))
+    spacing = max(1, int(cfg.get("slot_spacing_seconds", 300)))
+    phase_window = max(1, int(cfg.get("host_phase_window_seconds", 900)))
+    jitter_min = float(cfg.get("jitter_seconds_min", -42))
+    jitter_max = float(cfg.get("jitter_seconds_max", 73))
+    if jitter_min > jitter_max:
+        jitter_min, jitter_max = jitter_max, jitter_min
+    skip_probability = max(0.0, min(1.0, float(cfg.get("skip_probability", 0.08))))
+    window_len = max(1, end - start)
+    candidate_slots = list(range(0, max(1, window_len), spacing)) or [0]
+    num_tasks = rng.randint(count_min, count_max) if count_max > 0 else 0
+    num_tasks = min(num_tasks, len(candidate_slots))
+    if num_tasks <= 0:
+        return []
+
+    host_phase = _stable_seed(
+        f"task_phase:{system.hostname}:{current_hour.date().isoformat()}"
+    ) % min(phase_window, window_len)
+    selected_slots = sorted(rng.sample(candidate_slots, num_tasks))
+    offsets: list[float] = []
+    for slot in selected_slots:
+        if rng.random() < skip_probability:
+            continue
+        offset = start + ((slot + host_phase) % window_len) + rng.uniform(jitter_min, jitter_max)
+        offsets.append(max(float(start), min(float(end), offset)))
+    return sorted(offsets)
+
+
 # Synthetic SYSTEM user for baseline Event 8/10 generation
 _SYSTEM_USER = User(
     username="SYSTEM",
@@ -637,6 +725,101 @@ class BaselineMixin:
         defaults = get_rates_for_intensity(intensity)
         rate = defaults[traffic_type]
         return (rate[0], rate[1])
+
+    def _emit_dhcp_registry_side_effect(
+        self,
+        *,
+        system: Any,
+        time: datetime,
+        rng: random.Random,
+        sys_pids: dict[str, int],
+        dhcp_state: dict[str, Any] | None,
+    ) -> None:
+        """Emit DHCP interface registry writes coupled to a lease/renewal event."""
+        if _get_os_category(system.os) != "windows" or "windows_event_sysmon" not in self.emitters:
+            return
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, ProcessContext, RegistryContext
+        from evidenceforge.generation.activity.edr_pools import (
+            get_registry_keys_hklm,
+            materialize_edr_template_group,
+        )
+        from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
+
+        registry_cfg = registry_noise_config()
+        policy = registry_cfg.get("dhcp_interface_values", {})
+        if not policy.get("emit_on_lease_events", True):
+            return
+        if policy.get("require_dhcp_state", True) and not dhcp_state:
+            return
+        if _system_suppresses_dhcp_registry_noise(system, policy):
+            return
+
+        dhcp_entries = [
+            (key, value_name, details)
+            for key, value_name, details in get_registry_keys_hklm()
+            if _is_dhcp_managed_registry_value(key, value_name, policy)
+        ]
+        if not dhcp_entries:
+            return
+
+        _host_ctx = self.activity_generator._build_host_context(system)
+        count = min(len(dhcp_entries), rng.randint(1, min(2, len(dhcp_entries))))
+        for key_tmpl, value_tmpl, details_tmpl in rng.sample(dhcp_entries, count):
+            reg_ts = time + timedelta(milliseconds=rng.randint(45, 900))
+            key, value_name, details = materialize_edr_template_group(
+                (key_tmpl, value_tmpl, details_tmpl),
+                rng,
+                system.assigned_user or "SYSTEM",
+                host_ip=system.ip,
+                host_key=system.hostname,
+                host_os=system.os,
+            )
+            writer_candidates = _registry_writer_candidates(
+                key,
+                sys_pids,
+                system.assigned_user,
+            )
+            if writer_candidates:
+                reg_pid, reg_image, reg_user = rng.choice(writer_candidates)
+            else:
+                reg_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
+                reg_image = r"C:\Windows\System32\svchost.exe"
+                reg_user = "NETWORK SERVICE"
+            reg_proc = self.state_manager.get_process(system.hostname, reg_pid)
+            if reg_proc is not None:
+                reg_image = reg_proc.image
+                if reg_proc.start_time and reg_ts <= reg_proc.start_time:
+                    reg_ts = reg_proc.start_time + timedelta(milliseconds=1)
+            target = f"{key}\\{value_name}"
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=reg_ts,
+                    event_type="registry_modify",
+                    src_host=_host_ctx,
+                    auth=AuthContext(
+                        username=reg_user,
+                        user_sid=self.activity_generator._get_sid(reg_user),
+                        logon_id=reg_proc.logon_id if reg_proc is not None else "",
+                    ),
+                    process=ProcessContext(
+                        pid=reg_pid,
+                        parent_pid=reg_proc.parent_pid if reg_proc is not None else 0,
+                        image=reg_image,
+                        command_line=reg_proc.command_line if reg_proc is not None else "",
+                        username=reg_proc.username if reg_proc is not None else reg_user,
+                        logon_id=reg_proc.logon_id if reg_proc is not None else "",
+                        start_time=reg_proc.start_time if reg_proc is not None else None,
+                    ),
+                    registry=RegistryContext(
+                        key=target,
+                        value=_materialize_registry_value_for_time(target, details, reg_ts, rng),
+                        action="modify",
+                        pid=reg_pid,
+                    ),
+                )
+            )
 
     def _generate_scheduled_tasks(
         self,
@@ -3860,6 +4043,13 @@ class BaselineMixin:
                         uid=generate_zeek_uid("C"),
                         msg_types=["REQUEST", "ACK"],  # Renewal, not discovery
                     )
+                    self._emit_dhcp_registry_side_effect(
+                        system=dhcp_state["system"],
+                        time=renewal_ts,
+                        rng=rng,
+                        sys_pids=sys_pids,
+                        dhcp_state=dhcp_state,
+                    )
                     dhcp_state["last_renewal"] = next_renewal
 
             # SMB browsing: Windows workstations to DCs (SYSVOL/GPO) and file servers
@@ -4053,12 +4243,15 @@ class BaselineMixin:
                     get_registry_keys_hklm,
                     materialize_edr_template,
                 )
+                from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
                 _REG_KEYS_HKCU = get_registry_keys_hkcu()
                 _REG_KEYS_HKLM = get_registry_keys_hklm()
                 _reg_count = rng.randint(18, 42)
                 _svc_pid = sys_pids.get("svchost_netsvcs", sys_pids.get("services", 4))
                 _host_ctx = self.activity_generator._build_host_context(system)
+                _registry_cfg = registry_noise_config()
+                _dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
                 # Only emit HKCU on workstations with a logged-in user;
                 # servers and DCs run services, not user desktops.
                 _has_desktop = getattr(
@@ -4100,6 +4293,14 @@ class BaselineMixin:
                         else:
                             pool = rare_static_hklm
                         _key, _vname, _details = rng.choice(pool or _REG_KEYS_HKLM)
+                    if not _ambient_registry_entry_allowed(
+                        system,
+                        _key,
+                        _vname,
+                        _dhcp_state,
+                        _registry_cfg,
+                    ):
+                        continue
                     _template_user = system.assigned_user or "SYSTEM"
                     _key = materialize_edr_template(
                         _key,
@@ -4187,12 +4388,7 @@ class BaselineMixin:
                     pick_scheduled_task,
                 )
 
-                host_seed = _stable_seed(f"task_phase_{system.hostname}") % 900
-                num_tasks = rng.randint(2, 5)
-                slot_bases = sorted(rng.sample(range(0, 3600, 300), min(num_tasks, 12)))
-                for slot_base in slot_bases:
-                    offset = slot_base + host_seed + rng.gauss(0, 30) + rng.uniform(0, 10)
-                    offset = max(0, min(3599, offset))
+                for offset in _windows_scheduled_task_offsets(current_hour, system, rng):
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
                     task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
