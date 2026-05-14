@@ -21,12 +21,14 @@ caches data after first load. Two files (`network_params.yaml`,
 | `tls_realism.yaml` | `tls_realism.py` | TLS SAN, OCSP, certificate-chain, and destination-profile settings with overlay support. |
 | `kerberos_realism.yaml` | `kerberos_realism.py` | Kerberos 4768 TGT PreAuthType, TicketOptions, encryption, and PKINIT certificate field distributions with overlay support. |
 | `windows_auth_realism.yaml` | `windows_auth_realism.py` | Windows Security authentication realism knobs such as minimum 4800→4801 lock/unlock gap, failed-logon validation paths, companion network evidence, and 4672 privilege profiles. |
+| `auth_noise.yaml` | `auth_noise.py` | Baseline authentication-noise profiles such as stale scheduled-credential account pools and irregular recurrence timing. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, public NTP fallback servers, and DNS tunnel RTT bounds. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |
 | `extra_syslog_messages.yaml` | `extra_syslog.py` | Role/distro-tagged syslog program messages for baseline diversity. |
 | `application_catalog.yaml` | `application_catalog.py` | Unified app definitions: image paths, PE metadata, command templates, persona filtering, child processes. |
 | `traffic_profiles.yaml` | `traffic_profiles.py` | Role-based and persona-based network traffic profiles. See `docs/design/traffic-profiles-design.md`. |
+| `web_session_profiles.yaml` | `web_session_profiles.py` | Inbound web server visitor classes, request profiles, and User-Agent pools. Human visitors use `site_maps.yaml`; top-level `web` traffic rates fan out into page assets. |
 | `process_network_map.yaml` | `process_network.py` | Process-to-network service mappings for PID attribution and process-network correlation. |
 | `process_access_patterns.yaml` | `process_access_patterns.py` | Sysmon Event 10 baseline source/target pairs and weighted GrantedAccess masks. |
 | `create_remote_thread_patterns.yaml` | `create_remote_thread_patterns.py` | Sysmon Event 8/eCAR THREAD benign source/target pairs plus weighted start module/function locations. |

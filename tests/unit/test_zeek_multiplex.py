@@ -107,7 +107,7 @@ class TestPerSensorDirectoryRouting:
                 assert core[field] == dmz[field]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
-            assert abs(core["ts"] - dmz["ts"]) <= 1.5
+            assert abs(core["ts"] - dmz["ts"]) <= 0.005
             assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert core["orig_pkts"] == dmz["orig_pkts"] == 52
@@ -161,9 +161,9 @@ class TestPerSensorDirectoryRouting:
                 for port in sorted(core_by_port)
             ]
 
-            assert max(offsets) - min(offsets) > 0.05
+            assert max(offsets) - min(offsets) > 0.0005
             assert len(set(offsets)) > 30
-            assert all(offset > 0 for offset in offsets) or all(offset < 0 for offset in offsets)
+            assert max(abs(offset) for offset in offsets) <= 0.005
 
     def test_second_sensor_observation_preserves_http_body_lengths(self):
         """HTTP body sizes are transaction facts, not per-sensor packet-counter jitter."""

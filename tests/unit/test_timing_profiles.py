@@ -9,6 +9,7 @@ import pytest
 
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
+    network_sensor_observation_timing,
     reset_timing_profiles_cache,
     sample_timing_delta,
     windows_collision_spacing_config,
@@ -55,6 +56,29 @@ def test_timing_profiles_load_default_relationship():
     assert tls_window.relationship_class == "same_observation"
     assert tls_window.min_ms >= 650
 
+    navigation_window = get_timing_window(
+        "web.session_navigation",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    asset_window = get_timing_window(
+        "web.asset_stylesheet_script_after_page",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert navigation_window.relationship_class == "human_workflow"
+    assert navigation_window.min_ms >= 3000
+    assert asset_window.relationship_class == "burst_fanout"
+    assert asset_window.max_ms <= 200
+
+    sensor_timing = network_sensor_observation_timing()
+    assert sensor_timing.clock_skew_min_us == -1500
+    assert sensor_timing.clock_skew_max_us == 1500
+    assert sensor_timing.path_delay_min_us == 50
+    assert sensor_timing.path_delay_max_us == 2000
+
 
 def test_timing_profiles_overlay_overrides_relationship(tmp_path, monkeypatch):
     overlay = tmp_path / ".eforge" / "config" / "activity"
@@ -74,6 +98,16 @@ windows_event_time:
     near_gap_max_us: 20
     large_gap_min_ms: 2000
     large_gap_max_ms: 3000
+network_sensor_observation:
+  default_profile: lab
+  profiles:
+    lab:
+      clock_skew_us:
+        min: -250
+        max: 250
+      path_delay_us:
+        min: 25
+        max: 500
 """.lstrip()
     )
     monkeypatch.chdir(tmp_path)
@@ -86,11 +120,14 @@ windows_event_time:
         default_position="after",
     )
     spacing = windows_collision_spacing_config()
+    sensor_timing = network_sensor_observation_timing()
 
     assert window.min_ms == 250
     assert window.max_ms == 750
     assert spacing["near_zero_until"] == 3
     assert spacing["large_gap_min_ms"] == 2000
+    assert sensor_timing.clock_skew_min_us == -250
+    assert sensor_timing.path_delay_max_us == 500
 
 
 def test_sample_timing_delta_is_deterministic_and_bounded():
@@ -119,6 +156,16 @@ windows_event_time:
     near_gap_max_us: 2000000
     large_gap_min_ms: bad
     large_gap_max_ms: 999999999
+network_sensor_observation:
+  default_profile: bad
+  profiles:
+    bad:
+      clock_skew_us:
+        min: later
+        max: -later
+      path_delay_us:
+        min: 5000
+        max: 100
 """.lstrip()
     )
     monkeypatch.chdir(tmp_path)
@@ -131,6 +178,7 @@ windows_event_time:
         default_position="before",
     )
     spacing = windows_collision_spacing_config()
+    sensor_timing = network_sensor_observation_timing()
 
     assert window.min_ms == 20
     assert window.max_ms == 86_400_000
@@ -139,3 +187,7 @@ windows_event_time:
     assert spacing["near_gap_max_us"] == 1_000_000
     assert spacing["large_gap_min_ms"] == 1000
     assert spacing["large_gap_max_ms"] == 60_000
+    assert sensor_timing.clock_skew_min_us == -1500
+    assert sensor_timing.clock_skew_max_us == 1500
+    assert sensor_timing.path_delay_min_us == 50
+    assert sensor_timing.path_delay_max_us == 2000

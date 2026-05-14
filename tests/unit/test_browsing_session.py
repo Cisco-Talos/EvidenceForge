@@ -9,6 +9,7 @@ from evidenceforge.generation.activity.browsing_session import (
     BrowsingRequest,
     generate_browsing_session,
 )
+from evidenceforge.generation.activity.timing_profiles import reset_timing_profiles_cache
 
 
 class TestBrowsingSessionBasics:
@@ -222,6 +223,18 @@ class TestTagAndGenericFallback:
         requests = generate_browsing_session(rng, "ocsp.pki.goog", ["background"])
         assert requests == []
 
+    def test_inbound_web_server_can_use_generic_public_hostname(self):
+        rng = random.Random(42)
+        requests = generate_browsing_session(
+            rng,
+            "portal.customer.example",
+            [],
+            port=443,
+            require_browser_like_domain=False,
+        )
+        assert len(requests) > 0
+        assert requests[0].hostname == "portal.customer.example"
+
 
 class TestResponseSizes:
     """Response body lengths should be realistic for content types."""
@@ -257,6 +270,54 @@ class TestResponseSizes:
             if request.path.endswith(".ico"):
                 assert request.content_type == "image/x-icon"
                 assert 500 <= request.response_body_len <= 5_000
+
+    def test_stable_static_asset_size_for_same_host_and_path(self):
+        first = generate_browsing_session(
+            random.Random(42),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+        )
+        second = generate_browsing_session(
+            random.Random(43),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+        )
+        first_favicon = next(r for r in first if r.path == "/favicon.ico")
+        second_favicon = next(r for r in second if r.path == "/favicon.ico")
+
+        assert first_favicon.response_body_len == second_favicon.response_body_len
+
+    def test_subresource_timing_uses_timing_profile_overlay(self, tmp_path, monkeypatch):
+        overlay = tmp_path / ".eforge" / "config" / "activity"
+        overlay.mkdir(parents=True)
+        (overlay / "timing_profiles.yaml").write_text(
+            """
+relationships:
+  web.asset_stylesheet_script_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 1000
+    max_ms: 1000
+""".lstrip()
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_timing_profiles_cache()
+
+        requests = generate_browsing_session(random.Random(42), "github.com", [])
+        first_page = requests[0]
+        first_page_referrer = f"https://{first_page.hostname}{first_page.path}"
+        css_js = [
+            request
+            for request in requests
+            if request.referrer == first_page_referrer
+            and request.content_type in {"text/css", "application/javascript"}
+        ]
+
+        assert css_js
+        assert {request.time_offset_ms for request in css_js} == {1000}
+        reset_timing_profiles_cache()
 
 
 class TestDeterminism:

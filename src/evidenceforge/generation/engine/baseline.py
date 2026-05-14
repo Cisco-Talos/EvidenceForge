@@ -39,6 +39,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.generation.activity.auth_noise import scheduled_stale_credentials_config
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_noise_config,
     load_create_remote_thread_patterns,
@@ -231,6 +232,95 @@ def _pick_non_colliding_account_name(
 
     msg = "Unable to select non-colliding synthetic account name after bounded fallback search"
     raise ValueError(msg)
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Return an integer config value or a default."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_probability(value: Any, default: float) -> float:
+    """Return a clamped probability config value."""
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        probability = default
+    return max(0.0, min(probability, 0.95))
+
+
+def _weighted_interval_minutes(
+    rng: random.Random,
+    interval_ranges: list[dict[str, Any]],
+) -> int:
+    """Pick an interval in minutes from weighted config ranges."""
+    ranges = [entry for entry in interval_ranges if isinstance(entry, dict)]
+    if not ranges:
+        ranges = [
+            {"min_minutes": 55, "max_minutes": 95, "weight": 30},
+            {"min_minutes": 105, "max_minutes": 155, "weight": 45},
+            {"min_minutes": 170, "max_minutes": 260, "weight": 25},
+        ]
+    weights = [max(1, _as_int(entry.get("weight"), 1)) for entry in ranges]
+    selected = rng.choices(ranges, weights=weights, k=1)[0]
+    min_minutes = max(1, _as_int(selected.get("min_minutes"), 60))
+    max_minutes = max(min_minutes, _as_int(selected.get("max_minutes"), min_minutes))
+    return rng.randint(min_minutes, max_minutes)
+
+
+def _scheduled_stale_failure_offsets(
+    *,
+    scenario_name: str,
+    account_name: str,
+    hostname: str,
+    hour_idx: int,
+    config: dict[str, Any],
+) -> list[int]:
+    """Return stale scheduled-credential failure offsets for this generation hour."""
+    if hour_idx < 0:
+        return []
+
+    profile_key = f"sched_fail_profile:{scenario_name}:{account_name}:{hostname}"
+    profile_rng = random.Random(_stable_seed(profile_key))
+    first_min = max(0, _as_int(config.get("first_occurrence_seconds_min"), 0))
+    first_max = max(first_min, _as_int(config.get("first_occurrence_seconds_max"), 2700))
+    first_offset = profile_rng.randint(first_min, first_max)
+
+    jitter_min = _as_int(config.get("jitter_seconds_min"), -420)
+    jitter_max = max(jitter_min, _as_int(config.get("jitter_seconds_max"), 780))
+    skip_probability = _as_probability(config.get("skip_probability"), 0.16)
+    backoff_probability = _as_probability(config.get("backoff_probability"), 0.10)
+    backoff_min = max(0, _as_int(config.get("backoff_seconds_min"), 900))
+    backoff_max = max(backoff_min, _as_int(config.get("backoff_seconds_max"), 3600))
+    interval_ranges = config.get("interval_ranges")
+    if not isinstance(interval_ranges, list):
+        interval_ranges = []
+
+    window_start = hour_idx * 3600
+    window_end = window_start + 3600
+    offsets: list[int] = []
+    nominal_second = first_offset
+    occurrence_idx = 0
+    while nominal_second < window_end + max(0, -jitter_min) + backoff_max:
+        occurrence_rng = random.Random(_stable_seed(f"{profile_key}:occurrence:{occurrence_idx}"))
+        observed_second = nominal_second + occurrence_rng.randint(jitter_min, jitter_max)
+        if occurrence_rng.random() < backoff_probability:
+            observed_second += occurrence_rng.randint(backoff_min, backoff_max)
+        if (
+            occurrence_rng.random() >= skip_probability
+            and window_start <= observed_second < window_end
+        ):
+            offsets.append(int(observed_second - window_start))
+
+        interval_minutes = _weighted_interval_minutes(occurrence_rng, interval_ranges)
+        nominal_second += interval_minutes * 60
+        occurrence_idx += 1
+        if occurrence_idx > 10_000:
+            break
+
+    return sorted(set(offsets))
 
 
 def _hawkes_params_from_persona(persona: Persona | None) -> dict:
@@ -428,110 +518,6 @@ def _load_systemd_schedules() -> list[dict[str, Any]]:
     )
     _CACHED_SCHEDULES = data.get("schedules", [])
     return _CACHED_SCHEDULES
-
-
-# Weighted web request categories for realistic path diversity at high volume.
-# (category_weight, paths_within_category)
-_WEB_REQUEST_CATEGORIES: list[tuple[float, list[tuple[str, str, int, str]]]] = [
-    # (weight, [(path, method, status, mime), ...])
-    (
-        40,
-        [  # Page views
-            ("/", "GET", 200, "text/html"),
-            ("/index.html", "GET", 200, "text/html"),
-            ("/about", "GET", 200, "text/html"),
-            ("/contact", "GET", 200, "text/html"),
-            ("/products", "GET", 200, "text/html"),
-            ("/services", "GET", 200, "text/html"),
-            ("/blog", "GET", 200, "text/html"),
-            ("/login", "GET", 200, "text/html"),
-            ("/dashboard", "GET", 200, "text/html"),
-            ("/search?q=help", "GET", 200, "text/html"),
-        ],
-    ),
-    (
-        30,
-        [  # Static assets
-            ("/assets/main.css", "GET", 200, "text/css"),
-            ("/assets/app.js", "GET", 200, "application/javascript"),
-            ("/assets/vendor.js", "GET", 200, "application/javascript"),
-            ("/images/logo.png", "GET", 200, "image/png"),
-            ("/images/banner.jpg", "GET", 200, "image/jpeg"),
-            ("/favicon.ico", "GET", 200, "image/x-icon"),
-            ("/fonts/roboto.woff2", "GET", 200, "font/woff2"),
-            ("/assets/style.min.css", "GET", 200, "text/css"),
-        ],
-    ),
-    (
-        15,
-        [  # API calls
-            ("/api/v1/health", "GET", 200, "application/json"),
-            ("/api/v1/data", "POST", 200, "application/json"),
-            ("/api/v1/users", "GET", 200, "application/json"),
-            ("/api/v1/status", "GET", 200, "application/json"),
-            ("/api/v2/events", "POST", 200, "application/json"),
-            ("/api/v1/auth/token", "POST", 200, "application/json"),
-        ],
-    ),
-    (
-        8,
-        [  # Bot/crawler probes
-            ("/robots.txt", "GET", 200, "text/plain"),
-            ("/sitemap.xml", "GET", 200, "application/xml"),
-            ("/.well-known/security.txt", "GET", 200, "text/plain"),
-        ],
-    ),
-    (
-        7,
-        [  # 404/403 noise (opportunistic scanners, mistyped URLs)
-            ("/wp-login.php", "GET", 404, "text/html"),
-            ("/admin", "GET", 403, "text/html"),
-            ("/.env", "GET", 403, "text/html"),
-            ("/phpmyadmin/", "GET", 404, "text/html"),
-            ("/xmlrpc.php", "POST", 404, "text/html"),
-            ("/wp-admin/", "GET", 404, "text/html"),
-            ("/cgi-bin/", "GET", 403, "text/html"),
-            ("/backup.sql", "GET", 404, "text/html"),
-        ],
-    ),
-]
-
-# Pre-compute flattened weights for fast sampling
-_WEB_REQ_FLAT: list[tuple[str, str, int, str]] = []
-_WEB_REQ_WEIGHTS: list[float] = []
-for _cat_weight, _cat_paths in _WEB_REQUEST_CATEGORIES:
-    per_path_weight = _cat_weight / len(_cat_paths)
-    for _entry in _cat_paths:
-        _WEB_REQ_FLAT.append(_entry)
-        _WEB_REQ_WEIGHTS.append(per_path_weight)
-
-# Parameterized path templates for additional diversity at high volume
-_PARAMETERIZED_PATHS: list[tuple[str, str, int, str]] = [
-    ("/products/{id}", "GET", 200, "text/html"),
-    ("/users/{id}/profile", "GET", 200, "application/json"),
-    ("/api/v1/items/{id}", "GET", 200, "application/json"),
-    ("/blog/post-{id}", "GET", 200, "text/html"),
-    ("/images/gallery/{id}.jpg", "GET", 200, "image/jpeg"),
-    ("/docs/page/{id}", "GET", 200, "text/html"),
-]
-
-
-def _generate_web_request(rng: random.Random) -> tuple[str, str, int, str]:
-    """Generate a realistic web request (path, method, status, mime).
-
-    Uses weighted categories for realistic URI distribution. Occasionally
-    generates parameterized paths for additional variety.
-    """
-    from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
-
-    # 20% chance of parameterized path for extra diversity
-    if rng.random() < 0.20:
-        template, method, status, mime = rng.choice(_PARAMETERIZED_PATHS)
-        path = template.replace("{id}", str(rng.randint(1, 9999)))
-        return (path, method, status, normalize_mime_type_for_path(path, mime))
-
-    path, method, status, mime = rng.choices(_WEB_REQ_FLAT, weights=_WEB_REQ_WEIGHTS, k=1)[0]
-    return (path, method, status, normalize_mime_type_for_path(path, mime))
 
 
 def _machine_account_tgs_gap_ms(rng: random.Random, *, first: bool) -> int:
@@ -1124,10 +1110,25 @@ class BaselineMixin:
                 )
 
         # Pattern 2: Scheduled task with stale creds (deterministic per scenario).
-        # Pick 1-2 hosts and a plausible service account name.
+        # Pick configured hosts and a plausible service account name.
         _sched_seed = _stable_seed(self.scenario.name + "_sched_fail")
         _sched_rng = random.Random(_sched_seed)
-        _svc_names = ["svc_backup", "svc_monitor", "svc_report", "svc_deploy", "svc_scan"]
+        _sched_config = scheduled_stale_credentials_config()
+        configured_names = _sched_config.get("account_base_names", [])
+        _svc_names = [
+            str(name).strip() for name in configured_names if isinstance(name, str) and name.strip()
+        ] or [
+            "svc_backup",
+            "svc_monitor",
+            "svc_report",
+            "svc_deploy",
+            "svc_scan",
+            "svc_patch",
+            "svc_build",
+            "svc_sync",
+            "svc_jobs",
+            "svc_batch",
+        ]
         # Ensure no collision with actual scenario accounts
         _existing = {u.username for u in self.scenario.environment.users} | set(
             self.scenario.environment.service_accounts
@@ -1143,35 +1144,28 @@ class BaselineMixin:
             email=f"{_sched_acct}@system.local",
             enabled=False,
         )
-        n_sched_hosts = min(2, len(servers))
+        host_min = max(1, _as_int(_sched_config.get("host_count_min"), 1))
+        host_max = max(host_min, _as_int(_sched_config.get("host_count_max"), 2))
+        n_sched_hosts = min(_sched_rng.randint(host_min, host_max), len(servers))
         _sched_hosts = _sched_rng.sample(servers, n_sched_hosts)
         hour_idx = int((current_hour - self.start_time).total_seconds() / 3600)
         for host in _sched_hosts:
-            profile_rng = random.Random(
-                _stable_seed(
-                    f"sched_fail_profile:{self.scenario.name}:{_sched_acct}:{host.hostname}"
+            for sched_second in _scheduled_stale_failure_offsets(
+                scenario_name=self.scenario.name,
+                account_name=_sched_acct,
+                hostname=host.hostname,
+                hour_idx=hour_idx,
+                config=_sched_config,
+            ):
+                sched_time = current_hour + timedelta(seconds=sched_second)
+                self.state_manager.set_current_time(sched_time)
+                self.activity_generator.generate_failed_logon(
+                    user=_sched_user,
+                    system=host,
+                    time=sched_time,
+                    logon_type=4,  # batch (scheduled task)
+                    source_ip=host.ip,
                 )
-            )
-            sched_interval = profile_rng.choices([1, 2, 3], weights=[35, 45, 20], k=1)[0]
-            sched_phase = profile_rng.randint(0, sched_interval - 1)
-            if (hour_idx + sched_phase) % sched_interval != 0:
-                continue
-            hour_rng = random.Random(
-                _stable_seed(
-                    f"sched_fail_time:{self.scenario.name}:{_sched_acct}:{host.hostname}:{hour_idx}"
-                )
-            )
-            nominal_second = profile_rng.randint(0, 900)
-            sched_second = max(0, min(3599, nominal_second + hour_rng.randint(-180, 540)))
-            sched_time = current_hour + timedelta(seconds=sched_second)
-            self.state_manager.set_current_time(sched_time)
-            self.activity_generator.generate_failed_logon(
-                user=_sched_user,
-                system=host,
-                time=sched_time,
-                logon_type=4,  # batch (scheduled task)
-                source_ip=host.ip,
-            )
 
         # Pattern 3: Management software sweep (1-2 per business day).
         # Use scenario-local time for business-hour gating.
@@ -5314,159 +5308,228 @@ class BaselineMixin:
 
         # Web access logs
         if "web_access" in self.emitters:
-            _WEB_UAS_BROWSER = [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
-                "curl/7.88.1",
-                "python-requests/2.31.0",
-            ]
-            _WEB_UAS_BOT = [
-                "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-                "Mozilla/5.0 (compatible; bingbot/2.0; +http://www.bing.com/bingbot.htm)",
-                "Mozilla/5.0 (compatible; AhrefsBot/7.0; +http://ahrefs.com/robot/)",
-            ]
             for sys_obj in systems:
-                if "web_server" not in (sys_obj.roles or []):
-                    continue
-                _web_lo, _web_hi = self._resolve_traffic_rate("web")
-                num_reqs = rng.randint(_web_lo, _web_hi)
+                self._emit_web_server_access(sys_obj, systems, rng, current_hour)
 
-                internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
-                _segment = self._get_segment_for_system(sys_obj)
-                exposure = _segment.exposure if _segment else self._get_system_exposure(sys_obj)
-                ext_ratio = (
-                    _segment.external_ratio
-                    if _segment is not None and _segment.external_ratio is not None
-                    else 0.6
+    def _emit_web_server_access(
+        self,
+        sys_obj: Any,
+        systems: list[Any],
+        rng: random.Random,
+        current_hour: datetime,
+    ) -> None:
+        """Emit inbound web server traffic as sessions and source-native tool requests."""
+        if "web_server" not in (sys_obj.roles or []):
+            return
+
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.browsing_session import generate_browsing_session
+        from evidenceforge.generation.activity.http_content import (
+            is_stable_resource_path,
+            normalize_mime_type_for_path,
+            response_size_for_mime,
+            response_size_for_status,
+        )
+        from evidenceforge.generation.activity.timing_profiles import get_timing_window
+        from evidenceforge.generation.activity.web_session_profiles import (
+            pick_profile_request,
+            pick_web_user_agent,
+            pick_web_visitor_profile,
+            request_count_bounds,
+        )
+
+        web_lo, web_hi = self._resolve_traffic_rate("web")
+        top_level_budget = rng.randint(web_lo, web_hi)
+        if top_level_budget <= 0:
+            return
+
+        internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+        segment = self._get_segment_for_system(sys_obj)
+        exposure = segment.exposure if segment else self._get_system_exposure(sys_obj)
+        ext_ratio = (
+            segment.external_ratio
+            if segment is not None and segment.external_ratio is not None
+            else 0.6
+        )
+
+        ext_pool_size = min(200, max(10, top_level_budget // 10))
+        ext_ip_pool = [self._generate_external_client_ip(rng) for _ in range(ext_pool_size)]
+        ext_ip_weights = [1.0 / (i + 1) for i in range(ext_pool_size)]
+        int_ip_weights = [1.0 / (i + 1) for i in range(len(internal_ips))]
+        public_hosts = getattr(sys_obj, "public_hostnames", None) or []
+        ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+
+        def _choose_client_ip() -> str:
+            if exposure == "external":
+                return rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
+            if exposure == "both" and rng.random() < ext_ratio:
+                return rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
+            if internal_ips:
+                return rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
+            return "10.0.0.1"
+
+        def _effective_dst_ip(is_external_client: bool) -> str:
+            dispatcher = getattr(self, "dispatcher", None)
+            if is_external_client and dispatcher is not None:
+                visibility = getattr(dispatcher, "visibility_engine", None)
+                real_to_vip = getattr(visibility, "_real_ip_to_vip", None) if visibility else None
+                vip = real_to_vip.get(sys_obj.ip) if isinstance(real_to_vip, dict) else None
+                if vip:
+                    return vip
+            return sys_obj.ip
+
+        def _status_message(status: int) -> str:
+            return {
+                200: "OK",
+                403: "Forbidden",
+                404: "Not Found",
+                405: "Method Not Allowed",
+                500: "Internal Server Error",
+                503: "Service Unavailable",
+            }.get(status, "OK")
+
+        tool_gap = get_timing_window(
+            "web.tool_request_gap",
+            default_min_ms=120,
+            default_max_ms=1500,
+            default_position="after",
+            default_class="burst_fanout",
+        )
+
+        def _tool_gap_ms() -> int:
+            if tool_gap.max_ms <= tool_gap.min_ms:
+                return tool_gap.min_ms
+            return rng.randint(tool_gap.min_ms, tool_gap.max_ms)
+
+        top_level_emitted = 0
+        attempts = 0
+        while top_level_emitted < top_level_budget and attempts < top_level_budget * 4:
+            attempts += 1
+            client_ip = _choose_client_ip()
+            is_external_client = not _is_private_ip(client_ip)
+            dst_port = 443 if is_external_client and rng.random() < 0.85 else 80
+            dst_service = "ssl" if dst_port == 443 else "http"
+            http_host = (
+                rng.choice(public_hosts)
+                if is_external_client and public_hosts
+                else sys_obj.hostname
+            )
+            client_sys = ip_map.get(client_ip)
+            source_os = _get_os_category(client_sys.os) if client_sys is not None else None
+            profile_name, profile = pick_web_visitor_profile(
+                rng,
+                is_external=is_external_client,
+            )
+            ua_rng = random.Random(
+                _stable_seed(
+                    f"web_client_ua:{client_ip}:{http_host}:{profile_name}:{source_os or 'external'}"
                 )
+            )
+            chosen_ua = pick_web_user_agent(ua_rng, profile, source_os=source_os)
+            base_ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            effective_dst_ip = _effective_dst_ip(is_external_client)
 
-                # Build Zipf-weighted visitor IP pool for realistic frequency distribution
-                ext_pool_size = min(200, max(10, num_reqs // 10))
-                ext_ip_pool = [self._generate_external_client_ip(rng) for _ in range(ext_pool_size)]
-                ext_ip_weights = [1.0 / (i + 1) for i in range(ext_pool_size)]
-
-                # Zipf-weighted internal pool for non-uniform health-check / monitoring traffic
-                if internal_ips:
-                    int_ip_weights = [1.0 / (i + 1) for i in range(len(internal_ips))]
-                else:
-                    int_ip_weights = []
-
-                _pub_hosts = getattr(sys_obj, "public_hostnames", None) or []
-
-                from evidenceforge.events.contexts import HttpContext
-
-                for _ in range(num_reqs):
-                    offset = rng.uniform(0, 3599)
-                    ts = current_hour + timedelta(seconds=offset)
-                    path, method, status, mime = _generate_web_request(rng)
-                    if exposure == "external":
-                        client_ip = rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
-                    elif exposure == "both":
-                        if rng.random() < ext_ratio:
-                            client_ip = rng.choices(ext_ip_pool, weights=ext_ip_weights, k=1)[0]
-                        else:
-                            client_ip = (
-                                rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
-                                if internal_ips
-                                else "10.0.0.1"
-                            )
-                    else:
-                        client_ip = (
-                            rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
-                            if internal_ips
-                            else "10.0.0.1"
-                        )
-
-                    is_external_client = not _is_private_ip(client_ip)
-                    dst_port = 80
-                    dst_service = "http"
-                    if is_external_client and rng.random() < 0.85:
-                        dst_port = 443
-                        dst_service = "ssl"
-                    if is_external_client and _pub_hosts:
-                        http_host = rng.choice(_pub_hosts)
-                    else:
-                        http_host = sys_obj.hostname
-                    ip_map = getattr(self.activity_generator, "_ip_to_system", {})
-                    client_sys = ip_map.get(client_ip)
-                    if client_sys and _get_os_category(client_sys.os) == "linux":
-                        ua_pool = [
-                            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            "curl/7.88.1",
-                            "python-requests/2.31.0",
-                        ]
-                    else:
-                        ua_pool = _WEB_UAS_BROWSER + (_WEB_UAS_BOT if is_external_client else [])
-                    from evidenceforge.generation.activity.http_content import (
-                        is_stable_resource_path,
-                        response_size_for_mime,
-                        response_size_for_status,
-                    )
-
-                    resp_bytes = (
-                        response_size_for_status(status, http_host, path)
-                        if status != 200 or is_stable_resource_path(path)
-                        else response_size_for_mime(rng, mime)
-                    )
-                    ua_rng = random.Random(
-                        _stable_seed(f"web_client_ua:{client_ip}:{sys_obj.hostname}")
-                    )
-                    chosen_ua = ua_rng.choice(ua_pool)
-                    _ua_is_bot = any(
-                        bot in chosen_ua for bot in ("Googlebot", "bingbot", "AhrefsBot")
-                    )
-                    from evidenceforge.generation.activity.referrer import pick_referrer
-
-                    _site_map = getattr(sys_obj, "site_map", None)
-                    _referer = pick_referrer(
-                        rng,
-                        http_host,
-                        site_map=_site_map,
-                        is_bot=_ua_is_bot,
-                        context="general",
-                        port=dst_port,
-                    )
-                    effective_dst_ip = sys_obj.ip
-                    if is_external_client and hasattr(self, "dispatcher"):
-                        visibility = self.dispatcher.visibility_engine
-                        vip = visibility._real_ip_to_vip.get(sys_obj.ip) if visibility else None
-                        if vip:
-                            effective_dst_ip = vip
+            if profile.get("kind") == "session":
+                session_requests = generate_browsing_session(
+                    rng=rng,
+                    hostname=http_host,
+                    domain_tags=["web"],
+                    source_os=source_os or "windows",
+                    browsing_intensity=str(profile.get("browsing_intensity", "normal")),
+                    port=dst_port,
+                    require_browser_like_domain=False,
+                )
+                current_page_allowed = False
+                for req in session_requests:
+                    if req.is_page_load:
+                        if top_level_emitted >= top_level_budget:
+                            break
+                        top_level_emitted += 1
+                        current_page_allowed = True
+                    elif not current_page_allowed:
+                        continue
+                    if req.hostname != http_host:
+                        continue
+                    req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=effective_dst_ip,
-                        time=ts,
+                        time=req_ts,
                         dst_port=dst_port,
                         proto="tcp",
                         service=dst_service,
-                        duration=rng.uniform(0.01, 2.0),
-                        orig_bytes=rng.randint(200, 2000),
-                        resp_bytes=resp_bytes,
+                        duration=rng.uniform(0.03, 2.0),
+                        orig_bytes=max(200, req.request_body_len),
+                        resp_bytes=req.response_body_len,
+                        source_system=client_sys,
                         http=HttpContext(
-                            method=method,
+                            method=req.method,
                             host=http_host,
-                            uri=path,
+                            uri=req.path,
                             version="1.1",
                             user_agent=chosen_ua,
-                            request_body_len=rng.randint(0, 500) if method == "POST" else 0,
-                            response_body_len=resp_bytes,
-                            status_code=status,
-                            status_msg={200: "OK", 403: "Forbidden", 404: "Not Found"}.get(
-                                status, "OK"
-                            ),
-                            referrer=_referer,
-                            resp_mime_types=[mime] if status == 200 else [],
+                            request_body_len=req.request_body_len,
+                            response_body_len=req.response_body_len,
+                            status_code=200,
+                            status_msg="OK",
+                            referrer=req.referrer,
+                            trans_depth=req.trans_depth,
+                            resp_mime_types=[req.content_type] if req.content_type else [],
                             tags=[],
                         ),
                         hostname=http_host,
                     )
+                continue
+
+            lo, hi = request_count_bounds(profile)
+            count = min(top_level_budget - top_level_emitted, rng.randint(lo, hi))
+            elapsed_ms = 0
+            for request_index in range(count):
+                request = pick_profile_request(rng, profile)
+                path = str(request.get("path", "/"))
+                method = str(request.get("method", "GET"))
+                status = int(request.get("status", 200))
+                mime = normalize_mime_type_for_path(path, str(request.get("type", "text/html")))
+                resp_bytes = (
+                    response_size_for_status(status, http_host, path)
+                    if status != 200 or is_stable_resource_path(path)
+                    else response_size_for_mime(rng, mime)
+                )
+                request_body_len = rng.randint(100, 5_000) if method == "POST" else 0
+                referrer = ""
+                if profile.get("referrer_mode") == "same_origin" and rng.random() < 0.35:
+                    referrer = f"{'https' if dst_port == 443 else 'http'}://{http_host}/"
+                req_ts = base_ts + timedelta(milliseconds=elapsed_ms)
+                if request_index < count - 1:
+                    elapsed_ms += _tool_gap_ms()
+                self.activity_generator.generate_connection(
+                    src_ip=client_ip,
+                    dst_ip=effective_dst_ip,
+                    time=req_ts,
+                    dst_port=dst_port,
+                    proto="tcp",
+                    service=dst_service,
+                    duration=rng.uniform(0.01, 1.5),
+                    orig_bytes=max(200, request_body_len),
+                    resp_bytes=resp_bytes,
+                    source_system=client_sys,
+                    http=HttpContext(
+                        method=method,
+                        host=http_host,
+                        uri=path,
+                        version="1.1",
+                        user_agent=chosen_ua,
+                        request_body_len=request_body_len,
+                        response_body_len=resp_bytes,
+                        status_code=status,
+                        status_msg=_status_message(status),
+                        referrer=referrer,
+                        resp_mime_types=[mime] if status == 200 else [],
+                        tags=[],
+                    ),
+                    hostname=http_host,
+                )
+                top_level_emitted += 1
 
     def _generate_rsat_sessions(self, current_hour: datetime, rng, local_dt) -> None:
         """Generate correlated RSAT sessions from admin workstations to DCs.

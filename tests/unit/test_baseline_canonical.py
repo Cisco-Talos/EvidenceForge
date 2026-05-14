@@ -27,6 +27,7 @@ multiple emitters, producing correlated cross-source records.
 """
 
 import random
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -510,6 +511,38 @@ class TestSyslogContext:
         assert "Failed password" in event.syslog.message
         assert event.syslog.severity == 4  # Warning level
 
+    def test_remote_linux_failed_logon_reuses_ssh_source_port_for_zeek_tuple(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Remote failed sshd auth should have a matching Zeek SSH tuple."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        source_ip = "10.0.10.99"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(
+            user=User(username="attacker", full_name="Attacker", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+        )
+
+        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        match = re.search(r"from (?P<src>\S+) port (?P<port>\d+) ssh2", syslog_event.syslog.message)
+        assert match is not None
+        ssh_source_port = int(match.group("port"))
+        zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+
+        assert any(
+            event.network.src_ip == source_ip
+            and event.network.src_port == ssh_source_port
+            and event.network.dst_ip == linux.ip
+            and event.network.dst_port == 22
+            and event.network.service == "ssh"
+            and event.timestamp < syslog_event.timestamp
+            for event in zeek_events
+        )
+
     def test_local_linux_failed_logon_does_not_render_ssh_from_dash(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -529,6 +562,13 @@ class TestSyslogContext:
         assert event.syslog is not None
         assert event.syslog.app_name == "login"
         assert "from -" not in event.syslog.message
+        zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        assert not any(
+            event.event_type == "connection"
+            and event.network is not None
+            and event.network.dst_port == 22
+            for event in zeek_events
+        )
 
     def test_self_sourced_linux_failed_logon_renders_local_auth(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1103,3 +1143,119 @@ class TestWebAccessExternalVisitors:
         """exposure=both, external_ratio=0.05 → ≤10% external clients."""
         frac = self._simulate_both_branch(ext_ratio=0.05)
         assert frac <= 0.10, f"Expected ≤10% external with ratio=0.05, got {frac:.1%}"
+
+    def test_web_server_access_uses_browsing_session_shape(self, monkeypatch):
+        """Human visitors should emit clustered page/subresource requests, not isolated paths."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                },
+            ),
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (8, 8)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.side_effect = [f"8.8.4.{idx}" for idx in range(1, 20)]
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(42),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        page_loads = [kw for kw in collected if kw["http"].trans_depth == 1]
+        assert len(page_loads) == 8
+        assert len(collected) > len(page_loads)
+        assert {kw["http"].host for kw in collected} == {"portal.example.com"}
+        by_client = {}
+        for kwargs in collected:
+            by_client.setdefault(kwargs["src_ip"], set()).add(kwargs["http"].user_agent)
+        assert all(len(user_agents) == 1 for user_agents in by_client.values())
+        assert any(kw["http"].referrer == "https://portal.example.com/" for kw in collected)
+        assert any(
+            kw["http"].uri.endswith(".css") or kw["http"].uri.endswith(".js") for kw in collected
+        )
+
+    def test_web_server_access_keeps_scanner_requests_source_native(self, monkeypatch):
+        """Scanner visitors should keep configured error paths and blank referrers."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "opportunistic_probe",
+                {
+                    "kind": "requests",
+                    "request_count": [3, 3],
+                    "user_agent_pool": "scanner",
+                    "referrer_mode": "none",
+                    "requests": [
+                        {
+                            "path": "/wp-login.php",
+                            "method": "GET",
+                            "status": 404,
+                            "type": "text/html",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ),
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (3, 3)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.side_effect = [f"8.8.8.{idx}" for idx in range(1, 20)]
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(7),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        assert len(collected) == 3
+        assert {kw["http"].status_code for kw in collected} == {404}
+        assert {kw["http"].uri for kw in collected} == {"/wp-login.php"}
+        assert all(kw["http"].referrer == "" for kw in collected)

@@ -285,6 +285,36 @@ Failed-logon profiles control source-native Windows 4625 fields and DC-side vali
 
 ---
 
+## Auth Noise (`auth_noise.yaml`)
+
+Controls baseline authentication noise that is not scenario-authored, especially stale scheduled credentials.
+
+```yaml
+scheduled_stale_credentials:
+  account_base_names: [svc_backup, svc_monitor, svc_report, svc_deploy, svc_scan]
+  host_count_min: 1
+  host_count_max: 2
+  interval_ranges:
+    - min_minutes: 55
+      max_minutes: 95
+      weight: 30
+    - min_minutes: 105
+      max_minutes: 155
+      weight: 45
+  first_occurrence_seconds_min: 0
+  first_occurrence_seconds_max: 2700
+  jitter_seconds_min: -420
+  jitter_seconds_max: 780
+  skip_probability: 0.16
+  backoff_probability: 0.10
+  backoff_seconds_min: 900
+  backoff_seconds_max: 3600
+```
+
+`account_base_names` should be plausible disabled service or automation principals; the engine still avoids collisions with scenario users and service accounts. Interval ranges, jitter, skip probability, and backoff probability produce deterministic but non-modulo recurrence so stale scheduled-task failures do not land on exact hourly or two-hour cadences. Run `eforge validate-config` after overlay changes; ranges must be ordered, weights must be positive, and probabilities must be between 0 and 0.95.
+
+---
+
 ## timing_profiles.yaml
 
 Data-driven timing windows for causal relationships, source-native latency, teardown margins, and Windows/Sysmon same-timestamp collision spacing. Use this when tuning realism of correlated event gaps without changing scenario YAML.
@@ -313,6 +343,32 @@ relationships:
     position: after
     min_ms: 800
     max_ms: 2500
+  web.session_navigation:
+    class: human_workflow
+    position: after
+    min_ms: 3000
+    max_ms: 30000
+  web.asset_stylesheet_script_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 50
+    max_ms: 200
+  web.tool_request_gap:
+    class: burst_fanout
+    position: after
+    min_ms: 120
+    max_ms: 1500
+
+network_sensor_observation:
+  default_profile: well_synced
+  profiles:
+    well_synced:
+      clock_skew_us:
+        min: -1500
+        max: 1500
+      path_delay_us:
+        min: 50
+        max: 2000
 
 windows_event_time:
   collision_spacing:
@@ -334,6 +390,9 @@ windows_event_time:
 | `windows_event_time.collision_spacing.near_zero_until` | int | yes | Same-host tied-event collisions that can remain near-zero before larger spacing begins |
 | `windows_event_time.collision_spacing.near_gap_min_us` / `near_gap_max_us` | int | yes | Microsecond spacing for small tied clusters |
 | `windows_event_time.collision_spacing.large_gap_min_ms` / `large_gap_max_ms` | int | yes | Millisecond spacing for large tied clusters that would otherwise compress into synthetic-looking bursts |
+| `network_sensor_observation.default_profile` | string | yes | Sensor timing profile used for multi-sensor Zeek observation offsets |
+| `network_sensor_observation.profiles.<name>.clock_skew_us` | mapping | yes | `{min, max}` per-sensor clock skew in microseconds |
+| `network_sensor_observation.profiles.<name>.path_delay_us` | mapping | yes | `{min, max}` per-flow tap/capture delay in microseconds |
 
 ### Conventions
 
@@ -342,6 +401,8 @@ windows_event_time:
   `ssl.log` and `x509.log` timestamps should occur after conn start but before conn end for
   the same UID.
 - Use seconds or minutes for human or bulk workflow relationships; do not force everything into microseconds.
+- Web session timing uses `web.session_navigation` for user-driven page-to-page actions and `web.asset_*_after_page` / `web.tool_request_gap` for render fanout and tool/API bursts.
+- Keep the default `network_sensor_observation` profile in low milliseconds for well-synced Zeek fleets; use overlays only when modeling known sensor clock drift or queued/remote capture paths.
 - Run `eforge validate-config` after overlay changes; it rejects invalid relationship classes, positions, negative windows, and inverted min/max ranges.
 
 ---

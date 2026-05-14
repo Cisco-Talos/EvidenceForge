@@ -16,8 +16,10 @@ import random
 from dataclasses import dataclass
 
 from evidenceforge.generation.activity.http_content import (
+    is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
+    response_size_for_status,
 )
 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.site_maps import (
@@ -26,6 +28,7 @@ from evidenceforge.generation.activity.site_maps import (
     SubresourceDef,
     get_site_map,
 )
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 
 
 @dataclass
@@ -63,8 +66,10 @@ _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
 }
 
 
-def _response_size(rng: random.Random, content_type: str) -> int:
+def _response_size(rng: random.Random, hostname: str, path: str, content_type: str) -> int:
     """Generate a realistic response size for a given content type."""
+    if is_stable_resource_path(path):
+        return response_size_for_status(200, hostname, path)
     return response_size_for_mime(rng, content_type)
 
 
@@ -73,6 +78,70 @@ def _request_size(rng: random.Random, method: str) -> int:
     if method == "POST":
         return rng.randint(100, 10_000)
     return 0
+
+
+def _sample_profile_timing_ms(
+    rng: random.Random,
+    key: str,
+    *,
+    default_min_ms: int,
+    default_max_ms: int,
+    default_class: str,
+) -> int:
+    """Sample a configured web-session timing window using the caller's RNG."""
+    window = get_timing_window(
+        key,
+        default_min_ms=default_min_ms,
+        default_max_ms=default_max_ms,
+        default_position="after",
+        default_class=default_class,
+    )
+    if window.max_ms <= window.min_ms:
+        return window.min_ms
+    return rng.randint(window.min_ms, window.max_ms)
+
+
+def _subresource_delay_ms(rng: random.Random, content_type: str) -> int:
+    """Return render-pipeline timing for a page subresource."""
+    if content_type in ("text/css", "application/javascript"):
+        return _sample_profile_timing_ms(
+            rng,
+            "web.asset_stylesheet_script_after_page",
+            default_min_ms=50,
+            default_max_ms=200,
+            default_class="burst_fanout",
+        )
+    if content_type.startswith("font/"):
+        return _sample_profile_timing_ms(
+            rng,
+            "web.asset_font_after_page",
+            default_min_ms=300,
+            default_max_ms=600,
+            default_class="burst_fanout",
+        )
+    if content_type.startswith("image/"):
+        return _sample_profile_timing_ms(
+            rng,
+            "web.asset_image_after_page",
+            default_min_ms=200,
+            default_max_ms=800,
+            default_class="burst_fanout",
+        )
+    if content_type == "application/json":
+        return _sample_profile_timing_ms(
+            rng,
+            "web.asset_api_after_page",
+            default_min_ms=500,
+            default_max_ms=2_000,
+            default_class="burst_fanout",
+        )
+    return _sample_profile_timing_ms(
+        rng,
+        "web.asset_other_after_page",
+        default_min_ms=100,
+        default_max_ms=500,
+        default_class="burst_fanout",
+    )
 
 
 def _make_referrer(hostname: str, path: str, port: int = 443) -> str:
@@ -117,6 +186,7 @@ def generate_browsing_session(
     source_os: str = "windows",
     browsing_intensity: str = "normal",
     port: int = 443,
+    require_browser_like_domain: bool = True,
 ) -> list[BrowsingRequest]:
     """Generate a complete browsing session as a list of HTTP requests.
 
@@ -131,11 +201,14 @@ def generate_browsing_session(
         source_os: Source host OS ("windows" or "linux").
         browsing_intensity: "light", "normal", or "heavy".
         port: Destination port (443 for HTTPS, 80 for HTTP).
+        require_browser_like_domain: When true, suppress sessions for
+            certificate/update/telemetry domains. Set false for inbound
+            web-server logs where the public host may not exist in dns_registry.
 
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
     """
-    if not is_browser_like_proxy_domain(hostname):
+    if require_browser_like_domain and not is_browser_like_proxy_domain(hostname):
         return []
 
     site_map = get_site_map(hostname, domain_tags, rng)
@@ -187,8 +260,13 @@ def generate_browsing_session(
             next_idx = _pick_next_page(rng, site_map, current_page, visited_indices)
             current_page_idx = next_idx
 
-            # Inter-page navigation delay: 3-30 seconds
-            current_ms += rng.randint(3_000, 30_000)
+            current_ms += _sample_profile_timing_ms(
+                rng,
+                "web.session_navigation",
+                default_min_ms=3_000,
+                default_max_ms=30_000,
+                default_class="human_workflow",
+            )
 
         page = site_map.pages[current_page_idx]
         page_content_type = normalize_mime_type_for_path(page.path, page.content_type)
@@ -206,7 +284,7 @@ def generate_browsing_session(
                 referrer=previous_page_url,
                 trans_depth=1,
                 is_page_load=True,
-                response_body_len=_response_size(rng, page_content_type),
+                response_body_len=_response_size(rng, hostname, page.path, page_content_type),
                 request_body_len=_request_size(rng, "GET"),
             )
         )
@@ -220,17 +298,7 @@ def generate_browsing_session(
             sub_hostname = sub.host or hostname
             sub_content_type = normalize_mime_type_for_path(sub.path, sub.content_type)
 
-            # Timing: CSS/JS load early, images later, API calls latest
-            if sub_content_type in ("text/css", "application/javascript"):
-                delay = rng.randint(50, 200)
-            elif sub_content_type.startswith("font/"):
-                delay = rng.randint(300, 600)
-            elif sub_content_type.startswith("image/"):
-                delay = rng.randint(200, 800)
-            elif sub_content_type == "application/json":
-                delay = rng.randint(500, 2_000)
-            else:
-                delay = rng.randint(100, 500)
+            delay = _subresource_delay_ms(rng, sub_content_type)
 
             requests.append(
                 BrowsingRequest(
@@ -242,7 +310,12 @@ def generate_browsing_session(
                     referrer=page_url,
                     trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
                     is_page_load=False,
-                    response_body_len=_response_size(rng, sub_content_type),
+                    response_body_len=_response_size(
+                        rng,
+                        sub_hostname,
+                        sub.path,
+                        sub_content_type,
+                    ),
                     request_body_len=_request_size(rng, sub.method),
                 )
             )
