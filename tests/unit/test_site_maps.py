@@ -151,15 +151,26 @@ class TestGetSiteMap:
         for p1, p2 in zip(sm1.pages, sm2.pages, strict=True):
             assert p1.path == p2.path
 
-    def test_different_seeds_produce_different_vars(self):
-        """Different seeds should produce different template substitutions."""
-        sm1 = get_site_map("outlook.office365.com", [], random.Random(1))
-        sm2 = get_site_map("outlook.office365.com", [], random.Random(999))
-        # The page paths are fixed (/owa/, /owa/#/mail, etc.) but subresource
-        # paths contain {hex16} which should differ
-        subs1 = [s.path for p in sm1.pages for s in p.subresources]
-        subs2 = [s.path for p in sm2.pages for s in p.subresources]
-        assert subs1 != subs2
+    def test_dynamic_nav_vars_change_with_seed(self):
+        """Different seeds still vary dynamic navigation targets."""
+        sm1 = get_site_map("teams.microsoft.com", [], random.Random(1))
+        sm2 = get_site_map("teams.microsoft.com", [], random.Random(999))
+        navs1 = [target for page in sm1.pages for target in page.nav_targets]
+        navs2 = [target for page in sm2.pages for target in page.nav_targets]
+        assert navs1 != navs2
+
+    def test_cacheable_subresource_hashes_are_stable_across_seeds(self):
+        """Build asset hashes should behave like a stable deployment manifest."""
+        sm1 = get_site_map("ehr-portal.example.com", ["web"], random.Random(1))
+        sm2 = get_site_map("ehr-portal.example.com", ["web"], random.Random(999))
+        static_suffixes = (".css", ".js", ".webp", ".svg", ".jpg", ".png", ".ico")
+        subs1 = sorted(
+            s.path for p in sm1.pages for s in p.subresources if s.path.endswith(static_suffixes)
+        )
+        subs2 = sorted(
+            s.path for p in sm2.pages for s in p.subresources if s.path.endswith(static_suffixes)
+        )
+        assert subs1 == subs2
 
     def test_favicon_in_curated_domains(self):
         """Curated domains should include favicon.ico in subresources."""

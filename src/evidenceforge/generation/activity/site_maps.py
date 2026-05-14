@@ -17,6 +17,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.utils.rng import _stable_seed
 
 _SITE_MAPS_PATH = get_activity_directory() / "site_maps.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -69,20 +70,78 @@ class SiteMap:
     cdn_domains: list[str] = field(default_factory=list)
 
 
-def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
+def _stable_hex(stable_namespace: str, path: str, token: str, bits: int, ordinal: int) -> str:
+    """Return a deployment-stable hex token for cacheable asset templates."""
+    width = bits // 4
+    mask = (1 << bits) - 1
+    seed_key = f"site-map-asset:{stable_namespace}:{path}:{token}:{ordinal}"
+    if bits <= 32:
+        value = _stable_seed(seed_key)
+    else:
+        value = ((_stable_seed(f"{seed_key}:hi") & 0xFFFFFFFF) << 32) | (
+            _stable_seed(f"{seed_key}:lo") & 0xFFFFFFFF
+        )
+    return f"{value & mask:0{width}x}"
+
+
+def _stable_guid(stable_namespace: str, path: str, ordinal: int) -> str:
+    """Return a deployment-stable UUID token for cacheable asset templates."""
+    seed_key = f"site-map-asset:{stable_namespace}:{path}:guid:{ordinal}"
+    value = 0
+    for part in range(4):
+        value = (value << 32) | (_stable_seed(f"{seed_key}:{part}") & 0xFFFFFFFF)
+    return str(uuid.UUID(int=value))
+
+
+def _substitute_vars(
+    rng: random.Random,
+    path: str,
+    data: dict[str, Any],
+    stable_namespace: str | None = None,
+) -> str:
     """Replace template variables in a URI path."""
     if "{guid}" in path:
-        path = path.replace("{guid}", str(uuid.UUID(int=rng.getrandbits(128))), 1)
+        value = (
+            _stable_guid(stable_namespace, path, 0)
+            if stable_namespace
+            else str(uuid.UUID(int=rng.getrandbits(128)))
+        )
+        path = path.replace("{guid}", value, 1)
         if "{guid}" in path:
-            path = path.replace("{guid}", str(uuid.UUID(int=rng.getrandbits(128))), 1)
+            value = (
+                _stable_guid(stable_namespace, path, 1)
+                if stable_namespace
+                else str(uuid.UUID(int=rng.getrandbits(128)))
+            )
+            path = path.replace("{guid}", value, 1)
     if "{hex8}" in path:
-        path = path.replace("{hex8}", f"{rng.getrandbits(32):08x}", 1)
+        value = (
+            _stable_hex(stable_namespace, path, "hex8", 32, 0)
+            if stable_namespace
+            else f"{rng.getrandbits(32):08x}"
+        )
+        path = path.replace("{hex8}", value, 1)
         if "{hex8}" in path:
-            path = path.replace("{hex8}", f"{rng.getrandbits(32):08x}", 1)
+            value = (
+                _stable_hex(stable_namespace, path, "hex8", 32, 1)
+                if stable_namespace
+                else f"{rng.getrandbits(32):08x}"
+            )
+            path = path.replace("{hex8}", value, 1)
     if "{hex16}" in path:
-        path = path.replace("{hex16}", f"{rng.getrandbits(64):016x}", 1)
+        value = (
+            _stable_hex(stable_namespace, path, "hex16", 64, 0)
+            if stable_namespace
+            else f"{rng.getrandbits(64):016x}"
+        )
+        path = path.replace("{hex16}", value, 1)
         if "{hex16}" in path:
-            path = path.replace("{hex16}", f"{rng.getrandbits(64):016x}", 1)
+            value = (
+                _stable_hex(stable_namespace, path, "hex16", 64, 1)
+                if stable_namespace
+                else f"{rng.getrandbits(64):016x}"
+            )
+            path = path.replace("{hex16}", value, 1)
     if "{search_term}" in path:
         search_terms = data.get("search_terms", ["enterprise+software"])
         path = path.replace("{search_term}", rng.choice(search_terms))
@@ -103,15 +162,28 @@ def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str
     return path
 
 
+def _is_cacheable_subresource(item: dict[str, str]) -> bool:
+    """Return whether a subresource template should be stable for a site deployment."""
+    content_type = item.get("type", "")
+    return (
+        content_type in {"text/css", "application/javascript", "image/svg+xml", "image/x-icon"}
+        or content_type.startswith("image/")
+        or content_type.startswith("font/")
+    )
+
+
 def _build_subresources(
     rng: random.Random,
     raw_list: list[dict[str, str]],
     data: dict[str, Any],
+    stable_site_key: str,
 ) -> list[SubresourceDef]:
     """Convert raw YAML subresource dicts to SubresourceDef objects."""
     result = []
     for item in raw_list:
-        path = _substitute_vars(rng, item.get("path", "/"), data)
+        raw_path = item.get("path", "/")
+        stable_namespace = stable_site_key if _is_cacheable_subresource(item) else None
+        path = _substitute_vars(rng, raw_path, data, stable_namespace=stable_namespace)
         result.append(
             SubresourceDef(
                 path=path,
@@ -127,12 +199,18 @@ def _build_pages_from_curated(
     rng: random.Random,
     domain_entry: dict[str, Any],
     data: dict[str, Any],
+    stable_site_key: str,
 ) -> list[PageDef]:
     """Build PageDef list from a curated domain entry."""
     pages = []
     for page_raw in domain_entry.get("pages", []):
         nav_targets = [_substitute_vars(rng, t, data) for t in page_raw.get("nav_targets", [])]
-        subresources = _build_subresources(rng, page_raw.get("subresources", []), data)
+        subresources = _build_subresources(
+            rng,
+            page_raw.get("subresources", []),
+            data,
+            stable_site_key,
+        )
         pages.append(
             PageDef(
                 path=_substitute_vars(rng, page_raw["path"], data),
@@ -148,6 +226,7 @@ def _build_pages_from_tag(
     rng: random.Random,
     tag_entry: dict[str, Any],
     data: dict[str, Any],
+    stable_site_key: str,
 ) -> list[PageDef]:
     """Build PageDef list from a tag-based synthesis template."""
     patterns = tag_entry.get("subresource_patterns", {})
@@ -156,7 +235,7 @@ def _build_pages_from_tag(
         pattern_name = tmpl.get("subresource_pattern", "")
         raw_subs = patterns.get(pattern_name, [])
         nav_targets = [_substitute_vars(rng, t, data) for t in tmpl.get("nav_targets", [])]
-        subresources = _build_subresources(rng, raw_subs, data)
+        subresources = _build_subresources(rng, raw_subs, data, stable_site_key)
         pages.append(
             PageDef(
                 path=_substitute_vars(rng, tmpl["path"], data),
@@ -197,7 +276,7 @@ def get_site_map(
     domains = data.get("domains", {})
     if hostname in domains:
         entry = domains[hostname]
-        pages = _build_pages_from_curated(rng, entry, data)
+        pages = _build_pages_from_curated(rng, entry, data, stable_site_key=hostname)
         cdn = entry.get("cdn_domains", [])
         return SiteMap(hostname=hostname, pages=pages, cdn_domains=cdn)
 
@@ -205,10 +284,15 @@ def get_site_map(
     tags = data.get("tags", {})
     for tag in domain_tags:
         if tag in tags:
-            pages = _build_pages_from_tag(rng, tags[tag], data)
+            pages = _build_pages_from_tag(
+                rng,
+                tags[tag],
+                data,
+                stable_site_key=f"{hostname}:{tag}",
+            )
             return SiteMap(hostname=hostname, pages=pages)
 
     # Tier 3: Generic fallback
     generic = data.get("generic", {})
-    pages = _build_pages_from_tag(rng, generic, data)
+    pages = _build_pages_from_tag(rng, generic, data, stable_site_key=f"{hostname}:generic")
     return SiteMap(hostname=hostname, pages=pages)

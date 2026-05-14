@@ -619,10 +619,10 @@ variants:
       - name: ProcessName
         type: string
         required: true
-      - name: NetworkAddress
+      - name: IpAddress
         type: string
         required: false
-      - name: NetworkPort
+      - name: IpPort
         type: integer
         required: false
       - name: LogonGuid
@@ -1281,8 +1281,8 @@ output:
         <Data Name="TargetInfo">{{ TargetInfo | default('-') }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="ProcessName">{{ ProcessName }}</Data>
-        <Data Name="NetworkAddress">{{ NetworkAddress | default('-') }}</Data>
-        <Data Name="NetworkPort">{{ NetworkPort | default(0) }}</Data>
+        <Data Name="IpAddress">{{ IpAddress | default('-') }}</Data>
+        <Data Name="IpPort">{{ IpPort | default(0) }}</Data>
         {% elif EventID == 4768 %}
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
         <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>

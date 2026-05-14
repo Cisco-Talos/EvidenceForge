@@ -1168,8 +1168,8 @@ class TestWindowsEventEmitter:
             "TargetInfo": "fileserver01",
             "ProcessId": "0x704",
             "ProcessName": r"C:\Windows\System32\winlogon.exe",
-            "NetworkAddress": "10.0.0.50",
-            "NetworkPort": 50123,
+            "IpAddress": "10.0.0.50",
+            "IpPort": 50123,
         }
 
         emitter.emit_event(event_data)
@@ -1182,8 +1182,10 @@ class TestWindowsEventEmitter:
         assert '<Data Name="TargetServerName">fileserver01</Data>' in content
         assert '<Data Name="TargetInfo">fileserver01</Data>' in content
         assert '<Data Name="TargetUserName">admin01</Data>' in content
-        assert '<Data Name="NetworkAddress">10.0.0.50</Data>' in content
-        assert '<Data Name="NetworkPort">50123</Data>' in content
+        assert '<Data Name="IpAddress">10.0.0.50</Data>' in content
+        assert '<Data Name="IpPort">50123</Data>' in content
+        assert '<Data Name="NetworkAddress">' not in content
+        assert '<Data Name="NetworkPort">' not in content
 
     def test_emit_wfp_outbound_connection(self, format_def, temp_output):
         """Test emitting 5156 (WFP outbound connection)."""

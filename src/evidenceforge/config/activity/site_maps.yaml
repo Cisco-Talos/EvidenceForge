@@ -13,6 +13,10 @@
 #   {n}           - random integer 1-20
 #   {slug}        - random URL slug
 #
+# Cacheable subresources (CSS, JS, images, fonts, favicon) resolve placeholders
+# as stable per-site deployment assets. Page/nav/API placeholders can still vary
+# per session.
+#
 # Depended on by: generation engine (browsing session depth)
 # Depends on: dns_registry.yaml (domain keys should exist in registry)
 #

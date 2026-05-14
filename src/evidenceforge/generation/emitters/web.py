@@ -51,17 +51,31 @@ class WebEmitter(HostMultiplexEmitter):
     _defer_sorted_flush_until_close = True
 
     @staticmethod
-    def _sort_key(line: str) -> tuple[datetime, str]:
-        """Extract Apache/Nginx Combined Log timestamp for chronological flush sorting."""
+    def _sort_key(line: str) -> tuple[datetime, str, int, str]:
+        """Extract a stable chronological key for Combined Log sorting.
+
+        The rendered format has only second-level precision. When page HTML
+        and subresources land in the same rendered second, keep document
+        requests before assets so referrer chains read like browser fetches.
+        """
         start = line.find("[")
         end = line.find("]", start + 1)
         if start == -1 or end == -1:
-            return (datetime.max, line)
+            return (datetime.max, "", 99, line)
         try:
             ts = datetime.strptime(line[start + 1 : end], "%d/%b/%Y:%H:%M:%S %z")
         except ValueError:
-            return (datetime.max, line)
-        return (ts, line)
+            return (datetime.max, "", 99, line)
+        client_ip = line.split(" ", 1)[0]
+        path = ""
+        quote_start = line.find('"')
+        quote_end = line.find('"', quote_start + 1)
+        if quote_start != -1 and quote_end != -1:
+            request = line[quote_start + 1 : quote_end]
+            parts = request.split(" ")
+            if len(parts) >= 2:
+                path = parts[1]
+        return (ts, client_ip, _request_sort_bucket(path), line)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry an HttpContext and target a web server.
@@ -130,3 +144,34 @@ class WebEmitter(HostMultiplexEmitter):
         # Render template
         rendered = self._template.render(**context)
         return rendered.strip()
+
+
+def _request_sort_bucket(path: str) -> int:
+    """Order same-second web requests so documents precede dependent assets."""
+    static_prefixes = (
+        "/assets/",
+        "/static/",
+        "/favicon.ico",
+        "/images/",
+        "/img/",
+        "/fonts/",
+    )
+    static_suffixes = (
+        ".css",
+        ".js",
+        ".mjs",
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".webp",
+        ".ico",
+        ".woff",
+        ".woff2",
+    )
+    if path.startswith(static_prefixes) or path.endswith(static_suffixes):
+        return 1
+    if path.startswith(("/api/", "/graphql", "/owa/service.svc")):
+        return 2
+    return 0

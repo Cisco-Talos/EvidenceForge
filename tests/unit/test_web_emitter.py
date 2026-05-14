@@ -146,6 +146,37 @@ class TestWebEmitterCanHandle:
         assert "[15/Jul/2024:12:03:00 +0000]" in lines[1]
         assert "[15/Jul/2024:12:05:00 +0000]" in lines[2]
 
+    def test_web_access_same_second_sort_keeps_page_before_assets(self, tmp_path):
+        """Same-second rendered logs should keep document requests before subresources."""
+        fmt = load_format("web_access")
+        emitter = WebEmitter(fmt, tmp_path, buffer_size=10)
+        host = _make_host("server", ["web_server"])
+        ts = datetime(2024, 7, 15, 12, 1, 0, 500000, tzinfo=UTC)
+
+        for path, referrer in [
+            ("/assets/js/app.bundle.12345678.js", "https://web01.example.com/blog"),
+            ("/assets/css/main.12345678.css", "https://web01.example.com/blog"),
+            ("/blog", "https://web01.example.com/"),
+        ]:
+            http = HttpContext(
+                method="GET",
+                host="web01.example.com",
+                uri=path,
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                response_body_len=1024,
+                status_code=200,
+                referrer=referrer,
+            )
+            emitter.emit(_make_event(dst_host=host, http=http, timestamp=ts))
+
+        emitter.close()
+
+        lines = (tmp_path / "target" / "web_access.log").read_text().splitlines()
+        assert '"GET /blog HTTP/1.1"' in lines[0]
+        assert '"GET /assets/' in lines[1]
+        assert '"GET /assets/' in lines[2]
+
     def test_combined_log_quoted_fields_are_escaped(self, emitter):
         """Referer and User-Agent quotes should not break combined-log fields."""
         host = _make_host("server", ["web_server"])

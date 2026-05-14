@@ -306,6 +306,8 @@ domains:
           - {path: "/api/dashboard/data", type: "application/json", method: "POST"}
 ```
 
+Cacheable subresource placeholders for CSS, JavaScript, images, fonts, and favicons are resolved as stable per-site deployment assets. Page paths, navigation targets, and API request placeholders can still vary by session so browsing behavior does not become frozen.
+
 ### Tier 2: Tag-Based Synthesis
 
 Templates applied to any domain matching a tag. Defined in the `tag_templates:` section. Lower fidelity than curated entries.

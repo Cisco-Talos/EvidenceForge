@@ -313,7 +313,7 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 
 **Status and byte semantics:** For explicit proxy mode, client-side Zeek HTTP records describe the client-to-proxy exchange. Plain HTTP denials therefore show the proxy's status code and proxy response size, not the origin's status/body. For intercepted HTTPS, the CONNECT setup status is tracked separately from the inspected request status, so a successful tunnel setup can coexist with a denied inspected GET.
 
-**Session depth:** Persona HTTP traffic and inbound `web_server` human visitors generate multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, fonts, and same-origin API calls, producing realistic request clusters in proxy and web access logs. Persona browsing depth is controlled by `browsing_intensity`; inbound web visitor classes, tool/API requests, and User-Agent pools are controlled by `web_session_profiles.yaml`.
+**Session depth:** Persona HTTP traffic and inbound `web_server` human visitors generate multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, fonts, and same-origin API calls, producing realistic request clusters in proxy and web access logs. Cacheable asset placeholders from `site_maps.yaml` are stable per site deployment, while page/navigation/API placeholders can vary per session. Persona browsing depth is controlled by `browsing_intensity`; inbound web visitor classes, tool/API requests, and User-Agent pools are controlled by `web_session_profiles.yaml`.
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
