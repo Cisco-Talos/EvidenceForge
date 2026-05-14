@@ -158,6 +158,13 @@ Each row is a file; columns show what it depends on and what depends on it.
 | **depended on by** | Engine (runtime) | Drives Windows scheduled-process trigger windows, host drift, skips, and DHCP interface registry write policy |
 | validated by | `eforge validate-config` | Enforces coherent timing bounds, probability ranges, and non-empty DHCP registry value lists |
 
+### observation_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | scenario `observation_profile` | The scenario selects a named profile; the profile file owns source-level missingness/delay values |
+| **depended on by** | Event dispatcher, GROUND_TRUTH.md | Applies deterministic source-observation drops/delays after canonical state updates and reports source evidence status |
+| validated by | `eforge validate-config` and `eforge validate` | Config validation checks source-family names/ranges; scenario validation checks that the named profile exists |
+
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|

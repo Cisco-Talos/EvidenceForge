@@ -1444,6 +1444,13 @@ class Scenario(BaseModel):
     personas: list[Persona] | None = Field(default_factory=list)
     time_window: TimeWindow
     baseline_activity: BaselineActivity
+    observation_profile: str = Field(
+        default="complete",
+        description=(
+            "Named source-observation profile. Defaults to complete for "
+            "training-friendly perfect source coverage."
+        ),
+    )
     storyline: list[StorylineEvent] | None = Field(default_factory=list)
     red_herrings: list[RedHerringEvent] = Field(
         default_factory=list,
@@ -1466,4 +1473,12 @@ class Scenario(BaseModel):
         """Validate logon_grace_period uses a valid duration format."""
         if not re.match(r"^(\d+(ms|[hdms]))+$", v):
             raise ValueError("logon_grace_period must be a duration like '30m', '1h', '2h30m'")
+        return v
+
+    @field_validator("observation_profile")
+    @classmethod
+    def validate_observation_profile_name(cls, v: str) -> str:
+        """Validate observation profile names are simple config keys."""
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError("observation_profile must be a simple profile name")
         return v

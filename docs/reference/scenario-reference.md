@@ -22,6 +22,7 @@ personas: [...]               # Optional
 time_window: ...
 baseline_activity: ...
 logon_grace_period: "30m"    # Optional (default: "30m") — suppresses "no prior logon" warnings within this duration of time_window.start
+observation_profile: complete # Optional (default: complete) — named source-observation profile
 storyline: [...]              # Optional
 red_herrings: [...]          # Optional: suspicious-but-benign events for analyst training
 output: ...
@@ -391,6 +392,20 @@ baseline_activity:
 ```
 
 Intensity mapping: low=5, medium=15, high=40 events/user/hour.
+
+## Observation Profile
+
+```yaml
+observation_profile: complete     # complete | enterprise_standard | messy_collection
+```
+
+`observation_profile` selects a named source-observation profile from
+`config/activity/observation_profiles.yaml`. The default `complete` profile preserves
+training-friendly perfect source coverage and correlation. Non-default profiles may introduce
+deterministic source-level missingness and source-native delays while preserving canonical truth:
+they can make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but they
+must not create contradictory users, PIDs, ports, hashes, UIDs, or session identifiers across
+sources. `GROUND_TRUTH.md` records source evidence status when a non-complete profile is used.
 
 ## Storyline
 

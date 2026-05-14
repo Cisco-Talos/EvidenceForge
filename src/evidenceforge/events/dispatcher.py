@@ -30,10 +30,17 @@ Two-layer filtering for emitter selection:
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
+from evidenceforge.events.observation import (
+    ObservationPolicy,
+    ObservationStatus,
+    ObservationSummary,
+    source_family_for_format,
+)
 
 if TYPE_CHECKING:
     from evidenceforge.generation.emitters.base import LogEmitter
@@ -90,12 +97,27 @@ class EventDispatcher:
         emitters: dict[str, LogEmitter],
         visibility_engine: NetworkVisibilityEngine | None = None,
         output_start_time: datetime | None = None,
+        observation_policy: ObservationPolicy | None = None,
     ) -> None:
         self.state_manager = state_manager
         self.emitters = emitters
         self.visibility_engine = visibility_engine
         self.output_start_time = output_start_time
+        self.observation_policy = observation_policy or ObservationPolicy("complete")
+        self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self.storyline_cluster_id: str | None = None
+
+    @property
+    def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
+        """Return source evidence status summaries for ground truth generation."""
+        return {
+            cluster_id: {
+                source: summary.as_dict()
+                for source, summary in sorted(source_summaries.items())
+                if summary.as_dict()
+            }
+            for cluster_id, source_summaries in sorted(self._source_evidence_status.items())
+        }
 
     def _is_suppressed(self, timestamp: datetime) -> bool:
         """Return True if the event falls before the output window (warm-up period)."""
@@ -120,12 +142,23 @@ class EventDispatcher:
             event.storyline_cluster_id = self.storyline_cluster_id
         self.state_manager.apply(event)
         if self._is_suppressed(event.timestamp):
+            self._record_observation(event, "all", "out_of_window")
             return
-        for emitter in self._get_matching_emitters(event):
+        for format_name, emitter in self._get_matching_emitters(event):
+            decision = self.observation_policy.decide(format_name, event)
+            if decision.status == "dropped":
+                self._record_observation(event, format_name, "dropped")
+                continue
+            event_to_emit = event
+            status: ObservationStatus = "visible"
+            if decision.delay.total_seconds() > 0:
+                event_to_emit = replace(event, timestamp=event.timestamp + decision.delay)
+                status = "delayed"
+            self._record_observation(event, format_name, status)
             if event.raw is not None:
-                emitter.emit_raw(event.raw.fields)
+                emitter.emit_raw(event_to_emit.raw.fields)
             else:
-                emitter.emit(event)
+                emitter.emit(event_to_emit)
 
     def dispatch_raw(self, entry: RawLogEntry) -> None:
         """Route a raw log entry directly to a specific emitter (escape hatch).
@@ -137,9 +170,12 @@ class EventDispatcher:
         emitter = self.emitters.get(entry.target_emitter)
         if emitter is None:
             raise KeyError(f"Unknown emitter: {entry.target_emitter!r}")
+        decision = self.observation_policy.decide_raw(entry)
+        if decision.status == "dropped":
+            return
         emitter.emit_raw(entry.data)
 
-    def _get_matching_emitters(self, event: SecurityEvent) -> list[LogEmitter]:
+    def _get_matching_emitters(self, event: SecurityEvent) -> list[tuple[str, LogEmitter]]:
         """Two-layer filtering: format eligibility + network visibility."""
         # Raw event routing: target a single specific emitter
         if event.raw is not None:
@@ -148,8 +184,9 @@ class EventDispatcher:
                 logger.warning(f"Raw event targets unknown emitter: {event.raw.target_format!r}")
                 return []
             if event.local_only and event.raw.target_format in _NETWORK_FORMATS:
+                self._record_observation(event, event.raw.target_format, "filtered")
                 return []
-            return [emitter]
+            return [(event.raw.target_format, emitter)]
 
         # For network events, determine which formats can see this traffic
         # and annotate the event with observing sensor hostnames
@@ -246,10 +283,27 @@ class EventDispatcher:
                 continue
             # Host-local events (same src/dst IP) are invisible to network sensors
             if event.local_only and format_name in _NETWORK_FORMATS:
+                self._record_observation(event, format_name, "filtered")
                 continue
             # Network visibility filter: only applies to network-format emitters
             if visible_formats is not None and format_name in _NETWORK_FORMATS:
                 if format_name not in visible_formats:
+                    self._record_observation(event, format_name, "filtered")
                     continue
-            matched.append(emitter)
+            matched.append((format_name, emitter))
         return matched
+
+    def _record_observation(
+        self,
+        event: SecurityEvent,
+        format_name: str,
+        status: ObservationStatus,
+    ) -> None:
+        """Record source evidence status for storyline/red-herring ground truth."""
+        cluster_id = event.storyline_cluster_id
+        if not cluster_id:
+            return
+        source = source_family_for_format(format_name)
+        cluster = self._source_evidence_status.setdefault(cluster_id, {})
+        source_counts = cluster.setdefault(source, ObservationSummary())
+        source_counts.record(status)

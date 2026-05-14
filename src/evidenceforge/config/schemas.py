@@ -1178,6 +1178,105 @@ class EndpointNoiseConfig(BaseModel, extra="forbid"):
     registry_noise: RegistryNoiseConfig
 
 
+# --- Observation Profiles ---
+
+
+class ObservationDelayRange(BaseModel, extra="forbid"):
+    """Source-observation delay bounds in milliseconds."""
+
+    min_ms: int = Field(ge=0, le=3_600_000)
+    max_ms: int = Field(ge=0, le=3_600_000)
+
+    @model_validator(mode="after")
+    def bounds_are_ordered(self) -> Self:
+        """Reject inverted delay ranges."""
+        if self.min_ms > self.max_ms:
+            raise ValueError("min_ms must be <= max_ms")
+        return self
+
+
+class ObservationMultiplierRange(BaseModel, extra="forbid"):
+    """Deterministic per-host multiplier bounds for source missingness."""
+
+    min: float = Field(ge=0.0, le=10.0)
+    max: float = Field(ge=0.0, le=10.0)
+
+    @model_validator(mode="after")
+    def bounds_are_ordered(self) -> Self:
+        """Reject inverted multiplier ranges."""
+        if self.min > self.max:
+            raise ValueError("min must be <= max")
+        return self
+
+
+class ObservationSourceProfile(BaseModel, extra="forbid"):
+    """Source-level observation behavior for a profile."""
+
+    missingness: float = Field(default=0.0, ge=0.0, le=1.0)
+    delay_ms: ObservationDelayRange = Field(
+        default_factory=lambda: ObservationDelayRange(min_ms=0, max_ms=0)
+    )
+    host_missingness_multiplier: ObservationMultiplierRange = Field(
+        default_factory=lambda: ObservationMultiplierRange(min=1.0, max=1.0)
+    )
+
+
+class ObservationProfileEntry(BaseModel, extra="forbid"):
+    """A named source-observation profile."""
+
+    VALID_SOURCE_FAMILIES: ClassVar[set[str]] = {
+        "windows_security",
+        "sysmon",
+        "ecar",
+        "syslog",
+        "bash_history",
+        "zeek",
+        "proxy",
+        "web",
+        "asa",
+        "ids",
+    }
+
+    description: str = ""
+    default: ObservationSourceProfile = Field(default_factory=ObservationSourceProfile)
+    sources: dict[str, ObservationSourceProfile] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def source_names_are_known(self) -> Self:
+        """Reject source-family typos."""
+        unknown = sorted(set(self.sources) - self.VALID_SOURCE_FAMILIES)
+        if unknown:
+            raise ValueError(f"unknown observation source families: {', '.join(unknown)}")
+        return self
+
+
+class ObservationProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for observation_profiles.yaml."""
+
+    profiles: dict[str, ObservationProfileEntry]
+
+    @field_validator("profiles")
+    @classmethod
+    def profile_names_are_simple(
+        cls, v: dict[str, ObservationProfileEntry]
+    ) -> dict[str, ObservationProfileEntry]:
+        if not v:
+            raise ValueError("profiles must not be empty")
+        invalid = sorted(
+            name for name in v if not name or not name.replace("_", "").replace("-", "").isalnum()
+        )
+        if invalid:
+            raise ValueError(f"invalid observation profile names: {', '.join(invalid)}")
+        return v
+
+    @model_validator(mode="after")
+    def complete_profile_exists(self) -> Self:
+        """The complete profile is the stable training-friendly default."""
+        if "complete" not in self.profiles:
+            raise ValueError('profiles must include "complete"')
+        return self
+
+
 # --- CreateRemoteThread Patterns ---
 
 

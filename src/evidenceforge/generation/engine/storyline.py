@@ -1147,18 +1147,20 @@ class StorylineMixin:
         Returns a malicious_event dict for GROUND_TRUTH.md.
         """
         rng = _get_rng()
+        dispatcher = getattr(self, "dispatcher", None)
         malicious_event = {
             "time": time,
             "actor": actor.username,
             "system": system.hostname,
             "activity": activity,
             "type": spec.type,
+            "storyline_cluster_id": getattr(dispatcher, "storyline_cluster_id", None),
         }
 
         def _ground_truth_uid(uid: str, src_ip: str, dst_ip: str) -> str:
             if not uid:
                 return "(filtered by sensor placement)"
-            visibility = getattr(self.dispatcher, "visibility_engine", None)
+            visibility = getattr(dispatcher, "visibility_engine", None)
             if visibility is None:
                 return uid
             from evidenceforge.events.dispatcher import expand_formats
