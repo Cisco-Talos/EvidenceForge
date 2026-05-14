@@ -16,6 +16,7 @@ from evidenceforge.generation.activity.edr_pools import (
     materialize_edr_template,
     materialize_edr_template_group,
     normalize_defender_platform_path,
+    normalize_windows_binary_path,
     select_file_side_effect,
 )
 
@@ -349,6 +350,21 @@ class TestTemplateMaterialization:
             )
             == rf"C:\ProgramData\Microsoft\Windows Defender\Platform\{version}\MpClient.dll"
         )
+
+    def test_normalizes_winsxs_component_build_per_host_os(self):
+        path = (
+            r"C:\Windows\WinSxS\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_"
+            r"10.0.19041.3636_none_7c91d6e7c9f7f1f5\TiWorker.exe"
+        )
+
+        server_path = normalize_windows_binary_path(path, "DC-01", "Windows Server 2022")
+        workstation_path = normalize_windows_binary_path(path, "WS-01", "Windows 11")
+
+        assert r"\WinSxS\amd64_microsoft-windows-servicingstack_" in server_path
+        assert "10.0.20348." in server_path
+        assert "10.0.22621." in workstation_path
+        assert "10.0.19041.3636" not in server_path
+        assert server_path.endswith(r"\TiWorker.exe")
 
     def test_materializes_related_templates_with_shared_placeholders(self):
         import random

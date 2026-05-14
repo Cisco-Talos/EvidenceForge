@@ -730,6 +730,34 @@ class TestDhcpLease:
             "bound to 10.0.10.2 -- renewal in 3600 seconds.",
         ]
 
+    def test_generate_dhcp_lease_uses_udp_header_accounting(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """DHCP renewal conn counters should use 28 bytes of IPv4/UDP overhead per packet."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_dhcp_lease(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
+            msg_types=["REQUEST", "ACK"],
+        )
+
+        dhcp_events = [
+            call[0][0]
+            for emitter in mock_emitters.values()
+            if emitter.emit.called
+            for call in emitter.emit.call_args_list
+            if call[0][0].event_type == "dhcp_lease"
+        ]
+        net = dhcp_events[-1].network
+        assert net.orig_pkts == 1
+        assert net.resp_pkts == 1
+        assert net.orig_ip_bytes - net.orig_bytes == 28
+        assert net.resp_ip_bytes - net.resp_bytes == 28
+
 
 class TestAnonymousLogon:
     """Anonymous logon events dispatch without creating sessions."""

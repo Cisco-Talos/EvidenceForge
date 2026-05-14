@@ -1545,6 +1545,7 @@ class TestActivityGenerator:
             and event.file is not None
             and event.file.path == r"C:\Windows\PSEXESVC.exe"
         )
+        assert service_event.service.service_start_type == "3"
         assert file_event.timestamp < service_event.timestamp
 
     def test_remote_service_install_emits_smb_and_rpc_network_evidence(

@@ -713,6 +713,30 @@ class TestWeirdProtocolConstraint:
             event.network.resp_ip_bytes - event.network.resp_bytes
         )
 
+    def test_udp_dns_one_packet_ip_bytes_use_ipv4_udp_overhead(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """One-packet UDP DNS sides should use 20-byte IPv4 + 8-byte UDP overhead."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.1",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            hostname="resolver.example.com",
+            orig_bytes=60,
+            resp_bytes=120,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_pkts == 1
+        assert event.network.resp_pkts == 1
+        assert event.network.orig_ip_bytes - event.network.orig_bytes == 28
+        assert event.network.resp_ip_bytes - event.network.resp_bytes == 28
+
     def test_inferred_tcp_servfail_dns_row_keeps_tcp_ip_overhead(
         self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
     ):

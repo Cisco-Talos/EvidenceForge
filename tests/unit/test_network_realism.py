@@ -1,7 +1,7 @@
 # Tests for network realism fixes from expert reviewer feedback.
 #
 # Verifies statistical distributions are realistic:
-# - UDP/TCP overhead not constant/uniform
+# - UDP/TCP overhead is source-native for each protocol
 # - NTP timing varies by stratum
 # - SSL has failure rate, diverse history, weighted ciphers
 # - Proxy bytes differ from Zeek bytes
@@ -39,18 +39,13 @@ def _proxy_ua_pool(*path: str) -> list[str]:
 class TestProtocolOverhead:
     """Bug #1 + #8: UDP/TCP overhead distributions."""
 
-    def test_udp_overhead_mostly_28_with_variance(self):
+    def test_udp_overhead_uses_ipv4_udp_header_size(self):
         rng = random.Random(42)
         samples = [
             rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
             for _ in range(1000)
         ]
-        counts = Counter(samples)
-        # Most should be 28 but not all
-        assert counts[28] > 800
-        assert counts[28] < 1000  # some variance
-        assert len(counts) > 1
-        assert max(samples) <= 68
+        assert set(samples) == {28}
 
     def test_tcp_overhead_bimodal_favoring_52(self):
         rng = random.Random(42)

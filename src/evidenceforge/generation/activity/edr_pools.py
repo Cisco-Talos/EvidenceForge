@@ -156,6 +156,40 @@ def normalize_defender_platform_path(path: str, host_key: str) -> str:
     return f"{prefix}{defender_platform_version(host_key)}\\{suffix}"
 
 
+def normalize_windows_component_path(path: str, host_os: str, host_key: str) -> str:
+    """Keep WinSxS component path versions consistent with the host OS build."""
+    normalized = path.replace("/", "\\")
+    marker = "\\WinSxS\\"
+    marker_index = normalized.lower().find(marker.lower())
+    if marker_index == -1:
+        return path
+
+    component_start = marker_index + len(marker)
+    component, separator, remainder = normalized[component_start:].partition("\\")
+    if not component or not separator:
+        return normalized
+    if not re.search(r"10\.0\.\d+\.\d+", component):
+        return normalized
+
+    build = _windows_component_build(host_os, host_key)
+    patch = 1 + (_stable_seed(f"windows_component_patch:{host_key}:{component}") % 5000)
+    component = re.sub(r"10\.0\.\d+\.\d+", f"{build}.{patch}", component, count=1)
+    component_hash = f"{_stable_seed(f'windows_component_hash:{host_key}:{component}'):016x}"[-16:]
+    component = re.sub(
+        r"(_none_)[0-9a-fA-F]{16}",
+        lambda match: f"{match.group(1)}{component_hash}",
+        component,
+        count=1,
+    )
+    return f"{normalized[:component_start]}{component}{separator}{remainder}"
+
+
+def normalize_windows_binary_path(path: str, host_key: str, host_os: str = "") -> str:
+    """Normalize host-specific Windows binary paths before state/rendering."""
+    normalized = normalize_defender_platform_path(path, host_key)
+    return normalize_windows_component_path(normalized, host_os, host_key)
+
+
 def _windows_component_build(host_os: str, host_key: str) -> str:
     """Return the CBS package build family for a Windows host."""
     normalized = host_os.lower()
@@ -255,7 +289,7 @@ def materialize_edr_template(
 
     materialized = re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
     materialized = materialized.replace("{{", "{").replace("}}", "}")
-    return normalize_defender_platform_path(materialized, host_key)
+    return normalize_windows_binary_path(materialized, host_key, host_os)
 
 
 def materialize_edr_template_group(
@@ -312,11 +346,12 @@ def materialize_edr_template_group(
         return str(replacements[token]) if token in replacements else match.group(0)
 
     return tuple(
-        normalize_defender_platform_path(
+        normalize_windows_binary_path(
             re.sub(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", _replace, template)
             .replace("{{", "{")
             .replace("}}", "}"),
             host_key,
+            host_os,
         )
         for template in templates
     )

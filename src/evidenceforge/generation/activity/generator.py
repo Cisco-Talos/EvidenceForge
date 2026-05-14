@@ -62,7 +62,7 @@ from evidenceforge.events.contexts import (
     RemoteThreadContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
+from evidenceforge.generation.activity.edr_pools import normalize_windows_binary_path
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
@@ -968,10 +968,10 @@ _CONN_HISTORY = {s[0]: s[2] for s in TCP_CONN_STATE_DISTRIBUTION}
 
 # --- Network realism constants ---
 
-# UDP/IP header overhead: standard IPv4 (28), VLAN/QinQ and IP options variants.
-# Keep this bounded by the physical IPv4 maximum: IP header 60 + UDP header 8.
-_UDP_OVERHEAD_VALUES = (28, 32, 52, 60, 68)
-_UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
+# UDP/IP header overhead for source-native Zeek IPv4 UDP accounting: 20-byte IP
+# header + 8-byte UDP header. Routine DNS/DHCP must not borrow TCP option sizes.
+_UDP_OVERHEAD_VALUES = (28,)
+_UDP_OVERHEAD_WEIGHTS = (1,)
 
 # TCP header overhead: bimodal around 40/52/60
 # 40=no options (legacy), 52=timestamps (dominant), 60=SACK+ts, 64=full
@@ -4216,7 +4216,7 @@ class ActivityGenerator:
             command_line = (
                 r"C:\Windows\PSEXESVC.exe" if "accepteula" in command_line.lower() else command_line
             )
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
+        process_name = normalize_windows_binary_path(process_name, system.hostname, system.os)
         if _exe_lower in _HIGH_INTEGRITY_EXES:
             _integrity = "High"
         elif _get_os_category(system.os) == "windows" and any(
@@ -4356,7 +4356,7 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
         # Phase 1: Allocate IDs from StateManager
-        process_name = normalize_defender_platform_path(process_name, system.hostname)
+        process_name = normalize_windows_binary_path(process_name, system.hostname, system.os)
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
@@ -5934,7 +5934,7 @@ class ActivityGenerator:
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
         if proto == "udp":
-            overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
+            overhead = 28
         elif proto == "icmp":
             overhead = 28
         else:
@@ -7402,6 +7402,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        process_name = normalize_windows_binary_path(process_name, system.hostname, system.os)
         exe_name = ntpath.basename(process_name).lower()
         if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:
             for proc in self.state_manager.get_processes_on_system(system.hostname):
@@ -9433,6 +9434,10 @@ class ActivityGenerator:
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         self._emit_remote_service_control_network_evidence(user, system, time)
+        if service_start_type == "2" and (
+            service_name.lower() == "psexesvc" or "psexesvc" in service_file_name.lower()
+        ):
+            service_start_type = "3"
         if _get_os_category(system.os) == "windows":
             service_path = service_file_name.replace("%SystemRoot%", r"C:\Windows")
             service_path = service_path.replace("%systemroot%", r"C:\Windows")
@@ -10114,15 +10119,15 @@ class ActivityGenerator:
             )
             return False
         target_proc = self.state_manager.get_process(system.hostname, target_pid)
-        source_image = normalize_defender_platform_path(
-            source_proc.image or source_image, system.hostname
+        source_image = normalize_windows_binary_path(
+            source_proc.image or source_image, system.hostname, system.os
         )
         if target_proc is not None:
-            target_image = normalize_defender_platform_path(
-                target_proc.image or target_image, system.hostname
+            target_image = normalize_windows_binary_path(
+                target_proc.image or target_image, system.hostname, system.os
             )
         else:
-            target_image = normalize_defender_platform_path(target_image, system.hostname)
+            target_image = normalize_windows_binary_path(target_image, system.hostname, system.os)
         module_key = (start_module or target_image).rsplit("\\", 1)[-1].lower()
         module_base = (
             0x00007FF600000000 + (_stable_seed(f"module_base:{module_key}") % 0x700000) * 0x1000
@@ -10228,15 +10233,15 @@ class ActivityGenerator:
             )
             return False
         target_proc = self.state_manager.get_process(system.hostname, target_pid)
-        source_image = normalize_defender_platform_path(
-            source_proc.image or source_image, system.hostname
+        source_image = normalize_windows_binary_path(
+            source_proc.image or source_image, system.hostname, system.os
         )
         if target_proc is not None:
-            target_image = normalize_defender_platform_path(
-                target_proc.image or target_image, system.hostname
+            target_image = normalize_windows_binary_path(
+                target_proc.image or target_image, system.hostname, system.os
             )
         else:
-            target_image = normalize_defender_platform_path(target_image, system.hostname)
+            target_image = normalize_windows_binary_path(target_image, system.hostname, system.os)
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
@@ -10306,8 +10311,8 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
 
-        image = normalize_defender_platform_path(image, system.hostname)
-        dll_path = normalize_defender_platform_path(dll_path, system.hostname)
+        image = normalize_windows_binary_path(image, system.hostname, system.os)
+        dll_path = normalize_windows_binary_path(dll_path, system.hostname, system.os)
         time = self._clamp_time_after_process_start(system, pid, time)
         proc = self.state_manager.get_process(system.hostname, pid)
         if proc is None:
@@ -10442,8 +10447,9 @@ class ActivityGenerator:
                 resp_bytes=300,
                 orig_pkts=2 if "DISCOVER" in msg_types else 1,
                 resp_pkts=2 if "OFFER" in msg_types else 1,
-                orig_ip_bytes=356 if "DISCOVER" in msg_types else 208,
-                resp_ip_bytes=356,
+                orig_ip_bytes=(300 if "DISCOVER" in msg_types else 180)
+                + (2 if "DISCOVER" in msg_types else 1) * 28,
+                resp_ip_bytes=300 + (2 if "OFFER" in msg_types else 1) * 28,
                 conn_state="SF",
                 history="DdDd" if "DISCOVER" in msg_types else "Dd",
                 local_orig=True,

@@ -174,7 +174,7 @@ class TestTCPOverhead:
         net = event.network
         if net.orig_pkts and net.orig_ip_bytes and net.orig_bytes:
             overhead_per_pkt = (net.orig_ip_bytes - net.orig_bytes) / net.orig_pkts
-            assert overhead_per_pkt in (28, 32, 52, 60, 78)
+            assert overhead_per_pkt == 28
 
 
 class TestPerHostEventRecordIDs:

@@ -319,6 +319,41 @@ class TestGenerateSystemProcess:
         assert event.event_type == "system_process_create"
         assert event.auth.username == "SYSTEM"
 
+    def test_winsxs_system_process_path_matches_host_build(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        server = System(
+            hostname="SRV-01",
+            ip="10.0.10.20",
+            os="Windows Server 2022",
+            type="server",
+        )
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            server.hostname,
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "SYSTEM",
+            "System",
+        )
+
+        activity_gen.generate_system_process(
+            system=server,
+            time=timestamp,
+            process_name=(
+                r"C:\Windows\WinSxS\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_"
+                r"10.0.19041.3636_none_7c91d6e7c9f7f1f5\TiWorker.exe"
+            ),
+            command_line="TiWorker.exe -Embedding",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert "10.0.20348." in event.process.image
+        assert "10.0.19041.3636" not in event.process.image
+
     def test_emits_linux_syslog(
         self, activity_gen, linux_system, timestamp, state_manager, mock_emitters
     ):
