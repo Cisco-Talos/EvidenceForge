@@ -68,7 +68,11 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
-from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import (
+    get_timing_window,
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.generation.activity.windows_auth_realism import (
     failed_logon_config,
     min_unlock_gap_seconds,
@@ -6883,9 +6887,21 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
+            ssh_timing_seed = (
+                target_system.hostname,
+                source_ip,
+                src_port,
+                user.username,
+                time.isoformat(),
+            )
+            connection_delta = sample_packet_timing_delta(
+                "source.sshd_connection_before_auth",
+                seed_parts=ssh_timing_seed,
+            )
+
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
-                timestamp=time - timedelta(seconds=1),
+                timestamp=time - connection_delta,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -6918,10 +6934,23 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
+            ssh_timing_seed = (
+                target_system.hostname,
+                source_ip,
+                src_port,
+                user.username,
+                time.isoformat(),
+            )
+            pam_delta = sample_packet_timing_delta(
+                "source.sshd_pam_after_auth",
+                seed_parts=ssh_timing_seed,
+            )
+
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             hostname = target_system.hostname
+            pam_time = time + pam_delta
             pam_event = SecurityEvent(
-                timestamp=time + timedelta(seconds=1),
+                timestamp=pam_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -6938,7 +6967,10 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
-            logind_time = time + timedelta(seconds=2)
+            logind_time = pam_time + sample_packet_timing_delta(
+                "source.systemd_logind_after_pam",
+                seed_parts=ssh_timing_seed,
+            )
             # Session ID: monotonic + unique per host. StateManager owns this
             # sequence because baseline syslog noise and explicit SSH sessions
             # both produce systemd-logind messages for the same host.

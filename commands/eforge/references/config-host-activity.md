@@ -338,6 +338,16 @@ relationships:
     position: after
     min_ms: 0
     max_ms: 850
+  source.sshd_connection_before_auth:
+    class: source_latency
+    position: before
+    min_ms: 120
+    max_ms: 950
+  source.sshd_pam_after_auth:
+    class: source_latency
+    position: after
+    min_ms: 80
+    max_ms: 650
   network.tls_completed_min_duration:
     class: same_observation
     position: after

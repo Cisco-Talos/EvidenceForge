@@ -4928,11 +4928,11 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(10, 50)
+                    _msg_offset = rng.randint(10_000, 50_000)
                     login_times: list[datetime] = []
                     for _ in range(4):
-                        login_times.append(ts + timedelta(milliseconds=_msg_offset))
-                        _msg_offset += rng.randint(1, 50)
+                        login_times.append(ts + timedelta(microseconds=_msg_offset))
+                        _msg_offset += rng.randint(1_000, 50_000)
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
                         system.hostname,
                         rng,

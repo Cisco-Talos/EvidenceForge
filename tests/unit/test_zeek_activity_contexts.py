@@ -445,7 +445,7 @@ class TestSslContextPopulation:
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
 
-    def test_ssh_syslog_sub_events_are_second_ordered(self, activity_gen):
+    def test_ssh_syslog_sub_events_are_jittered_and_ordered(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -456,7 +456,7 @@ class TestSslContextPopulation:
             type="server",
             roles=["web_server"],
         )
-        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        base_time = datetime(2024, 1, 15, 10, 0, 0, 432016, tzinfo=UTC)
 
         gen.generate_ssh_session(
             user=user,
@@ -477,11 +477,17 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert times == [
-            base_time - timedelta(seconds=1),
-            base_time,
-            base_time + timedelta(seconds=1),
-        ]
+        assert times[0] < times[1] < times[2]
+        assert times[1] == base_time
+        assert times[1] - times[0] != timedelta(seconds=1)
+        assert times[2] - times[1] != timedelta(seconds=1)
+        assert len({event_time.microsecond for event_time in times}) > 1
+
+        logind_event = next(
+            event for event in events if event.syslog and event.syslog.app_name == "systemd-logind"
+        )
+        assert logind_event.timestamp > times[2]
+        assert logind_event.timestamp - times[2] != timedelta(seconds=1)
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen

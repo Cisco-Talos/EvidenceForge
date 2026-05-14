@@ -71,6 +71,21 @@ relationships:
     position: after
     min_ms: 1
     max_ms: 11
+  source.sshd_connection_before_auth:
+    class: source_latency
+    position: before
+    min_ms: 120
+    max_ms: 950
+  source.sshd_pam_after_auth:
+    class: source_latency
+    position: after
+    min_ms: 80
+    max_ms: 650
+  source.systemd_logind_after_pam:
+    class: source_latency
+    position: after
+    min_ms: 120
+    max_ms: 900
   source.ecar_remote_thread:
     class: source_latency
     position: after
