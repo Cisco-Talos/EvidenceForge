@@ -742,6 +742,8 @@ def validate_config() -> ValidationResult:
         content_types = entry.get("content_types")
         domain_class = entry.get("domain_class")
         referrer_policy = entry.get("referrer_policy", "normal")
+        plain_http_policy = entry.get("plain_http_policy")
+        plain_http_status = entry.get("plain_http_status")
         if not isinstance(paths, list) or not paths:
             result.issues.append(
                 Issue(
@@ -774,6 +776,27 @@ def validate_config() -> ValidationResult:
                     "ERROR",
                     "proxy_uri_templates.yaml",
                     f'Domain "{domain}" has invalid referrer_policy "{referrer_policy}"',
+                )
+            )
+        if plain_http_policy is not None and plain_http_policy not in {
+            "redirect_https",
+            "hsts_redirect",
+        }:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" has invalid plain_http_policy "{plain_http_policy}"',
+                )
+            )
+        if plain_http_status is not None and (
+            not isinstance(plain_http_status, int) or not 300 <= plain_http_status <= 399
+        ):
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "proxy_uri_templates.yaml",
+                    f'Domain "{domain}" has invalid plain_http_status "{plain_http_status}"',
                 )
             )
         if domain_class in _INFRA_PROXY_CLASSES:

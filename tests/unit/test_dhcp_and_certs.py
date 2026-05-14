@@ -340,6 +340,7 @@ class TestTlsIssuers:
 
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
         assert "download.windowsupdate.com" not in linux_domains
+        assert "ctldl.windowsupdate.com" not in linux_domains
 
     def test_tls_destination_picker_excludes_cleartext_cert_infra_domains(self):
         """OCSP/CRL responders are HTTP objects, not direct TLS SNI destinations."""

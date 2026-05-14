@@ -845,6 +845,48 @@ class TestExplicitProxyVisibility:
         assert egress_http_events[0].http.uri == "/jquery.js"
         assert egress_http_events[0].http.user_agent == "Mozilla/5.0"
 
+    def test_plain_http_hsts_destination_redirects_instead_of_200_content(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip=resolve_domain_ip("www.facebook.com", src_host="WKS-01"),
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.8,
+            orig_bytes=450,
+            resp_bytes=35_000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="www.facebook.com",
+            conn_state="SF",
+        )
+
+        origin_ip = resolve_domain_ip("www.facebook.com", src_host="PROXY-01")
+        egress_http_events = [
+            call.args[0]
+            for call in emitters["zeek_http"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.3.10"
+            and call.args[0].network.dst_ip == origin_ip
+            and call.args[0].network.dst_port == 80
+        ]
+        assert egress_http_events
+        assert egress_http_events[0].http.host == "www.facebook.com"
+        assert egress_http_events[0].http.status_code == 301
+        assert egress_http_events[0].http.status_msg == "Moved Permanently"
+        assert egress_http_events[0].http.response_body_len < 500
+
     def test_inspected_https_upload_client_leg_does_not_double_count_request_body(self):
         generator, emitters = _generator(
             [

@@ -75,7 +75,8 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | `dns_registry.yaml` | Domain keys should exist in dns_registry |
-| **depended on by** | Engine (runtime) | Provides realistic URI paths for proxy log generation |
+| **depended on by** | Engine (runtime) | Provides realistic URI paths, domain classes, referrer behavior, content semantics, and plain-HTTP redirect policy for proxy/HTTP generation |
+| validated by | `eforge validate-config` | Flags invalid `plain_http_policy` values and browser-like templates on certificate/update infrastructure classes |
 
 ### proxy_user_agents.yaml
 | Direction | File | Relationship |
@@ -167,7 +168,7 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates match issuer names/patterns selected from issuer config; OCSP responder hosts must exist in dns_registry; destination profiles can pull domains by DNS tag |
-| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection, including OS-specific destination overrides |
 
 ### smb_file_transfers.yaml
 | Direction | File | Relationship |

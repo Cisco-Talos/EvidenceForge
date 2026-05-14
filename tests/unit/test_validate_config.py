@@ -208,6 +208,38 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_plain_http_policy(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_uri
+
+        real_loader = proxy_uri.load_proxy_uri_templates
+
+        def load_invalid_proxy_templates():
+            data = real_loader()
+            domains = dict(data.get("domains", {}))
+            domains["www.facebook.com"] = {
+                **domains["www.facebook.com"],
+                "plain_http_policy": "serve_full_page",
+                "plain_http_status": 200,
+            }
+            return {**data, "domains": domains}
+
+        monkeypatch.setattr(proxy_uri, "load_proxy_uri_templates", load_invalid_proxy_templates)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_uri_templates.yaml"
+            and 'invalid plain_http_policy "serve_full_page"' in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_uri_templates.yaml"
+            and 'invalid plain_http_status "200"' in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_timing_profile_window(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 

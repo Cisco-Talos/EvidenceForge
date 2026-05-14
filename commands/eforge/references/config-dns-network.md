@@ -195,6 +195,8 @@ domains:
     os: windows                        # Optional, restricts to OS
     domain_class: browser              # Optional: browser, ocsp, crl, windows_update, etc.
     referrer_policy: normal            # Optional: normal or none
+    plain_http_policy: redirect_https   # Optional: redirect plain HTTP to HTTPS
+    plain_http_status: 301              # Optional: redirect status code, default 301
     paths:                             # Required, list of URI path templates
       - "/api/v2/endpoint/{guid}"
       - "/static/resource.js"
@@ -210,6 +212,9 @@ domains:
 | `os` | string | no | Restrict to `windows` or `linux` |
 | `domain_class` | string | no | Domain behavior class. Certificate and update infrastructure should use classes such as `ocsp`, `crl`, or `windows_update` rather than browser-like defaults. |
 | `referrer_policy` | string | no | `normal` emits realistic browser referrers where appropriate; `none` suppresses referrers for certificate/update infrastructure. |
+| `plain_http_policy` | string | no | Plain HTTP behavior for HTTPS-first public sites. Supported values: `redirect_https`, `hsts_redirect`. |
+| `plain_http_status` | integer | no | HTTP status code for `plain_http_policy`; defaults to `301`. |
+| `plain_http_content_type` | string | no | MIME type for the redirect body; defaults to `text/html`. |
 | `paths` | list[string] | yes | URI path templates with optional `{placeholder}` variables |
 | `content_type` | string | no | MIME type for responses |
 | `methods` | list[string] | no | HTTP methods (default: `["GET"]`) |
@@ -244,6 +249,8 @@ When the skill auto-generates a proxy_uri_templates entry for a new domain, use 
 For OCSP, CRL, and software update domains, avoid generic browser paths such as `/login`, `/favicon.ico`, `.css`, or `.js`. Use the domain's native protocol paths/content types and set `referrer_policy: none`; `eforge validate-config` flags browser-like infrastructure templates.
 
 Domains with non-browser `domain_class` values (`ocsp`, `crl`, `software_update`, `telemetry`, `windows_update`, or `windows_trust_list`) are excluded from browser-style site-map sessions. This keeps certificate checks, telemetry calls, and update probes from accidentally producing page loads, favicons, CSS, or search referrers.
+
+For HTTPS-first public sites, add `plain_http_policy: redirect_https` so port-80 requests render as small source-native 3xx responses instead of full content fetches. This policy applies to generated proxy and Zeek HTTP contexts without changing HTTPS behavior.
 
 ---
 

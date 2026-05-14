@@ -186,6 +186,33 @@ destinations:
         - ocsp.int-x3.letsencrypt.org
         - r3.o.lencr.org
         - x1.c.lencr.org
+      os_overrides:
+        windows:
+          domains:
+            - ocsp.digicert.com
+            - crl.microsoft.com
+            - ctldl.windowsupdate.com
+            - crl3.digicert.com
+            - crl4.digicert.com
+            - ocsp.sectigo.com
+            - ocsp.globalsign.com
+            - ocsp.pki.goog
+            - crls.pki.goog
+            - ocsp.int-x3.letsencrypt.org
+            - r3.o.lencr.org
+            - x1.c.lencr.org
+        linux:
+          domains:
+            - ocsp.digicert.com
+            - crl3.digicert.com
+            - crl4.digicert.com
+            - ocsp.sectigo.com
+            - ocsp.globalsign.com
+            - ocsp.pki.goog
+            - crls.pki.goog
+            - ocsp.int-x3.letsencrypt.org
+            - r3.o.lencr.org
+            - x1.c.lencr.org
     - name: package_update
       weight: 18
       dns_tags: [background]

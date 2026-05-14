@@ -155,10 +155,12 @@ Configuration files are interconnected. When you add an entry to one file, other
 |----------------|----------------|
 | A new domain | `proxy_uri_templates.yaml` (URI paths), `site_maps.yaml` (browsing depth) |
 | Certificate/update/telemetry proxy behavior | `proxy_uri_templates.yaml` (`domain_class`, infra-specific paths/content types, and `referrer_policy: none`; non-browser classes are excluded from site-map browsing sessions) |
+| HTTPS-first plain HTTP behavior | `proxy_uri_templates.yaml` (`plain_http_policy`, optional redirect status/content type) so public sites that redirect or HSTS-upgrade do not emit full port-80 content |
 | New proxy User-Agent behavior | `proxy_user_agents.yaml` (workstation/server UA pools, package-manager host bindings, domain-specific update/cert/telemetry overrides) |
 | Inbound web visitor mix | `web_session_profiles.yaml` (visitor classes, configured tool/API requests, and User-Agent pools). Human visitor sessions use `site_maps.yaml`; cacheable subresource placeholders are stable per site deployment; timing lives in `timing_profiles.yaml`; `traffic_rates.yaml` `web` counts top-level actions only. |
 | New TLS issuer behavior | `tls_issuers.yaml` (issuer validity, key-type weights, and domain CA overrides). RSA-branded issuer names should only advertise RSA key types unless the chain/signature model is also updated to distinguish issuer signature algorithm from leaf public-key algorithm. |
 | New TLS OCSP responder behavior | `tls_realism.yaml` (`ocsp.responders`) plus `dns_registry.yaml` for each responder hostname |
+| OS-specific TLS/update destination behavior | `tls_realism.yaml` (`destinations.profiles[].os_overrides`) to keep Windows trust-list/update endpoints and Linux package/certificate traffic in source-native pools |
 | Kerberos TGT pre-auth realism | `kerberos_realism.yaml` (`tgt_success.pre_auth_types`, ticket options, encryption types, and PKINIT certificate profiles). Run `eforge validate-config`; PKINIT (`PreAuthType: 15`) requires populated certificate profile support. |
 | Windows auth realism | `windows_auth_realism.yaml` (`workstation_lock.min_unlock_gap_seconds`, failed-logon local/network profiles, and optional companion network connection rates) |
 | Baseline auth noise | `auth_noise.yaml` (stale scheduled-credential account pools, host counts, recurrence intervals, jitter, skips, and backoff) |

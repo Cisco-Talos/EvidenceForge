@@ -78,6 +78,41 @@ def is_browser_like_proxy_domain(hostname: str) -> bool:
     return domain_class not in _NON_BROWSER_DOMAIN_CLASSES
 
 
+def _template_entry(hostname: str, domain_tags: list[str] | None = None) -> dict[str, Any]:
+    """Return the best proxy template entry for a hostname/tags pair."""
+    data = load_proxy_uri_templates()
+    domains = data.get("domains", {})
+    entry = domains.get(hostname)
+    if entry is None:
+        tags = data.get("tags", {})
+        for tag in domain_tags or []:
+            if tag in tags:
+                entry = tags[tag]
+                break
+    if entry is None:
+        entry = data.get("generic", {})
+    return entry if isinstance(entry, dict) else {}
+
+
+def get_plain_http_response(
+    hostname: str,
+    domain_tags: list[str] | None = None,
+) -> tuple[int, str, str] | None:
+    """Return configured source-native plain-HTTP behavior for a host."""
+    entry = _template_entry(hostname, domain_tags)
+    policy = entry.get("plain_http_policy")
+    if policy in {"redirect_https", "hsts_redirect"}:
+        status_code = int(entry.get("plain_http_status", 301))
+        status_msg = {
+            301: "Moved Permanently",
+            302: "Found",
+            307: "Temporary Redirect",
+            308: "Permanent Redirect",
+        }.get(status_code, "Moved Permanently")
+        return status_code, status_msg, str(entry.get("plain_http_content_type", "text/html"))
+    return None
+
+
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
     """Replace template variables in a URI path."""
     while "{guid}" in path:
@@ -124,21 +159,7 @@ def pick_proxy_uri(
     """
     data = load_proxy_uri_templates()
 
-    # 1. Exact domain match
-    domains = data.get("domains", {})
-    entry = domains.get(hostname)
-
-    # 2. Tag-based fallback
-    if entry is None:
-        tags = data.get("tags", {})
-        for tag in domain_tags:
-            if tag in tags:
-                entry = tags[tag]
-                break
-
-    # 3. Generic fallback
-    if entry is None:
-        entry = data.get("generic", {})
+    entry = _template_entry(hostname, domain_tags)
 
     paths = entry.get("paths", ["/"])
     content_type = entry.get("content_type", "text/html")

@@ -1374,6 +1374,8 @@ def _proxy_http_response_body_len(
     """Return Zeek HTTP entity-body length for an explicit proxy response."""
     if proxy_context.status_code in {204, 304} or proxy_context.method == "HEAD":
         return 0
+    if 300 <= proxy_context.status_code < 400:
+        return max(0, proxy_context.sc_bytes)
     if proxy_context.status_code >= 400:
         return max(0, proxy_context.sc_bytes)
     if http is not None and http.status_code == proxy_context.status_code:
@@ -1914,6 +1916,7 @@ class ActivityGenerator:
 
         from evidenceforge.generation.activity.dns_registry import get_domain_tags
         from evidenceforge.generation.activity.proxy_uri import (
+            get_plain_http_response,
             is_browser_like_proxy_domain,
             pick_proxy_uri,
         )
@@ -2023,7 +2026,19 @@ class ActivityGenerator:
         else:
             cache_result = "DENIED"
 
-        response_bytes = http.response_body_len if http is not None else (resp_bytes or 0)
+        plain_http_response = (
+            get_plain_http_response(proxy_hostname, domain_tags)
+            if http is None and dst_port == 80
+            else None
+        )
+        if plain_http_response is not None:
+            status_code_for_size, _, redirect_content_type = plain_http_response
+            proxy_content_type = redirect_content_type
+            from evidenceforge.generation.activity.http_content import response_size_for_status
+
+            response_bytes = response_size_for_status(status_code_for_size, proxy_hostname, url)
+        else:
+            response_bytes = http.response_body_len if http is not None else (resp_bytes or 0)
         cs_bytes = (orig_bytes or 0) + rng.randint(*_PROXY_CS_OVERHEAD)
         if cache_result == "DENIED":
             sc_bytes = rng.randint(500, 2000)
@@ -2053,15 +2068,20 @@ class ActivityGenerator:
             host_len = len(proxy_hostname)
             cs_bytes = rng.randint(180 + host_len, 520 + host_len)
 
-        status_code = (
-            http.status_code
-            if http is not None
-            else {
+        if http is not None:
+            status_code = http.status_code
+        elif plain_http_response is not None and cache_result not in {
+            "DENIED",
+            "AUTH_REQUIRED",
+            "GATEWAY_ERROR",
+        }:
+            status_code = plain_http_response[0]
+        else:
+            status_code = {
                 "DENIED": 403,
                 "AUTH_REQUIRED": 407,
                 "GATEWAY_ERROR": rng.choice([502, 503, 504]),
             }.get(cache_result, 200)
-        )
         time_taken = int((duration or 0) * 1000)
         if explicit_mode and proxy_method == "CONNECT" and status_code >= 400:
             time_taken = rng.randint(20, 1500)
@@ -5202,7 +5222,14 @@ class ActivityGenerator:
                         resp_bytes=resp_bytes,
                     ),
                     status_code=proxy_context.status_code,
-                    status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
+                    status_msg={
+                        200: "OK",
+                        301: "Moved Permanently",
+                        302: "Found",
+                        307: "Temporary Redirect",
+                        308: "Permanent Redirect",
+                        403: "Forbidden",
+                    }.get(proxy_context.status_code, "OK"),
                     referrer=proxy_context.referrer,
                     tags=[],
                     resp_mime_types=[proxy_context.content_type]
@@ -6157,7 +6184,10 @@ class ActivityGenerator:
                 if proxy_hostname == "":
                     proxy_hostname = dst_ip
                 from evidenceforge.generation.activity.dns_registry import get_domain_tags
-                from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+                from evidenceforge.generation.activity.proxy_uri import (
+                    get_plain_http_response,
+                    pick_proxy_uri,
+                )
 
                 domain_tags = get_domain_tags(proxy_hostname)
 
@@ -6219,6 +6249,17 @@ class ActivityGenerator:
                         if referrer_policy == "none"
                         else pick_referrer(rng, proxy_hostname, context="general", port=80)
                     )
+                    plain_http_response = get_plain_http_response(proxy_hostname, domain_tags)
+                    if plain_http_response is not None:
+                        _redirect_status, _status_msg, redirect_content_type = plain_http_response
+                        from evidenceforge.generation.activity.http_content import (
+                            response_size_for_status,
+                        )
+
+                        proxy_content_type = redirect_content_type
+                        resp_bytes = response_size_for_status(_redirect_status, proxy_hostname, url)
+                if event.http is not None or dst_port == 443:
+                    plain_http_response = None
                 # OS-aware proxy User-Agent selection (skip when session set it)
                 if event.http is None:
                     if proxy_ua_override:
@@ -6292,9 +6333,11 @@ class ActivityGenerator:
                     status_code=(
                         event.http.status_code
                         if event.http is not None
-                        else 200
-                        if cache_result != "DENIED"
                         else 403
+                        if cache_result == "DENIED"
+                        else plain_http_response[0]
+                        if plain_http_response is not None
+                        else 200
                     ),
                     sc_bytes=_sc,
                     cs_bytes=_cs,
@@ -6369,7 +6412,10 @@ class ActivityGenerator:
                 is_stable_resource_path,
                 response_size_for_status,
             )
-            from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+            from evidenceforge.generation.activity.proxy_uri import (
+                get_plain_http_response,
+                pick_proxy_uri,
+            )
 
             web_host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
             if web_host == "":
@@ -6389,7 +6435,13 @@ class ActivityGenerator:
             )
             if http_ua_override:
                 ua = http_ua_override
-            status_code, status_msg = _get_http_status(dst_ip, uri)
+            plain_http_response = (
+                get_plain_http_response(web_host, web_domain_tags) if dst_port == 80 else None
+            )
+            if plain_http_response is not None:
+                status_code, status_msg, mime_type = plain_http_response
+            else:
+                status_code, status_msg = _get_http_status(dst_ip, uri)
             if status_code in (301, 302, 304) or (
                 status_code < 400 and is_stable_resource_path(uri)
             ):

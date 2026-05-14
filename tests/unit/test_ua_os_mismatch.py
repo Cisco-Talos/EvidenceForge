@@ -148,6 +148,40 @@ class TestProxyUriOsFiltering:
         assert is_browser_like_proxy_domain("www.bing.com") is True
         assert is_browser_like_proxy_domain("unknown.example.test") is True
 
+    def test_plain_http_policy_marks_hsts_like_redirect(self):
+        """Configured HTTPS-first sites should not return full HTTP 200 bodies."""
+        from evidenceforge.generation.activity.proxy_uri import get_plain_http_response
+
+        response = get_plain_http_response("www.facebook.com", ["web", "social"])
+
+        assert response == (301, "Moved Permanently", "text/html")
+        assert get_plain_http_response("www.google.com", ["web"]) == (
+            301,
+            "Moved Permanently",
+            "text/html",
+        )
+        assert get_plain_http_response("accounts.google.com", ["saas"]) == (
+            301,
+            "Moved Permanently",
+            "text/html",
+        )
+        assert get_plain_http_response("www.office.com", ["saas"]) == (
+            301,
+            "Moved Permanently",
+            "text/html",
+        )
+        assert get_plain_http_response("www.reddit.com", ["web", "social"]) == (
+            301,
+            "Moved Permanently",
+            "text/html",
+        )
+        assert get_plain_http_response("blog.cloudflare.com", ["web", "cdn"]) == (
+            301,
+            "Moved Permanently",
+            "text/html",
+        )
+        assert get_plain_http_response("www.healthcareitnews.com", ["web"]) is None
+
     def test_proxy_user_agent_normalization_replaces_windows_browser_for_linux(self):
         from evidenceforge.generation.activity.proxy_user_agents import (
             normalize_proxy_user_agent_for_os,

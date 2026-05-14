@@ -54,7 +54,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add/modify DLL load profile | `application_catalog.yaml` or `system_processes.yaml` | `sysmon_filters.yaml` (Event 7 filter) |
 | Create/modify persona | `personas/{name}.yaml` | `application_catalog.yaml` (persona lists), `traffic_profiles.yaml` (persona_traffic) |
 | Modify spawn rules | `spawn_rules.yaml` | `application_catalog.yaml` (validate exe exists) |
-| Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
+| Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure, and `plain_http_policy` for HTTPS-first sites that should redirect on port 80 |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists); cacheable CSS/JS/image/font placeholders are stable per site deployment |
 | Modify inbound web visitor mix | `web_session_profiles.yaml` | `site_maps.yaml`, `traffic_rates.yaml`, `timing_profiles.yaml` |
@@ -68,6 +68,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
 | Modify Windows auth realism | `windows_auth_realism.yaml` | (standalone — Security log auth timing and failed-logon profile knobs) |
 | Modify baseline auth noise | `auth_noise.yaml` | (standalone — stale scheduled-credential accounts and irregular recurrence timing) |
+| Modify TLS destination profiles | `tls_realism.yaml` | `dns_registry.yaml` for explicit hosts and tag pools; use `os_overrides` to keep OS-specific update/certificate destinations realistic |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, multi-sensor Zeek timestamp offsets, and Windows/Sysmon collision-spacing knobs) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |

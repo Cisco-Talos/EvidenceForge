@@ -55,6 +55,8 @@ domains:
     domain_class: software_update
     os: windows
     referrer_policy: none
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/service/update2/json"
       - "/service/update2/crx"
@@ -213,6 +215,8 @@ domains:
 
   # --- Azure AD / Identity ---
   login.microsoftonline.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/common/oauth2/v2.0/token"
       - "/common/oauth2/v2.0/authorize"
@@ -223,6 +227,8 @@ domains:
     methods: ["POST", "GET", "GET", "POST", "POST"]
 
   login.live.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/ppsecure/post.srf"
       - "/oauth20_token.srf"
@@ -232,6 +238,8 @@ domains:
     methods: ["POST", "POST", "GET", "GET"]
 
   graph.microsoft.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/v1.0/me"
       - "/v1.0/me/drive/root/children"
@@ -243,6 +251,8 @@ domains:
 
   # --- Microsoft Office / SaaS ---
   www.office.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/login"
@@ -251,6 +261,8 @@ domains:
     methods: ["GET"]
 
   outlook.office365.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/owa/"
       - "/owa/service.svc?action=GetConversationItems"
@@ -261,6 +273,8 @@ domains:
     methods: ["GET", "POST", "POST", "GET", "GET"]
 
   teams.microsoft.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/api/mt/part/emea-03/beta/users/fetchShortProfile"
       - "/api/mt/part/emea-03/beta/teams/teamMembers"
@@ -269,6 +283,8 @@ domains:
     methods: ["POST", "POST", "GET"]
 
   portal.azure.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/#blade/HubsExtension/BrowseAll"
@@ -278,6 +294,8 @@ domains:
     methods: ["GET"]
 
   sharepoint.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/_api/web/lists"
       - "/_layouts/15/Doc.aspx"
@@ -287,6 +305,8 @@ domains:
     methods: ["GET"]
 
   onenote.officeapps.live.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/o/onenoteframe.aspx?ui=en-us&rs=en-us"
       - "/o/onenoteframe.aspx?edit=0&{hex16}"
@@ -296,6 +316,8 @@ domains:
     methods: ["GET", "GET", "GET", "GET"]
 
   onedrive.live.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/redir?resid={hex16}"
       - "/edit.aspx?resid={hex16}"
@@ -305,6 +327,8 @@ domains:
 
   # --- Bing / search ---
   www.bing.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/search?q={search_term}"
@@ -315,6 +339,8 @@ domains:
 
   # --- Google ---
   www.google.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/search?q={search_term}"
@@ -324,6 +350,8 @@ domains:
     methods: ["GET"]
 
   accounts.google.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/ServiceLogin"
       - "/o/oauth2/auth"
@@ -332,6 +360,8 @@ domains:
     methods: ["GET"]
 
   calendar.google.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/render"
       - "/r/month"
@@ -342,6 +372,8 @@ domains:
     methods: ["GET"]
 
   drive.google.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/drive/my-drive"
       - "/file/d/{hex16}/view"
@@ -350,6 +382,8 @@ domains:
     methods: ["GET"]
 
   docs.google.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/document/d/{hex16}/edit"
       - "/spreadsheets/d/{hex16}/edit"
@@ -360,6 +394,8 @@ domains:
 
   # --- Slack ---
   slack.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/get-started"
@@ -367,6 +403,8 @@ domains:
     methods: ["GET"]
 
   api.slack.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/api/conversations.list"
       - "/api/chat.postMessage"
@@ -376,6 +414,8 @@ domains:
     methods: ["POST"]
 
   files.slack.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/files-tmb/{hex16}/download/image.png"
       - "/files-pri/{hex16}/download/document.pdf"
@@ -451,6 +491,8 @@ domains:
 
   # --- Cloudflare ---
   www.cloudflare.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/products/cdn/"
@@ -460,6 +502,8 @@ domains:
     methods: ["GET"]
 
   dash.cloudflare.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/login"
@@ -470,6 +514,8 @@ domains:
     methods: ["GET"]
 
   blog.cloudflare.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/tag/security/"
@@ -518,6 +564,8 @@ domains:
     methods: ["GET"]
 
   pages.github.io:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/index.html"
@@ -528,6 +576,8 @@ domains:
 
   # --- Social ---
   www.facebook.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/login"
@@ -536,6 +586,8 @@ domains:
     methods: ["GET"]
 
   www.reddit.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/r/popular/"
@@ -545,6 +597,8 @@ domains:
     methods: ["GET"]
 
   www.linkedin.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/feed/"
       - "/messaging/"
@@ -556,6 +610,8 @@ domains:
     methods: ["GET"]
 
   en.wikipedia.org:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/wiki/Main_Page"
       - "/wiki/Special:Search?search={search_term}"
@@ -622,6 +678,8 @@ domains:
 
   # --- Other ---
   stackoverflow.com:
+    plain_http_policy: redirect_https
+    plain_http_status: 301
     paths:
       - "/"
       - "/questions"
