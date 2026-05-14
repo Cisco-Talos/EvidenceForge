@@ -459,6 +459,12 @@ ocsp:
 certificate_chains:
   include_intermediate_probability: 0.86
   include_second_intermediate_probability: 0.08
+  subject_key_profiles:
+    - subject_patterns: ["CN=R3, O=Let's Encrypt, C=US"]
+      issuer_family: rsa_public_ca
+      key_type: rsa
+      key_length: 2048
+      child_signature_algorithms: ["sha256WithRSAEncryption"]
   templates:
     - name: lets_encrypt
       issuer_patterns: ["*Let's Encrypt*"]
@@ -483,6 +489,8 @@ Responder hostnames should also exist in `dns_registry.yaml`; `eforge validate-c
 warns when an OCSP responder host is missing from the registry.
 
 `ocsp.suppress_revoked_suffixes` prevents routine mainstream browsing certificates from being marked revoked while still allowing rare revoked statuses for uncategorized or intentionally suspicious certificate identities.
+
+`certificate_chains.subject_key_profiles` declares the issuer-side key family used when signing child certificates. The `certificate.sig_alg` rendered in Zeek `x509.log` follows the issuer key and one of the profile's compatible `child_signature_algorithms`, so RSA and ECDSA public CAs do not produce impossible mixed chains. Run `eforge validate-config` after changing this section; it rejects empty pattern/algorithm lists and RSA/ECDSA signature mismatches.
 
 `destinations.profiles` keeps TLS volume heavy-tailed without collapsing all hosts onto the same few SNI values. Profiles can list explicit `domains`, pull from `dns_registry.yaml` through `dns_tags`, limit by `os`, `personas`, `system_types`, or `purpose_tags`, and add `os_overrides` for OS-specific update/package endpoints. When an OS override provides domains or DNS tags, that override replaces the profile's generic pool for that OS so Windows update traffic does not drift into Linux package mirrors, and vice versa. Overlays merge nested dicts and extend lists, so project-local profiles can add domains without replacing the default pool.
 

@@ -41,10 +41,28 @@ applications:
         loaded_modules:
           - path: 'C:\Program Files\Google\Chrome\Application\chrome_elf.dll'
             signature: "Google LLC"
+            pe_metadata:
+              file_version: "120.0.6099.225"
+              description: "Google Chrome ELF"
+              product: "Google Chrome"
+              company: "Google LLC"
+              original_filename: "chrome_elf.dll"
           - path: 'C:\Program Files\Google\Chrome\Application\libEGL.dll'
             signature: "Google LLC"
+            pe_metadata:
+              file_version: "120.0.6099.225"
+              description: "ANGLE libEGL"
+              product: "Google Chrome"
+              company: "Google LLC"
+              original_filename: "libEGL.dll"
           - path: 'C:\Program Files\Google\Chrome\Application\libGLESv2.dll'
             signature: "Google LLC"
+            pe_metadata:
+              file_version: "120.0.6099.225"
+              description: "ANGLE libGLESv2"
+              product: "Google Chrome"
+              company: "Google LLC"
+              original_filename: "libGLESv2.dll"
           - path: 'C:\Windows\System32\user32.dll'
           - path: 'C:\Windows\System32\gdi32.dll'
           - path: 'C:\Windows\System32\ws2_32.dll'
@@ -77,10 +95,28 @@ applications:
         loaded_modules:
           - path: 'C:\Program Files\Mozilla Firefox\mozglue.dll'
             signature: "Mozilla Corporation"
+            pe_metadata:
+              file_version: "121.0"
+              description: "Mozilla Glue Library"
+              product: "Firefox"
+              company: "Mozilla Corporation"
+              original_filename: "mozglue.dll"
           - path: 'C:\Program Files\Mozilla Firefox\nss3.dll'
             signature: "Mozilla Corporation"
+            pe_metadata:
+              file_version: "121.0"
+              description: "Network Security Services"
+              product: "Firefox"
+              company: "Mozilla Corporation"
+              original_filename: "nss3.dll"
           - path: 'C:\Program Files\Mozilla Firefox\lgpllibs.dll'
             signature: "Mozilla Corporation"
+            pe_metadata:
+              file_version: "121.0"
+              description: "Mozilla LGPL Libraries"
+              product: "Firefox"
+              company: "Mozilla Corporation"
+              original_filename: "lgpllibs.dll"
           - path: 'C:\Windows\System32\user32.dll'
           - path: 'C:\Windows\System32\gdi32.dll'
           - path: 'C:\Windows\System32\ws2_32.dll'

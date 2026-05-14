@@ -26,12 +26,14 @@ from evidenceforge.generation.activity.tls_issuers import (
 )
 from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
+    certificate_subject_key_profile,
     chain_template_for_issuer,
     multi_label_public_suffixes,
     ocsp_config,
     pick_ocsp_responder,
     pick_tls_destination,
     reset_tls_realism_cache,
+    signature_algorithm_for_issuer,
     tls_destination_config,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -816,6 +818,78 @@ class TestTlsIssuers:
             first_intermediate.certificate_not_valid_after
             == second_intermediate.certificate_not_valid_after
         )
+
+    def test_intermediate_signature_algorithm_follows_issuer_key(self):
+        """Intermediate certificate signatures should be signed by the issuer key."""
+        generator = ActivityGenerator(StateManager(), {})
+        issuer_name = "CN=E1, O=Let's Encrypt, C=US"
+        intermediate = None
+        for seed in range(1, 50):
+            chain = generator._build_tls_certificate_chain(
+                leaf=X509Context(
+                    fuid="FLeaf",
+                    certificate_subject="CN=leaf.example",
+                    certificate_issuer=issuer_name,
+                ),
+                cert_name=f"leaf-{seed}.example",
+                issuer_name=issuer_name,
+                event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                connection_uid=f"CLeE1{seed}",
+                rng=random.Random(seed),
+            )
+            candidate = chain[1]
+            if (
+                certificate_subject_key_profile(candidate.certificate_subject)[0]
+                != certificate_subject_key_profile(candidate.certificate_issuer)[0]
+            ):
+                intermediate = candidate
+                break
+
+        assert intermediate is not None
+
+        assert intermediate.certificate_subject == issuer_name
+        assert intermediate.certificate_issuer != intermediate.certificate_subject
+        expected = signature_algorithm_for_issuer(intermediate.certificate_issuer)
+        assert intermediate.certificate_sig_alg == expected
+
+    def test_leaf_signature_algorithm_follows_issuer_not_leaf_key(self):
+        """An ECDSA leaf signed by an RSA CA should render an RSA signature algorithm."""
+        state_manager = StateManager()
+        state_manager.set_current_time(datetime(2024, 10, 14, 12, 0, tzinfo=UTC))
+        generator = ActivityGenerator(state_manager, {})
+        generator._emit_ocsp_http_response = lambda *args, **kwargs: None
+        event = None
+
+        for seed in range(1, 100):
+            candidate = SecurityEvent(
+                timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.30.40.101",
+                    src_port=50123 + seed,
+                    dst_ip="142.250.190.99",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid=f"CGtsLeafSignature{seed}",
+                ),
+            )
+            generator._attach_ssl_context(
+                candidate,
+                hostname=f"asset-{seed}.google.com",
+                dns=None,
+                dst_ip="142.250.190.99",
+                rng=random.Random(seed),
+                allow_failure=False,
+            )
+            if candidate.x509 is not None:
+                event = candidate
+                break
+
+        assert event is not None and event.x509 is not None
+        assert event.x509.certificate_issuer == "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
+        expected = signature_algorithm_for_issuer(event.x509.certificate_issuer)
+        assert event.x509.certificate_sig_alg == expected
 
 
 class TestDnsRtt:

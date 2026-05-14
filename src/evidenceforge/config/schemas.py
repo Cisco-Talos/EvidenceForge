@@ -53,6 +53,40 @@ class LoadedModuleEntry(BaseModel, extra="forbid"):
     signature_status: str = "Valid"
     pe_metadata: dict[str, str] | None = None
 
+    @model_validator(mode="after")
+    def known_vendor_modules_have_native_identity(self) -> Self:
+        """Require explicit source-native identity for known third-party DLL families."""
+        known_vendors = {
+            "google\\chrome": ("Google LLC",),
+            "mozilla firefox": ("Mozilla Corporation",),
+            "7-zip": ("Igor Pavlov", "-"),
+            "vmware": ("VMware, Inc.",),
+            "dell": ("Dell Inc.",),
+            "cisco": ("Cisco Systems, Inc.",),
+        }
+        path_lower = self.path.replace("/", "\\").lower()
+        for path_fragment, allowed_signatures in known_vendors.items():
+            if path_fragment not in path_lower:
+                continue
+            if self.signature not in allowed_signatures:
+                raise ValueError(f"known third-party module {self.path!r} must use a native signer")
+            if not self.pe_metadata:
+                raise ValueError(f"known third-party module {self.path!r} must define pe_metadata")
+            required_fields = {
+                "file_version",
+                "description",
+                "product",
+                "company",
+                "original_filename",
+            }
+            missing = sorted(field for field in required_fields if not self.pe_metadata.get(field))
+            if missing:
+                raise ValueError(
+                    f"known third-party module {self.path!r} missing pe_metadata fields: "
+                    f"{', '.join(missing)}"
+                )
+        return self
+
 
 class PlatformConfig(BaseModel, extra="forbid"):
     """Per-OS platform config within an application entry."""
@@ -259,6 +293,61 @@ class TlsChainTemplate(BaseModel, extra="forbid"):
         return v
 
 
+class TlsSubjectKeyProfile(BaseModel, extra="forbid"):
+    """A CA subject-name to public-key profile mapping in tls_realism.yaml."""
+
+    subject_patterns: list[str]
+    issuer_family: str
+    key_type: Literal["rsa", "ecdsa"]
+    key_length: int
+    child_signature_algorithms: list[
+        Literal[
+            "sha256WithRSAEncryption",
+            "sha384WithRSAEncryption",
+            "ecdsa-with-SHA256",
+            "ecdsa-with-SHA384",
+        ]
+    ]
+
+    @field_validator("subject_patterns")
+    @classmethod
+    def patterns_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("subject_patterns must not be empty")
+        if any(not pattern for pattern in v):
+            raise ValueError("subject_patterns entries must be non-empty")
+        return v
+
+    @field_validator("key_length")
+    @classmethod
+    def key_length_valid(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("key_length must be positive")
+        return v
+
+    @field_validator("child_signature_algorithms")
+    @classmethod
+    def child_signature_algorithms_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("child_signature_algorithms must not be empty")
+        return v
+
+    @model_validator(mode="after")
+    def child_algorithms_match_key_type(self) -> Self:
+        """Reject child signature algorithms incompatible with the issuer key."""
+        has_ecdsa_alg = any(
+            algorithm.startswith("ecdsa-") for algorithm in self.child_signature_algorithms
+        )
+        has_rsa_alg = any(
+            algorithm.endswith("RSAEncryption") for algorithm in self.child_signature_algorithms
+        )
+        if self.key_type == "rsa" and has_ecdsa_alg:
+            raise ValueError("rsa issuer profiles cannot use ecdsa child signature algorithms")
+        if self.key_type == "ecdsa" and has_rsa_alg:
+            raise ValueError("ecdsa issuer profiles cannot use RSA child signature algorithms")
+        return self
+
+
 class TlsCertificateChainConfig(BaseModel, extra="forbid"):
     """Certificate-chain behavior settings in tls_realism.yaml."""
 
@@ -268,6 +357,7 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
     intermediate_validity_days_max: int
     intermediate_not_before_max_days: int
     key_types: list[TlsKeyType]
+    subject_key_profiles: list[TlsSubjectKeyProfile] = Field(default_factory=list)
     templates: list[TlsChainTemplate]
 
     @field_validator(
@@ -1025,6 +1115,165 @@ class EdrFileSideEffectProfile(BaseModel, extra="forbid"):
             raise ValueError("profile must define paths_windows or paths_linux")
         if not 0 <= self.probability <= 1:
             raise ValueError("probability must be between 0 and 1")
+        return self
+
+
+# --- Endpoint Noise ---
+
+
+class WindowsScheduledProcessNoiseConfig(BaseModel, extra="forbid"):
+    """Windows scheduled/background process timing policy."""
+
+    count_min: int = Field(ge=0)
+    count_max: int = Field(ge=0)
+    trigger_window_start_seconds: int = Field(ge=0, le=3599)
+    trigger_window_end_seconds: int = Field(ge=0, le=3599)
+    slot_spacing_seconds: int = Field(gt=0, le=3600)
+    host_phase_window_seconds: int = Field(gt=0, le=3600)
+    jitter_seconds_min: int
+    jitter_seconds_max: int
+    skip_probability: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def bounds_are_ordered(self) -> Self:
+        """Reject timing windows that would reintroduce boundary clamping."""
+        if self.count_min > self.count_max:
+            raise ValueError("count_min must be <= count_max")
+        if self.trigger_window_start_seconds >= self.trigger_window_end_seconds:
+            raise ValueError("trigger_window_start_seconds must be < trigger_window_end_seconds")
+        if self.jitter_seconds_min > self.jitter_seconds_max:
+            raise ValueError("jitter_seconds_min must be <= jitter_seconds_max")
+        return self
+
+
+class DhcpInterfaceRegistryNoiseConfig(BaseModel, extra="forbid"):
+    """Policy for DHCP-related interface registry values."""
+
+    value_names: list[str]
+    require_dhcp_state: bool = True
+    emit_on_lease_events: bool = True
+    suppress_system_types: list[str] = Field(default_factory=list)
+    suppress_roles: list[str] = Field(default_factory=list)
+
+    @field_validator("value_names")
+    @classmethod
+    def value_names_non_empty(cls, v: list[str]) -> list[str]:
+        if not v:
+            raise ValueError("value_names must not be empty")
+        if any(not name for name in v):
+            raise ValueError("value_names entries must be non-empty")
+        return v
+
+
+class RegistryNoiseConfig(BaseModel, extra="forbid"):
+    """Ambient endpoint registry-noise policy."""
+
+    dhcp_interface_values: DhcpInterfaceRegistryNoiseConfig
+
+
+class EndpointNoiseConfig(BaseModel, extra="forbid"):
+    """Root schema for endpoint_noise.yaml."""
+
+    windows_scheduled_processes: WindowsScheduledProcessNoiseConfig
+    registry_noise: RegistryNoiseConfig
+
+
+# --- Observation Profiles ---
+
+
+class ObservationDelayRange(BaseModel, extra="forbid"):
+    """Source-observation delay bounds in milliseconds."""
+
+    min_ms: int = Field(ge=0, le=3_600_000)
+    max_ms: int = Field(ge=0, le=3_600_000)
+
+    @model_validator(mode="after")
+    def bounds_are_ordered(self) -> Self:
+        """Reject inverted delay ranges."""
+        if self.min_ms > self.max_ms:
+            raise ValueError("min_ms must be <= max_ms")
+        return self
+
+
+class ObservationMultiplierRange(BaseModel, extra="forbid"):
+    """Deterministic per-host multiplier bounds for source missingness."""
+
+    min: float = Field(ge=0.0, le=10.0)
+    max: float = Field(ge=0.0, le=10.0)
+
+    @model_validator(mode="after")
+    def bounds_are_ordered(self) -> Self:
+        """Reject inverted multiplier ranges."""
+        if self.min > self.max:
+            raise ValueError("min must be <= max")
+        return self
+
+
+class ObservationSourceProfile(BaseModel, extra="forbid"):
+    """Source-level observation behavior for a profile."""
+
+    missingness: float = Field(default=0.0, ge=0.0, le=1.0)
+    delay_ms: ObservationDelayRange = Field(
+        default_factory=lambda: ObservationDelayRange(min_ms=0, max_ms=0)
+    )
+    host_missingness_multiplier: ObservationMultiplierRange = Field(
+        default_factory=lambda: ObservationMultiplierRange(min=1.0, max=1.0)
+    )
+
+
+class ObservationProfileEntry(BaseModel, extra="forbid"):
+    """A named source-observation profile."""
+
+    VALID_SOURCE_FAMILIES: ClassVar[set[str]] = {
+        "windows_security",
+        "sysmon",
+        "ecar",
+        "syslog",
+        "bash_history",
+        "zeek",
+        "proxy",
+        "web",
+        "asa",
+        "ids",
+    }
+
+    description: str = ""
+    default: ObservationSourceProfile = Field(default_factory=ObservationSourceProfile)
+    sources: dict[str, ObservationSourceProfile] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def source_names_are_known(self) -> Self:
+        """Reject source-family typos."""
+        unknown = sorted(set(self.sources) - self.VALID_SOURCE_FAMILIES)
+        if unknown:
+            raise ValueError(f"unknown observation source families: {', '.join(unknown)}")
+        return self
+
+
+class ObservationProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for observation_profiles.yaml."""
+
+    profiles: dict[str, ObservationProfileEntry]
+
+    @field_validator("profiles")
+    @classmethod
+    def profile_names_are_simple(
+        cls, v: dict[str, ObservationProfileEntry]
+    ) -> dict[str, ObservationProfileEntry]:
+        if not v:
+            raise ValueError("profiles must not be empty")
+        invalid = sorted(
+            name for name in v if not name or not name.replace("_", "").replace("-", "").isalnum()
+        )
+        if invalid:
+            raise ValueError(f"invalid observation profile names: {', '.join(invalid)}")
+        return v
+
+    @model_validator(mode="after")
+    def complete_profile_exists(self) -> Self:
+        """The complete profile is the stable training-friendly default."""
+        if "complete" not in self.profiles:
+            raise ValueError('profiles must include "complete"')
         return self
 
 

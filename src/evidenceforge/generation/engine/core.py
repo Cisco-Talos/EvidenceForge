@@ -266,11 +266,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             }
 
         # Initialize event dispatcher and activity generator
+        from evidenceforge.events.observation import ObservationPolicy
+
         self.dispatcher = EventDispatcher(
             state_manager=self.state_manager,
             emitters=self.emitters,
             visibility_engine=visibility_engine,
             output_start_time=self.start_time,
+            observation_policy=ObservationPolicy(self.scenario.observation_profile),
         )
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
@@ -469,6 +472,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             scenario=self.scenario,
             malicious_events=self.malicious_events,
             red_herring_events=self.red_herring_events,
+            source_evidence_status=self.dispatcher.source_evidence_status,
         )
 
         generator.generate(output_path)

@@ -62,6 +62,21 @@ class TestScenarioValidator:
         assert len(issues) == 0
         assert not validator.has_errors()
 
+    def test_unknown_observation_profile_errors(self, scenarios_dir):
+        """Scenario observation_profile must refer to a configured profile."""
+        scenario_data = load_yaml(scenarios_dir / "minimal.yaml")
+        scenario_data["observation_profile"] = "does_not_exist"
+        scenario = Scenario(**scenario_data)
+
+        issues = ScenarioValidator(scenario).validate()
+
+        assert any(
+            issue.severity == "error"
+            and issue.field_path == "observation_profile"
+            and "Unknown observation_profile" in issue.message
+            for issue in issues
+        )
+
     def test_invalid_persona_reference(self):
         """User referencing non-existent persona should error."""
         scenario = Scenario(

@@ -80,7 +80,7 @@ applications:
 
 ### Loaded Module Fields (Windows only)
 
-DLLs characteristically loaded by this process, used for Sysmon Event 7 (ImageLoaded) generation. All fields except `path` have defaults — only specify what differs.
+DLLs characteristically loaded by this process, used for Sysmon Event 7 (ImageLoaded) generation. Microsoft OS loader DLLs can rely on defaults. Third-party modules should set source-native signer metadata, and known vendor modules should carry PE metadata so rendered `Company`, `Product`, `Description`, and `FileVersion` do not fall back to Microsoft or blank values.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -88,8 +88,9 @@ DLLs characteristically loaded by this process, used for Sysmon Event 7 (ImageLo
 | `signed` | bool | `true` | Whether the DLL is digitally signed |
 | `signature` | string | `"Microsoft Windows"` | Signer name (e.g., `"Google LLC"`, `"Mozilla Corporation"`) |
 | `signature_status` | string | `"Valid"` | One of: `Valid`, `Expired`, `Revoked`, `Unavailable` |
+| `pe_metadata` | object | inherited or blank | Optional DLL-specific PE fields: `file_version`, `description`, `product`, `company`, `original_filename` |
 
-Every Windows process also receives the common OS loader DLLs (ntdll.dll, kernel32.dll, etc.) defined in `system_processes.yaml` under `common_loaded_modules.windows` — you don't need to repeat those in per-app profiles.
+Application DLLs inherit the owning app's PE version/product/company if `pe_metadata` is omitted. Every Windows process also receives the common OS loader DLLs (ntdll.dll, kernel32.dll, etc.) defined in `system_processes.yaml` under `common_loaded_modules.windows` — you don't need to repeat those in per-app profiles.
 
 ### Valid Categories
 
@@ -369,7 +370,7 @@ Provides file path, registry key, and DLL pools for probabilistic background eve
 - `registry_keys_hklm:` — `[key, value_name, details]` triples for HKLM writes (Run, Defender, WDigest, Firewall)
 - `dll_pool:` — System32 and application DLL paths for module load events
 
-Overlay replaces entire sections (section-replace merge). Details values use Sysmon format: `"DWORD (0x00000001)"` for REG_DWORD, string for REG_SZ. Registry and DLL entries may use `{user}`, `{rand}`, `{hex}`, `{guid}`, `{mru}`, `{doc}`, `{package}`, and `{version}` placeholders; these are materialized per emitted event to avoid repetitive TargetObject paths.
+Overlay replaces entire sections (section-replace merge). Details values use Sysmon format: `"DWORD (0x00000001)"` for REG_DWORD, string for REG_SZ. Registry and DLL entries may use `{user}`, `{rand}`, `{hex}`, `{guid}`, `{mru}`, `{doc}`, `{package}`, and `{version}` placeholders; these are materialized per emitted event to avoid repetitive TargetObject paths. DHCP interface registry values are additionally controlled by `endpoint_noise.yaml`, which reserves them for actual DHCP lease/reconfigure activity unless explicitly relaxed.
 
 ---
 

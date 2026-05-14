@@ -151,6 +151,20 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone authentication-noise profile data |
 | **depended on by** | Engine (runtime) | Drives stale scheduled-credential account pools, recurrence timing, jitter, skips, and backoff |
 
+### endpoint_noise.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone endpoint background timing and registry-emission policy data |
+| **depended on by** | Engine (runtime) | Drives Windows scheduled-process trigger windows, host drift, skips, and DHCP interface registry write policy |
+| validated by | `eforge validate-config` | Enforces coherent timing bounds, probability ranges, and non-empty DHCP registry value lists |
+
+### observation_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | scenario `observation_profile` | The scenario selects a named profile; the profile file owns source-level missingness/delay values |
+| **depended on by** | Event dispatcher, GROUND_TRUTH.md | Applies deterministic source-observation drops/delays after canonical state updates and reports source evidence status |
+| validated by | `eforge validate-config` and `eforge validate` | Config validation checks source-family names/ranges; scenario validation checks that the named profile exists |
+
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
@@ -166,8 +180,9 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### tls_realism.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates match issuer names/patterns selected from issuer config; OCSP responder hosts must exist in dns_registry; destination profiles can pull domains by DNS tag |
-| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates and subject-key profiles match issuer names/patterns selected from issuer config; OCSP responder hosts must exist in dns_registry; destination profiles can pull domains by DNS tag |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, issuer-compatible certificate signature algorithms, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+| validated by | `eforge validate-config` | Enforces coherent chain profile structure, non-empty subject-key patterns, and RSA/ECDSA child signature compatibility |
 
 ### smb_file_transfers.yaml
 | Direction | File | Relationship |

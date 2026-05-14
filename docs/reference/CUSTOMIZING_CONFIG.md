@@ -143,7 +143,7 @@ This is a **partial overlay** — it adds `nurse` to Chrome's and Outlook's pers
 eforge info personas    # Should include "nurse"
 eforge info dns_tags    # Should include your new tags
 
-# Run full validation (27 cross-reference checks)
+# Run full validation across merged package + overlay config
 eforge validate-config
 ```
 
@@ -157,11 +157,13 @@ Configuration files are interconnected. When you add an entry to one file, other
 | Certificate/update/telemetry proxy behavior | `proxy_uri_templates.yaml` (`domain_class`, infra-specific paths/content types, and `referrer_policy: none`; non-browser classes are excluded from site-map browsing sessions) |
 | New proxy User-Agent behavior | `proxy_user_agents.yaml` (workstation/server UA pools, package-manager host bindings, domain-specific update/cert/telemetry overrides) |
 | Inbound web visitor mix | `web_session_profiles.yaml` (visitor classes, configured tool/API requests, and User-Agent pools). Human visitor sessions use `site_maps.yaml`; timing lives in `timing_profiles.yaml`; `traffic_rates.yaml` `web` counts top-level actions only. |
-| New TLS issuer behavior | `tls_issuers.yaml` (issuer validity, key-type weights, and domain CA overrides). RSA-branded issuer names should only advertise RSA key types unless the chain/signature model is also updated to distinguish issuer signature algorithm from leaf public-key algorithm. |
-| New TLS OCSP responder behavior | `tls_realism.yaml` (`ocsp.responders`) plus `dns_registry.yaml` for each responder hostname |
+| New TLS issuer behavior | `tls_issuers.yaml` (issuer validity, key-type weights, and domain CA overrides). RSA-branded issuer names should only advertise RSA key types unless matching `tls_realism.yaml` subject-key profiles distinguish issuer signature algorithm from leaf public-key algorithm. |
+| New TLS OCSP responder or chain behavior | `tls_realism.yaml` (`ocsp.responders`, `certificate_chains.templates`, and `certificate_chains.subject_key_profiles`) plus `dns_registry.yaml` for each responder hostname. Subject key profiles must include issuer family, key type/size, and compatible child signature algorithms. |
 | Kerberos TGT pre-auth realism | `kerberos_realism.yaml` (`tgt_success.pre_auth_types`, ticket options, encryption types, and PKINIT certificate profiles). Run `eforge validate-config`; PKINIT (`PreAuthType: 15`) requires populated certificate profile support. |
 | Windows auth realism | `windows_auth_realism.yaml` (`workstation_lock.min_unlock_gap_seconds`, failed-logon local/network profiles, and optional companion network connection rates) |
 | Baseline auth noise | `auth_noise.yaml` (stale scheduled-credential account pools, host counts, recurrence intervals, jitter, skips, and backoff) |
+| Endpoint background noise | `endpoint_noise.yaml` (Windows scheduled-process trigger windows, host drift, skip probability, and DHCP registry emission policy) |
+| Observation/source coverage | `observation_profiles.yaml` (named source-level missingness/delay profiles selected by scenario `observation_profile`; default `complete` keeps perfect coverage) |
 | Causal/source-native timing | `timing_profiles.yaml` (`relationships` for causal prerequisites, source latency, teardown margins, Zeek analyzer offsets and TLS duration floors, plus Windows/Sysmon collision spacing) |
 | Public NTP fallback servers and DNS tunnel timing | `network_params.yaml` (`public_ntp_servers`, `dns_tunnel_rtt`; scenario-defined internal/domain NTP servers still take precedence) |
 | A new application | `spawn_rules.yaml` (process tree), `process_network_map.yaml` (if it generates traffic) |
@@ -203,4 +205,4 @@ For full field schemas and conventions, see the reference docs installed with th
 | Persona file structure | `/eforge:references:config-personas` |
 | Host activity (bash, systemd, syslog) | `/eforge:references:config-host-activity` |
 | Cross-file dependency map | `/eforge:references:config-dependency-graph` |
-| Validation checks (27) | `/eforge:references:config-validation` |
+| Validation checks | `/eforge:references:config-validation` |

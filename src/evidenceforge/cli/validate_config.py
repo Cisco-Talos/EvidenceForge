@@ -114,7 +114,7 @@ def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
 
 
 def validate_config() -> ValidationResult:
-    """Run all 27 validation checks across config files.
+    """Run validation checks across config files.
 
     Uses the same loader paths the engine uses (including overlay merges).
     """
@@ -229,6 +229,9 @@ def validate_config() -> ValidationResult:
                 "file_paths_linux",
                 "dll_pool",
             },
+        },
+        "activity/endpoint_noise.yaml": {
+            "dict_fields": {"windows_scheduled_processes", "registry_noise"},
         },
         "activity/ids_signatures.yaml": {
             "list_fields": {"signatures": None},
@@ -438,6 +441,7 @@ def validate_config() -> ValidationResult:
     # Load all data through overlay-aware loaders for consistency.
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
+    from evidenceforge.config.observation_profiles import load_observation_profiles
     from evidenceforge.generation.activity.application_catalog import load_catalog
     from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
@@ -445,6 +449,7 @@ def validate_config() -> ValidationResult:
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
     from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
@@ -475,6 +480,8 @@ def validate_config() -> ValidationResult:
     proxy_ua_data = load_proxy_user_agents()
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
+    endpoint_noise_data = load_endpoint_noise()
+    observation_profiles_data = load_observation_profiles()
     tls_realism_data = load_tls_realism()
     windows_auth_data = load_windows_auth_realism()
     timing_profiles_data = load_timing_profiles()
@@ -1689,7 +1696,9 @@ def validate_config() -> ValidationResult:
         DnsTunnelRttConfig,
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
+        EndpointNoiseConfig,
         KerberosRealismConfig,
+        ObservationProfilesConfig,
         OuiEntry,
         PersonaEntry,
         ProcessAccessPatternEntry,
@@ -1814,6 +1823,12 @@ def validate_config() -> ValidationResult:
                 EdrFileSideEffectProfile,
                 "edr_pools.yaml (file_side_effect_profiles)",
             )
+        )
+    if endpoint_noise_data:
+        _SCHEMA_CHECKS.append(([endpoint_noise_data], EndpointNoiseConfig, "endpoint_noise.yaml"))
+    if observation_profiles_data:
+        _SCHEMA_CHECKS.append(
+            ([observation_profiles_data], ObservationProfilesConfig, "observation_profiles.yaml")
         )
 
     # traffic_profiles.yaml: connection entries

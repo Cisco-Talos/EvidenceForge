@@ -12,8 +12,12 @@ Schema documentation for host-level activity config files. User customizations g
 2. [systemd_schedules.yaml](#systemd_schedulesyaml)
 3. [extra_syslog_messages.yaml](#extra_syslog_messagesyaml)
 4. [kerberos_realism.yaml](#kerberos_realismyaml)
-5. [timing_profiles.yaml](#timing_profilesyaml)
-6. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
+5. [windows_auth_realism.yaml](#windows_auth_realismyaml)
+6. [auth_noise.yaml](#auth-noise-auth_noiseyaml)
+7. [endpoint_noise.yaml](#endpoint-noise-endpoint_noiseyaml)
+8. [observation_profiles.yaml](#observation-profiles-observation_profilesyaml)
+9. [timing_profiles.yaml](#timing_profilesyaml)
+10. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -312,6 +316,71 @@ scheduled_stale_credentials:
 ```
 
 `account_base_names` should be plausible disabled service or automation principals; the engine still avoids collisions with scenario users and service accounts. Interval ranges, jitter, skip probability, and backoff probability produce deterministic but non-modulo recurrence so stale scheduled-task failures do not land on exact hourly or two-hour cadences. Run `eforge validate-config` after overlay changes; ranges must be ordered, weights must be positive, and probabilities must be between 0 and 0.95.
+
+---
+
+## Endpoint Noise (`endpoint_noise.yaml`)
+
+Controls endpoint background timing and registry-emission policies that are too source-specific for scenario YAML. Use it to tune routine Windows scheduled-process spacing and whether DHCP interface registry values appear as ambient Sysmon/EDR noise.
+
+```yaml
+windows_scheduled_processes:
+  count_min: 2
+  count_max: 5
+  trigger_window_start_seconds: 90
+  trigger_window_end_seconds: 3510
+  slot_spacing_seconds: 300
+  host_phase_window_seconds: 900
+  jitter_seconds_min: -42
+  jitter_seconds_max: 73
+  skip_probability: 0.08
+
+registry_noise:
+  dhcp_interface_values:
+    value_names: [DhcpIPAddress, DhcpNameServer]
+    require_dhcp_state: true
+    emit_on_lease_events: true
+    suppress_system_types: [server, domain_controller]
+    suppress_roles: [domain_controller, dns_server, file_server, web_server]
+```
+
+`windows_scheduled_processes` replaces hour-end clamping with profile-driven trigger windows, per-host phase offsets, jitter, and skips. Keep `trigger_window_end_seconds` comfortably below 3599 to avoid synthetic `xx:59:59` clusters.
+
+`registry_noise.dhcp_interface_values` reserves DHCP interface registry writes for actual DHCP lease/reconfigure activity. Static infrastructure roles should stay in `suppress_system_types` or `suppress_roles` so they do not repeatedly rewrite DHCP values as ambient registry noise. Run `eforge validate-config` after overlay changes; it rejects inverted ranges, empty value-name lists, and invalid probabilities.
+
+---
+
+## Observation Profiles (`observation_profiles.yaml`)
+
+Defines named source-observation profiles selected by scenario `observation_profile`. Keep `complete` as the default for training-friendly perfect source coverage and correlation. Use non-default profiles only when a scenario intentionally needs realistic source gaps or ingestion delays.
+
+```yaml
+profiles:
+  complete:
+    description: Perfect source coverage for training-friendly datasets.
+    default:
+      missingness: 0.0
+      delay_ms: {min_ms: 0, max_ms: 0}
+      host_missingness_multiplier: {min: 1.0, max: 1.0}
+    sources: {}
+
+  enterprise_standard:
+    default:
+      missingness: 0.0
+      delay_ms: {min_ms: 0, max_ms: 0}
+      host_missingness_multiplier: {min: 0.85, max: 1.15}
+    sources:
+      zeek:
+        missingness: 0.002
+        delay_ms: {min_ms: 0, max_ms: 3}
+      sysmon:
+        missingness: 0.005
+        delay_ms: {min_ms: 5, max_ms: 250}
+```
+
+Profiles are intentionally source-level, not event-type matrices. Scenario authors select a named profile; code owns safe source-native application semantics so new event types inherit their source-family default. Non-complete profiles may make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but must not create contradictory identifiers or field values across sources.
+
+Valid source families are `windows_security`, `sysmon`, `ecar`, `syslog`, `bash_history`, `zeek`, `proxy`, `web`, `asa`, and `ids`. Run `eforge validate-config` after overlay changes; it rejects unknown source-family names, invalid probabilities, and inverted ranges. Run `eforge validate` on scenarios that use a non-default profile so unknown profile names are caught before generation.
 
 ---
 

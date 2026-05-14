@@ -66,6 +66,8 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how many top-level visitor actions web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). Human page views automatically fan out into required page assets (JS, CSS, images, fonts, same-origin API calls) without consuming additional `web` budget. If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
 
+**Observation profile** — Default to `observation_profile: complete`. This preserves training-friendly perfect source coverage and correlation. Only choose another named profile such as `enterprise_standard` or `messy_collection` when the user explicitly wants source-native gaps, ingestion delays, or blind-review realism; do not invent per-source rates in scenario YAML.
+
 **Stale accounts** — Does the organization have any disabled or inactive accounts that haven't been fully cleaned up? Former employees, decommissioned service accounts, or un-revoked contractor access are common in real environments. Add 2-4 stale accounts to `environment.stale_accounts` with `username`, `last_active` (ISO date), and `reason`. The engine automatically generates background noise from these: failed logons, Kerberos pre-auth failures on DCs, scheduled task failures, and service startup failures — creating realistic "why is this disabled account still here?" ambiguity for analysts.
 
 **Attacker realism / messiness** — How polished is the attacker? Real attacks are messy — even skilled operators make mistakes, hit dead ends, and waste time on paths that go nowhere. Ask the user how much "fumbling" they want in the storyline. This ranges from a near-perfect surgical strike (rare, but appropriate for APT scenarios) to a sloppy novice who tries multiple approaches before succeeding. See the "Attacker Fumbles and Dead Ends" section below for implementation details.
@@ -257,6 +259,9 @@ baseline_activity:
 
 logon_grace_period: "30m"         # Optional (default "30m") — suppresses "no prior logon"
                                   # warnings for events within this duration of time_window.start
+
+observation_profile: complete     # Optional (default complete). Use complete unless the user
+                                  # explicitly wants realistic source gaps/delays.
 
 storyline:                        # The attack events to bury in the data
   - id: evt-recon-whoami          # Required: unique event ID. Use descriptive labels
