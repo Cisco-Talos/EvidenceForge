@@ -159,12 +159,12 @@
       service_file_name: "%SystemRoot%\PSEXESVC.exe") + process events for commands run under
       the service. Do NOT use "cmd.exe /c PSEXESVC.exe" — that produces the wrong parent chain.
 
-  15. Privilege Escalation (+4h15m): Create backdoor account svc_sqlreader (account_created event),
+  15. Privilege Escalation (+4h15m): Create backdoor account svc_mhsync (account_created event),
       add to Domain Admins (group_member_added event). Actor: SYSTEM on DC-01.
 
-  16. Persistence (+4h20m): Install service "HealthMonitorSvc" (service_installed event with
+  16. Persistence (+4h20m): Install service "DeviceSyncSvc" (service_installed event with
       service_name, service_file_name, service_account) and create scheduled task
-      "\Microsoft\Windows\Maintenance\SystemHealthCheck" (scheduled_task_created event) on DC-01.
+      "\Microsoft\Windows\Maintenance\DeviceSync" (scheduled_task_created event) on DC-01.
 
   17. C2 Beaconing (+4h30m): HTTPS beacon from DC-01 to 45.33.32.30:443 (beacon event with
       interval: "10m", duration: "1h30m", jitter: 0.3, hostname, user_agent, method: GET,
@@ -176,14 +176,14 @@
       internal sensors only.
 
   19. DNS Tunneling (+4h45m): Exfiltrate data via DNS tunnel from APP-INT-01 (dns_tunnel event
-      with base_domain: "ns1.cdn-health-updates.net", encoding: hex, qtype: TXT, interval: "2s",
+      with base_domain: "ns1.westbridge-services.net", encoding: hex, qtype: TXT, interval: "2s",
       duration: "15m", payload_size: 512).
 
   20. DGA Activity (+5h): DGA queries from WEB-EXT-01 (dga_queries event with tld: ".net",
       length_range: [10, 18], interval: "30s", duration: "45m",
       rcode_distribution for mostly NXDOMAIN).
 
-  21. Collection (+5h): Authenticate to FILE-SRV-01 with backdoor account svc_sqlreader
+  21. Collection (+5h): Authenticate to FILE-SRV-01 with backdoor account svc_mhsync
       (logon event, type 3), enumerate shares, stage financial and patient data, compress
       with PowerShell Compress-Archive.
 
@@ -193,7 +193,7 @@
   23. Workstation Lock (+5h20m): Attacker locks the compromised workstation before stepping away
       (workstation_lock event) — exercises EventID 4800.
 
-  24. Exfiltration (+5h25m): Upload archive to cdn-assets-update.com (45.33.32.30) over HTTPS
+  24. Exfiltration (+5h25m): Upload archive to api.westbridge-services.net (45.33.32.30) over HTTPS
       (connection event with HTTP fields, method: POST, large orig_bytes — use a physically
       plausible value in the 100-500 MB range, NOT multi-GB).
 
@@ -210,8 +210,8 @@
   28. Ongoing C2 (+5h, +5h30m): Periodic beacons from WEB-EXT-01 to 45.33.32.30:443
       (separate beacon events).
 
-  29. Account Cleanup (+5h50m): Delete the backdoor account svc_sqlreader (account_deleted event
-      with target_username: svc_sqlreader).
+  29. Account Cleanup (+5h50m): Delete the backdoor account svc_mhsync (account_deleted event
+      with target_username: svc_mhsync).
 
   30. Logoff (+5h55m): Attacker logs off from compromised systems (logoff events).
 
