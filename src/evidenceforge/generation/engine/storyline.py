@@ -1611,8 +1611,21 @@ class StorylineMixin:
                         weights=[55, 25, 20],
                         k=1,
                     )[0]
+                _http_host = spec.hostname or dst_ip
+                _status_code = spec.status_code or 200
+                _size_host = (
+                    system.hostname
+                    if "web_server" in (getattr(system, "roles", None) or [])
+                    else _http_host
+                )
                 if spec.response_body_len is not None:
                     resp_bytes = spec.response_body_len
+                elif (
+                    300 <= _status_code < 400
+                    or _status_code >= 400
+                    or is_stable_resource_path(_uri_raw)
+                ):
+                    resp_bytes = response_size_for_status(_status_code, _size_host, _uri_raw)
                 elif _method == "POST" and any(
                     kw in _uri for kw in ("/upload", "/submit", "/api", "/beacon")
                 ):
@@ -1627,7 +1640,6 @@ class StorylineMixin:
                     resp_bytes = response_size_for_mime(rng, _mime_type)
                 from evidenceforge.generation.activity.referrer import pick_referrer
 
-                _http_host = spec.hostname or dst_ip
                 request_body_len = (
                     max(0, s_ob or 0) if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"} else 0
                 )
@@ -1641,7 +1653,7 @@ class StorylineMixin:
                     user_agent=spec.user_agent or "Mozilla/5.0",
                     request_body_len=request_body_len,
                     response_body_len=resp_bytes,
-                    status_code=spec.status_code or 200,
+                    status_code=_status_code,
                     status_msg={
                         200: "OK",
                         301: "Moved Permanently",
@@ -1649,7 +1661,7 @@ class StorylineMixin:
                         403: "Forbidden",
                         404: "Not Found",
                         500: "Internal Server Error",
-                    }.get(spec.status_code or 200, "OK"),
+                    }.get(_status_code, "OK"),
                     referrer=spec.referrer
                     if spec.referrer is not None
                     else ""
@@ -2290,8 +2302,21 @@ class StorylineMixin:
                             weights=[65, 25, 10],
                             k=1,
                         )[0]
+                    _http_host2 = spec.hostname or spec.dst_ip
+                    _status_code = spec.status_code or 200
+                    _size_host = (
+                        system.hostname
+                        if "web_server" in (getattr(system, "roles", None) or [])
+                        else _http_host2
+                    )
                     if spec.response_body_len is not None:
                         resp_bytes = spec.response_body_len
+                    elif (
+                        300 <= _status_code < 400
+                        or _status_code >= 400
+                        or is_stable_resource_path(_uri_raw)
+                    ):
+                        resp_bytes = response_size_for_status(_status_code, _size_host, _uri_raw)
                     elif _method == "POST":
                         resp_bytes = rng.randint(200, 2000)
                     elif _is_c2_http:
@@ -2300,7 +2325,6 @@ class StorylineMixin:
                         resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
 
-                    _http_host2 = spec.hostname or spec.dst_ip
                     request_body_len = (
                         max(0, s_ob or 0)
                         if _method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}
@@ -2316,7 +2340,7 @@ class StorylineMixin:
                         user_agent=spec.user_agent or "Mozilla/5.0",
                         request_body_len=request_body_len,
                         response_body_len=resp_bytes,
-                        status_code=spec.status_code or 200,
+                        status_code=_status_code,
                         status_msg={
                             200: "OK",
                             301: "Moved Permanently",
@@ -2324,7 +2348,7 @@ class StorylineMixin:
                             403: "Forbidden",
                             404: "Not Found",
                             500: "Internal Server Error",
-                        }.get(spec.status_code or 200, "OK"),
+                        }.get(_status_code, "OK"),
                         referrer=spec.referrer
                         if spec.referrer is not None
                         else ""
@@ -2570,6 +2594,11 @@ class StorylineMixin:
                 duration_sec = (end_dt - start).total_seconds()
             scan_src_ip = spec.source_ip or system.ip
             scan_host = spec.hostname or spec.dst_ip
+            scan_size_host = (
+                system.hostname
+                if "web_server" in (getattr(system, "roles", None) or [])
+                else scan_host
+            )
             service = "http" if spec.dst_port == 80 else "ssl"
             scan_dst_ip = spec.dst_ip
             if (
@@ -2669,8 +2698,8 @@ class StorylineMixin:
                 )
 
                 _response_body_len = (
-                    response_size_for_status(_status, scan_host, _uri)
-                    if _status >= 400 or is_stable_resource_path(_uri)
+                    response_size_for_status(_status, scan_size_host, _uri)
+                    if _status >= 300 or is_stable_resource_path(_uri)
                     else response_size_for_mime(rng, _mime_type)
                 )
                 http_ctx = HttpContext(

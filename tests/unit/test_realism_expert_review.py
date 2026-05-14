@@ -12,6 +12,7 @@ from evidenceforge.generation.activity.generator import (
     _KERBEROS_SVC_VALUES,
     _KERBEROS_SVC_WEIGHTS,
 )
+from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -92,6 +93,13 @@ class TestHttpResponseSizing:
         else:
             resp = rng.randint(5000, 50000)
         assert resp <= 5000
+
+    def test_redirect_response_size_is_small_and_stable(self):
+        first = response_size_for_status(301, "WEB-EXT-01", "/assets/app.js")
+        second = response_size_for_status(301, "WEB-EXT-01", "/assets/app.js")
+
+        assert first == second
+        assert 140 <= first <= 360
 
 
 class TestPid4Lookup:

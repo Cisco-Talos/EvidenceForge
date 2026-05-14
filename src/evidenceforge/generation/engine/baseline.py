@@ -5414,6 +5414,7 @@ class BaselineMixin:
                 if is_external_client and public_hosts
                 else sys_obj.hostname
             )
+            stable_size_host = getattr(sys_obj, "fqdn", None) or sys_obj.hostname
             client_sys = ip_map.get(client_ip)
             source_os = _get_os_category(client_sys.os) if client_sys is not None else None
             profile_name, profile = pick_web_visitor_profile(
@@ -5438,6 +5439,7 @@ class BaselineMixin:
                     browsing_intensity=str(profile.get("browsing_intensity", "normal")),
                     port=dst_port,
                     require_browser_like_domain=False,
+                    stable_size_hostname=stable_size_host,
                 )
                 current_page_allowed = False
                 for req in session_requests:
@@ -5491,7 +5493,7 @@ class BaselineMixin:
                 status = int(request.get("status", 200))
                 mime = normalize_mime_type_for_path(path, str(request.get("type", "text/html")))
                 resp_bytes = (
-                    response_size_for_status(status, http_host, path)
+                    response_size_for_status(status, stable_size_host, path)
                     if status != 200 or is_stable_resource_path(path)
                     else response_size_for_mime(rng, mime)
                 )

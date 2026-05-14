@@ -3276,6 +3276,112 @@ class TestActivityGenerator:
         assert net.conn_state == "SF"
         assert net.duration is not None and net.duration >= 0.04
 
+    def test_auto_http_context_uses_stable_sizes_for_static_resources(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Automatic HTTP contexts should not randomize cacheable static asset sizes."""
+        from evidenceforge.generation.activity import proxy_uri
+        from evidenceforge.generation.activity.http_content import response_size_for_status
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.0.5",
+            os="Linux Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        activity_gen._ip_to_system = {web_server.ip: web_server}
+        monkeypatch.setattr(
+            proxy_uri,
+            "pick_proxy_uri",
+            lambda rng, hostname, domain_tags, source_os=None: (
+                "/favicon.ico",
+                "image/x-icon",
+                "GET",
+                None,
+                "none",
+            ),
+        )
+        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            web_server.ip,
+            timestamp,
+            dst_port=80,
+            service="http",
+            duration=0.1,
+            resp_bytes=30000,
+            conn_state="SF",
+        )
+
+        event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].http
+        )
+        assert event.http is not None
+        assert event.http.uri == "/favicon.ico"
+        assert event.http.response_body_len == response_size_for_status(
+            200, "WEB-EXT-01", "/favicon.ico"
+        )
+
+    def test_auto_http_context_uses_zero_body_for_not_modified(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Automatic 304 HTTP contexts should not inherit generic network byte counts."""
+        from evidenceforge.generation.activity import proxy_uri
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.0.5",
+            os="Linux Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        activity_gen._ip_to_system = {web_server.ip: web_server}
+        monkeypatch.setattr(
+            proxy_uri,
+            "pick_proxy_uri",
+            lambda rng, hostname, domain_tags, source_os=None: (
+                "/dashboard",
+                "text/html",
+                "GET",
+                None,
+                "none",
+            ),
+        )
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda dst_ip, uri: (304, "Not Modified"),
+        )
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            web_server.ip,
+            timestamp,
+            dst_port=80,
+            service="http",
+            duration=0.1,
+            resp_bytes=43939,
+            conn_state="SF",
+        )
+
+        event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].http
+        )
+        assert event.http is not None
+        assert event.http.uri == "/dashboard"
+        assert event.http.status_code == 304
+        assert event.http.response_body_len == 0
+
     def test_default_connection_duration_jitter_diversifies_reviewer_anchors(self):
         """Generator-owned placeholder durations should not render as exact constants."""
         for anchor in (0.8, 2.0, 0.01):

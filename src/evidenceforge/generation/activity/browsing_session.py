@@ -66,10 +66,16 @@ _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
 }
 
 
-def _response_size(rng: random.Random, hostname: str, path: str, content_type: str) -> int:
+def _response_size(
+    rng: random.Random,
+    hostname: str,
+    path: str,
+    content_type: str,
+    stable_size_hostname: str | None = None,
+) -> int:
     """Generate a realistic response size for a given content type."""
     if is_stable_resource_path(path):
-        return response_size_for_status(200, hostname, path)
+        return response_size_for_status(200, stable_size_hostname or hostname, path)
     return response_size_for_mime(rng, content_type)
 
 
@@ -187,6 +193,7 @@ def generate_browsing_session(
     browsing_intensity: str = "normal",
     port: int = 443,
     require_browser_like_domain: bool = True,
+    stable_size_hostname: str | None = None,
 ) -> list[BrowsingRequest]:
     """Generate a complete browsing session as a list of HTTP requests.
 
@@ -204,6 +211,8 @@ def generate_browsing_session(
         require_browser_like_domain: When true, suppress sessions for
             certificate/update/telemetry domains. Set false for inbound
             web-server logs where the public host may not exist in dns_registry.
+        stable_size_hostname: Optional canonical origin key for stable resource
+            sizes when the rendered log format does not include the Host header.
 
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
@@ -284,7 +293,13 @@ def generate_browsing_session(
                 referrer=previous_page_url,
                 trans_depth=1,
                 is_page_load=True,
-                response_body_len=_response_size(rng, hostname, page.path, page_content_type),
+                response_body_len=_response_size(
+                    rng,
+                    hostname,
+                    page.path,
+                    page_content_type,
+                    stable_size_hostname,
+                ),
                 request_body_len=_request_size(rng, "GET"),
             )
         )
@@ -315,6 +330,7 @@ def generate_browsing_session(
                         sub_hostname,
                         sub.path,
                         sub_content_type,
+                        stable_size_hostname if sub_hostname == hostname else None,
                     ),
                     request_body_len=_request_size(rng, sub.method),
                 )

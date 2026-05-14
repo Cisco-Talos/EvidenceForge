@@ -99,6 +99,19 @@ def is_stable_resource_path(uri: str) -> bool:
 
 def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     """Return a stable source-native web response body size for an HTTP status."""
+    if 300 <= status_code < 400:
+        if status_code == 304:
+            return 0
+        ranges = {
+            301: (140, 360),
+            302: (120, 320),
+            307: (120, 320),
+            308: (140, 360),
+        }
+        lo, hi = ranges.get(status_code, (100, 300))
+        rng = random.Random(_stable_seed(f"web_redirect:{status_code}:{host}:{uri}"))
+        return rng.randint(lo, hi)
+
     if status_code < 400:
         rng = random.Random(_stable_seed(f"web_response:{status_code}:{host}:{uri}"))
         return response_size_for_mime(rng, normalize_mime_type_for_path(uri, "text/html"))

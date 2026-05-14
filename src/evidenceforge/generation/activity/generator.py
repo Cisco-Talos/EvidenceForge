@@ -6361,11 +6361,23 @@ class ActivityGenerator:
             if dst_port not in (80, 443):
                 host = f"{host}:{dst_port}"
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
+            from evidenceforge.generation.activity.http_content import (
+                is_stable_resource_path,
+                response_size_for_status,
+            )
             from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
 
             web_host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
             if web_host == "":
                 web_host = dst_ip
+            response_size_host = web_host
+            ip_to_system = getattr(self, "_ip_to_system", {})
+            if dst_ip in ip_to_system:
+                response_size_host = ip_to_system[dst_ip].hostname
+            elif self.dispatcher and self.dispatcher.visibility_engine:
+                real_dst_ip = self.dispatcher.visibility_engine._vip_to_real_ip.get(dst_ip)
+                if real_dst_ip and real_dst_ip in ip_to_system:
+                    response_size_host = ip_to_system[real_dst_ip].hostname
             web_domain_tags = get_domain_tags(web_host)
             _src_os_http = _get_os_category(source_system.os) if source_system else None
             uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
@@ -6374,11 +6386,12 @@ class ActivityGenerator:
             if http_ua_override:
                 ua = http_ua_override
             status_code, status_msg = _get_http_status(dst_ip, uri)
-            resp_body_len = resp_bytes or rng.randint(200, 50000)
-            if status_code in (301, 302):
-                resp_body_len = rng.randint(100, 300)
-            elif status_code == 304:
-                resp_body_len = 0
+            if status_code in (301, 302, 304) or (
+                status_code < 400 and is_stable_resource_path(uri)
+            ):
+                resp_body_len = response_size_for_status(status_code, response_size_host, uri)
+            else:
+                resp_body_len = resp_bytes if resp_bytes is not None else rng.randint(200, 50000)
             from evidenceforge.generation.activity.referrer import pick_referrer
 
             _http_referer = (

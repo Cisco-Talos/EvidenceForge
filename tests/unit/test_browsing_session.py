@@ -289,6 +289,26 @@ class TestResponseSizes:
 
         assert first_favicon.response_body_len == second_favicon.response_body_len
 
+    def test_stable_static_asset_size_can_use_origin_key(self):
+        first = generate_browsing_session(
+            random.Random(42),
+            "ehr-portal.example.com",
+            [],
+            require_browser_like_domain=False,
+            stable_size_hostname="WEB-EXT-01",
+        )
+        second = generate_browsing_session(
+            random.Random(43),
+            "WEB-EXT-01",
+            [],
+            require_browser_like_domain=False,
+            stable_size_hostname="WEB-EXT-01",
+        )
+        first_favicon = next(r for r in first if r.path == "/favicon.ico")
+        second_favicon = next(r for r in second if r.path == "/favicon.ico")
+
+        assert first_favicon.response_body_len == second_favicon.response_body_len
+
     def test_subresource_timing_uses_timing_profile_overlay(self, tmp_path, monkeypatch):
         overlay = tmp_path / ".eforge" / "config" / "activity"
         overlay.mkdir(parents=True)
