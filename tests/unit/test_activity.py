@@ -140,6 +140,76 @@ class TestProcessHttpCommandCorrelation:
         assert process_name == "/usr/bin/curl"
         assert command_line == "curl -s https://api.slack.com/methods/api.test"
 
+    def test_generate_connection_uses_process_http_command_for_proxy_context(self, monkeypatch):
+        """Later network effects attributed to curl should keep the command URL."""
+        state = StateManager()
+        generator = ActivityGenerator(
+            state,
+            {},
+            dispatcher=EventDispatcher(state_manager=state, emitters={}),
+        )
+        source = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        generator._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        generator._proxy_mode = "explicit"
+        generator._proxy_listener_port = 8080
+        generator._proxy_routes = {source.ip: [proxy]}
+        generator._ad_domain = "meridianhcs.local"
+
+        timestamp = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        state.set_current_time(timestamp)
+        pid = state.create_process(
+            system=source.hostname,
+            parent_pid=4,
+            image="/usr/bin/curl",
+            command_line="curl -s https://api.slack.com/methods/api.test",
+            username="sarah.martinez",
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+
+        captured: list[dict[str, object]] = []
+        original_build_proxy_context = generator._build_proxy_context
+
+        def capture_proxy_context(**kwargs):
+            captured.append(kwargs)
+            return original_build_proxy_context(**kwargs)
+
+        monkeypatch.setattr(generator, "_build_proxy_context", capture_proxy_context)
+
+        generator.generate_connection(
+            src_ip=source.ip,
+            dst_ip="13.107.246.52",
+            time=timestamp + timedelta(seconds=1),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=400,
+            resp_bytes=1200,
+            emit_dns=True,
+            pid=pid,
+            source_system=source,
+        )
+
+        assert captured
+        assert captured[0]["hostname"] == "api.slack.com"
+        assert captured[0]["dst_port"] == 443
+        http = captured[0]["http"]
+        assert isinstance(http, HttpContext)
+        assert http.user_agent == "curl/7.88.1"
+        assert http.uri == "/methods/api.test"
+
 
 class TestNetworkValidation:
     """Tests for network connection validation."""

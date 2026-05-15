@@ -5161,6 +5161,47 @@ class ActivityGenerator:
         if source_system is None and hasattr(self, "_ip_to_system"):
             source_system = self._ip_to_system.get(src_ip)
 
+        if (
+            http is None
+            and pid > 0
+            and source_system is not None
+            and proto == "tcp"
+            and (dst_port in {80, 443, 8080} or service is None or service in {"http", "ssl"})
+        ):
+            proc = self.state_manager.get_process(source_system.hostname, pid)
+            if proc is not None:
+                command_http = _http_context_from_process_command(
+                    proc.image,
+                    proc.command_line,
+                    response_body_len=resp_bytes or _get_rng().randint(500, 50000),
+                )
+                if command_http is not None:
+                    command_http_context, command_host, command_port, command_service = command_http
+                    command_target = self._system_for_hostname(command_host)
+                    host_lower = command_host.lower().rstrip(".")
+                    ad_domain_for_command = (
+                        str(
+                            getattr(self, "_ad_domain", "") or "",
+                        )
+                        .lower()
+                        .rstrip(".")
+                    )
+                    command_is_unknown_internal = command_target is None and (
+                        host_lower.endswith(".local")
+                        or (
+                            ad_domain_for_command
+                            and host_lower.endswith(f".{ad_domain_for_command}")
+                        )
+                    )
+                    if not command_is_unknown_internal:
+                        http = command_http_context
+                        hostname = command_host
+                        dst_port = command_port
+                        service = command_service
+                        if command_target is not None:
+                            dst_ip = command_target.ip
+                            emit_dns = True
+
         # Resolve hostname ONCE for DNS/proxy consistency.
         # All downstream uses (causal DNS expansion, proxy hostname)
         # share this single resolved value instead of doing independent lookups.
