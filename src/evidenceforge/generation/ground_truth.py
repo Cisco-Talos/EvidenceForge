@@ -509,34 +509,34 @@ class GroundTruthGenerator:
         Returns:
             Formatted IOC sections (Markdown)
         """
-        if not iocs:
+        if not iocs or not any(values for values in iocs.values()):
             return "*No IOCs extracted.*\n"
 
         sections = []
 
         # Network IOCs
-        if "network" in iocs:
+        if iocs.get("network"):
             sections.append("### Network IOCs\n")
             for ioc in sorted(iocs["network"]):
                 sections.append(f"- {ioc}")
             sections.append("")
 
         # Process IOCs
-        if "processes" in iocs:
+        if iocs.get("processes"):
             sections.append("### Process IOCs\n")
             for ioc in sorted(iocs["processes"]):
                 sections.append(f"- {ioc}")
             sections.append("")
 
         # User IOCs
-        if "users" in iocs:
+        if iocs.get("users"):
             sections.append("### User IOCs\n")
             for ioc in sorted(iocs["users"]):
                 sections.append(f"- {ioc} (compromised account)")
             sections.append("")
 
         # File IOCs
-        if "files" in iocs:
+        if iocs.get("files"):
             sections.append("### File IOCs\n")
             for ioc in sorted(iocs["files"]):
                 sections.append(f"- {ioc}")

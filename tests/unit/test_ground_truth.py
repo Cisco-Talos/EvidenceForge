@@ -469,6 +469,18 @@ class TestGroundTruthGenerator:
 
         assert "No IOCs extracted" in formatted
 
+    def test_format_iocs_empty_categories(self, minimal_scenario, malicious_events):
+        """_format_iocs() should not emit blank headings for empty IOC categories."""
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+
+        formatted = generator._format_iocs(
+            {"network": set(), "processes": set(), "users": set(), "files": set()}
+        )
+
+        assert "No IOCs extracted" in formatted
+        assert "### Network IOCs" not in formatted
+        assert "### Process IOCs" not in formatted
+
     def test_format_iocs_sorted(self, minimal_scenario, malicious_events):
         """_format_iocs() should sort IOCs alphabetically."""
         iocs = {"users": {"zebra", "alpha", "beta"}}
