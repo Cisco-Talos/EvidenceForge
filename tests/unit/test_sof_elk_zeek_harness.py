@@ -29,9 +29,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.helpers.sof_elk_zeek import (
+from evidenceforge.config import get_formats_directory
+from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
     SOF_ELK_FILTER_FILES,
+    ZEEK_LOG_SPECS,
     DnsExpectation,
     SofElkParserError,
     StagedLog,
@@ -40,6 +42,13 @@ from tests.helpers.sof_elk_zeek import (
     stage_zeek_logs,
     validate_parsed_output,
 )
+
+
+def test_zeek_log_specs_cover_all_format_definitions() -> None:
+    zeek_formats = {path.stem for path in get_formats_directory().glob("zeek_*.yaml")}
+    harness_formats = {spec.log_type for spec in ZEEK_LOG_SPECS}
+
+    assert harness_formats == zeek_formats
 
 
 def test_stage_zeek_logs_preserves_sensor_subdirectories(
@@ -87,6 +96,22 @@ def test_stage_zeek_logs_adapts_flat_generated_files_for_sof_elk(
     assert manifest.expected_counts == {"zeek_conn": 2, "zeek_dns": 2}
 
 
+def test_stage_zeek_logs_adapts_all_generated_zeek_flat_files(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_root.mkdir()
+    for spec in ZEEK_LOG_SPECS:
+        (source_root / spec.source_names[-1]).write_text(
+            '{"ts": 1742036200.0}\n',
+            encoding="utf-8",
+        )
+
+    manifest = stage_zeek_logs(source_root, tmp_path / "stage")
+
+    staged_paths = {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs}
+    assert staged_paths == {Path("zeek/default") / spec.staged_name for spec in ZEEK_LOG_SPECS}
+    assert manifest.expected_counts == {spec.log_type: 1 for spec in ZEEK_LOG_SPECS}
+
+
 def test_stage_zeek_logs_keeps_corrupt_dns_for_external_parser(tmp_path: Path) -> None:
     source_dir = tmp_path / "source" / "sensor-a"
     source_dir.mkdir(parents=True)
@@ -97,7 +122,7 @@ def test_stage_zeek_logs_keeps_corrupt_dns_for_external_parser(tmp_path: Path) -
 
     manifest = stage_zeek_logs(tmp_path / "source", tmp_path / "stage")
 
-    assert manifest.expected_counts == {"zeek_conn": 0, "zeek_dns": 1}
+    assert manifest.expected_counts == {"zeek_dns": 1}
     assert manifest.dns_expectations == {}
     assert (manifest.logstash_root / "zeek" / "sensor-a" / "dns.log").exists()
 
@@ -118,9 +143,17 @@ def test_build_sof_elk_zeek_configs_reuses_sof_elk_filebeat_input(tmp_path: Path
 
     pipeline_dir, filebeat_config = build_sof_elk_zeek_configs(sof_elk_dir, tmp_path)
 
-    assert "/usr/local/sof-elk/lib/filebeat_inputs/zeek.yml" in filebeat_config.read_text(
-        encoding="utf-8"
+    assert "/usr/share/filebeat/inputs.d/*.yml" in filebeat_config.read_text(encoding="utf-8")
+    assert (
+        (filebeat_config.parent / "filebeat-inputs" / "zeek.yml")
+        .read_text(encoding="utf-8")
+        .startswith("- type: filestream")
     )
+    supplemental_inputs = (
+        filebeat_config.parent / "filebeat-inputs" / "evidenceforge-zeek.yml"
+    ).read_text(encoding="utf-8")
+    assert "type: zeek_ntp" in supplemental_inputs
+    assert "/logstash/zeek/**/reporter.*" in supplemental_inputs
     assert 'path => "/parsed-output/%{[labels][type]}.jsonl"' in (
         pipeline_dir / "9999-output-jsonl.conf"
     ).read_text(encoding="utf-8")

@@ -1,8 +1,7 @@
 # External Parser Validation
 
 EvidenceForge has an optional external-parser lane for checking generated logs
-against third-party parsers. The first harness covers SOF-ELK Zeek `conn` and
-`dns` ingestion.
+against third-party parsers. The first harness covers SOF-ELK Zeek ingestion.
 
 The goal is not to prove that our JSON is valid JSON. The goal is to stage
 generated files the way SOF-ELK expects to collect them, run SOF-ELK's own
@@ -13,33 +12,45 @@ EvidenceForge output later when a parser rejects records.
 
 Supported in the V1 harness:
 
-- Zeek connection logs
-- Zeek DNS logs
-- SOF-ELK Filebeat input paths from `lib/filebeat_inputs/zeek.yml`
+- All EvidenceForge Zeek log files:
+  `conn`, `dns`, `http`, `files`, `ssl`, `x509`, `weird`, `dhcp`, `ntp`,
+  `ocsp`, `packet_filter`, `pe`, and `reporter`
+- SOF-ELK Filebeat input paths copied unchanged from `lib/filebeat_inputs/zeek.yml`
+- Supplemental Filebeat inputs for EvidenceForge Zeek logs SOF-ELK does not
+  currently watch: `ntp`, `ocsp`, `packet_filter`, `pe`, and `reporter`
 - SOF-ELK Logstash filter files copied unchanged from a pinned checkout
 - JSONL output instead of Elasticsearch
 
 Not yet covered:
 
-- Zeek `http`, `ssl`, `files`, `x509`, `ntp`, and other Zeek logs
 - Windows XML logs
 - ASA, IDS, syslog, proxy, web, eCAR
 - Elasticsearch output behavior
 
+SOF-ELK has dedicated filters for the Zeek types it supports today, such as
+`conn`, `dns`, `http`, `files`, `ssl`, `x509`, and `weird`. For EvidenceForge
+Zeek files that SOF-ELK does not yet parse with a dedicated filter, the harness
+still stages and ingests the file, validates JSON ingestion/counts, captures the
+raw parsed event, and records in reports that the type did not use a dedicated
+SOF-ELK filter.
+
 ## How It Works
 
-The harness lives in `tests/helpers/sof_elk_zeek.py`.
+The harness lives in `src/evidenceforge/external_parsers/sof_elk_zeek.py`.
 
 At runtime it:
 
 1. Clones SOF-ELK at the pinned commit into an external cache, not into this
    repository.
 2. Stages generated Zeek files under a temporary SOF-ELK-style tree:
-   `/logstash/zeek/<sensor>/conn.log` and `/logstash/zeek/<sensor>/dns.log`.
+   `/logstash/zeek/<sensor>/<zeek-log-name>.log`.
 3. Builds a temporary Logstash pipeline:
    - a small Beats input wrapper
    - unchanged SOF-ELK filter files
    - a JSONL file output wrapper
+   It also builds Filebeat input config from SOF-ELK's unchanged `zeek.yml`
+   plus supplemental EvidenceForge-only Zeek inputs for files SOF-ELK does not
+   currently watch.
 4. Runs pinned Logstash and Filebeat containers on an isolated container
    network.
 5. Mounts staged input at `/logstash`.
@@ -66,7 +77,8 @@ docker ps -a --filter label=evidenceforge.external_parser=sof-elk-zeek
 SOF-ELK watches recursive paths such as `/logstash/zeek/**/conn.*` and
 `/logstash/zeek/**/dns.*`, so the harness keeps the SOF-ELK collection shape.
 
-Generated files are staged as follows:
+Generated files are staged as follows. Per-sensor files keep their sensor
+directory; flat generated files are adapted into a synthetic `default` sensor.
 
 | EvidenceForge file | Staged SOF-ELK file |
 | --- | --- |
@@ -74,10 +86,20 @@ Generated files are staged as follows:
 | `<sensor>/dns.json` | `/logstash/zeek/<sensor>/dns.log` |
 | `zeek_conn.json` | `/logstash/zeek/default/conn.log` |
 | `zeek_dns.json` | `/logstash/zeek/default/dns.log` |
+| `zeek_http.json` | `/logstash/zeek/default/http.log` |
+| `zeek_files.json` | `/logstash/zeek/default/files.log` |
+| `zeek_ssl.json` | `/logstash/zeek/default/ssl.log` |
+| `zeek_x509.json` | `/logstash/zeek/default/x509.log` |
+| `zeek_weird.json` | `/logstash/zeek/default/weird.log` |
+| `zeek_dhcp.json` | `/logstash/zeek/default/dhcp.log` |
+| `zeek_ntp.json` | `/logstash/zeek/default/ntp.log` |
+| `zeek_ocsp.json` | `/logstash/zeek/default/ocsp.log` |
+| `zeek_packet_filter.json` | `/logstash/zeek/default/packet_filter.log` |
+| `zeek_pe.json` | `/logstash/zeek/default/pe.log` |
+| `zeek_reporter.json` | `/logstash/zeek/default/reporter.log` |
 
-The flat `zeek_conn.json` and `zeek_dns.json` forms come from generated outputs
-without explicit network sensors. They are adapted into a `default` sensor only
-for parser validation.
+The same basename mapping applies inside real sensor directories, for example
+`zeek-core/http.json` stages to `/logstash/zeek/zeek-core/http.log`.
 
 ## Commands
 
@@ -87,7 +109,7 @@ Run the normal external parser smoke tests:
 uv run pytest --include-external-parsers -m external_parser --no-cov
 ```
 
-Generate the medium dataset's Zeek logs and run the harness manually:
+Generate the medium dataset's Zeek logs and run the harness:
 
 ```bash
 uv run eforge generate tests/fixtures/scenarios/medium-dataset.yaml \
@@ -96,13 +118,17 @@ uv run eforge generate tests/fixtures/scenarios/medium-dataset.yaml \
   --force \
   --verbose
 
-uv run python -c 'from pathlib import Path; from tests.helpers.sof_elk_zeek import run_sof_elk_zeek_parser; run_sof_elk_zeek_parser(Path("/private/tmp/eforge-sof-elk-medium/data"), Path("/private/tmp/eforge-sof-elk-medium/harness"), timeout_seconds=180)'
+uv run python scripts/external_parser.py sof-elk-zeek \
+  /private/tmp/eforge-sof-elk-medium/data \
+  --work-dir /private/tmp/eforge-sof-elk-medium/harness \
+  --timeout 180
 ```
 
 For assessment/improvement loops, use the generated scenario output directory
-from the coverage-test scenario workflow and pass its `data/` directory to
-`run_sof_elk_zeek_parser(...)`. `scenarios/COVERAGE-TEST-PROMPT.md` is the
-prompt used to create that scenario, not itself a runnable scenario YAML file.
+from the coverage-test scenario workflow and pass its `data/` directory to the
+same `scripts/external_parser.py sof-elk-zeek ...` command.
+`scenarios/COVERAGE-TEST-PROMPT.md` is the prompt used to create that scenario,
+not itself a runnable scenario YAML file.
 
 ## Cache And Images
 
@@ -114,7 +140,7 @@ Defaults:
 
 - SOF-ELK repo: `https://github.com/philhagen/sof-elk.git`
 - SOF-ELK commit: defined by `SOF_ELK_COMMIT` in
-  `tests/helpers/sof_elk_zeek.py`
+  `src/evidenceforge/external_parsers/sof_elk_zeek.py`
 - Filebeat image: defined by `FILEBEAT_IMAGE`
 - Logstash image: defined by `LOGSTASH_IMAGE`
 
@@ -130,9 +156,10 @@ Given a harness work directory, useful artifacts are:
 | --- | --- |
 | `stage/logstash/zeek/...` | Files as SOF-ELK sees them |
 | `runtime-config/pipeline/` | Temporary Logstash pipeline wrapper plus copied SOF-ELK filters |
-| `runtime-config/filebeat.yml` | Filebeat config that points at SOF-ELK's Zeek input file |
-| `parsed/zeek_conn.jsonl` | Parsed connection events |
-| `parsed/zeek_dns.jsonl` | Parsed DNS events |
+| `runtime-config/filebeat.yml` | Filebeat config that loads generated input files |
+| `runtime-config/filebeat-inputs/zeek.yml` | SOF-ELK Zeek Filebeat input copied unchanged |
+| `runtime-config/filebeat-inputs/evidenceforge-zeek.yml` | Supplemental inputs for EvidenceForge Zeek files SOF-ELK does not watch |
+| `parsed/zeek_*.jsonl` | Parsed events by Zeek label type |
 | `parsed/sof_elk_parser_failures.json` | Structured failure report when validation fails |
 | `pipeline-logs/filebeat.log` | Filebeat container logs |
 | `pipeline-logs/logstash.log` | Logstash container logs |
@@ -145,6 +172,7 @@ The failure report includes:
 - failure messages
 - failure tag counts by log type
 - DNS failure counts by question type
+- whether each staged log type had a dedicated SOF-ELK filter
 - sample failed events with `event.original`
 
 This report is the main artifact to keep when triaging generated-data parser
@@ -153,18 +181,27 @@ failures.
 ## Current Medium Dataset Result
 
 The medium dataset can now be generated and ingested through the harness. In the
-current implementation, the pipeline discovers and parses every staged `conn`
-and `dns` line, but validation fails because SOF-ELK tags some DNS records with
-`_grokparsefail_6200-01`.
+current implementation, the pipeline discovers and emits JSONL for every staged
+EvidenceForge Zeek file present in the dataset, but validation fails because
+SOF-ELK tags some DNS records with `_grokparsefail_6200-01`.
 
 Observed in one run:
 
 - `zeek_conn`: 10,790 input lines, 10,790 parsed events, no parser failure tags
 - `zeek_dns`: 4,227 input lines, 4,227 parsed events, 341 parser failure tags
+- `zeek_http`: 593 input lines, 593 parsed events, no parser failure tags
+- `zeek_files`: 582 input lines, 582 parsed events, no parser failure tags
+- `zeek_ssl`: 1,128 input lines, 1,128 parsed events, no parser failure tags
+- `zeek_x509`: 357 input lines, 357 parsed events, no parser failure tags
+- `zeek_dhcp`: 28 input lines, 28 JSON-ingested events, no parser failure tags
+- `zeek_ntp`: 152 input lines, 152 JSON-ingested events, no parser failure tags
+- `zeek_ocsp`: 39 input lines, 39 JSON-ingested events, no parser failure tags
 - DNS failures by question type: `PTR` 194, `NS` 59, `MX` 55, `SOA` 33
 
 This is exactly the kind of generated-data finding the external-parser lane is
 intended to expose. Do not patch SOF-ELK filters to make this pass. Later work
 should decide whether EvidenceForge is emitting valid Zeek DNS records that
 SOF-ELK models too narrowly, or whether the emitter should change to match real
-Zeek output more closely.
+Zeek output more closely. The `dhcp`, `ntp`, and `ocsp` counts above are
+JSON-ingestion checks because the pinned SOF-ELK config does not include
+dedicated filters for those EvidenceForge Zeek types.

@@ -262,7 +262,7 @@ uv run ruff format --check .
 ```
 
 See [External Parser Validation](docs/reference/external-parser-validation.md)
-for the SOF-ELK Zeek harness architecture, manual full-dataset commands, and
+for the SOF-ELK Zeek harness architecture, full-dataset runner command, and
 failure report details.
 
 ### Tech Stack

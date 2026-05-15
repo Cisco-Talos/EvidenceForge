@@ -33,7 +33,7 @@ import uuid
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 SOF_ELK_REPO_URL = "https://github.com/philhagen/sof-elk.git"
 SOF_ELK_COMMIT = "517af9445574cc084cd5f4b80539fc244dab82b0"
@@ -50,15 +50,14 @@ SOF_ELK_FILTER_FILES = (
     "1200-preprocess-zeek.conf",
     "2051-zeek_conn-netflow.conf",
     "6200-zeek_dns.conf",
+    "6201-zeek_http.conf",
+    "6202-zeek_files.conf",
+    "6203-zeek_ssl.conf",
+    "6204-zeek_x509.conf",
+    "6276-zeek_weird.conf",
+    "8000-postprocess-zeek.conf",
 )
 
-LOG_TYPES = ("zeek_conn", "zeek_dns")
-SOURCE_TO_STAGED = {
-    "conn.json": ("conn.log", "zeek_conn"),
-    "zeek_conn.json": ("conn.log", "zeek_conn"),
-    "dns.json": ("dns.log", "zeek_dns"),
-    "zeek_dns.json": ("dns.log", "zeek_dns"),
-}
 FAILURE_TAGS = {
     "_dateparsefailure",
     "_jsonparsefailure",
@@ -67,7 +66,165 @@ FAILURE_TAGS = {
 }
 
 JsonObject = dict[str, Any]
-LogType = Literal["zeek_conn", "zeek_dns"]
+LogType = str
+
+
+@dataclass(frozen=True)
+class ZeekLogSpec:
+    """Mapping from generated EvidenceForge Zeek files to SOF-ELK input shape."""
+
+    log_type: LogType
+    staged_name: str
+    source_names: tuple[str, ...]
+    required_paths: tuple[str, ...] = ()
+    sof_elk_dedicated_filter: bool = False
+    sof_elk_filebeat_input: bool = False
+
+
+GENERIC_JSON_REQUIRED_PATHS = ("raw.ts",)
+ZEEK_LOG_SPECS: tuple[ZeekLogSpec, ...] = (
+    ZeekLogSpec(
+        log_type="zeek_conn",
+        staged_name="conn.log",
+        source_names=("conn.json", "zeek_conn.json"),
+        required_paths=(
+            "zeek.session_id",
+            "source.ip",
+            "source.port",
+            "destination.ip",
+            "destination.port",
+            "network.transport",
+            "zeek.connection.state",
+            "source.bytes",
+            "destination.bytes",
+            "source.packets",
+            "destination.packets",
+        ),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_dns",
+        staged_name="dns.log",
+        source_names=("dns.json", "zeek_dns.json"),
+        required_paths=(
+            "zeek.session_id",
+            "source.ip",
+            "source.port",
+            "destination.ip",
+            "destination.port",
+            "network.transport",
+            "dns.question.name",
+            "dns.question.type",
+            "dns.response.code",
+        ),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_http",
+        staged_name="http.log",
+        source_names=("http.json", "zeek_http.json"),
+        required_paths=(
+            "zeek.session_id",
+            "source.ip",
+            "source.port",
+            "destination.ip",
+            "destination.port",
+            "http.request.method",
+        ),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_files",
+        staged_name="files.log",
+        source_names=("files.json", "zeek_files.json"),
+        required_paths=(
+            "zeek.files.fuid",
+            "zeek.files.source",
+            "zeek.files.seen_bytes",
+        ),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_ssl",
+        staged_name="ssl.log",
+        source_names=("ssl.json", "zeek_ssl.json"),
+        required_paths=(
+            "zeek.session_id",
+            "source.ip",
+            "source.port",
+            "destination.ip",
+            "destination.port",
+            "tls.version",
+        ),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_x509",
+        staged_name="x509.log",
+        source_names=("x509.json", "zeek_x509.json"),
+        required_paths=(
+            "tls.cert_container.x509.hash.sha256",
+            "tls.cert_container.x509.version_number",
+        ),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_weird",
+        staged_name="weird.log",
+        source_names=("weird.json", "zeek_weird.json"),
+        required_paths=("zeek.weird.name",),
+        sof_elk_dedicated_filter=True,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_dhcp",
+        staged_name="dhcp.log",
+        source_names=("dhcp.json", "zeek_dhcp.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+        sof_elk_filebeat_input=True,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_ntp",
+        staged_name="ntp.log",
+        source_names=("ntp.json", "zeek_ntp.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_ocsp",
+        staged_name="ocsp.log",
+        source_names=("ocsp.json", "zeek_ocsp.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_packet_filter",
+        staged_name="packet_filter.log",
+        source_names=("packet_filter.json", "zeek_packet_filter.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_pe",
+        staged_name="pe.log",
+        source_names=("pe.json", "zeek_pe.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+    ZeekLogSpec(
+        log_type="zeek_reporter",
+        staged_name="reporter.log",
+        source_names=("reporter.json", "zeek_reporter.json"),
+        required_paths=GENERIC_JSON_REQUIRED_PATHS,
+    ),
+)
+LOG_TYPES: tuple[LogType, ...] = tuple(spec.log_type for spec in ZEEK_LOG_SPECS)
+LOG_SPECS_BY_TYPE: dict[LogType, ZeekLogSpec] = {spec.log_type: spec for spec in ZEEK_LOG_SPECS}
+SUPPLEMENTAL_FILEBEAT_SPECS = tuple(
+    spec for spec in ZEEK_LOG_SPECS if not spec.sof_elk_filebeat_input
+)
 
 
 class SofElkHarnessError(RuntimeError):
@@ -107,10 +264,10 @@ class ZeekStageManifest:
     @property
     def expected_counts(self) -> dict[LogType, int]:
         """Return expected output event counts by SOF-ELK label type."""
-        counts: dict[LogType, int] = {"zeek_conn": 0, "zeek_dns": 0}
+        counts: dict[LogType, int] = dict.fromkeys(LOG_TYPES, 0)
         for log in self.logs:
             counts[log.log_type] += log.record_count
-        return counts
+        return {log_type: count for log_type, count in counts.items() if count}
 
 
 @dataclass(frozen=True)
@@ -199,7 +356,7 @@ def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
     """Stage generated Zeek JSON files under SOF-ELK's `/logstash/zeek/**` layout.
 
     Args:
-        source_root: Root containing generated Zeek conn/dns files.
+        source_root: Root containing generated Zeek files.
         staging_root: Temporary directory where the SOF-ELK-style tree is created.
 
     Returns:
@@ -213,28 +370,32 @@ def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
     logs: list[StagedLog] = []
     dns_expectations: dict[tuple[str, str], DnsExpectation] = {}
 
-    for source_name, (staged_name, log_type) in SOURCE_TO_STAGED.items():
-        for source in sorted(source_root.rglob(source_name)):
-            sensor = _sensor_name(source_root, source.parent)
-            destination = zeek_root / sensor / staged_name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, destination)
-            record_count = _count_jsonl_lines(destination)
-            logs.append(
-                StagedLog(
-                    source=source,
-                    staged=destination,
-                    log_type=log_type,
-                    record_count=record_count,
+    for spec in ZEEK_LOG_SPECS:
+        for source_name in spec.source_names:
+            for source in sorted(source_root.rglob(source_name)):
+                sensor = _sensor_name(source_root, source.parent)
+                destination = zeek_root / sensor / spec.staged_name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, destination)
+                record_count = _count_jsonl_lines(destination)
+                logs.append(
+                    StagedLog(
+                        source=source,
+                        staged=destination,
+                        log_type=spec.log_type,
+                        record_count=record_count,
+                    )
                 )
-            )
-            if log_type == "zeek_dns":
-                dns_expectations.update(_dns_expectations(source))
+                if spec.log_type == "zeek_dns":
+                    dns_expectations.update(_dns_expectations(source))
 
     if not logs:
+        expected_names = ", ".join(
+            sorted(source_name for spec in ZEEK_LOG_SPECS for source_name in spec.source_names)
+        )
         raise SofElkHarnessError(
-            "no Zeek conn/dns JSON files found below generated output "
-            f"{source_root}; expected conn.json/dns.json or zeek_conn.json/zeek_dns.json"
+            f"no supported Zeek JSON files found below generated output {source_root}; "
+            f"expected one of: {expected_names}"
         )
 
     return ZeekStageManifest(
@@ -257,7 +418,9 @@ def build_sof_elk_zeek_configs(sof_elk_dir: Path, work_dir: Path) -> tuple[Path,
     _assert_sof_elk_files_exist(sof_elk_dir)
     config_root = work_dir.resolve() / "runtime-config"
     pipeline_dir = config_root / "pipeline"
+    filebeat_inputs_dir = config_root / "filebeat-inputs"
     pipeline_dir.mkdir(parents=True, exist_ok=True)
+    filebeat_inputs_dir.mkdir(parents=True, exist_ok=True)
 
     (pipeline_dir / "0000-input-beats.conf").write_text(
         """input {
@@ -274,6 +437,16 @@ def build_sof_elk_zeek_configs(sof_elk_dir: Path, work_dir: Path) -> tuple[Path,
             sof_elk_dir / "configfiles" / filter_file,
             pipeline_dir / filter_file,
         )
+    shutil.copyfile(
+        sof_elk_dir / "lib" / "filebeat_inputs" / "zeek.yml",
+        filebeat_inputs_dir / "zeek.yml",
+    )
+    supplemental_inputs = _supplemental_filebeat_inputs()
+    if supplemental_inputs:
+        (filebeat_inputs_dir / "evidenceforge-zeek.yml").write_text(
+            supplemental_inputs,
+            encoding="utf-8",
+        )
     (pipeline_dir / "9999-output-jsonl.conf").write_text(
         """output {
   file {
@@ -289,7 +462,7 @@ def build_sof_elk_zeek_configs(sof_elk_dir: Path, work_dir: Path) -> tuple[Path,
     filebeat_config.write_text(
         """filebeat.config.inputs:
   enabled: true
-  path: /usr/local/sof-elk/lib/filebeat_inputs/zeek.yml
+  path: /usr/share/filebeat/inputs.d/*.yml
   reload.enabled: false
 
 output.logstash:
@@ -301,6 +474,30 @@ path.data: /usr/share/filebeat/data
         encoding="utf-8",
     )
     return pipeline_dir, filebeat_config
+
+
+def _supplemental_filebeat_inputs() -> str:
+    """Return Filebeat inputs for EvidenceForge Zeek logs SOF-ELK does not watch yet."""
+    blocks: list[str] = []
+    for spec in SUPPLEMENTAL_FILEBEAT_SPECS:
+        input_id = spec.log_type.replace("_", "-")
+        watched_name = spec.staged_name.removesuffix(".log")
+        blocks.append(
+            f"""- type: filestream
+  id: eforge-{input_id}-01
+  paths:
+    - /logstash/zeek/**/{watched_name}.*
+  prospector.scanner.exclude_files: [ '\\.gz$', '\\.bz2$', '\\.zip$' ]
+  close.on_state_change.inactive: 5m
+  clean_removed: true
+  processors:
+    - add_labels:
+       labels:
+         type: {spec.log_type}
+  tags: [ 'zeek' ]
+"""
+        )
+    return "\n".join(blocks)
 
 
 def run_sof_elk_zeek_parser(
@@ -374,7 +571,7 @@ def validate_parsed_output(
 
     Args:
         manifest: Staging manifest describing expected input records.
-        parsed_dir: Directory containing `zeek_conn.jsonl` and `zeek_dns.jsonl`.
+        parsed_dir: Directory containing SOF-ELK JSONL outputs.
 
     Returns:
         Parsed events grouped by SOF-ELK label type.
@@ -385,7 +582,7 @@ def validate_parsed_output(
     """
     failures: list[str] = []
     failure_events: list[JsonObject] = []
-    events_by_type: dict[LogType, list[JsonObject]] = {"zeek_conn": [], "zeek_dns": []}
+    events_by_type: dict[LogType, list[JsonObject]] = {log_type: [] for log_type in LOG_TYPES}
 
     for log_type, expected_count in manifest.expected_counts.items():
         output_path = parsed_dir / f"{log_type}.jsonl"
@@ -498,6 +695,8 @@ def _run_containers(
                 f"{sof_elk_dir}:/usr/local/sof-elk:ro",
                 "-v",
                 f"{filebeat_config}:/usr/share/filebeat/filebeat.yml:ro",
+                "-v",
+                f"{filebeat_config.parent / 'filebeat-inputs'}:/usr/share/filebeat/inputs.d:ro",
                 "-v",
                 f"{filebeat_data_dir}:/usr/share/filebeat/data",
                 FILEBEAT_IMAGE,
@@ -617,33 +816,8 @@ def _event_failures(
     if failure_tags:
         failures.append(f"{prefix}: parser failure tags present: {', '.join(failure_tags)}")
 
-    if log_type == "zeek_conn":
-        required_paths = (
-            "zeek.session_id",
-            "source.ip",
-            "source.port",
-            "destination.ip",
-            "destination.port",
-            "network.transport",
-            "zeek.connection.state",
-            "source.bytes",
-            "destination.bytes",
-            "source.packets",
-            "destination.packets",
-        )
-    else:
-        required_paths = (
-            "zeek.session_id",
-            "source.ip",
-            "source.port",
-            "destination.ip",
-            "destination.port",
-            "network.transport",
-            "dns.question.name",
-            "dns.question.type",
-            "dns.response.code",
-        )
-    for path in required_paths:
+    spec = LOG_SPECS_BY_TYPE[log_type]
+    for path in spec.required_paths:
         if _get_path(event, path) in (None, ""):
             failures.append(f"{prefix}: missing required field {path}")
 
@@ -673,9 +847,19 @@ def _write_failure_report(
     report_path = parsed_dir / FAILURE_REPORT_FILENAME
     report = {
         "expected_counts": manifest.expected_counts,
-        "observed_counts": {log_type: len(events) for log_type, events in events_by_type.items()},
+        "observed_counts": {
+            log_type: len(events_by_type.get(log_type, [])) for log_type in manifest.expected_counts
+        },
         "parsed_outputs": {
-            log_type: str(parsed_dir / f"{log_type}.jsonl") for log_type in LOG_TYPES
+            log_type: str(parsed_dir / f"{log_type}.jsonl") for log_type in manifest.expected_counts
+        },
+        "log_support": {
+            spec.log_type: {
+                "sof_elk_dedicated_filter": spec.sof_elk_dedicated_filter,
+                "sof_elk_filebeat_input": spec.sof_elk_filebeat_input,
+            }
+            for spec in ZEEK_LOG_SPECS
+            if spec.log_type in manifest.expected_counts
         },
         "staged_logs": [
             {
@@ -688,7 +872,10 @@ def _write_failure_report(
         ],
         "failure_count": len(failures),
         "failure_messages": failures,
-        "failure_tag_counts": _failure_tag_counts(events_by_type),
+        "failure_tag_counts": _failure_tag_counts(
+            events_by_type,
+            tuple(manifest.expected_counts),
+        ),
         "dns_failure_qtype_counts": _dns_failure_qtype_counts(events_by_type),
         "sample_failures": failure_events[:FAILURE_DETAIL_LIMIT],
     }
@@ -729,11 +916,12 @@ def _failure_event_summary(
 
 def _failure_tag_counts(
     events_by_type: dict[LogType, list[JsonObject]],
+    log_types: tuple[LogType, ...],
 ) -> dict[LogType, dict[str, int]]:
-    counts_by_type: dict[LogType, dict[str, int]] = {"zeek_conn": {}, "zeek_dns": {}}
-    for log_type, events in events_by_type.items():
+    counts_by_type: dict[LogType, dict[str, int]] = {}
+    for log_type in log_types:
         counts: Counter[str] = Counter()
-        for event in events:
+        for event in events_by_type.get(log_type, []):
             tags = event.get("tags", [])
             if isinstance(tags, list):
                 counts.update(_failure_tags(tags))
@@ -745,7 +933,7 @@ def _dns_failure_qtype_counts(
     events_by_type: dict[LogType, list[JsonObject]],
 ) -> dict[str, int]:
     counts: Counter[str] = Counter()
-    for event in events_by_type["zeek_dns"]:
+    for event in events_by_type.get("zeek_dns", []):
         tags = event.get("tags", [])
         if not isinstance(tags, list) or not _failure_tags(tags):
             continue

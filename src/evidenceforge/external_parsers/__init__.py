@@ -20,4 +20,4 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Shared test helper modules."""
+"""External parser harnesses for generated EvidenceForge logs."""

@@ -70,7 +70,7 @@ uv run pytest --include-external-parsers -m external_parser --no-cov
 ```
 
 See [External Parser Validation](docs/reference/external-parser-validation.md)
-for the SOF-ELK Zeek harness architecture, manual full-dataset commands, and
+for the SOF-ELK Zeek harness architecture, full-dataset runner command, and
 failure report details.
 
 Coverage is reserved for final readiness checks before opening a `dev` → `main`

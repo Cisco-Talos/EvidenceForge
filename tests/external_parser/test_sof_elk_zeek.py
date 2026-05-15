@@ -31,15 +31,15 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext
-from evidenceforge.formats import load_format
-from evidenceforge.generation.emitters.zeek import ZeekEmitter
-from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
-from tests.helpers.sof_elk_zeek import (
+from evidenceforge.external_parsers.sof_elk_zeek import (
     SofElkHarnessError,
     SofElkParserError,
     find_container_runtime,
     run_sof_elk_zeek_parser,
 )
+from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 
 pytestmark = pytest.mark.external_parser
 
