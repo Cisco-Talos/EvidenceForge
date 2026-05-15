@@ -31,6 +31,7 @@ import subprocess
 import time
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,12 @@ FAILURE_TAGS = {
 
 JsonObject = dict[str, Any]
 LogType = str
+ProgressCallback = Callable[[str, dict[str, Any]], None]
+
+
+def _noop_progress(_event_type: str, _data: dict[str, Any]) -> None:
+    """Default progress callback used when callers do not need updates."""
+    return
 
 
 @dataclass(frozen=True)
@@ -507,6 +514,7 @@ def run_sof_elk_zeek_parser(
     cache_dir: Path | None = None,
     timeout_seconds: int = 120,
     runtime: str | None = None,
+    progress_callback: ProgressCallback = _noop_progress,
 ) -> SofElkZeekResult:
     """Run Filebeat and Logstash against staged Zeek logs and validate output.
 
@@ -516,6 +524,7 @@ def run_sof_elk_zeek_parser(
         cache_dir: Optional runtime cache for SOF-ELK.
         timeout_seconds: Polling timeout for containerized parser output.
         runtime: Optional container runtime command, mainly for tests.
+        progress_callback: Optional callback for high-level parser stages.
 
     Returns:
         Successful parse result with parsed events by log type.
@@ -535,12 +544,17 @@ def run_sof_elk_zeek_parser(
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
+    progress_callback("validator_step", {"description": "Staging Zeek files"})
     manifest = stage_zeek_logs(source_root, staging_dir)
+    progress_callback("validator_step", {"description": "Preparing SOF-ELK checkout"})
     sof_elk_dir = ensure_sof_elk_checkout(cache_dir)
+    progress_callback("validator_step", {"description": "Building runtime config"})
     pipeline_dir, filebeat_config = build_sof_elk_zeek_configs(sof_elk_dir, work_dir)
     container_runtime = runtime or find_container_runtime()
 
+    progress_callback("validator_step", {"description": "Validating Logstash config"})
     _validate_logstash_config(container_runtime, pipeline_dir, sof_elk_dir, parsed_dir)
+    progress_callback("validator_step", {"description": "Running Filebeat and Logstash"})
     _run_containers(
         container_runtime,
         manifest=manifest,
@@ -553,7 +567,9 @@ def run_sof_elk_zeek_parser(
         pipeline_log_dir=pipeline_log_dir,
         timeout_seconds=timeout_seconds,
     )
+    progress_callback("validator_step", {"description": "Checking parsed output"})
     events_by_type = validate_parsed_output(manifest, parsed_dir)
+    progress_callback("validator_done", {"description": "SOF-ELK Zeek complete"})
     return SofElkZeekResult(
         manifest=manifest,
         output_dir=parsed_dir,

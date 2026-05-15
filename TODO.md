@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Add automatic external-parser validator discovery and progress reporting — runner now scans generated data, runs matching validators without requiring names like `sof-elk-zeek`, warns on unsupported log families, shows host/logtype/subtype plus validator-stage progress, and preserves focused validator mode for debugging.
 - [x] Expand SOF-ELK external parser validation across the Zeek family — staged every generated EvidenceForge Zeek file, included matching SOF-ELK filters where available, added supplemental Filebeat inputs for EvidenceForge-only Zeek files, preserved artifact/report output, and added a runner script ready for future parser families.
 - [x] Document SOF-ELK external parser validation — added human/agent docs for the harness architecture, commands, cache/container behavior, staging layout, artifact locations, failure reports, and current medium-dataset finding.
 - [x] Add full generated-dataset SOF-ELK Zeek check — adapted flat generated Zeek conn/dns files into SOF-ELK staging paths and ran the medium dataset through the parser harness; ingestion/counts matched, with 341 SOF-ELK DNS grok failures on PTR/NS/MX/SOA answer records to triage next.

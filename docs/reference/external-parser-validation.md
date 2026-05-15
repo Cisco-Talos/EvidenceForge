@@ -37,26 +37,33 @@ SOF-ELK filter.
 ## How It Works
 
 The harness lives in `src/evidenceforge/external_parsers/sof_elk_zeek.py`.
+The dataset runner lives in `scripts/external_parser.py` and auto-detects which
+validators apply to the generated files under a `data/` directory.
 
 At runtime it:
 
-1. Clones SOF-ELK at the pinned commit into an external cache, not into this
+1. Scans the generated `data/` directory and groups files by host/sensor, log
+   family, and subtype for progress reporting.
+2. Warns about generated log families that do not yet have an external parser
+   validator.
+3. Runs every matching validator. Today that means SOF-ELK for Zeek files.
+4. Clones SOF-ELK at the pinned commit into an external cache, not into this
    repository.
-2. Stages generated Zeek files under a temporary SOF-ELK-style tree:
+5. Stages generated Zeek files under a temporary SOF-ELK-style tree:
    `/logstash/zeek/<sensor>/<zeek-log-name>.log`.
-3. Builds a temporary Logstash pipeline:
+6. Builds a temporary Logstash pipeline:
    - a small Beats input wrapper
    - unchanged SOF-ELK filter files
    - a JSONL file output wrapper
    It also builds Filebeat input config from SOF-ELK's unchanged `zeek.yml`
    plus supplemental EvidenceForge-only Zeek inputs for files SOF-ELK does not
    currently watch.
-4. Runs pinned Logstash and Filebeat containers on an isolated container
+7. Runs pinned Logstash and Filebeat containers on an isolated container
    network.
-5. Mounts staged input at `/logstash`.
-6. Mounts the SOF-ELK checkout at `/usr/local/sof-elk`.
-7. Writes parsed output to temp JSONL files.
-8. Fails on count mismatches, parser failure tags, missing required fields, or
+8. Mounts staged input at `/logstash`.
+9. Mounts the SOF-ELK checkout at `/usr/local/sof-elk`.
+10. Writes parsed output to temp JSONL files.
+11. Fails on count mismatches, parser failure tags, missing required fields, or
    missing DNS answers/TTLs when the raw input had them.
 
 Two containers per run are expected:
@@ -118,7 +125,7 @@ uv run eforge generate tests/fixtures/scenarios/medium-dataset.yaml \
   --force \
   --verbose
 
-uv run python scripts/external_parser.py sof-elk-zeek \
+uv run python scripts/external_parser.py \
   /private/tmp/eforge-sof-elk-medium/data \
   --work-dir /private/tmp/eforge-sof-elk-medium/harness \
   --timeout 180
@@ -126,7 +133,9 @@ uv run python scripts/external_parser.py sof-elk-zeek \
 
 For assessment/improvement loops, use the generated scenario output directory
 from the coverage-test scenario workflow and pass its `data/` directory to the
-same `scripts/external_parser.py sof-elk-zeek ...` command.
+same `scripts/external_parser.py ...` command. The runner will choose matching
+validators automatically and print warnings for generated logs that do not yet
+have a validator.
 `scenarios/COVERAGE-TEST-PROMPT.md` is the prompt used to create that scenario,
 not itself a runnable scenario YAML file.
 
@@ -150,19 +159,20 @@ If unset, the harness uses `$XDG_CACHE_HOME/evidenceforge/external-parsers` or
 
 ## Outputs And Failure Reports
 
-Given a harness work directory, useful artifacts are:
+Given a runner work directory, each validator writes under its own subdirectory
+such as `sof-elk-zeek/`. Useful SOF-ELK Zeek artifacts are:
 
 | Path | Purpose |
 | --- | --- |
-| `stage/logstash/zeek/...` | Files as SOF-ELK sees them |
-| `runtime-config/pipeline/` | Temporary Logstash pipeline wrapper plus copied SOF-ELK filters |
-| `runtime-config/filebeat.yml` | Filebeat config that loads generated input files |
-| `runtime-config/filebeat-inputs/zeek.yml` | SOF-ELK Zeek Filebeat input copied unchanged |
-| `runtime-config/filebeat-inputs/evidenceforge-zeek.yml` | Supplemental inputs for EvidenceForge Zeek files SOF-ELK does not watch |
-| `parsed/zeek_*.jsonl` | Parsed events by Zeek label type |
-| `parsed/sof_elk_parser_failures.json` | Structured failure report when validation fails |
-| `pipeline-logs/filebeat.log` | Filebeat container logs |
-| `pipeline-logs/logstash.log` | Logstash container logs |
+| `sof-elk-zeek/stage/logstash/zeek/...` | Files as SOF-ELK sees them |
+| `sof-elk-zeek/runtime-config/pipeline/` | Temporary Logstash pipeline wrapper plus copied SOF-ELK filters |
+| `sof-elk-zeek/runtime-config/filebeat.yml` | Filebeat config that loads generated input files |
+| `sof-elk-zeek/runtime-config/filebeat-inputs/zeek.yml` | SOF-ELK Zeek Filebeat input copied unchanged |
+| `sof-elk-zeek/runtime-config/filebeat-inputs/evidenceforge-zeek.yml` | Supplemental inputs for EvidenceForge Zeek files SOF-ELK does not watch |
+| `sof-elk-zeek/parsed/zeek_*.jsonl` | Parsed events by Zeek label type |
+| `sof-elk-zeek/parsed/sof_elk_parser_failures.json` | Structured failure report when validation fails |
+| `sof-elk-zeek/pipeline-logs/filebeat.log` | Filebeat container logs |
+| `sof-elk-zeek/pipeline-logs/logstash.log` | Logstash container logs |
 
 The failure report includes:
 

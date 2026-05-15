@@ -29,124 +29,304 @@ import json
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
+from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+
+from evidenceforge.external_parsers.runner import (
+    SOF_ELK_ZEEK_VALIDATOR,
+    VALIDATOR_ORDER,
+    ExternalParserPlan,
+    detect_external_parser_plan,
+    group_logs_for_progress,
+    unsupported_summary,
+)
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
     SofElkHarnessError,
     SofElkParserError,
+    SofElkZeekResult,
     run_sof_elk_zeek_parser,
 )
 
+VALIDATOR_STEP_TOTAL = 6
+console = Console()
+error_console = Console(stderr=True)
 
-def main() -> int:
+
+def main(argv: list[str] | None = None) -> int:
     """Run the external parser CLI."""
-    parser = argparse.ArgumentParser(
-        description="Run external parser validation against generated EvidenceForge data.",
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    return _run(args)
 
-    zeek = subparsers.add_parser(
-        "sof-elk-zeek",
-        help="Validate generated Zeek logs through the SOF-ELK Filebeat/Logstash path.",
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    legacy_validator: str | None = None
+    if argv and argv[0] in VALIDATOR_ORDER:
+        legacy_validator = argv.pop(0)
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run external parser validation against generated EvidenceForge data. "
+            "By default, the runner auto-detects generated log families and runs "
+            "every matching external validator."
+        ),
     )
-    zeek.add_argument("data_dir", type=Path, help="Generated EvidenceForge data/ directory")
-    zeek.add_argument(
+    parser.add_argument("data_dir", type=Path, help="Generated EvidenceForge data/ directory")
+    parser.add_argument(
         "--work-dir",
         type=Path,
         help="Directory for staged files, parsed JSONL, logs, and reports",
     )
-    zeek.add_argument(
+    parser.add_argument(
         "--timeout",
         type=int,
         default=180,
         help="Seconds to wait for parser output before failing",
     )
-    zeek.add_argument(
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         help="External cache directory for downloaded parser assets",
     )
-    zeek.add_argument(
+    parser.add_argument(
         "--runtime",
         choices=("docker", "podman"),
         help="Container runtime to use; default auto-detects Docker then Podman",
     )
+    parser.add_argument(
+        "--validator",
+        action="append",
+        choices=VALIDATOR_ORDER,
+        help="Limit execution to a specific validator; may be repeated",
+    )
 
-    args = parser.parse_args()
-    if args.command == "sof-elk-zeek":
-        return _run_sof_elk_zeek(args)
-
-    parser.error(f"unsupported command: {args.command}")
-    return 1
+    args = parser.parse_args(argv)
+    if legacy_validator:
+        args.validator = [legacy_validator, *(args.validator or [])]
+    return args
 
 
-def _run_sof_elk_zeek(args: argparse.Namespace) -> int:
+def _run(args: argparse.Namespace) -> int:
     data_dir = args.data_dir.resolve()
     if not data_dir.is_dir():
-        print(f"error: data directory does not exist: {data_dir}", file=sys.stderr)
+        console.print(f"[bold red]error:[/bold red] data directory does not exist: {data_dir}")
         return 1
 
     work_dir = (
         args.work_dir.resolve()
         if args.work_dir
-        else Path(tempfile.mkdtemp(prefix="eforge-sof-elk-zeek-"))
+        else Path(tempfile.mkdtemp(prefix="eforge-external-parsers-"))
     )
-    print(f"Data directory: {data_dir}", flush=True)
-    print(f"Work directory: {work_dir}", flush=True)
+    plan = detect_external_parser_plan(data_dir)
+    validators = _selected_validators(plan, args.validator)
 
-    try:
-        result = run_sof_elk_zeek_parser(
-            data_dir,
-            work_dir,
+    console.print(f"[bold]Data directory:[/bold] {data_dir}")
+    console.print(f"[bold]Work directory:[/bold] {work_dir}")
+    _show_discovery_progress(plan)
+    _print_plan_summary(plan, validators)
+
+    if not plan.logs:
+        console.print("[bold red]ERROR:[/bold red] no generated log files were found")
+        return 1
+    if not validators:
+        console.print("[yellow]Warning:[/yellow] no external validators matched this dataset")
+        return 0
+
+    exit_code = 0
+    for validator in validators:
+        validator_work_dir = work_dir / validator
+        result = _run_validator(
+            validator,
+            data_dir=data_dir,
+            work_dir=validator_work_dir,
             cache_dir=args.cache_dir,
-            timeout_seconds=args.timeout,
+            timeout=args.timeout,
             runtime=args.runtime,
         )
-    except SofElkParserError as exc:
-        print(f"\nFAIL: {exc}", file=sys.stderr)
-        _print_failure_report(work_dir / "parsed" / FAILURE_REPORT_FILENAME)
-        _print_artifact_paths(work_dir)
-        return 2
-    except SofElkHarnessError as exc:
-        print(f"\nERROR: {exc}", file=sys.stderr)
-        _print_artifact_paths(work_dir)
-        return 1
+        if result != 0:
+            exit_code = result
+            break
 
-    print("\nPASS: SOF-ELK parsed all staged Zeek records without validation failures")
-    print(f"Expected counts: {result.manifest.expected_counts}")
-    print(
-        "Observed counts: "
-        f"{ {log_type: len(events) for log_type, events in result.events_by_type.items() if events} }"
-    )
+    return exit_code
+
+
+def _selected_validators(
+    plan: ExternalParserPlan,
+    requested_validators: list[str] | None,
+) -> tuple[str, ...]:
+    if not requested_validators:
+        return plan.validators
+    requested = tuple(dict.fromkeys(requested_validators))
+    return tuple(validator for validator in VALIDATOR_ORDER if validator in requested)
+
+
+def _show_discovery_progress(plan: ExternalParserPlan) -> None:
+    grouped = group_logs_for_progress(plan.logs)
+    if not grouped:
+        return
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        host_task = progress.add_task("Host", total=len(grouped))
+        logtype_task = progress.add_task("Logtype", total=1)
+        subtype_task = progress.add_task("Subtype", total=1)
+
+        for host_index, (host, logtypes) in enumerate(grouped.items()):
+            progress.update(
+                host_task,
+                completed=host_index,
+                description=f"Host {host}",
+            )
+            progress.update(logtype_task, completed=0, total=len(logtypes))
+
+            for logtype_index, (logtype, subtypes) in enumerate(logtypes.items()):
+                progress.update(
+                    logtype_task,
+                    completed=logtype_index,
+                    description=f"Logtype {logtype}",
+                )
+                progress.update(subtype_task, completed=0, total=len(subtypes))
+
+                for subtype_index, (subtype, files) in enumerate(subtypes.items()):
+                    file_count = len(files)
+                    suffix = "file" if file_count == 1 else "files"
+                    progress.update(
+                        subtype_task,
+                        completed=subtype_index,
+                        description=f"Subtype {subtype} ({file_count} {suffix})",
+                    )
+                progress.update(subtype_task, completed=len(subtypes))
+
+            progress.update(logtype_task, completed=len(logtypes))
+            progress.update(host_task, completed=host_index + 1)
+
+
+def _print_plan_summary(plan: ExternalParserPlan, validators: tuple[str, ...]) -> None:
+    console.print(f"\n[bold]Discovered logs:[/bold] {len(plan.logs)} file(s)")
+    if validators:
+        console.print(f"[bold]Validators:[/bold] {', '.join(validators)}")
+
+    unsupported = unsupported_summary(plan.unsupported_logs)
+    for logtype, subtypes in unsupported.items():
+        console.print(
+            f"[yellow]Warning:[/yellow] no external validator for {logtype}: {', '.join(subtypes)}"
+        )
+
+
+def _run_validator(
+    validator: str,
+    *,
+    data_dir: Path,
+    work_dir: Path,
+    cache_dir: Path | None,
+    timeout: int,
+    runtime: str | None,
+) -> int:
+    if validator != SOF_ELK_ZEEK_VALIDATOR:
+        console.print(f"[yellow]Warning:[/yellow] unsupported validator skipped: {validator}")
+        return 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        transient=False,
+    ) as progress:
+        task_id = progress.add_task("Validator SOF-ELK Zeek", total=VALIDATOR_STEP_TOTAL)
+
+        def progress_callback(event_type: str, data: dict[str, Any]) -> None:
+            if event_type == "validator_step":
+                progress.update(
+                    task_id,
+                    advance=1,
+                    description=f"Validator SOF-ELK Zeek: {data['description']}",
+                )
+            elif event_type == "validator_done":
+                progress.update(
+                    task_id,
+                    completed=VALIDATOR_STEP_TOTAL,
+                    description="Validator SOF-ELK Zeek complete",
+                )
+
+        try:
+            result = run_sof_elk_zeek_parser(
+                data_dir,
+                work_dir,
+                cache_dir=cache_dir,
+                timeout_seconds=timeout,
+                runtime=runtime,
+                progress_callback=progress_callback,
+            )
+        except SofElkParserError as exc:
+            progress.stop()
+            error_console.print(f"\n[bold red]FAIL:[/bold red] {exc}")
+            _print_failure_report(work_dir / "parsed" / FAILURE_REPORT_FILENAME)
+            _print_artifact_paths(work_dir)
+            return 2
+        except SofElkHarnessError as exc:
+            progress.stop()
+            error_console.print(f"\n[bold red]ERROR:[/bold red] {exc}")
+            _print_artifact_paths(work_dir)
+            return 1
+
+    _print_success(result)
     _print_artifact_paths(work_dir)
     return 0
 
 
+def _print_success(result: SofElkZeekResult) -> None:
+    console.print("\n[bold green]PASS:[/bold green] SOF-ELK parsed staged Zeek records")
+    console.print(f"Expected counts: {result.manifest.expected_counts}")
+    console.print(
+        "Observed counts: "
+        f"{ {log_type: len(events) for log_type, events in result.events_by_type.items() if events} }"
+    )
+
+
 def _print_failure_report(report_path: Path) -> None:
     if not report_path.exists():
-        print(f"Failure report: missing ({report_path})")
+        console.print(f"Failure report: missing ({report_path})")
         return
 
     with report_path.open("r", encoding="utf-8") as handle:
         report = json.load(handle)
 
-    print("\nFailure summary:")
-    print(f"  Report: {report_path}")
-    print(f"  Expected counts: {report.get('expected_counts', {})}")
-    print(f"  Observed counts: {report.get('observed_counts', {})}")
-    print(f"  Failure count: {report.get('failure_count', 0)}")
-    print(f"  Failure tag counts: {report.get('failure_tag_counts', {})}")
+    console.print("\n[bold]Failure summary:[/bold]")
+    console.print(f"  Report: {report_path}")
+    console.print(f"  Expected counts: {report.get('expected_counts', {})}")
+    console.print(f"  Observed counts: {report.get('observed_counts', {})}")
+    console.print(f"  Failure count: {report.get('failure_count', 0)}")
+    console.print(f"  Failure tag counts: {report.get('failure_tag_counts', {})}")
     dns_qtypes = report.get("dns_failure_qtype_counts")
     if dns_qtypes:
-        print(f"  DNS failures by qtype: {dns_qtypes}")
+        console.print(f"  DNS failures by qtype: {dns_qtypes}")
 
 
 def _print_artifact_paths(work_dir: Path) -> None:
-    print("\nArtifacts:")
-    print(f"  Staged input: {work_dir / 'stage' / 'logstash' / 'zeek'}")
-    print(f"  Parsed JSONL: {work_dir / 'parsed'}")
-    print(f"  Pipeline logs: {work_dir / 'pipeline-logs'}")
-    print(f"  Runtime config: {work_dir / 'runtime-config'}")
+    console.print("\n[bold]Artifacts:[/bold]")
+    console.print(f"  Staged input: {work_dir / 'stage' / 'logstash' / 'zeek'}")
+    console.print(f"  Parsed JSONL: {work_dir / 'parsed'}")
+    console.print(f"  Pipeline logs: {work_dir / 'pipeline-logs'}")
+    console.print(f"  Runtime config: {work_dir / 'runtime-config'}")
 
 
 if __name__ == "__main__":
