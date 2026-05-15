@@ -1343,3 +1343,82 @@ class TestWebAccessExternalVisitors:
         assert {kw["http"].status_code for kw in collected} == {404}
         assert {kw["http"].uri for kw in collected} == {"/wp-login.php"}
         assert all(kw["http"].referrer == "" for kw in collected)
+
+    def test_health_checks_use_server_scoped_internal_sources(self, monkeypatch):
+        """Monitoring UAs should not be sourced from ordinary workstations."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "health_check",
+                {
+                    "kind": "requests",
+                    "request_count": [1, 1],
+                    "user_agent_pool": "health_check",
+                    "source_type_any": ["server", "domain_controller"],
+                    "source_role_any": ["monitoring", "load_balancer", "forward_proxy"],
+                    "referrer_mode": "none",
+                    "requests": [
+                        {
+                            "path": "/api/v1/health",
+                            "method": "GET",
+                            "status": 200,
+                            "type": "application/json",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ),
+        )
+
+        target = self._make_web_system("internal")
+        workstation = SimpleNamespace(
+            hostname="WS-01",
+            ip="10.0.10.20",
+            os="Windows 11",
+            type="workstation",
+            roles=[],
+            services=[],
+        )
+        monitor = SimpleNamespace(
+            hostname="MON-01",
+            ip="10.0.10.30",
+            os="Linux Ubuntu 22.04",
+            type="server",
+            roles=["monitoring"],
+            services=["prometheus"],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {workstation.ip: workstation, monitor.ip: monitor}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (4, 4)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="internal",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.8.8"
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            target,
+            [target, workstation, monitor],
+            Random(42),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        assert collected
+        assert {kw["src_ip"] for kw in collected} == {monitor.ip}
+        assert all(kw["source_system"] is monitor for kw in collected)
+        assert all(kw["http"].uri == "/api/v1/health" for kw in collected)
+        assert all(42 <= kw["http"].response_body_len <= 720 for kw in collected)

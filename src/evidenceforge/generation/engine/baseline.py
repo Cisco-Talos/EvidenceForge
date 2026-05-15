@@ -591,6 +591,39 @@ _DAY_NAME_TO_INT = {
     "sunday": 6,
 }
 
+_DC_KERBEROS_MEMBER_SVC_DIST = (
+    ("cifs", 52),
+    ("host", 16),
+    ("http", 12),
+    ("ldap", 8),
+    ("rpcss", 5),
+    ("wsman", 4),
+    ("termsrv", 3),
+)
+_DC_KERBEROS_LOCAL_SVC_DIST = (
+    ("ldap", 42),
+    ("cifs", 22),
+    ("host", 18),
+    ("DNS", 12),
+    ("rpcss", 4),
+    ("http", 2),
+)
+_KERBEROS_MEMBER_SERVICE_MARKERS = {
+    "app-server",
+    "crm",
+    "exchange",
+    "file-server",
+    "iis",
+    "mssql",
+    "print",
+    "sharepoint",
+    "smb",
+    "sql-server",
+    "web",
+    "web-server",
+    "windows-search",
+}
+
 
 def _merge_systemd_schedules(default: dict, overlay: dict) -> dict:
     """Merge overlay systemd schedules into defaults (keyed by service name)."""
@@ -641,6 +674,47 @@ def _machine_account_ntlm_offset_seconds(tgt_offset_seconds: float, rng: random.
         direction = -1 if tgt_offset_seconds > 1800 else 1
         candidate = tgt_offset_seconds + direction * rng.uniform(30, 300)
     return max(0.0, min(3599.0, candidate))
+
+
+def _dc_kerberos_cycle_range(multiplier: float) -> tuple[int, int]:
+    """Return per-client DC Kerberos cycle bounds without letting DC roles explode volume."""
+    return scale_count_range(1, 3, min(max(multiplier, 0.25), 2.5))
+
+
+def _dc_kerberos_tgs_range(multiplier: float) -> tuple[int, int]:
+    """Return service-ticket burst bounds for one machine-account Kerberos cycle."""
+    return scale_count_range(1, 2, min(max(multiplier, 0.25), 1.5))
+
+
+def _pick_dc_kerberos_service(rng: random.Random, *, target_is_dc: bool) -> str:
+    """Pick a Kerberos service class with source-native skew instead of uniform buckets."""
+    dist = _DC_KERBEROS_LOCAL_SVC_DIST if target_is_dc else _DC_KERBEROS_MEMBER_SVC_DIST
+    values = [entry[0] for entry in dist]
+    weights = [entry[1] for entry in dist]
+    return rng.choices(values, weights=weights, k=1)[0]
+
+
+def _pick_dc_kerberos_target(
+    rng: random.Random,
+    member_servers: list[str],
+    dc_hostname: str,
+) -> tuple[str, bool]:
+    """Pick a service-ticket target, favoring member services over the DC itself."""
+    if member_servers and rng.random() < 0.82:
+        return rng.choice(member_servers), False
+    return dc_hostname, True
+
+
+def _is_kerberos_member_server(system: Any) -> bool:
+    """Return whether a Windows host should receive routine machine-account TGS traffic."""
+    host_type = str(getattr(system, "type", "")).lower()
+    if host_type not in {"server", "workstation"}:
+        return False
+    services = {str(value).lower().replace("_", "-") for value in getattr(system, "services", [])}
+    roles = {
+        str(value).lower().replace("_", "-") for value in (getattr(system, "roles", None) or [])
+    }
+    return bool((services | roles) & _KERBEROS_MEMBER_SERVICE_MARKERS)
 
 
 class BaselineMixin:
@@ -5032,7 +5106,9 @@ class BaselineMixin:
                     None,
                 )
                 for client in windows_clients:
-                    num_cycles = self._scaled_randint(rng, dc_system, "dc_kerberos", 3, 8)
+                    dc_kerberos_multiplier = self._activity_multiplier(dc_system, "dc_kerberos")
+                    cycle_lo, cycle_hi = _dc_kerberos_cycle_range(dc_kerberos_multiplier)
+                    num_cycles = rng.randint(cycle_lo, cycle_hi)
                     base_interval = 3600 / (num_cycles + 1)
                     for i in range(num_cycles):
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
@@ -5050,43 +5126,27 @@ class BaselineMixin:
                         if rng.random() < 0.22:
                             num_tgs = 0
                         else:
-                            num_tgs = self._scaled_randint(
-                                rng,
-                                dc_system,
-                                "dc_kerberos",
-                                1,
-                                5,
-                            )
+                            tgs_lo, tgs_hi = _dc_kerberos_tgs_range(dc_kerberos_multiplier)
+                            num_tgs = rng.randint(tgs_lo, tgs_hi)
                         member_servers = [
                             s.hostname
                             for s in self.scenario.environment.systems
                             if _get_os_category(s.os) == "windows"
                             and s.ip not in dc_ips
-                            and any(
-                                svc in s.services
-                                for svc in [
-                                    "file-server",
-                                    "sql-server",
-                                    "web",
-                                    "iis",
-                                    "exchange",
-                                    "sharepoint",
-                                    "crm",
-                                    "print",
-                                ]
-                            )
-                        ] or [dc_hostname]
+                            and _is_kerberos_member_server(s)
+                        ]
                         elapsed_ms = 0
                         for tgs_i in range(num_tgs):
                             elapsed_ms += _machine_account_tgs_gap_ms(rng, first=tgs_i == 0)
                             ts2 = ts + timedelta(milliseconds=elapsed_ms)
                             if ts2 >= current_hour + timedelta(hours=1):
                                 continue
-                            svc = rng.choice(["cifs", "ldap", "http", "host"])
-                            if rng.random() < 0.60 and member_servers:
-                                target = rng.choice(member_servers)
-                            else:
-                                target = dc_hostname
+                            target, target_is_dc = _pick_dc_kerberos_target(
+                                rng,
+                                member_servers,
+                                dc_hostname,
+                            )
+                            svc = _pick_dc_kerberos_service(rng, target_is_dc=target_is_dc)
                             self.activity_generator.generate_kerberos_service_ticket(
                                 username=username,
                                 service_name=f"{svc}/{target}",
@@ -5769,7 +5829,8 @@ class BaselineMixin:
         if top_level_budget <= 0:
             return
 
-        internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+        internal_client_systems = [s for s in systems if s.ip != sys_obj.ip]
+        internal_ips = [s.ip for s in internal_client_systems]
         segment = self._get_segment_for_system(sys_obj)
         exposure = segment.exposure if segment else self._get_system_exposure(sys_obj)
         ext_ratio = (
@@ -5793,6 +5854,32 @@ class BaselineMixin:
             if internal_ips:
                 return rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
             return "10.0.0.1"
+
+        def _profile_restricted_internal_pool(
+            profile: dict[str, Any],
+        ) -> tuple[list[str], list[float]] | None:
+            raw_types = profile.get("source_type_any")
+            raw_roles = profile.get("source_role_any")
+            type_filter = (
+                {str(value) for value in raw_types} if isinstance(raw_types, list) else set()
+            )
+            role_filter = (
+                {str(value) for value in raw_roles} if isinstance(raw_roles, list) else set()
+            )
+            if not type_filter and not role_filter:
+                return None
+
+            candidates = []
+            for candidate in internal_client_systems:
+                candidate_type = str(getattr(candidate, "type", ""))
+                candidate_roles = {str(role) for role in (getattr(candidate, "roles", None) or [])}
+                if candidate_type in type_filter or candidate_roles & role_filter:
+                    candidates.append(candidate)
+            if not candidates:
+                return [], []
+            ips = [candidate.ip for candidate in candidates]
+            weights = [1.0 / (i + 1) for i in range(len(ips))]
+            return ips, weights
 
         def _effective_dst_ip(is_external_client: bool) -> str:
             dispatcher = getattr(self, "dispatcher", None)
@@ -5833,6 +5920,21 @@ class BaselineMixin:
             attempts += 1
             client_ip = _choose_client_ip()
             is_external_client = not _is_private_ip(client_ip)
+            profile_name, profile = pick_web_visitor_profile(
+                rng,
+                is_external=is_external_client,
+            )
+
+            restricted_pool = None
+            if not is_external_client:
+                restricted_pool = _profile_restricted_internal_pool(profile)
+            if restricted_pool is not None:
+                restricted_ips, restricted_weights = restricted_pool
+                if not restricted_ips:
+                    continue
+                client_ip = rng.choices(restricted_ips, weights=restricted_weights, k=1)[0]
+                is_external_client = False
+
             dst_port = 443 if is_external_client and rng.random() < 0.85 else 80
             dst_service = "ssl" if dst_port == 443 else "http"
             http_host = (
@@ -5842,10 +5944,6 @@ class BaselineMixin:
             )
             client_sys = ip_map.get(client_ip)
             source_os = _get_os_category(client_sys.os) if client_sys is not None else None
-            profile_name, profile = pick_web_visitor_profile(
-                rng,
-                is_external=is_external_client,
-            )
             ua_rng = random.Random(
                 _stable_seed(
                     f"web_client_ua:{client_ip}:{http_host}:{profile_name}:{source_os or 'external'}"

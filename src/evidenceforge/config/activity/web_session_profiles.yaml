@@ -37,6 +37,8 @@ visitor_classes:
     kind: requests
     external: false
     internal: true
+    source_type_any: ["server", "domain_controller"]
+    source_role_any: ["monitoring", "load_balancer", "forward_proxy", "app_server"]
     request_count: [1, 2]
     user_agent_pool: health_check
     referrer_mode: none

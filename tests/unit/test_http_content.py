@@ -7,8 +7,10 @@ import random
 
 from evidenceforge.generation.activity.http_content import (
     infer_mime_type_from_path,
+    is_health_endpoint_path,
     is_stable_resource_path,
     normalize_mime_type_for_path,
+    response_size_for_health_endpoint,
     response_size_for_mime,
     response_size_for_status,
 )
@@ -48,6 +50,7 @@ def test_stable_resource_path_identifies_static_web_content():
     assert is_stable_resource_path("/assets/vendor.js?cache=1")
     assert is_stable_resource_path("/robots.txt")
     assert is_stable_resource_path("/index.html")
+    assert is_stable_resource_path("/api/v1/health")
     assert not is_stable_resource_path("/api/v1/events")
 
 
@@ -58,3 +61,15 @@ def test_success_response_size_is_stable_for_same_resource():
 
     assert first == second
     assert first != sibling
+
+
+def test_health_endpoint_response_sizes_are_small_and_stable():
+    assert is_health_endpoint_path("/api/v1/health?probe=1")
+
+    first = response_size_for_health_endpoint(200, "portal.example.com", "/api/v1/health")
+    second = response_size_for_status(200, "portal.example.com", "/api/v1/health")
+    status = response_size_for_status(200, "portal.example.com", "/status")
+
+    assert first == second
+    assert 42 <= first <= 720
+    assert 18 <= status <= 180

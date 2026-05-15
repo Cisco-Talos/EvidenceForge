@@ -42,6 +42,13 @@ def test_external_profile_selection_excludes_internal_health_checks():
         assert name != "health_check"
 
 
+def test_health_check_profile_is_server_scoped():
+    profile = load_web_session_profiles()["visitor_classes"]["health_check"]
+
+    assert profile["source_type_any"] == ["server", "domain_controller"]
+    assert "monitoring" in profile["source_role_any"]
+
+
 def test_user_agent_honors_source_os_pool():
     profile = load_web_session_profiles()["visitor_classes"]["human_browser"]
     ua = pick_web_user_agent(random.Random(1), profile, source_os="linux")
