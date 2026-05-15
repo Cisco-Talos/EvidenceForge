@@ -628,13 +628,24 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
         return (0.2, 2.0)
     if exe_name in {"grep", "head", "tail", "wc", "env", "printenv", "ss", "ip", "ps"}:
         return (0.5, 4.0)
-    if exe_name in {"gzip", "tar", "zip", "scp", "curl", "wget", "kubectl", "docker"}:
+    if exe_name in {"curl", "wget"}:
+        return (0.8, 12.0)
+    if exe_name in {"gzip", "tar", "zip", "scp", "kubectl", "docker"}:
         return (3.0, 18.0)
     if exe_name in {"make", "gcc", "cargo", "npm", "python", "python3", "mysqldump"}:
         return (8.0, 45.0)
     if exe_name in {"vim", "vi", "nano"}:
         return (6.0, 35.0)
     return (1.0, 8.0)
+
+
+_LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
+    "curl",
+    "wget",
+    "scp",
+    "kubectl",
+    "mysqldump",
+}
 
 
 def _windows_foreground_lifetime(
@@ -657,6 +668,8 @@ def _windows_foreground_lifetime(
         )
     ):
         return None
+    if exe_name in {"curl.exe", "curl", "wget.exe", "wget"}:
+        return (0.8, 12.0)
     if exe_name in {
         "whoami.exe",
         "hostname.exe",
@@ -682,7 +695,25 @@ def _windows_foreground_lifetime(
         "wevtutil.exe",
     }:
         return (0.4, 6.0)
-    if exe_name in {"powershell.exe", "pwsh.exe", "cmd.exe", "wmic.exe", "certutil.exe"}:
+    padded_command = f" {command} "
+    if exe_name == "cmd.exe":
+        if " /c " in padded_command:
+            return (0.4, 8.0)
+        return None
+    if exe_name in {"powershell.exe", "pwsh.exe"}:
+        one_shot_markers = (
+            " -command ",
+            " -encodedcommand ",
+            " -enc ",
+            " -file ",
+            " invoke-webrequest",
+            " iwr ",
+            " downloadstring",
+        )
+        if any(marker in padded_command for marker in one_shot_markers):
+            return (2.0, 25.0)
+        return None
+    if exe_name in {"wmic.exe", "certutil.exe"}:
         return (4.0, 35.0)
     if exe_name == "sqlcmd.exe" and " -q " in f" {command} ":
         return (2.0, 25.0)
@@ -1774,6 +1805,7 @@ class ActivityGenerator:
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
+        self._terminated_process_keys: set[tuple[str, int]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
@@ -2356,6 +2388,7 @@ class ActivityGenerator:
             and proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
+            and not self._foreground_process_expired_for_attribution(source_system, proc, time)
         ]
         if running_candidates:
             proc = max(running_candidates, key=lambda candidate: candidate.start_time)
@@ -2372,7 +2405,11 @@ class ActivityGenerator:
                 f"{source_system.hostname}:{user.username}:{image}:{proxy_context.host}"
             )
         )
-        lead_seconds = process_rng.uniform(12.0, 240.0)
+        process_lifetime = _windows_foreground_lifetime(image, command_line)
+        if process_lifetime is not None:
+            lead_seconds = process_rng.uniform(0.4, min(8.0, process_lifetime[1]))
+        else:
+            lead_seconds = process_rng.uniform(12.0, 240.0)
         process_time = time - timedelta(seconds=lead_seconds)
         min_process_time = session.start_time + timedelta(milliseconds=500)
         if process_time < min_process_time:
@@ -2408,6 +2445,7 @@ class ActivityGenerator:
         source_system: System | None,
         pid: int,
         process_image: str | None,
+        time: datetime,
         proxy_context: ProxyContext,
         proxy_sys: System,
         dst_port: int,
@@ -2417,6 +2455,12 @@ class ActivityGenerator:
             return None
 
         running = self.state_manager.get_process(source_system.hostname, pid)
+        if running is not None and self._foreground_process_expired_for_attribution(
+            source_system,
+            running,
+            time=time,
+        ):
+            return None
         candidate_image = running.image if running is not None else process_image
         if not candidate_image:
             return None
@@ -4274,6 +4318,37 @@ class ActivityGenerator:
             return process_name, command_line
         return proc.image, proc.command_line
 
+    def _foreground_process_expired_for_attribution(
+        self,
+        system: System,
+        proc: Any,
+        time: datetime,
+    ) -> bool:
+        """Return whether a bounded foreground process is too old for new effects."""
+        if proc is None or proc.start_time is None:
+            return False
+        lifetime = self._foreground_process_lifetime_for_attribution(system, proc)
+        if lifetime is None:
+            return False
+        max_process_time = proc.start_time + timedelta(seconds=lifetime[1] + 5.0)
+        return time > max_process_time
+
+    def _foreground_process_lifetime_for_attribution(
+        self,
+        system: System,
+        proc: Any,
+    ) -> tuple[float, float] | None:
+        """Return bounded foreground lifetime for process-owned network attribution."""
+        os_category = _get_os_category(system.os)
+        if os_category == "windows":
+            return _windows_foreground_lifetime(proc.image, proc.command_line)
+        if os_category == "linux":
+            exe_name = proc.image.rsplit("/", 1)[-1].lower()
+            if exe_name not in _LINUX_ONE_SHOT_NETWORK_EXES:
+                return None
+            return _linux_foreground_lifetime(proc.image, proc.command_line)
+        return None
+
     def _space_browser_launch(
         self,
         *,
@@ -5011,6 +5086,10 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        termination_key = (system.hostname, pid)
+        if termination_key in self._terminated_process_keys:
+            return
+
         running_proc = self.state_manager.get_process(system.hostname, pid)
         if (
             running_proc is not None
@@ -5080,6 +5159,7 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
+        self._terminated_process_keys.add(termination_key)
 
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
@@ -5544,6 +5624,7 @@ class ActivityGenerator:
                 source_system=source_system,
                 pid=pid,
                 process_image=process_image,
+                time=time,
                 proxy_context=proxy_context,
                 proxy_sys=proxy_sys,
                 dst_port=dst_port,
@@ -5784,28 +5865,23 @@ class ActivityGenerator:
             if (
                 resolved_process
                 and resolved_process.start_time
-                and _get_os_category(resolved_source_system.os) == "windows"
-            ):
-                process_lifetime = _windows_foreground_lifetime(
-                    resolved_process.image,
-                    resolved_process.command_line,
+                and self._foreground_process_expired_for_attribution(
+                    resolved_source_system,
+                    resolved_process,
+                    time,
                 )
-                if process_lifetime is not None:
-                    max_process_time = resolved_process.start_time + timedelta(
-                        seconds=process_lifetime[1] + 5.0
-                    )
-                    if time > max_process_time:
-                        logger.debug(
-                            "Dropping expired foreground process attribution: "
-                            "host=%s pid=%s image=%s dst=%s:%s",
-                            resolved_source_system.hostname,
-                            pid,
-                            resolved_process.image,
-                            dst_ip,
-                            dst_port,
-                        )
-                        pid = -1
-                        resolved_process = None
+            ):
+                logger.debug(
+                    "Dropping expired foreground process attribution: "
+                    "host=%s pid=%s image=%s dst=%s:%s",
+                    resolved_source_system.hostname,
+                    pid,
+                    resolved_process.image,
+                    dst_ip,
+                    dst_port,
+                )
+                pid = -1
+                resolved_process = None
             elif resolved_process is None and pid != 4:
                 logger.debug(
                     "Dropping stale connection PID attribution: host=%s pid=%s dst=%s:%s",
@@ -6943,6 +7019,42 @@ class ActivityGenerator:
                 pid=pid,
                 application=wfp_application,
             )
+
+        if (
+            pid > 0
+            and resolved_source_system is not None
+            and process_ctx is not None
+            and (resolved_source_system.hostname, pid) not in self._terminated_process_keys
+        ):
+            running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            lifetime = (
+                self._foreground_process_lifetime_for_attribution(resolved_source_system, running)
+                if running is not None
+                else None
+            )
+            if lifetime is not None and re.match(r"^[a-zA-Z0-9._$-]+$", running.username):
+                known_users = getattr(self, "_users_by_username", {})
+                process_user = known_users.get(running.username) or User(
+                    username=running.username,
+                    full_name=running.username,
+                    email=f"{running.username}@example.local",
+                )
+                term_rng = random.Random(
+                    _stable_seed(
+                        "connection_owned_foreground_termination:"
+                        f"{resolved_source_system.hostname}:{pid}:{time.isoformat()}"
+                    )
+                )
+                min_delay = min(max(lifetime[0], 0.5), 4.0)
+                max_delay = max(min_delay + 0.5, min(lifetime[1] + 8.0, 45.0))
+                self.generate_process_termination(
+                    user=process_user,
+                    system=resolved_source_system,
+                    time=time + timedelta(seconds=term_rng.uniform(min_delay, max_delay)),
+                    pid=pid,
+                    process_name=running.image,
+                    logon_id=running.logon_id,
+                )
 
         return uid
 

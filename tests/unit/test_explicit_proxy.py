@@ -605,6 +605,105 @@ class TestExplicitProxyVisibility:
         assert client_event.process.username == "SYSTEM"
         assert client_event.process.command_line.endswith("AA==")
 
+    def test_one_shot_proxy_client_process_starts_near_request_time(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        proxy = generator._ip_to_system["10.0.3.10"]
+        generator._explicit_proxy_client_process_hint = Mock(
+            return_value=(
+                r"C:\Windows\System32\curl.exe",
+                'curl.exe --proxy http://PROXY-01.example.org:8080 "https://www.bing.com/"',
+            )
+        )
+        request_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        pid, image = generator._ensure_explicit_proxy_client_process(
+            source_system=workstation,
+            time=request_time,
+            proxy_context=ProxyContext(
+                client_ip=workstation.ip,
+                method="CONNECT",
+                url="www.bing.com:443",
+                host="www.bing.com",
+                status_code=200,
+                user_agent="curl/8.4.0",
+                proxy_fqdn="PROXY-01.example.org",
+            ),
+            proxy_sys=proxy,
+            dst_port=443,
+        )
+
+        proc = generator.state_manager.get_process(workstation.hostname, pid)
+        assert image == r"C:\Windows\System32\curl.exe"
+        assert proc is not None
+        lead_seconds = (request_time - proc.start_time).total_seconds()
+        assert 0 < lead_seconds <= 8.0
+
+    def test_one_shot_proxy_client_process_terminates_after_request(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        generator._explicit_proxy_client_process_hint = Mock(
+            return_value=(
+                r"C:\Windows\System32\curl.exe",
+                'curl.exe --proxy http://PROXY-01.example.org:8080 "https://www.bing.com/"',
+            )
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=workstation.ip,
+                method="CONNECT",
+                url="www.bing.com:443",
+                host="www.bing.com",
+                status_code=200,
+                user_agent="curl/8.4.0",
+                proxy_fqdn="PROXY-01.example.org",
+                cache_result="MISS",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip="204.79.197.200",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=workstation,
+            hostname="www.bing.com",
+            conn_state="SF",
+        )
+
+        active_images = [
+            proc.image
+            for proc in generator.state_manager.get_processes_on_system(workstation.hostname)
+        ]
+        assert r"C:\Windows\System32\curl.exe" not in active_images
+
     def test_documentation_ip_with_external_hostname_routes_through_proxy(self):
         generator, emitters = _generator(
             [

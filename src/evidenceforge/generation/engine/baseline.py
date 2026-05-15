@@ -2200,6 +2200,12 @@ class BaselineMixin:
             "tasklist.exe",
             "sc.exe",
             "wevtutil.exe",
+            "curl",
+            "wget",
+            "scp",
+            "kubectl",
+            "mysqldump",
+            "sqlcmd",
         )
 
         # Collect all seeded system PIDs for this system as a safety net

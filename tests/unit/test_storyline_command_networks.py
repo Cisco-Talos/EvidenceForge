@@ -106,6 +106,9 @@ class _FakeActivityGenerator:
     def _resolve_parent(self, *args: Any, **kwargs: Any) -> int:
         return 1
 
+    def _get_system_pid(self, *args: Any, **kwargs: Any) -> int:
+        return 500
+
     def generate_process(self, *args: Any, **kwargs: Any) -> int:
         self.processes.append(kwargs)
         return 4242
@@ -137,6 +140,9 @@ class _FakeActivityGenerator:
 class _FakeStateManager:
     def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
         return [SimpleNamespace(system="SRC", logon_id="0xabc")]
+
+    def get_processes_on_system(self, hostname: str) -> list[SimpleNamespace]:
+        return []
 
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
@@ -317,6 +323,57 @@ class TestStorylineScpCorrelation:
         assert conn["dst_ip"] == "45.33.32.30"
         assert conn["hostname"] == "cdn-assets-update.com"
         assert conn["preserve_dst_ip"] is True
+
+    def test_recent_psexesvc_service_runs_follow_on_commands_as_system(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        service_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        engine._record_storyline_service_install(
+            system=source,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            service_account="LocalSystem",
+            time=service_time,
+        )
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c whoami /all",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=service_time.replace(second=2),
+            activity="run remote command through psexec service",
+            explicit_types={"process"},
+        )
+
+        service_proc = engine.activity_generator.processes[0]
+        child_proc = engine.activity_generator.processes[1]
+        assert service_proc["user"].username == "SYSTEM"
+        assert service_proc["process_name"] == r"C:\Windows\PSEXESVC.exe"
+        assert service_proc["parent_pid"] == 500
+        assert child_proc["user"].username == "SYSTEM"
+        assert child_proc["logon_id"] == "0x3e7"
+        assert child_proc["parent_pid"] == 4242
 
     def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
         source = System(

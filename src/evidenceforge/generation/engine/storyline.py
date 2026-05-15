@@ -728,6 +728,97 @@ class StorylineMixin:
         }
 
     @staticmethod
+    def _normalize_storyline_service_file_name(service_file_name: str) -> str:
+        """Return a Windows service image path in source-native expanded form."""
+        image = service_file_name.strip().strip('"')
+        replacements = {
+            "%SystemRoot%": r"C:\Windows",
+            "%systemroot%": r"C:\Windows",
+            r"\SystemRoot": r"C:\Windows",
+        }
+        for marker, replacement in replacements.items():
+            if image.startswith(marker):
+                image = replacement + image[len(marker) :]
+                break
+        return image.replace("/", "\\")
+
+    @staticmethod
+    def _service_account_user(service_account: str) -> User | None:
+        """Return a User model for service identities that can own process telemetry."""
+        normalized = service_account.strip().replace("/", "\\")
+        account_key = normalized.upper()
+        if account_key in {"LOCALSYSTEM", "LOCAL SYSTEM", "NT AUTHORITY\\SYSTEM", "SYSTEM"}:
+            return User(
+                username="SYSTEM",
+                full_name="Local System",
+                email="system@example.local",
+            )
+        return None
+
+    def _storyline_service_context_for_process(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        process_name: str,
+    ) -> tuple[User, str, int] | None:
+        """Return service identity/logon/parent PID for recent service-backed commands."""
+        if _get_os_category(system.os) != "windows":
+            return None
+        services = getattr(self, "_last_storyline_service_by_system", {})
+        service = services.get(system.hostname)
+        if not service:
+            return None
+
+        installed_at = service.get("installed_at")
+        if isinstance(installed_at, datetime):
+            if time < installed_at or time - installed_at > timedelta(minutes=30):
+                return None
+
+        service_file_name = str(service.get("service_file_name") or "")
+        if not service_file_name:
+            return None
+        service_image = self._normalize_storyline_service_file_name(service_file_name)
+        service_exe = service_image.rsplit("\\", 1)[-1].lower()
+        if service_exe not in {"psexesvc.exe", "healthmonitorsvc.exe"}:
+            return None
+
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if process_exe == service_exe:
+            return None
+        service_child_exes = {
+            "cmd.exe",
+            "powershell.exe",
+            "pwsh.exe",
+            "net.exe",
+            "net1.exe",
+            "whoami.exe",
+            "hostname.exe",
+            "ipconfig.exe",
+            "nltest.exe",
+            "klist.exe",
+            "sc.exe",
+            "wevtutil.exe",
+            "wmic.exe",
+            "certutil.exe",
+        }
+        if process_exe not in service_child_exes:
+            return None
+
+        service_user = self._service_account_user(str(service.get("service_account") or ""))
+        if service_user is None:
+            return None
+
+        service_pid, _service_image = self._ensure_storyline_service_process_for_beacon(
+            actor=service_user,
+            system=system,
+            time=time,
+        )
+        if service_pid <= 0:
+            return None
+        return service_user, "0x3e7", service_pid
+
+    @staticmethod
     def _scheduled_task_lookup_key(system: System, task_name: str) -> tuple[str, str]:
         """Return a normalized host/task key for correlating schtasks with 4698."""
         normalized_task = task_name.strip().strip('"').replace("/", "\\")
@@ -775,6 +866,7 @@ class StorylineMixin:
         service_file_name = str(service.get("service_file_name") or "")
         if not service_file_name:
             return -1, None
+        service_file_name = self._normalize_storyline_service_file_name(service_file_name)
 
         image_lower = service_file_name.lower()
         running = [
@@ -1329,19 +1421,30 @@ class StorylineMixin:
                         process_command_line = inferred_command_line
 
             output_file = self._extract_output_file(command_line, os_category)
-            parent_pid = self.activity_generator._resolve_parent(
-                system, actor, time, logon_id, process_name
+            process_actor = actor
+            process_logon_id = logon_id
+            service_context = self._storyline_service_context_for_process(
+                actor=actor,
+                system=system,
+                time=time,
+                process_name=process_name,
             )
+            if service_context is not None:
+                process_actor, process_logon_id, parent_pid = service_context
+            else:
+                parent_pid = self.activity_generator._resolve_parent(
+                    system, actor, time, logon_id, process_name
+                )
             exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
             service_backed_process = "service_installed" in explicit_types and exe_name in {
                 "psexesvc.exe",
                 "healthmonitorsvc.exe",
             }
             pid = self.activity_generator.generate_process(
-                user=actor,
+                user=process_actor,
                 system=system,
                 time=time,
-                logon_id=logon_id,
+                logon_id=process_logon_id,
                 process_name=process_name,
                 command_line=process_command_line,
                 parent_pid=parent_pid,
@@ -1349,7 +1452,7 @@ class StorylineMixin:
                 from_storyline=True,
                 suppress_command_file_effect=output_file is not None,
             )
-            self.activity_generator._record_user_process(system, actor, pid, process_name)
+            self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name)
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
@@ -1360,7 +1463,11 @@ class StorylineMixin:
 
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
-                    home = "/root" if actor.username == "root" else f"/home/{actor.username}"
+                    home = (
+                        "/root"
+                        if process_actor.username == "root"
+                        else f"/home/{process_actor.username}"
+                    )
                     output_file = f"{home}/{output_file[2:]}"
                 file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
                 from evidenceforge.events.base import SecurityEvent
@@ -1379,14 +1486,14 @@ class StorylineMixin:
                         timestamp=file_time,
                         event_type="file_create",
                         src_host=host_ctx,
-                        auth=AuthContext(username=actor.username),
+                        auth=AuthContext(username=process_actor.username),
                         process=ProcessContext(
                             pid=pid,
                             parent_pid=parent_pid,
                             image=process_name,
                             command_line=process_command_line,
-                            username=actor.username,
-                            logon_id=logon_id,
+                            username=process_actor.username,
+                            logon_id=process_logon_id,
                             start_time=running_proc.start_time
                             if running_proc is not None
                             else None,
@@ -1501,11 +1608,11 @@ class StorylineMixin:
                         self._emit_scp_receiver_artifacts(
                             source_system=system,
                             target_system=target_system,
-                            actor=actor,
+                            actor=process_actor,
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
-                            target_user=scp_destination[2] or actor.username,
+                            target_user=scp_destination[2] or process_actor.username,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
                             source_port=source_port,
@@ -1526,10 +1633,10 @@ class StorylineMixin:
             if uses_explicit_creds and os_category == "windows":
                 cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
                 self.activity_generator.generate_explicit_credentials(
-                    user=actor,
+                    user=process_actor,
                     system=system,
                     time=cred_time,
-                    target_username=actor.username,
+                    target_username=process_actor.username,
                     target_server="localhost",
                     process_name=process_name,
                     process_pid=pid,
@@ -1539,11 +1646,11 @@ class StorylineMixin:
                 self.activity_generator._expand_and_emit(
                     "process_create",
                     time,
-                    actor=actor,
+                    actor=process_actor,
                     target_system=system,
                     command_line=command_line,
                     os_category=os_category,
-                    logon_id=logon_id,
+                    logon_id=process_logon_id,
                     skip_types=explicit_types,
                 )
 
@@ -1554,12 +1661,12 @@ class StorylineMixin:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)
                 self._queue_story_process_termination(
-                    actor=actor,
+                    actor=process_actor,
                     system=system,
                     time=term_time,
                     pid=pid,
                     process_name=process_name,
-                    logon_id=logon_id,
+                    logon_id=process_logon_id,
                 )
                 if os_category == "linux":
                     self._storyline_shell_available_at[shell_key] = term_time
