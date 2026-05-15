@@ -359,12 +359,17 @@ def find_container_runtime() -> str:
     )
 
 
-def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
+def stage_zeek_logs(
+    source_root: Path,
+    staging_root: Path,
+    progress_callback: ProgressCallback = _noop_progress,
+) -> ZeekStageManifest:
     """Stage generated Zeek JSON files under SOF-ELK's `/logstash/zeek/**` layout.
 
     Args:
         source_root: Root containing generated Zeek files.
         staging_root: Temporary directory where the SOF-ELK-style tree is created.
+        progress_callback: Optional callback for staged log scope progress.
 
     Returns:
         Manifest describing staged files and expected parsed output counts.
@@ -392,6 +397,16 @@ def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
                         log_type=spec.log_type,
                         record_count=record_count,
                     )
+                )
+                progress_callback(
+                    "validator_scope",
+                    {
+                        "host": sensor,
+                        "logtype": "zeek",
+                        "subtype": spec.staged_name.removesuffix(".log"),
+                        "source": str(source),
+                        "record_count": record_count,
+                    },
                 )
                 if spec.log_type == "zeek_dns":
                     dns_expectations.update(_dns_expectations(source))
@@ -545,7 +560,7 @@ def run_sof_elk_zeek_parser(
         directory.mkdir(parents=True, exist_ok=True)
 
     progress_callback("validator_step", {"description": "Staging Zeek files"})
-    manifest = stage_zeek_logs(source_root, staging_dir)
+    manifest = stage_zeek_logs(source_root, staging_dir, progress_callback=progress_callback)
     progress_callback("validator_step", {"description": "Preparing SOF-ELK checkout"})
     sof_elk_dir = ensure_sof_elk_checkout(cache_dir)
     progress_callback("validator_step", {"description": "Building runtime config"})

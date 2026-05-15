@@ -42,11 +42,12 @@ validators apply to the generated files under a `data/` directory.
 
 At runtime it:
 
-1. Scans the generated `data/` directory and groups files by host/sensor, log
-   family, and subtype for progress reporting.
+1. Scans the generated `data/` directory to determine which validators apply.
 2. Warns about generated log families that do not yet have an external parser
    validator.
-3. Runs every matching validator. Today that means SOF-ELK for Zeek files.
+3. Runs every matching validator. Today that means SOF-ELK for Zeek files. The
+   validator phase shows stage progress plus host/sensor, log family, and
+   subtype progress for the files being handed to that validator.
 4. Clones SOF-ELK at the pinned commit into an external cache, not into this
    repository.
 5. Stages generated Zeek files under a temporary SOF-ELK-style tree:

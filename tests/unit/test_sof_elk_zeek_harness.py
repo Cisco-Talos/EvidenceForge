@@ -96,6 +96,28 @@ def test_stage_zeek_logs_adapts_flat_generated_files_for_sof_elk(
     assert manifest.expected_counts == {"zeek_conn": 2, "zeek_dns": 2}
 
 
+def test_stage_zeek_logs_reports_validator_scope_progress(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+
+    def progress_callback(event_type: str, data: dict[str, object]) -> None:
+        events.append((event_type, data))
+
+    stage_zeek_logs(
+        fixtures_dir / "external_parser" / "zeek",
+        tmp_path,
+        progress_callback=progress_callback,
+    )
+
+    scopes = [data for event_type, data in events if event_type == "validator_scope"]
+    assert {(scope["host"], scope["logtype"], scope["subtype"]) for scope in scopes} == {
+        ("sensor-a", "zeek", "conn"),
+        ("sensor-a", "zeek", "dns"),
+    }
+
+
 def test_stage_zeek_logs_adapts_all_generated_zeek_flat_files(tmp_path: Path) -> None:
     source_root = tmp_path / "generated"
     source_root.mkdir()

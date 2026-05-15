@@ -131,7 +131,6 @@ def _run(args: argparse.Namespace) -> int:
 
     console.print(f"[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Work directory:[/bold] {work_dir}")
-    _show_discovery_progress(plan)
     _print_plan_summary(plan, validators)
 
     if not plan.logs:
@@ -146,6 +145,7 @@ def _run(args: argparse.Namespace) -> int:
         validator_work_dir = work_dir / validator
         result = _run_validator(
             validator,
+            plan=plan,
             data_dir=data_dir,
             work_dir=validator_work_dir,
             cache_dir=args.cache_dir,
@@ -169,54 +169,6 @@ def _selected_validators(
     return tuple(validator for validator in VALIDATOR_ORDER if validator in requested)
 
 
-def _show_discovery_progress(plan: ExternalParserPlan) -> None:
-    grouped = group_logs_for_progress(plan.logs)
-    if not grouped:
-        return
-
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeElapsedColumn(),
-        console=console,
-        transient=False,
-    ) as progress:
-        host_task = progress.add_task("Host", total=len(grouped))
-        logtype_task = progress.add_task("Logtype", total=1)
-        subtype_task = progress.add_task("Subtype", total=1)
-
-        for host_index, (host, logtypes) in enumerate(grouped.items()):
-            progress.update(
-                host_task,
-                completed=host_index,
-                description=f"Host {host}",
-            )
-            progress.update(logtype_task, completed=0, total=len(logtypes))
-
-            for logtype_index, (logtype, subtypes) in enumerate(logtypes.items()):
-                progress.update(
-                    logtype_task,
-                    completed=logtype_index,
-                    description=f"Logtype {logtype}",
-                )
-                progress.update(subtype_task, completed=0, total=len(subtypes))
-
-                for subtype_index, (subtype, files) in enumerate(subtypes.items()):
-                    file_count = len(files)
-                    suffix = "file" if file_count == 1 else "files"
-                    progress.update(
-                        subtype_task,
-                        completed=subtype_index,
-                        description=f"Subtype {subtype} ({file_count} {suffix})",
-                    )
-                progress.update(subtype_task, completed=len(subtypes))
-
-            progress.update(logtype_task, completed=len(logtypes))
-            progress.update(host_task, completed=host_index + 1)
-
-
 def _print_plan_summary(plan: ExternalParserPlan, validators: tuple[str, ...]) -> None:
     console.print(f"\n[bold]Discovered logs:[/bold] {len(plan.logs)} file(s)")
     if validators:
@@ -232,6 +184,7 @@ def _print_plan_summary(plan: ExternalParserPlan, validators: tuple[str, ...]) -
 def _run_validator(
     validator: str,
     *,
+    plan: ExternalParserPlan,
     data_dir: Path,
     work_dir: Path,
     cache_dir: Path | None,
@@ -242,6 +195,12 @@ def _run_validator(
         console.print(f"[yellow]Warning:[/yellow] unsupported validator skipped: {validator}")
         return 0
 
+    validator_logs = tuple(log for log in plan.supported_logs if log.validator == validator)
+    progress_totals = _progress_totals(validator_logs)
+    seen_hosts: set[str] = set()
+    seen_logtypes: set[tuple[str, str]] = set()
+    seen_subtypes: set[tuple[str, str, str]] = set()
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
@@ -251,21 +210,49 @@ def _run_validator(
         console=console,
         transient=False,
     ) as progress:
-        task_id = progress.add_task("Validator SOF-ELK Zeek", total=VALIDATOR_STEP_TOTAL)
+        stage_task = progress.add_task("Validator SOF-ELK Zeek", total=VALIDATOR_STEP_TOTAL)
+        host_task = progress.add_task("Host", total=max(1, progress_totals["hosts"]))
+        logtype_task = progress.add_task("Logtype", total=max(1, progress_totals["logtypes"]))
+        subtype_task = progress.add_task("Subtype", total=max(1, progress_totals["subtypes"]))
 
         def progress_callback(event_type: str, data: dict[str, Any]) -> None:
             if event_type == "validator_step":
                 progress.update(
-                    task_id,
+                    stage_task,
                     advance=1,
                     description=f"Validator SOF-ELK Zeek: {data['description']}",
                 )
+            elif event_type == "validator_scope":
+                host = str(data["host"])
+                logtype = str(data["logtype"])
+                subtype = str(data["subtype"])
+                seen_hosts.add(host)
+                seen_logtypes.add((host, logtype))
+                seen_subtypes.add((host, logtype, subtype))
+                progress.update(
+                    host_task,
+                    completed=len(seen_hosts),
+                    description=f"Host {host}",
+                )
+                progress.update(
+                    logtype_task,
+                    completed=len(seen_logtypes),
+                    description=f"Logtype {logtype}",
+                )
+                progress.update(
+                    subtype_task,
+                    completed=len(seen_subtypes),
+                    description=f"Subtype {subtype}",
+                )
             elif event_type == "validator_done":
                 progress.update(
-                    task_id,
+                    stage_task,
                     completed=VALIDATOR_STEP_TOTAL,
                     description="Validator SOF-ELK Zeek complete",
                 )
+                progress.update(host_task, completed=max(1, progress_totals["hosts"]))
+                progress.update(logtype_task, completed=max(1, progress_totals["logtypes"]))
+                progress.update(subtype_task, completed=max(1, progress_totals["subtypes"]))
 
         try:
             result = run_sof_elk_zeek_parser(
@@ -291,6 +278,17 @@ def _run_validator(
     _print_success(result)
     _print_artifact_paths(work_dir)
     return 0
+
+
+def _progress_totals(logs: tuple[Any, ...]) -> dict[str, int]:
+    grouped = group_logs_for_progress(logs)
+    return {
+        "hosts": len(grouped),
+        "logtypes": sum(len(logtypes) for logtypes in grouped.values()),
+        "subtypes": sum(
+            len(subtypes) for logtypes in grouped.values() for subtypes in logtypes.values()
+        ),
+    }
 
 
 def _print_success(result: SofElkZeekResult) -> None:
