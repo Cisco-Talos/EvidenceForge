@@ -541,7 +541,7 @@ applications:
       linux:
         image_path: "/usr/bin/curl"
         command_templates:
-          - "curl -s https://api.example.com/status"
+          - "curl -s {external_api_url}"
           - "curl -sS -o /dev/null -w '%{http_code}' {internal_url}"
           - "curl -X GET {internal_url} -H 'Accept: application/json'"
     categories: [user_app]

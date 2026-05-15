@@ -5397,9 +5397,15 @@ class BaselineMixin:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                     _msg_offset = rng.randint(10, 50)
                     login_times: list[datetime] = []
-                    for _ in range(4):
+                    for _ in range(3):
                         login_times.append(ts + timedelta(milliseconds=_msg_offset))
-                        _msg_offset += rng.randint(1, 50)
+                        _msg_offset += rng.randint(12, 70)
+                    # systemd-logind is observed as a different process from
+                    # sshd, so source-observation delay can be independent.
+                    # Keep enough visible margin that New-session rows cannot
+                    # sort before auth/PAM under the default syslog delay profile.
+                    _msg_offset += rng.randint(420, 760)
+                    login_times.append(ts + timedelta(milliseconds=_msg_offset))
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
                         system.hostname,
                         rng,
@@ -5592,12 +5598,16 @@ class BaselineMixin:
                             16,
                         )
                         pid = 500 + (_h % 59500)  # range 500-59999
+                    facility = 10 if app == "sudo" else 3
+                    severity = 5 if app == "sudo" else 6
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name=app,
                         message=msg,
                         pid=pid,
+                        facility=facility,
+                        severity=severity,
                     )
 
         # ICMP ping between systems on same subnet

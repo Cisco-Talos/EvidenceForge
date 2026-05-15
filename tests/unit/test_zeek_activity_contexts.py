@@ -445,7 +445,7 @@ class TestSslContextPopulation:
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
 
-    def test_ssh_syslog_sub_events_are_second_ordered(self, activity_gen):
+    def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -477,11 +477,18 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert times == [
-            base_time - timedelta(seconds=1),
-            base_time,
-            base_time + timedelta(seconds=1),
+        assert times[0] < base_time < times[2]
+        assert timedelta(milliseconds=70) <= base_time - times[0] <= timedelta(milliseconds=160)
+        assert timedelta(milliseconds=115) <= times[2] - base_time <= timedelta(milliseconds=270)
+        assert times[2] - times[0] != timedelta(seconds=1)
+
+        logind_events = [
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "systemd-logind"
         ]
+        assert len(logind_events) == 1
+        assert logind_events[0].timestamp - times[2] >= timedelta(milliseconds=420)
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen

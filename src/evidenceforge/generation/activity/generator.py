@@ -294,6 +294,102 @@ def _extract_nmap_ports(command_line: str) -> list[int]:
     return list(dict.fromkeys(port for port in ports if 0 < port <= 65535))
 
 
+def _extract_http_url_from_command(command_line: str) -> str | None:
+    """Return the first HTTP(S) URL embedded in a process command line."""
+    for match in re.finditer(r"https?://[^\s'\"<>]+", command_line):
+        candidate = match.group(0).rstrip(").,;]")
+        parsed = urlsplit(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.hostname:
+            return candidate
+    return None
+
+
+def _http_user_agent_for_process(process_name: str, command_line: str) -> str:
+    """Return a source-native HTTP User-Agent for command-line HTTP clients."""
+    exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+    command = command_line.lower()
+    if exe in {"curl", "curl.exe"} or command.startswith("curl "):
+        return "curl/7.88.1"
+    if exe in {"wget", "wget.exe"} or command.startswith("wget "):
+        return "Wget/1.21.3"
+    if "python" in exe and "requests" in command:
+        return "python-requests/2.31.0"
+    return ""
+
+
+def _is_tool_http_user_agent(user_agent: str) -> bool:
+    """Return true when the UA identifies a command-line/library HTTP client."""
+    ua = user_agent.strip().lower()
+    return ua.startswith(
+        (
+            "curl/",
+            "wget/",
+            "python-requests/",
+            "go-http-client/",
+            "apache-httpclient/",
+            "powershell/",
+        )
+    )
+
+
+def _http_method_for_process_command(command_line: str) -> str:
+    """Infer the HTTP method visible for a simple CLI HTTP command."""
+    lowered = f" {command_line.lower()} "
+    if " -i " in lowered or " --head " in lowered or " --head" in lowered:
+        return "HEAD"
+    method_match = re.search(r"(?:\s-X\s+|\s--request\s+)([A-Za-z]+)", command_line)
+    if method_match:
+        return method_match.group(1).upper()
+    return "GET"
+
+
+def _http_context_from_process_command(
+    process_name: str,
+    command_line: str,
+    *,
+    response_body_len: int,
+) -> tuple[HttpContext, str, int, str] | None:
+    """Build canonical HTTP request metadata from a process command URL.
+
+    Returns ``(context, host, port, service)`` so the owning process, proxy, and
+    Zeek records agree on host, path, method, and User-Agent for the same flow.
+    """
+    http_url = _extract_http_url_from_command(command_line)
+    if not http_url:
+        return None
+    parsed = urlsplit(http_url)
+    host = parsed.hostname or ""
+    if not host:
+        return None
+    service = "ssl" if parsed.scheme == "https" else "http"
+    port = parsed.port or (443 if service == "ssl" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+    user_agent = _http_user_agent_for_process(process_name, command_line)
+    if not user_agent:
+        return None
+
+    from evidenceforge.generation.activity.http_content import infer_mime_type_from_path
+
+    mime_type = infer_mime_type_from_path(path)
+    context = HttpContext(
+        method=_http_method_for_process_command(command_line),
+        host=host if port in (80, 443) else f"{host}:{port}",
+        uri=path,
+        version="1.1",
+        user_agent=user_agent,
+        request_body_len=0,
+        response_body_len=response_body_len,
+        status_code=200,
+        status_msg="OK",
+        referrer="",
+        resp_mime_types=[mime_type] if mime_type else [],
+        tags=[],
+    )
+    return context, host, port, service
+
+
 def _parse_port_tokens(tokens: list[str]) -> list[int]:
     """Parse nmap port tokens until the next option or target token."""
     ports: list[int] = []
@@ -1722,6 +1818,31 @@ class ActivityGenerator:
             roles=list(system.roles),
         )
 
+    def _system_for_hostname(self, hostname: str) -> Any | None:
+        """Resolve a scenario system by short hostname or FQDN."""
+        wanted = hostname.lower().rstrip(".")
+        if not wanted:
+            return None
+        systems = []
+        seen_hosts: set[str] = set()
+        for system in getattr(self, "_ip_to_system", {}).values():
+            system_host_key = str(getattr(system, "hostname", "") or "")
+            if system_host_key in seen_hosts:
+                continue
+            seen_hosts.add(system_host_key)
+            systems.append(system)
+        for system in systems:
+            system_host = str(getattr(system, "hostname", "") or "").lower().rstrip(".")
+            ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+            system_fqdn = (
+                f"{system_host}.{ad_domain}"
+                if system_host and ad_domain and "." not in system_host
+                else system_host
+            )
+            if wanted in {system_host, system_fqdn}:
+                return system
+        return None
+
     def _resolve_process_identity(
         self,
         *,
@@ -1976,7 +2097,10 @@ class ActivityGenerator:
             )
             user_agent = ""
 
-        apply_domain_user_agent = http is None or not is_browser_like_proxy_domain(proxy_hostname)
+        apply_domain_user_agent = http is None or (
+            not _is_tool_http_user_agent(http.user_agent)
+            and not is_browser_like_proxy_domain(proxy_hostname)
+        )
         domain_user_agent = (
             pick_proxy_domain_user_agent(
                 rng,
@@ -6292,8 +6416,9 @@ class ActivityGenerator:
                         )
                 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
-                apply_domain_user_agent = event.http is None or not is_browser_like_proxy_domain(
-                    proxy_hostname
+                apply_domain_user_agent = event.http is None or (
+                    not _is_tool_http_user_agent(event.http.user_agent)
+                    and not is_browser_like_proxy_domain(proxy_hostname)
                 )
                 domain_user_agent = (
                     pick_proxy_domain_user_agent(
@@ -6934,9 +7059,13 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
+            conn_delay_ms = rng.randint(70, 160)
+            pam_delay_ms = conn_delay_ms + rng.randint(45, 110)
+            logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
+
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
-                timestamp=time - timedelta(seconds=1),
+                timestamp=time - timedelta(milliseconds=conn_delay_ms),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -6972,7 +7101,7 @@ class ActivityGenerator:
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             hostname = target_system.hostname
             pam_event = SecurityEvent(
-                timestamp=time + timedelta(seconds=1),
+                timestamp=time + timedelta(milliseconds=pam_delay_ms),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -6989,7 +7118,7 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
-            logind_time = time + timedelta(seconds=2)
+            logind_time = time + timedelta(milliseconds=logind_delay_ms)
             # Session ID: monotonic + unique per host. StateManager owns this
             # sequence because baseline syslog noise and explicit SSH sessions
             # both produce systemd-logind messages for the same host.
@@ -8021,6 +8150,11 @@ class ActivityGenerator:
 
         conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
         ext_hostname = None
+        dst_port = conn_info["dst_port"]
+        service = conn_info["service"]
+        http_context = None
+        resp_bytes = rng.randint(500, 50000)
+        emit_dns = bool(conn_info["external"])
 
         if conn_info["external"]:
             # External connection: domain-first selection. App-specific mappings
@@ -8035,9 +8169,28 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.dns_registry import (
                 pick_domain_and_ip as _pick_domain_and_ip,
             )
+            from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 
             dns_tags = conn_info.get("dns_tags") or []
-            if conn_info["service"] == "ssl":
+            process_http = _http_context_from_process_command(
+                process_name,
+                command_line,
+                response_body_len=resp_bytes,
+            )
+            if process_http is not None:
+                http_context, ext_hostname, dst_port, service = process_http
+                command_target = self._system_for_hostname(ext_hostname)
+                if command_target is not None:
+                    dst_ip = command_target.ip
+                else:
+                    host_lower = ext_hostname.lower().rstrip(".")
+                    ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+                    if host_lower.endswith(".local") or (
+                        ad_domain and host_lower.endswith(f".{ad_domain}")
+                    ):
+                        return
+                    dst_ip = resolve_domain_ip(ext_hostname, src_host=system.hostname)
+            elif service == "ssl":
                 if hasattr(self, "_pick_profiled_tls_destination"):
                     ext_hostname, dst_ip = self._pick_profiled_tls_destination(
                         rng,
@@ -8071,9 +8224,9 @@ class ActivityGenerator:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])
             all_ips = getattr(self, "_all_system_ips", [])
-            if conn_info["service"] in ("mssql", "mysql", "postgresql") and db_servers:
+            if service in ("mssql", "mysql", "postgresql") and db_servers:
                 # Filter to DB servers that match the requested service
-                svc = conn_info["service"]
+                svc = service
                 compatible = [
                     e
                     for e in db_servers
@@ -8092,14 +8245,15 @@ class ActivityGenerator:
             src_ip=system.ip,
             dst_ip=dst_ip,
             time=conn_time,
-            dst_port=conn_info["dst_port"],
+            dst_port=dst_port,
             proto="tcp",
-            service=conn_info["service"],
+            service=service,
             duration=rng.uniform(0.3, 15.0),
             orig_bytes=rng.randint(200, 5000),
-            resp_bytes=rng.randint(500, 50000),
-            emit_dns=conn_info["external"],
+            resp_bytes=resp_bytes,
+            emit_dns=emit_dns,
             pid=pid,
+            http=http_context,
             hostname=ext_hostname if conn_info["external"] else None,
         )
 

@@ -41,6 +41,7 @@ from evidenceforge.generation.activity import (
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
     _extract_image_from_command,
+    _http_context_from_process_command,
     _jitter_default_connection_duration,
 )
 from evidenceforge.generation.activity.tls_realism import (
@@ -61,6 +62,70 @@ class TestStateObjectIds:
 
         assert first == ""
         assert second == ""
+
+
+class TestProcessHttpCommandCorrelation:
+    def test_http_context_from_curl_command_preserves_url_and_user_agent(self):
+        """CLI HTTP command lines should drive the canonical HTTP flow metadata."""
+        result = _http_context_from_process_command(
+            "/usr/bin/curl",
+            "curl -s https://api.github.com/rate_limit?resource=core",
+            response_body_len=1234,
+        )
+
+        assert result is not None
+        http, host, port, service = result
+        assert host == "api.github.com"
+        assert port == 443
+        assert service == "ssl"
+        assert http.host == "api.github.com"
+        assert http.uri == "/rate_limit?resource=core"
+        assert http.user_agent == "curl/7.88.1"
+        assert http.response_body_len == 1234
+
+    def test_proxy_context_preserves_cli_http_user_agent(self):
+        """Proxy logs should not replace a caller-provided CLI User-Agent."""
+        generator = ActivityGenerator(StateManager(), {})
+        source = System(
+            hostname="LINUX-01",
+            ip="10.0.0.20",
+            os="Ubuntu 24.04",
+            type="workstation",
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.0.5",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        http = HttpContext(
+            method="GET",
+            host="api.github.com",
+            uri="/rate_limit",
+            user_agent="curl/7.88.1",
+            response_body_len=1234,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/json"],
+        )
+
+        proxy_context = generator._build_proxy_context(
+            src_ip=source.ip,
+            dst_ip="140.82.112.5",
+            dst_port=443,
+            service="ssl",
+            duration=1.2,
+            orig_bytes=320,
+            resp_bytes=1234,
+            hostname="api.github.com",
+            source_system=source,
+            proxy_sys=proxy,
+            http=http,
+            explicit_mode=True,
+        )
+
+        assert proxy_context.url == "https://api.github.com/rate_limit"
+        assert proxy_context.user_agent == "curl/7.88.1"
 
 
 class TestNetworkValidation:

@@ -112,8 +112,10 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 fuid=cert.fuid,
                 position=depth,
             )
-            event_data = {
-                "ts": self._offset_timestamp(
+            cert_ts = _bounded_in_connection_timestamp(
+                event.timestamp,
+                net.duration,
+                self._offset_timestamp(
                     event.timestamp,
                     max(
                         analyzer_delay_ms,
@@ -124,6 +126,9 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                         + 1,
                     ),
                 ),
+            )
+            event_data = {
+                "ts": cert_ts,
                 "fuid": cert.fuid,
                 "tx_hosts": [net.dst_ip],
                 "rx_hosts": [net.src_ip],
@@ -226,6 +231,25 @@ def _bounded_file_transfer_observation(
     if file_ts + timedelta(seconds=bounded_duration) > conn_end:
         bounded_duration = max(0.0, (conn_end - file_ts).total_seconds() - epsilon)
     return file_ts, bounded_duration
+
+
+def _bounded_in_connection_timestamp(
+    conn_ts: datetime,
+    conn_duration: float | None,
+    preferred_ts: datetime,
+) -> datetime:
+    """Keep source-side analyzer rows inside the owning conn.log lifetime."""
+    if conn_duration is None or conn_duration <= 0:
+        return max(conn_ts, preferred_ts)
+
+    epsilon = 0.001
+    conn_end = conn_ts + timedelta(seconds=conn_duration)
+    latest_ts = conn_end - timedelta(seconds=epsilon)
+    if preferred_ts > latest_ts:
+        return latest_ts if latest_ts > conn_ts else conn_ts
+    if preferred_ts < conn_ts:
+        return conn_ts
+    return preferred_ts
 
 
 def _related_http_analyzer_timestamp(event: SecurityEvent) -> datetime | None:
