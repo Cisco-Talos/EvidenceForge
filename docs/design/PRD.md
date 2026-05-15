@@ -36,7 +36,7 @@ The tool addresses the need for realistic, large-volume training datasets withou
 - Schema validation for scenario files (Pydantic-based)
 - Cross-reference validation (users, systems, personas, groups referenced correctly)
 - Evaluation framework with concrete metrics (format compliance, consistency, statistical properties)
-- Ground truth documentation (GROUND_TRUTH.md) for scenarios with malicious activity
+- Ground truth documentation (GROUND_TRUTH.md) for every generated scenario
 - Network topology and sensor placement modeling for traffic visibility
 - Persona-based temporal activity distribution with configurable work hours, intensity, and risk profiles
 - Comprehensive test coverage (95%+) with pytest
@@ -154,7 +154,7 @@ eforge generate SCENARIO_FILE [--output DIR] [--verbose] [--debug]
 9. Write to organized directory structure with incremental flushing (10K event buffer)
 10. Show progress with Rich progress bars (per-hour baseline, per-event storyline)
 11. Log details to `generation.log` in output directory
-12. Generate GROUND_TRUTH.md when malicious/suspicious activities are present
+12. Generate GROUND_TRUTH.md and OBSERVATION_MANIFEST.json sidecars
 
 #### Workflow 6: Evaluate Output
 ```bash
@@ -430,7 +430,8 @@ Generated logs are written to a timestamped output directory:
 output/
   scenario-name-YYYYMMDD-HHMMSS/
     generation.log              # Detailed generation log
-    GROUND_TRUTH.md            # Attack ground truth (if malicious activity present)
+    GROUND_TRUTH.md            # Ground truth sidecar (empty for baseline-only scenarios)
+    OBSERVATION_MANIFEST.json  # Source-observation sidecar
     windows_events.xml         # Windows Event Logs
     zeek_conn.log              # Zeek connection logs
     ecar.json                  # ECAR events
@@ -442,7 +443,7 @@ output/
 
 **GROUND_TRUTH.md Format**
 
-When a scenario includes malicious or suspicious activities (not baseline-only scenarios), the generator creates a GROUND_TRUTH.md file documenting the attack for training and evaluation purposes.
+Every successful generation creates a GROUND_TRUTH.md file. Attack/red-herring scenarios document the narrative, timeline, and IOCs for training and evaluation; baseline-only scenarios explicitly state that no malicious events were generated.
 
 ```markdown
 # Ground Truth: [Scenario Name]

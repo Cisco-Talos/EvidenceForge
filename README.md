@@ -97,7 +97,7 @@ For details on the overlay system, manual editing, and cross-file dependencies, 
 
 EvidenceForge creates multi-format security log datasets from YAML scenario definitions. You describe an environment (users, systems, network topology) and a storyline (attack events), and EvidenceForge generates temporally consistent logs across all formats simultaneously — complete with cross-referenced LogonIDs, PIDs, timestamps, and UIDs.
 
-Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what happened, when, and where — making the datasets immediately usable for threat hunting training.
+Every generated scenario includes a `GROUND_TRUTH.md` file. Attack scenarios document exactly what happened, when, and where, while baseline-only scenarios explicitly document that no malicious events were generated.
 
 ### Key Capabilities
 
@@ -106,7 +106,7 @@ Every attack scenario includes a `GROUND_TRUTH.md` file documenting exactly what
 - **Realistic baseline noise** — 26 lateral movement patterns, process→network correlation, network-level red herrings, and 18 Linux syslog categories create noise that analysts must work through
 - **OS-aware generation** — Windows systems produce Windows Event + Sysmon logs; Linux systems produce syslog + bash history
 - **Network visibility modeling** — Define sensor placement (SPAN/TAP), direction, and monitored segments
-- **Ground truth documentation** — Every attack scenario generates a GROUND_TRUTH.md with narrative, timeline, and IOCs
+- **Ground truth documentation** — Every run generates a GROUND_TRUTH.md; attack scenarios include narrative, timeline, and IOCs
 - **Parallel generation** — Threaded emitters write all formats simultaneously with temporal consistency
 - **Scenario validation** — Cross-reference checking, uniqueness constraints, and network topology validation
 - **Data quality evaluation** — 5-dimension scoring framework (23 sub-scores) with acceptance criteria

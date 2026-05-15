@@ -10,7 +10,8 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 
 ```
 output/
-  GROUND_TRUTH.md                          # Attack narrative, timeline, IOCs
+  GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
+  OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
   ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events

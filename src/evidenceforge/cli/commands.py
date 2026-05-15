@@ -278,7 +278,7 @@ def generate(
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
 
-    # Check for existing generated output (data/ and GROUND_TRUTH.md only).
+    # Check for existing generated output (data/ and generated sidecars only).
     # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
     existing = []
     if data_dir.exists():
@@ -387,8 +387,8 @@ def generate(
 
         # Transactional swap: backup old → install new → cleanup backup.
         # If any step fails (including KeyboardInterrupt), old output is
-        # restored from backup. data/ and GROUND_TRUTH.md are always kept
-        # as a matched pair — partial preservation is never valid.
+        # restored from backup. data/ and generated sidecars are always kept
+        # as a matched set — partial preservation is never valid.
         if staging_dir:
             staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
             staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
@@ -396,6 +396,10 @@ def generate(
                 raise RuntimeError("Staged data/ directory missing after generation")
             if not staged_gt.exists():
                 raise RuntimeError("Staged GROUND_TRUTH.md missing after generation")
+            if not staged_manifest.exists():
+                raise RuntimeError(
+                    f"Staged {OBSERVATION_MANIFEST_FILENAME} missing after generation"
+                )
 
             # Clean up stale rollback dirs from prior killed runs
             for stale in ground_truth_dir.glob(".eforge_rollback_*"):

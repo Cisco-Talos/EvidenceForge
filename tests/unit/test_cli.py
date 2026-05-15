@@ -35,6 +35,7 @@ from evidenceforge.cli.commands import (
     EXIT_SUCCESS,
     app,
 )
+from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 
 runner = CliRunner()
 
@@ -212,6 +213,7 @@ output:
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -272,6 +274,7 @@ output:
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -280,6 +283,7 @@ output:
         # Create existing output files
         (tmp_path / "data").mkdir()
         (tmp_path / "GROUND_TRUTH.md").write_text("old")
+        (tmp_path / OBSERVATION_MANIFEST_FILENAME).write_text("old manifest")
         (tmp_path / "ENVIRONMENT.md").write_text("old")
 
         result = runner.invoke(
@@ -297,10 +301,58 @@ output:
         assert "Overwrite existing output?" not in result.stdout
         assert mock_engine.generate.called
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "new ground truth"
+        assert (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text() == '{"schema_version": 1}'
         assert (tmp_path / "data" / "new.xml").read_text() == "new data"
         # ENVIRONMENT.md must be preserved (not engine output)
         assert (tmp_path / "ENVIRONMENT.md").exists()
         assert (tmp_path / "ENVIRONMENT.md").read_text() == "old"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_force_baseline_only_replaces_complete_sidecar_set(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """--force should swap baseline-only outputs with data, ground truth, and manifest."""
+
+        def _fake_generate():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "baseline.log").write_text("new baseline data")
+                (sd / "GROUND_TRUTH.md").write_text(
+                    "# Ground Truth: baseline-only\n\n*No malicious activities in this scenario.*\n"
+                )
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text(
+                    '{"schema_version": 1, "scenario_name": "baseline-only"}'
+                )
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.log").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+        (tmp_path / OBSERVATION_MANIFEST_FILENAME).write_text("old manifest")
+        (tmp_path / "ENVIRONMENT.md").write_text("scenario-authored")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "baseline-only.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert not (tmp_path / "data" / "old.log").exists()
+        assert (tmp_path / "data" / "baseline.log").read_text() == "new baseline data"
+        assert "No malicious activities" in (tmp_path / "GROUND_TRUTH.md").read_text()
+        assert "baseline-only" in (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text()
+        assert (tmp_path / "ENVIRONMENT.md").read_text() == "scenario-authored"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_force_preserves_old_output_on_failure(
@@ -364,6 +416,7 @@ output:
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -415,6 +468,7 @@ output:
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -485,6 +539,7 @@ output:
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
@@ -549,6 +604,45 @@ output:
         assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_force_swap_requires_staged_manifest(self, mock_engine_class, scenarios_dir, tmp_path):
+        """If engine succeeds but staged observation manifest is missing, old output preserved."""
+
+        def _fake_generate_no_manifest():
+            staging_dirs = list(tmp_path.glob(".eforge_staging_*"))
+            if staging_dirs:
+                sd = staging_dirs[0]
+                (sd / "data").mkdir(exist_ok=True)
+                (sd / "data" / "new.xml").write_text("new data")
+                (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                # Deliberately skip creating OBSERVATION_MANIFEST.json
+
+        mock_engine = Mock()
+        mock_engine.generate.side_effect = _fake_generate_no_manifest
+        mock_engine_class.return_value = mock_engine
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "old.xml").write_text("old data")
+        (tmp_path / "GROUND_TRUTH.md").write_text("old ground truth")
+        (tmp_path / OBSERVATION_MANIFEST_FILENAME).write_text("old manifest")
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--force",
+            ],
+        )
+
+        assert result.exit_code == EXIT_GENERATION_ERROR
+        assert (tmp_path / "data" / "old.xml").exists()
+        assert (tmp_path / "data" / "old.xml").read_text() == "old data"
+        assert (tmp_path / "GROUND_TRUTH.md").read_text() == "old ground truth"
+        assert (tmp_path / OBSERVATION_MANIFEST_FILENAME).read_text() == "old manifest"
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_force_swap_cleans_stale_rollback(self, mock_engine_class, scenarios_dir, tmp_path):
         """Stale rollback dirs from prior killed runs are cleaned up."""
 
@@ -559,6 +653,7 @@ output:
                 (sd / "data").mkdir(exist_ok=True)
                 (sd / "data" / "new.xml").write_text("new data")
                 (sd / "GROUND_TRUTH.md").write_text("new ground truth")
+                (sd / OBSERVATION_MANIFEST_FILENAME).write_text('{"schema_version": 1}')
 
         mock_engine = Mock()
         mock_engine.generate.side_effect = _fake_generate
