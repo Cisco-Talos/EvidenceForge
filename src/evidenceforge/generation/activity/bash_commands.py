@@ -68,14 +68,35 @@ def _resolve_server_role(hostname: str, services: list[str]) -> str:
     return "generic"
 
 
-def _resolve_template(template: str, rng: random.Random, params: dict[str, list[str]]) -> str:
+def _service_template_values(system_services: list[str] | None, fallback: list[str]) -> list[str]:
+    """Return service placeholder values that fit the current host when possible."""
+    contextual: list[str] = []
+    for service in system_services or []:
+        normalized = service.strip().lower()
+        if not normalized or normalized in {"dns-client", "systemd"}:
+            continue
+        if normalized == "ssh":
+            normalized = "sshd"
+        contextual.append(normalized)
+    return contextual or fallback
+
+
+def _resolve_template(
+    template: str,
+    rng: random.Random,
+    params: dict[str, list[str]],
+    system_services: list[str] | None = None,
+) -> str:
     """Resolve {placeholder} tokens in a command template."""
     result = template
     # Iterate to handle templates with multiple placeholders
     for key, values in params.items():
         token = "{" + key + "}"
         while token in result:
-            result = result.replace(token, rng.choice(values), 1)
+            candidates = (
+                _service_template_values(system_services, values) if key == "service" else values
+            )
+            result = result.replace(token, rng.choice(candidates), 1)
     return result
 
 
@@ -325,9 +346,9 @@ def pick_bash_command_entry(
         if username and rng.random() < 0.80:
             pool = _get_user_pool(username, pool)
         template = rng.choice(pool)
-        return _resolve_template(template, rng, params), False
+        return _resolve_template(template, rng, params, system_services), False
 
     # Common command (60%)
     common = commands.get("common", ["ls"])
     template = rng.choice(common)
-    return _resolve_template(template, rng, params), False
+    return _resolve_template(template, rng, params, system_services), False

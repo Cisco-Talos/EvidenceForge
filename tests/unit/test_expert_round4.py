@@ -10,6 +10,7 @@ from evidenceforge.generation.activity.application_catalog import (
 )
 from evidenceforge.generation.activity.bash_commands import (
     _get_user_pool,
+    _resolve_template,
     load_bash_commands,
 )
 from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
@@ -114,6 +115,17 @@ class TestPerUserToolAffinity:
 
         assert all(command in db_pool for command in db_affinity)
         assert not any("apache2" in command or "nginx" in command for command in db_affinity)
+
+    def test_service_placeholder_prefers_host_services(self):
+        """Generic service placeholders should not pull web services onto DB hosts."""
+        command = _resolve_template(
+            "systemctl status {service}",
+            random.Random(42),
+            {"service": ["apache2", "nginx"]},
+            ["mysql", "ssh", "dns-client"],
+        )
+
+        assert command in {"systemctl status mysql", "systemctl status sshd"}
 
 
 class TestPerUserBrowserAffinity:
