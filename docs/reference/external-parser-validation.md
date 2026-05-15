@@ -181,7 +181,6 @@ The failure report includes:
 - expected and observed counts
 - staged source paths
 - parsed output paths
-- failure messages
 - failure tag counts by log type
 - DNS failure counts by question type
 - whether each staged log type had a dedicated SOF-ELK filter

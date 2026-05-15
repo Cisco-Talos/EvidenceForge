@@ -1001,7 +1001,6 @@ def _write_failure_report(
             for log in manifest.logs
         ],
         "failure_count": len(failures),
-        "failure_messages": failures,
         "failure_tag_counts": _failure_tag_counts(
             events_by_type,
             tuple(manifest.expected_counts),

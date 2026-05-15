@@ -263,6 +263,7 @@ def test_validate_parsed_output_reports_parser_failure_tags(tmp_path: Path) -> N
     report_path = parsed_dir / FAILURE_REPORT_FILENAME
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert str(report_path) in str(excinfo.value)
+    assert "failure_messages" not in report
     assert report["failure_tag_counts"]["zeek_conn"]["_jsonparsefailure"] == 1
     assert report["sample_failures"][0]["zeek_session_id"] == "BROKEN"
 
