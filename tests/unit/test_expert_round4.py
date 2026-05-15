@@ -103,6 +103,18 @@ class TestPerUserToolAffinity:
         assert all(cmd in pool for cmd in pool_a)
         assert all(cmd in pool for cmd in pool_b)
 
+    def test_same_user_pool_affinity_is_role_specific(self):
+        """A user's web-admin affinity should not leak into later DB sessions."""
+        commands = load_bash_commands()
+        web_pool = commands["webadmin"]
+        db_pool = commands["dba"]
+
+        _get_user_pool("marcus.chen", web_pool)
+        db_affinity = _get_user_pool("marcus.chen", db_pool)
+
+        assert all(command in db_pool for command in db_affinity)
+        assert not any("apache2" in command or "nginx" in command for command in db_affinity)
+
 
 class TestPerUserBrowserAffinity:
     """P1-7c: Per-user browser affinity."""

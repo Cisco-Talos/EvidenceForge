@@ -218,7 +218,7 @@ def _typo_allowed(
     return True
 
 
-_USER_TOOL_AFFINITY: dict[str, list[str]] = {}
+_USER_TOOL_AFFINITY: dict[tuple[str, tuple[str, ...]], list[str]] = {}
 
 
 def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
@@ -228,8 +228,9 @@ def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
     80% of role-specific commands come from the primary tools, 20% from
     the full pool — so users have consistent tooling preferences.
     """
-    if username in _USER_TOOL_AFFINITY:
-        return _USER_TOOL_AFFINITY[username]
+    cache_key = (username, tuple(full_pool))
+    if cache_key in _USER_TOOL_AFFINITY:
+        return _USER_TOOL_AFFINITY[cache_key]
 
     # Identify tool families by prefix keywords
     _TOOL_FAMILIES = {
@@ -260,7 +261,7 @@ def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
     if len(primary_pool) < 3:
         primary_pool = full_pool
 
-    _USER_TOOL_AFFINITY[username] = primary_pool
+    _USER_TOOL_AFFINITY[cache_key] = primary_pool
     return primary_pool
 
 
