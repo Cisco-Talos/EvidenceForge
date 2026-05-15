@@ -1814,6 +1814,9 @@ class ActivityGenerator:
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
+        self._foreground_process_finalizers: dict[
+            tuple[str, int], tuple[System, str, str, str, datetime]
+        ] = {}
         self._loaded_modules_by_process: set[tuple[str, int, str, str]] = set()
         self._last_one_shot_cli_launch_by_exe: dict[tuple[str, str, str, str], datetime] = {}
         self._last_one_shot_cli_launch_by_command: dict[
@@ -1825,6 +1828,92 @@ class ActivityGenerator:
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
+
+    def _remember_foreground_process_finalizer(
+        self,
+        *,
+        system: System,
+        user: User,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+        termination_time: datetime,
+    ) -> None:
+        """Track a bounded foreground process until its terminate event is observed."""
+        self._foreground_process_finalizers[(system.hostname, pid)] = (
+            system,
+            user.username,
+            process_name,
+            logon_id,
+            ensure_utc(termination_time),
+        )
+
+    def finalize_foreground_process_lifetimes(self, end_time: datetime) -> None:
+        """Close any tracked one-shot foreground shell processes still running.
+
+        Most shell telemetry emits its terminate row immediately after the create row. This
+        finalization pass is a safety net for slice-end and session-interleaving edge cases
+        where a bounded foreground command stayed active in state despite its expected
+        lifetime being inside the visible window.
+        """
+        known_users = getattr(self, "_users_by_username", {})
+        window_end = ensure_utc(end_time)
+        for key, (
+            system,
+            username,
+            process_name,
+            logon_id,
+            termination_time,
+        ) in sorted(self._foreground_process_finalizers.items(), key=lambda item: item[1][4]):
+            if key in self._terminated_process_keys or termination_time > window_end:
+                continue
+            running = self.state_manager.get_process(system.hostname, key[1])
+            if running is None:
+                continue
+            process_user = known_users.get(username) or User(
+                username=username,
+                full_name=username,
+                email=f"{username}@example.local",
+            )
+            self.generate_process_termination(
+                user=process_user,
+                system=system,
+                time=termination_time,
+                pid=key[1],
+                process_name=running.image or process_name,
+                logon_id=running.logon_id or logon_id,
+            )
+
+    def _generate_bounded_foreground_process_termination(
+        self,
+        *,
+        user: User,
+        system: System,
+        start_time: datetime,
+        pid: int,
+        process_name: str,
+        logon_id: str,
+        lifetime: tuple[float, float],
+        rng: random.Random,
+    ) -> None:
+        """Emit and track termination for a bounded foreground command process."""
+        termination_time = start_time + timedelta(seconds=rng.uniform(*lifetime))
+        self._remember_foreground_process_finalizer(
+            system=system,
+            user=user,
+            pid=pid,
+            process_name=process_name,
+            logon_id=logon_id,
+            termination_time=termination_time,
+        )
+        self.generate_process_termination(
+            user=user,
+            system=system,
+            time=termination_time,
+            pid=pid,
+            process_name=process_name,
+            logon_id=logon_id,
+        )
 
     def _ntp_association_profile(self, src_ip: str, dst_ip: str) -> dict[str, float | int]:
         """Return stable NTP client/server association fields."""
@@ -7559,13 +7648,15 @@ class ActivityGenerator:
             self._record_user_process(system, user, pid, image)
             lifetime = _linux_foreground_lifetime(image, process_command_line)
             if lifetime is not None:
-                self.generate_process_termination(
+                self._generate_bounded_foreground_process_termination(
                     user=user,
                     system=system,
-                    time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
+                    start_time=process_time,
                     pid=pid,
                     process_name=image,
                     logon_id=session.logon_id,
+                    lifetime=lifetime,
+                    rng=rng,
                 )
 
     def _schedule_bash_history_time(
@@ -8694,13 +8785,15 @@ class ActivityGenerator:
                             effect_command_line,
                         )
                         if lifetime is not None:
-                            self.generate_process_termination(
+                            self._generate_bounded_foreground_process_termination(
                                 user=user,
                                 system=system,
-                                time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                                start_time=process_time,
                                 pid=pid,
                                 process_name=effect_process_name,
                                 logon_id=logon_id,
+                                lifetime=lifetime,
+                                rng=rng,
                             )
                     elif os_category == "linux":
                         self._emit_bash_command_event(
@@ -8714,13 +8807,15 @@ class ActivityGenerator:
                             effect_command_line,
                         )
                         if lifetime is not None:
-                            self.generate_process_termination(
+                            self._generate_bounded_foreground_process_termination(
                                 user=user,
                                 system=system,
-                                time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
+                                start_time=process_time,
                                 pid=pid,
                                 process_name=effect_process_name,
                                 logon_id=logon_id,
+                                lifetime=lifetime,
+                                rng=rng,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
@@ -8743,13 +8838,15 @@ class ActivityGenerator:
                     self._record_user_process(system, user, pid, process_name)
                     lifetime = _windows_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
-                        self.generate_process_termination(
+                        self._generate_bounded_foreground_process_termination(
                             user=user,
                             system=system,
-                            time=time + timedelta(seconds=rng.uniform(*lifetime)),
+                            start_time=time,
                             pid=pid,
                             process_name=process_name,
                             logon_id=logon_id,
+                            lifetime=lifetime,
+                            rng=rng,
                         )
                 elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
                     rng = _get_rng()
@@ -8776,13 +8873,15 @@ class ActivityGenerator:
                     self._emit_bash_command_event(user, system, process_time, command_line)
                     lifetime = _linux_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
-                        self.generate_process_termination(
+                        self._generate_bounded_foreground_process_termination(
                             user=user,
                             system=system,
-                            time=process_time + timedelta(seconds=rng.uniform(*lifetime)),
+                            start_time=process_time,
                             pid=pid,
                             process_name=process_name,
                             logon_id=logon_id,
+                            lifetime=lifetime,
+                            rng=rng,
                         )
 
         # Connection activities

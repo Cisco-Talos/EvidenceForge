@@ -304,6 +304,14 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     (`213 passed`), config validation, Ruff, format check, and full normal
     `uv run pytest --no-cov -q` (`3092 passed, 37 skipped`). Regeneration and
     blind review follow.
+  - [x] Loop 7 hard-probe follow-up: one late Linux bash/eCAR
+    `curl -sI https://localhost` process remained open despite being a bounded
+    foreground command. Added a finalization backstop for tracked one-shot shell
+    process telemetry before emitters close while preserving commands whose
+    expected termination falls beyond the visible window. Verification passed
+    with focused lifetime/storyline/proxy regressions, config validation, Ruff,
+    format check, and full normal `uv run pytest --no-cov -q`
+    (`3094 passed, 37 skipped`). Regeneration and blind review follow.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 

@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
@@ -14,7 +15,7 @@ from evidenceforge.generation.activity.generator import (
 )
 from evidenceforge.generation.engine.baseline import _eligible_for_hourly_module_load
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models.scenario import System
+from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import RunningProcess
 
 
@@ -105,6 +106,90 @@ def test_linux_http_cli_commands_have_short_lifetimes(image: str, command_line: 
 
     assert lifetime is not None
     assert lifetime[1] <= 12.0
+
+
+def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None:
+    start = datetime(2024, 3, 18, 17, 56, 39, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="APP-INT-01",
+        ip="10.10.2.30",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    user = User(
+        username="marcus.chen",
+        full_name="Marcus Chen",
+        email="marcus.chen@example.local",
+    )
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image="/usr/bin/curl",
+        command_line="curl -sI https://localhost",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+
+    generator._remember_foreground_process_finalizer(
+        system=system,
+        user=user,
+        pid=pid,
+        process_name="/usr/bin/curl",
+        logon_id="0x1234",
+        termination_time=start + timedelta(seconds=5),
+    )
+
+    generator.finalize_foreground_process_lifetimes(start + timedelta(minutes=1))
+
+    assert state.get_process(system.hostname, pid) is None
+    assert (system.hostname, pid) in generator._terminated_process_keys
+
+
+def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window() -> None:
+    start = datetime(2024, 3, 18, 17, 59, 58, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="APP-INT-01",
+        ip="10.10.2.30",
+        os="Ubuntu 22.04",
+        type="server",
+    )
+    user = User(
+        username="marcus.chen",
+        full_name="Marcus Chen",
+        email="marcus.chen@example.local",
+    )
+    pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image="/usr/bin/curl",
+        command_line="curl -sI https://localhost",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+
+    generator._remember_foreground_process_finalizer(
+        system=system,
+        user=user,
+        pid=pid,
+        process_name="/usr/bin/curl",
+        logon_id="0x1234",
+        termination_time=start + timedelta(seconds=5),
+    )
+
+    generator.finalize_foreground_process_lifetimes(start + timedelta(seconds=2))
+
+    assert state.get_process(system.hostname, pid) is not None
+    assert (system.hostname, pid) not in generator._terminated_process_keys
 
 
 def test_expired_linux_curl_is_not_valid_for_later_network_attribution() -> None:
