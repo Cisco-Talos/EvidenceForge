@@ -281,6 +281,16 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     observation offsets. Verification passed with focused timing/cache regressions,
     `uv run eforge validate-config`, Ruff checks/format checks, and full normal
     `uv run pytest --no-cov -q` (`3082 passed, 37 skipped`).
+  - Loop 6 final regeneration and assessment completed from commit `ac30094`:
+    regenerated `scenarios/iteration-test/scenario.yaml`, quantitative eval passed at
+    `96/100` across `76,801` records, and hard probes found zero duplicate logind
+    removals, zero page-asset ordering inversions, zero repeated full static 200s,
+    and zero TiWorker component/version mismatches. Blind synthetic-confidence scores
+    were Threat Hunter `74`, Detection `74`, Network `72`, Host/EDR `82`
+    (average `75.5`). Top Loop 7 targets are PsExec/service-control process lineage
+    and token semantics, one-shot CLI/eCAR process lifetimes, proxy cache behavior
+    for immutable third-party static assets, stale Let's Encrypt OCSP responder
+    mapping, and repeated Linux daemon/syslog texture.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 
