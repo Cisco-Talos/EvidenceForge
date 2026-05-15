@@ -13,7 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.models.scenario import Scenario
-from evidenceforge.utils.time import parse_duration
+from evidenceforge.utils.time import resolve_time_window
 
 logger = logging.getLogger(__name__)
 
@@ -149,11 +149,10 @@ def load_observation_manifest(output_dir: Path) -> ObservationManifest | None:
 
 
 def _collection_window(scenario: Scenario) -> dict[str, str | None]:
-    start = scenario.time_window.start
-    end: datetime | None = None
     try:
-        end = start + parse_duration(scenario.time_window.duration)
+        start, end = resolve_time_window(scenario.time_window)
     except ValueError:
+        start = scenario.time_window.start
         end = None
     return {
         "start": _format_dt(start),

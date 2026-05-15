@@ -21,7 +21,7 @@ from evidenceforge.models import (
 )
 
 
-def _scenario() -> Scenario:
+def _scenario(time_window: TimeWindow | None = None) -> Scenario:
     return Scenario(
         version="1.0",
         name="manifest-test",
@@ -38,7 +38,7 @@ def _scenario() -> Scenario:
             ],
             systems=[System(hostname="WS-01", ip="10.0.0.10", os="Windows 11", type="workstation")],
         ),
-        time_window=TimeWindow(start="2026-02-03T13:00:00Z", duration="2h"),
+        time_window=time_window or TimeWindow(start="2026-02-03T13:00:00Z", duration="2h"),
         baseline_activity=BaselineActivity(description="Low", intensity="low", variation="low"),
         observation_profile="enterprise_standard",
         output=OutputSpec(logs=[{"format": "windows_event_security"}], destination="./out"),
@@ -76,6 +76,22 @@ def test_build_manifest_summarizes_storyline_source_status() -> None:
     }
     assert manifest.storyline_events[0].storyline_id == "step-001"
     assert manifest.storyline_events[0].source_status["sysmon"] == {"dropped": 2}
+
+
+def test_build_manifest_uses_explicit_end_time_window() -> None:
+    """Manifest should support scenarios that define an explicit end instead of duration."""
+    manifest = build_observation_manifest(
+        _scenario(
+            TimeWindow(
+                start="2026-02-03T13:00:00Z",
+                end="2026-02-03T14:30:00Z",
+            )
+        ),
+        {},
+    )
+
+    assert manifest.collection_window["start"] == "2026-02-03T13:00:00Z"
+    assert manifest.collection_window["end"] == "2026-02-03T14:30:00Z"
 
 
 def test_load_manifest_finds_scenario_root_from_data_dir(tmp_path) -> None:
