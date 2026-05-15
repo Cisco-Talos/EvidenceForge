@@ -80,7 +80,6 @@ addopts = [
     "--tb=short",
     "--cov=evidenceforge",
     "--cov-report=term-missing",
-    "--cov-report=html",
 ]
 filterwarnings = [
     "error",

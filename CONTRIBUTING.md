@@ -46,11 +46,14 @@ We expect new pull requests to include tests for any affected behavior, and, as
 we follow semantic versioning, we may reserve breaking changes until the next
 major version release.
 
-Before submitting, run the full test suite (including slow tests) and confirm
-all tests pass:
+Before submitting, run the normal coverage-gated suite, the slow comprehensive
+suite without coverage instrumentation, and lint/format checks:
 
 ```bash
-uv run pytest --include-slow
+uv run pytest
+uv run pytest --include-slow -m slow --no-cov --durations=20
+uv run ruff check .
+uv run ruff format --check .
 ```
 
 ### Commit Messages
@@ -93,18 +96,18 @@ uv sync
 uv run pytest
 
 # Lint and format
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
+uv run ruff check .
+uv run ruff format --check .
 ```
 
 ### Test Markers
 
-- `@pytest.mark.slow`: large dataset tests (100+ users), skipped by default
+- `@pytest.mark.slow`: large dataset and workload tests, skipped by default and normally
+  run without coverage instrumentation
 
 ```bash
-uv run pytest                  # Quick run (skips slow tests)
-uv run pytest --include-slow   # Full run (all tests, required before PRs)
-uv run pytest -m slow          # Only slow tests
+uv run pytest                                               # Normal coverage-gated run
+uv run pytest --include-slow -m slow --no-cov --durations=20 # Slow comprehensive run
 ```
 
 ## Code Style

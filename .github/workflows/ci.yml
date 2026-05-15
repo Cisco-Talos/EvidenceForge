@@ -33,9 +33,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      - name: Run tests with coverage
-        if: github.ref_name != 'dev' && github.base_ref != 'dev'
-        run: uv run pytest --include-slow --cov-report=xml
+      - name: Run tests with coverage (Python 3.12)
+        if: matrix.python-version == '3.12' && github.ref_name != 'dev' && github.base_ref != 'dev'
+        run: uv run pytest --cov-report=xml
+
+      - name: Run compatibility tests (Python 3.11)
+        if: matrix.python-version == '3.11' && github.ref_name != 'dev' && github.base_ref != 'dev'
+        run: uv run pytest --no-cov
 
       - name: Run fast unit tests (dev)
         if: github.ref_name == 'dev' || github.base_ref == 'dev'
@@ -47,6 +51,32 @@ jobs:
         with:
           file: ./coverage.xml
           fail_ci_if_error: false
+
+  slow-comprehensive:
+    name: Slow comprehensive tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.ref_name != 'dev' && github.base_ref != 'dev'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run slow comprehensive tests without coverage
+        run: uv run pytest --include-slow -m slow --no-cov --durations=20
 
   lint:
     name: Lint
