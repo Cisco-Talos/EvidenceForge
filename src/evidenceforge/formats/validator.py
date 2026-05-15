@@ -249,10 +249,20 @@ def validate_field(field_def: FieldDefinition, field_value: Any) -> ValidationRe
 # Strict-mode validators — format-specific raw-content checks
 # ---------------------------------------------------------------------------
 
-# RFC 5424 syslog header: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID
-# BSD syslog: <PRI>MONTH DD HH:MM:SS HOSTNAME
-_RFC5424_RE = re.compile(r"^<(\d{1,3})>(?:(\d+) [\w:+\-Z.]+|[A-Z][a-z]{2}\s+\d+\s+[\d:]+)\s+\S")
+# RFC 5424 syslog header: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA
+_RFC5424_RE = re.compile(
+    r"^<(?P<pri>\d{1,3})>(?P<version>\d+)\s+"
+    r"(?P<timestamp>\S+)\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<app_name>\S+)\s+"
+    r"(?P<procid>\S+)\s+"
+    r"(?P<msgid>\S+)\s+"
+    r"(?P<structured_data>-|(?:\[[^\]]*\])+)"
+    r"(?:\s(?P<message>.*))?$"
+)
 _RFC5424_PRIORITY_MAX = 191  # 23 facilities × 8 severities - 1
+_LEGACY_BSD_SYSLOG_RE = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S+\s+\S+")
+_LEGACY_ISO_SYSLOG_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\S*\s+\S+\s+\S+")
 
 # eCAR valid object/action combos
 _ECAR_VALID_OBJECTS = frozenset(
@@ -322,7 +332,7 @@ def validate_strict(format_name: str, raw: str, fields: dict[str, Any]) -> Valid
     result = ValidationResult()
 
     if format_name == "syslog":
-        _validate_strict_syslog(raw, result)
+        _validate_strict_syslog(raw, fields, result)
     elif format_name.startswith("zeek_"):
         _validate_strict_zeek_json(raw, result)
     elif format_name in ("windows_event_security", "windows_event_sysmon"):
@@ -333,33 +343,41 @@ def validate_strict(format_name: str, raw: str, fields: dict[str, Any]) -> Valid
     return result
 
 
-_BSD_SYSLOG_RE = re.compile(r"^[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\S")
+def _validate_strict_syslog(raw: str, fields: dict[str, Any], result: ValidationResult) -> None:
+    """Require RFC 5424 for generated syslog, allowing parser-marked legacy eval input."""
+    if not raw.strip():
+        return
 
+    protocol = fields.get("syslog_protocol")
+    if protocol == "rfc3164_legacy":
+        if not _LEGACY_BSD_SYSLOG_RE.match(raw):
+            result.add_error("syslog", "Legacy syslog marker does not match BSD/RFC3164 input")
+        return
+    if protocol == "iso_legacy":
+        if not _LEGACY_ISO_SYSLOG_RE.match(raw):
+            result.add_error("syslog", "Legacy syslog marker does not match ISO-style input")
+        return
 
-def _validate_strict_syslog(raw: str, result: ValidationResult) -> None:
-    """RFC 5424 / BSD syslog structural checks.
+    match = _RFC5424_RE.match(raw)
+    if match is None:
+        result.add_error("syslog", "Syslog line does not match RFC 5424")
+        return
 
-    Accepts:
-      - RFC 5424: <PRI>VERSION TIMESTAMP HOSTNAME ...
-      - BSD syslog with PRI: <PRI>Mon DD HH:MM:SS HOSTNAME ...
-      - BSD syslog without PRI: Mon DD HH:MM:SS HOSTNAME ... (common generator output)
-    """
-    if raw.startswith("<"):
-        # PRI-prefixed: validate PRI value
-        m = re.match(r"^<(\d{1,3})>", raw)
-        if not m:
-            result.add_error("syslog_pri", "Malformed PRI field")
-            return
-        pri = int(m.group(1))
-        if pri > _RFC5424_PRIORITY_MAX:
-            result.add_error("syslog_pri", f"PRI {pri} exceeds maximum {_RFC5424_PRIORITY_MAX}")
-    else:
-        # BSD syslog without PRI — must match MMM DD HH:MM:SS pattern
-        if not _BSD_SYSLOG_RE.match(raw):
-            result.add_error(
-                "syslog",
-                "Syslog line does not match BSD (Mon DD HH:MM:SS) or RFC 5424 pattern",
-            )
+    pri = int(match.group("pri"))
+    if pri > _RFC5424_PRIORITY_MAX:
+        result.add_error("syslog_pri", f"PRI {pri} exceeds maximum {_RFC5424_PRIORITY_MAX}")
+
+    if match.group("version") != "1":
+        result.add_error("syslog_version", "RFC 5424 VERSION must be 1")
+
+    timestamp = match.group("timestamp")
+    if timestamp == "-":
+        result.add_error("syslog_timestamp", "Generated syslog requires a timestamp")
+        return
+    try:
+        datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        result.add_error("syslog_timestamp", f"Invalid RFC 5424 timestamp: {timestamp}")
 
 
 def _validate_strict_zeek_json(raw: str, result: ValidationResult) -> None:

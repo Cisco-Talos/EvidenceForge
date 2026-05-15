@@ -250,6 +250,8 @@ def generate(
         data_dir = scenario_dir / "data"
         ground_truth_dir = scenario_dir
 
+    from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+
     # Apply --formats filter (intersection with scenario output.logs)
     if formats:
         from evidenceforge.events.dispatcher import expand_formats
@@ -276,7 +278,7 @@ def generate(
     console.print(f"\n[bold]Data directory:[/bold] {data_dir}")
     console.print(f"[bold]Ground truth:[/bold] {ground_truth_dir / 'GROUND_TRUTH.md'}")
 
-    # Check for existing generated output (data/ and GROUND_TRUTH.md only).
+    # Check for existing generated output (data/ and generated sidecars only).
     # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
     existing = []
     if data_dir.exists():
@@ -284,6 +286,9 @@ def generate(
     gt_path = ground_truth_dir / "GROUND_TRUTH.md"
     if gt_path.exists():
         existing.append(f"  GROUND_TRUTH.md ({gt_path})")
+    manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
+    if manifest_path.exists():
+        existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
 
     has_existing = bool(existing)
     if has_existing:
@@ -382,14 +387,19 @@ def generate(
 
         # Transactional swap: backup old → install new → cleanup backup.
         # If any step fails (including KeyboardInterrupt), old output is
-        # restored from backup. data/ and GROUND_TRUTH.md are always kept
-        # as a matched pair — partial preservation is never valid.
+        # restored from backup. data/ and generated sidecars are always kept
+        # as a matched set — partial preservation is never valid.
         if staging_dir:
             staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
+            staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
             if not gen_data_dir.exists():
                 raise RuntimeError("Staged data/ directory missing after generation")
             if not staged_gt.exists():
                 raise RuntimeError("Staged GROUND_TRUTH.md missing after generation")
+            if not staged_manifest.exists():
+                raise RuntimeError(
+                    f"Staged {OBSERVATION_MANIFEST_FILENAME} missing after generation"
+                )
 
             # Clean up stale rollback dirs from prior killed runs
             for stale in ground_truth_dir.glob(".eforge_rollback_*"):
@@ -404,10 +414,14 @@ def generate(
                     data_dir.rename(rollback_dir / "data")
                 if gt_path.exists():
                     gt_path.rename(rollback_dir / "GROUND_TRUTH.md")
+                if manifest_path.exists():
+                    manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
 
                 # Step 2: Install new output
                 gen_data_dir.rename(data_dir)
                 staged_gt.rename(gt_path)
+                if staged_manifest.exists():
+                    staged_manifest.rename(manifest_path)
                 swap_succeeded = True
 
             except BaseException:
@@ -417,10 +431,15 @@ def generate(
                         shutil.rmtree(data_dir)
                     if gt_path.exists() and (rollback_dir / "GROUND_TRUTH.md").exists():
                         gt_path.unlink()
+                    if manifest_path.exists():
+                        manifest_path.unlink()
                     if (rollback_dir / "data").exists():
                         (rollback_dir / "data").rename(data_dir)
                     if (rollback_dir / "GROUND_TRUTH.md").exists():
                         (rollback_dir / "GROUND_TRUTH.md").rename(gt_path)
+                    rollback_manifest = rollback_dir / OBSERVATION_MANIFEST_FILENAME
+                    if rollback_manifest.exists():
+                        rollback_manifest.rename(manifest_path)
                 except Exception:
                     logger.error("Rollback failed — old output may be in: %s", rollback_dir)
                 raise
@@ -435,10 +454,13 @@ def generate(
         console.print("\nGenerated files:")
         console.print(f"  Scenario directory: {ground_truth_dir}")
 
-        # List files in scenario root (GROUND_TRUTH.md)
+        # List files in scenario root (GROUND_TRUTH.md + machine-readable sidecars)
         if ground_truth_dir.exists():
             for file in sorted(ground_truth_dir.iterdir()):
-                if file.is_file() and file.name == "GROUND_TRUTH.md":
+                if file.is_file() and file.name in {
+                    "GROUND_TRUTH.md",
+                    OBSERVATION_MANIFEST_FILENAME,
+                }:
                     size = file.stat().st_size
                     size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"
                     console.print(f"  • {file.name} ({size_str})")

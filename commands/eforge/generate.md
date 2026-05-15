@@ -93,7 +93,8 @@ Generation writes log files to a `data/` subdirectory alongside the scenario fil
 scenarios/<scenario-name>/
   scenario.yaml          ← input
   ENVIRONMENT.md         ← created by /eforge scenario
-  GROUND_TRUTH.md        ← generated (answer key)
+  GROUND_TRUTH.md        ← generated answer key (empty for benign baseline-only runs)
+  OBSERVATION_MANIFEST.json ← generated source-observation sidecar
   data/                  ← generated log files
     windows/
       security.xml
@@ -104,14 +105,14 @@ scenarios/<scenario-name>/
     ...
 ```
 
-If `data/`, `GROUND_TRUTH.md`, or `ENVIRONMENT.md` already exist, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use).
+If generated output (`data/`, `GROUND_TRUTH.md`, or `OBSERVATION_MANIFEST.json`) already exists, the CLI prompts before overwriting. Use `--force` to skip the prompt (for automation / AI use). `ENVIRONMENT.md` is scenario-authored and is preserved.
 
 ### 3. Post-Generation
 
 After successful generation:
 - List the generated files and their sizes
 - Check that expected formats were produced
-- If the scenario had a storyline, note that `GROUND_TRUTH.md` was generated alongside the scenario file — this is the answer key containing the full attack timeline and IOCs
+- Note that `GROUND_TRUTH.md` and `OBSERVATION_MANIFEST.json` were generated alongside the scenario file. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, Kerberos TGT/TGS before logons, audit events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
@@ -162,7 +163,7 @@ After reviewing output, you can suggest:
 | windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
 | zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
 | ecar | EDR/XDR telemetry in eCAR format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
-| syslog | Linux syslog (BSD format) | Linux systems |
+| syslog | Linux syslog (RFC 5424) | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
 | cisco_asa | Cisco ASA firewall syslog (Built/Teardown/Deny) | Firewall sensors |

@@ -10,6 +10,8 @@
   warmup: "2h" (minimum viable to pre-populate DNS cache, process trees, and sessions —
   cold-start artifacts are immediately visible to forensic reviewers).
   logon_grace_period: "30m"
+  observation_profile: enterprise_standard (intentionally exercises realistic source-level
+  observation gaps, delays, and coverage variation for blind-review improvement loops).
 
   Systems (mix of Windows and Linux, ~15 total):
   - 8 workstations, one per user (1:1 mapping — create one workstation per user):
@@ -37,12 +39,12 @@
     default_action: deny, deny_ratio: 2.0, drop_mode: drop, threat_detection_rate: 10,
     nat_rules:
       - type: dynamic_pat
-        src: [corporate_lan, server_vlan]
-        mapped_ip: 45.33.32.1
+        src: [corporate_lan, server_vlan, dmz]
+        mapped_ip: 203.14.220.1
       - type: static
         src: dmz
         real_ip: 10.10.3.10 (WEB-EXT-01)
-        mapped_ip: 45.33.32.10
+        mapped_ip: 203.14.220.10
     policy:
       - {src: external, dst: dmz, ports: [80, 443]}
       - {src: corporate_lan, dst: any}
@@ -93,12 +95,13 @@
      `src_ip`. Produces ASA 106023 denies + Zeek S0 conn entries on external-facing
      sensors only (not internal sensors).
 
-  2. Web Scan (+0h30m): External attacker runs web vulnerability scanning against WEB-EXT-01.
+  2. Web Scan (+0h31m): External attacker runs web vulnerability scanning against WEB-EXT-01.
      Use a `web_scan` event with `source_ip: "185.70.41.45"`, `dst_ip: "10.10.3.10"`,
      `dst_port: 443`, `hostname: "ehr-portal.meridianhcs.com"`, `preset: nikto`,
      `rate: 10`, and exactly one termination field: `duration: "20m"`. Do not use
-     `src_ip`. Run concurrently with the port scan. Expect 733100 threat-detection
-     alerts during this phase.
+     `src_ip`. Start one minute after the port scan so timing checks do not see
+     identical step timestamps, while still overlapping the scan activity. Expect
+     733100 threat-detection alerts during this phase.
 
   3. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP.
      Use a `dhcp_lease` event on the parent storyline `system` for the rogue device.
@@ -159,31 +162,31 @@
       service_file_name: "%SystemRoot%\PSEXESVC.exe") + process events for commands run under
       the service. Do NOT use "cmd.exe /c PSEXESVC.exe" — that produces the wrong parent chain.
 
-  15. Privilege Escalation (+4h15m): Create backdoor account svc_sqlreader (account_created event),
+  15. Privilege Escalation (+4h15m): Create backdoor account svc_mhsync (account_created event),
       add to Domain Admins (group_member_added event). Actor: SYSTEM on DC-01.
 
-  16. Persistence (+4h20m): Install service "HealthMonitorSvc" (service_installed event with
+  16. Persistence (+4h20m): Install service "DeviceSyncSvc" (service_installed event with
       service_name, service_file_name, service_account) and create scheduled task
-      "\Microsoft\Windows\Maintenance\SystemHealthCheck" (scheduled_task_created event) on DC-01.
+      "\Microsoft\Windows\Maintenance\DeviceSync" (scheduled_task_created event) on DC-01.
 
   17. C2 Beaconing (+4h30m): HTTPS beacon from DC-01 to 45.33.32.30:443 (beacon event with
       interval: "10m", duration: "1h30m", jitter: 0.3, hostname, user_agent, method: GET,
       orig_bytes/resp_bytes for realistic sizing).
 
-  18. Blocked C2 (+4h30m): Attacker malware on DC-01 also attempts to beacon directly to
+  18. Blocked C2 (+4h31m): Attacker malware on DC-01 also attempts to beacon directly to
       45.33.32.30:443 — blocked by firewall (server_vlan → external not in policy). Use beacon
       event with action: deny, interval: "30m", duration: "1h30m". Denied attempts visible to
       internal sensors only.
 
   19. DNS Tunneling (+4h45m): Exfiltrate data via DNS tunnel from APP-INT-01 (dns_tunnel event
-      with base_domain: "ns1.cdn-health-updates.net", encoding: hex, qtype: TXT, interval: "2s",
+      with base_domain: "ns1.westbridge-services.net", encoding: hex, qtype: TXT, interval: "2s",
       duration: "15m", payload_size: 512).
 
   20. DGA Activity (+5h): DGA queries from WEB-EXT-01 (dga_queries event with tld: ".net",
       length_range: [10, 18], interval: "30s", duration: "45m",
       rcode_distribution for mostly NXDOMAIN).
 
-  21. Collection (+5h): Authenticate to FILE-SRV-01 with backdoor account svc_sqlreader
+  21. Collection (+5h01m): Authenticate to FILE-SRV-01 with backdoor account svc_mhsync
       (logon event, type 3), enumerate shares, stage financial and patient data, compress
       with PowerShell Compress-Archive.
 
@@ -193,9 +196,9 @@
   23. Workstation Lock (+5h20m): Attacker locks the compromised workstation before stepping away
       (workstation_lock event) — exercises EventID 4800.
 
-  24. Exfiltration (+5h25m): Upload archive to cdn-assets-update.com (45.33.32.30) over HTTPS
+  24. Exfiltration (+5h25m): Upload archive to api.westbridge-services.net (45.33.32.30) over HTTPS
       (connection event with HTTP fields, method: POST, large orig_bytes — use a physically
-      plausible value in the 100-500 MB range, NOT multi-GB).
+      plausible non-round value in the 100-500 MB range, NOT multi-GB or a power-of-two anchor).
 
   25. Workstation Unlock (+5h35m): Attacker returns, unlocks workstation (workstation_unlock
       event) — exercises EventID 4801.
@@ -210,8 +213,8 @@
   28. Ongoing C2 (+5h, +5h30m): Periodic beacons from WEB-EXT-01 to 45.33.32.30:443
       (separate beacon events).
 
-  29. Account Cleanup (+5h50m): Delete the backdoor account svc_sqlreader (account_deleted event
-      with target_username: svc_sqlreader).
+  29. Account Cleanup (+5h50m): Delete the backdoor account svc_mhsync (account_deleted event
+      with target_username: svc_mhsync).
 
   30. Logoff (+5h55m): Attacker logs off from compromised systems (logoff events).
 
@@ -253,6 +256,7 @@
     LDAP/RPC connections to DC, type 3 logon on DC — all within seconds
   - 4634 logoff pairs with 4624 on matching TargetLogonId
   - Certificate validity periods match issuer (Let's Encrypt = 90 days, DigiCert = 397 days)
+  - X.509 child certificate signatures are compatible with the issuer key family and CA profile
   - PID 4 resolves to "System" in parent process lookups
   - NAT rules produce: dynamic PAT for outbound (mapped_src_ip + translated port), static NAT
     for WEB-EXT-01 VIP. Outside Zeek sensors see post-NAT IPs; inside sensors see real IPs
@@ -284,7 +288,9 @@
     command line; ParentImage reflects spawn_rules.yaml chains
   - Event 3 (NetworkConnect): outbound connections attributed to originating process
   - Event 5 (ProcessTerminate): paired 1:1 with Security 4689 + eCAR PROCESS/TERMINATE
-  - Event 7 (ImageLoad): baseline DLL loads with signing status
+  - Event 7 (ImageLoad): baseline DLL loads with signing status. Third-party DLLs preserve
+    source-native signer, company, product, and version metadata instead of falling back to
+    Microsoft identity.
   - Event 8 (CreateRemoteThread): baseline benign pairs (1-3/hr) plus storyline mimikatz
   - Event 10 (ProcessAccess): baseline benign pairs (3-8/hr) plus storyline mimikatz on lsass
   - Event 11/12/13: emitted for persistence steps (service install, scheduled task)
@@ -296,6 +302,9 @@
   - Built/Teardown pairs (302013/302014) for permitted TCP connections
   - Built/Teardown pairs (302015/302016) for permitted UDP connections (DNS, NTP)
   - Deny records (106023) for blocked traffic
+  - Deny baseline timing uses burst/quiet cadence from host_activity_profiles.yaml, not evenly
+    spaced attempts; 106023 hash pairs should vary when the profile calls for it, not always
+    render as [0x0, 0x0]
   - 733100 threat-detection alerts during port_scan and web_scan phases (burst exceeds
     threat_detection_rate of 10 drops/sec). Verify rate_id, current_burst, max_burst,
     total_count fields present.
@@ -309,6 +318,9 @@
   - Causal expansion: DNS queries precede TCP connections; Kerberos 4768/4769 precede 4624
     domain logons; process_access follows create_remote_thread targeting lsass
   - Hawkes temporal model: user events show bursty clusters (CV > 1.0), not uniform spacing
+  - Host activity profiles: host type, roles, and persona shape broad rate families after
+    traffic_rates/scenario overrides. Verify DC/file/web/proxy/server hosts and user workstations
+    have distinct event-volume profiles rather than uniform per-host counts.
   - Typing cadence: multi-event storyline steps have 1-15 second gaps, not identical timestamps
   - Process→network correlation: chrome.exe/git/sqlcmd baseline processes produce matching connections
   - Stale account enrichment: Kerberos 4771 (0x12) failures plus failed batch and service logons
@@ -321,6 +333,9 @@
   - Workstation lock/unlock (4800/4801): workstation_lock always precedes workstation_unlock
     for the same session — semantic ordering enforced
   - Explicit credentials (4648): RunAs and scheduled task execution with alternate credentials
+  - Observation profile: `enterprise_standard` introduces realistic source-level gaps, delays,
+    and coverage variation without contradictions. Ground truth should still preserve canonical
+    truth and source-evidence status for reviewer traceability.
 
   Proxy coverage (verify in generated data):
   - PROXY-01 (forward_proxy) routes web traffic for internal systems
@@ -337,6 +352,8 @@
   - Nikto User-Agent rotates per request via @NIKTO_TESTID@ token (unique 6-digit IDs),
     not a single static string
   - Web-scan Referer for nikto: ~30% same-origin; for sqlmap/dirb/nmap_http: always blank
+  - Browser-like page loads fan out into realistic CSS/JS/image/API subresource requests; the
+    top-level request budget counts user-driven page/tool requests, not every render component
 
   Ground truth / answer key:
   - GROUND_TRUTH.md generated automatically from storyline events

@@ -12,8 +12,13 @@ Schema documentation for host-level activity config files. User customizations g
 2. [systemd_schedules.yaml](#systemd_schedulesyaml)
 3. [extra_syslog_messages.yaml](#extra_syslog_messagesyaml)
 4. [kerberos_realism.yaml](#kerberos_realismyaml)
-5. [timing_profiles.yaml](#timing_profilesyaml)
-6. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
+5. [windows_auth_realism.yaml](#windows_auth_realismyaml)
+6. [auth_noise.yaml](#auth-noise-auth_noiseyaml)
+7. [endpoint_noise.yaml](#endpoint-noise-endpoint_noiseyaml)
+8. [host_activity_profiles.yaml](#host-activity-profiles-host_activity_profilesyaml)
+9. [observation_profiles.yaml](#observation-profiles-observation_profilesyaml)
+10. [timing_profiles.yaml](#timing_profilesyaml)
+11. [Domain Controller Baseline Activity](#domain-controller-baseline-activity)
 
 ---
 
@@ -285,6 +290,155 @@ Failed-logon profiles control source-native Windows 4625 fields and DC-side vali
 
 ---
 
+## Auth Noise (`auth_noise.yaml`)
+
+Controls baseline authentication noise that is not scenario-authored, especially stale scheduled credentials.
+
+```yaml
+scheduled_stale_credentials:
+  account_base_names: [svc_backup, svc_monitor, svc_report, svc_deploy, svc_scan]
+  host_count_min: 1
+  host_count_max: 2
+  interval_ranges:
+    - min_minutes: 55
+      max_minutes: 95
+      weight: 30
+    - min_minutes: 105
+      max_minutes: 155
+      weight: 45
+  first_occurrence_seconds_min: 0
+  first_occurrence_seconds_max: 2700
+  jitter_seconds_min: -420
+  jitter_seconds_max: 780
+  skip_probability: 0.16
+  backoff_probability: 0.10
+  backoff_seconds_min: 900
+  backoff_seconds_max: 3600
+```
+
+`account_base_names` should be plausible disabled service or automation principals; the engine still avoids collisions with scenario users and service accounts. Interval ranges, jitter, skip probability, and backoff probability produce deterministic but non-modulo recurrence so stale scheduled-task failures do not land on exact hourly or two-hour cadences. Run `eforge validate-config` after overlay changes; ranges must be ordered, weights must be positive, and probabilities must be between 0 and 0.95.
+
+---
+
+## Endpoint Noise (`endpoint_noise.yaml`)
+
+Controls endpoint background timing and registry-emission policies that are too source-specific for scenario YAML. Use it to tune routine Windows scheduled-process spacing and whether DHCP interface registry values appear as ambient Sysmon/EDR noise.
+
+```yaml
+windows_scheduled_processes:
+  count_min: 2
+  count_max: 5
+  trigger_window_start_seconds: 90
+  trigger_window_end_seconds: 3510
+  slot_spacing_seconds: 300
+  host_phase_window_seconds: 900
+  jitter_seconds_min: -42
+  jitter_seconds_max: 73
+  skip_probability: 0.08
+
+registry_noise:
+  dhcp_interface_values:
+    value_names: [DhcpIPAddress, DhcpNameServer]
+    require_dhcp_state: true
+    emit_on_lease_events: true
+    suppress_system_types: [server, domain_controller]
+    suppress_roles: [domain_controller, dns_server, file_server, web_server]
+```
+
+`windows_scheduled_processes` replaces hour-end clamping with profile-driven trigger windows, per-host phase offsets, jitter, and skips. Keep `trigger_window_end_seconds` comfortably below 3599 to avoid synthetic `xx:59:59` clusters.
+
+`registry_noise.dhcp_interface_values` reserves DHCP interface registry writes for actual DHCP lease/reconfigure activity. Static infrastructure roles should stay in `suppress_system_types` or `suppress_roles` so they do not repeatedly rewrite DHCP values as ambient registry noise. Run `eforge validate-config` after overlay changes; it rejects inverted ranges, empty value-name lists, and invalid probabilities.
+
+---
+
+## Host Activity Profiles (`host_activity_profiles.yaml`)
+
+Controls coarse host/persona/role volume multipliers for baseline realism. This layer is intentionally rate-family based rather than event-type based: it keeps scenario authors from managing per-emitter matrices while still making domain controllers, servers, workstations, sysadmins, developers, and exposed roles produce distinct volumes.
+
+```yaml
+rate_families:
+  default_bounds: [0.25, 6.0]
+  bounds:
+    windows_machine_auth: [0.5, 8.0]
+    firewall_deny: [0.4, 5.0]
+
+host_types:
+  workstation:
+    base_multiplier: 1.0
+    variance: [0.75, 1.35]
+    families:
+      inbound_network: 0.65
+  server:
+    base_multiplier: 1.8
+    variance: [0.85, 1.45]
+    families:
+      windows_service_process: 1.15
+  domain_controller:
+    base_multiplier: 4.0
+    variance: [0.9, 1.3]
+    families:
+      dc_kerberos: 1.5
+
+role_profiles:
+  web_server:
+    families:
+      inbound_network: 2.0
+      firewall_deny: 1.35
+
+persona_profiles:
+  sysadmin:
+    families:
+      linux_remote_admin: 1.45
+      windows_remote_admin: 1.35
+```
+
+Resolved multipliers apply after global intensity defaults and scenario `baseline_activity.traffic_rates` overrides. Use `traffic_rates.yaml` for global low/medium/high defaults; use `host_activity_profiles.yaml` when the rate should differ by host type, role, persona, or deterministic per-host variance.
+
+Valid rate families are: `user_activity`, `web`, `dns_interval`, `ntp`, `smb_interval`, `kerberos`, `ldap`, `persona_connections`, `role_network`, `inbound_network`, `windows_service_process`, `windows_registry`, `windows_scheduled_task`, `windows_remote_thread`, `windows_process_access`, `windows_module_load`, `windows_remote_admin`, `windows_service_logon`, `windows_machine_auth`, `dc_kerberos`, `linux_syslog`, `linux_remote_admin`, `linux_shell`, `firewall_deny`, `ids_alert`, and `icmp_monitoring`.
+
+`artifact_variants.powershell_encoded` provides data-driven benign encoded PowerShell payload templates and parameter pools. `firewall_deny` controls ASA deny burst windows, quiet periods, and mostly-zero metadata hash frequency. Run `eforge validate-config` after overlay changes; it rejects unknown rate-family names, missing core host types, inverted ranges, invalid probabilities, and empty artifact pools.
+
+---
+
+## Observation Profiles (`observation_profiles.yaml`)
+
+Defines named source-observation profiles selected by scenario `observation_profile`. Keep `complete` as the default for training-friendly perfect source coverage and correlation. Use non-default profiles only when a scenario intentionally needs realistic source gaps or ingestion delays.
+
+```yaml
+profiles:
+  complete:
+    description: Perfect source coverage for training-friendly datasets.
+    default:
+      missingness: 0.0
+      delay_ms: {min_ms: 0, max_ms: 0}
+      host_missingness_multiplier: {min: 1.0, max: 1.0}
+    sources: {}
+
+  enterprise_standard:
+    default:
+      missingness: 0.0
+      delay_ms: {min_ms: 0, max_ms: 0}
+      host_missingness_multiplier: {min: 0.85, max: 1.15}
+    sources:
+      zeek:
+        missingness: 0.002
+        delay_ms: {min_ms: 0, max_ms: 3}
+      sysmon:
+        missingness: 0.005
+        delay_ms: {min_ms: 5, max_ms: 250}
+```
+
+Profiles are intentionally source-level, not event-type matrices. Scenario authors select a named profile; code owns safe source-native application semantics so new event types inherit their source-family default. Non-complete profiles may make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but must not create contradictory identifiers or field values across sources.
+
+Generation writes `OBSERVATION_MANIFEST.json` beside `GROUND_TRUTH.md`. `eforge eval` uses this
+sidecar to adjust only coverage-style causality scoring for expected missing evidence under
+non-`complete` profiles. The raw score remains visible in the report, and source-native
+correctness checks are not relaxed.
+
+Valid source families are `windows_security`, `sysmon`, `ecar`, `syslog`, `bash_history`, `zeek`, `proxy`, `web`, `asa`, and `ids`. Run `eforge validate-config` after overlay changes; it rejects unknown source-family names, invalid probabilities, and inverted ranges. Run `eforge validate` on scenarios that use a non-default profile so unknown profile names are caught before generation.
+
+---
+
 ## timing_profiles.yaml
 
 Data-driven timing windows for causal relationships, source-native latency, teardown margins, and Windows/Sysmon same-timestamp collision spacing. Use this when tuning realism of correlated event gaps without changing scenario YAML.
@@ -313,6 +467,32 @@ relationships:
     position: after
     min_ms: 800
     max_ms: 2500
+  web.session_navigation:
+    class: human_workflow
+    position: after
+    min_ms: 3000
+    max_ms: 30000
+  web.asset_stylesheet_script_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 50
+    max_ms: 200
+  web.tool_request_gap:
+    class: burst_fanout
+    position: after
+    min_ms: 120
+    max_ms: 1500
+
+network_sensor_observation:
+  default_profile: well_synced
+  profiles:
+    well_synced:
+      clock_skew_us:
+        min: -1500
+        max: 1500
+      path_delay_us:
+        min: 50
+        max: 2000
 
 windows_event_time:
   collision_spacing:
@@ -334,6 +514,9 @@ windows_event_time:
 | `windows_event_time.collision_spacing.near_zero_until` | int | yes | Same-host tied-event collisions that can remain near-zero before larger spacing begins |
 | `windows_event_time.collision_spacing.near_gap_min_us` / `near_gap_max_us` | int | yes | Microsecond spacing for small tied clusters |
 | `windows_event_time.collision_spacing.large_gap_min_ms` / `large_gap_max_ms` | int | yes | Millisecond spacing for large tied clusters that would otherwise compress into synthetic-looking bursts |
+| `network_sensor_observation.default_profile` | string | yes | Sensor timing profile used for multi-sensor Zeek observation offsets |
+| `network_sensor_observation.profiles.<name>.clock_skew_us` | mapping | yes | `{min, max}` per-sensor clock skew in microseconds |
+| `network_sensor_observation.profiles.<name>.path_delay_us` | mapping | yes | `{min, max}` per-flow tap/capture delay in microseconds |
 
 ### Conventions
 
@@ -342,6 +525,8 @@ windows_event_time:
   `ssl.log` and `x509.log` timestamps should occur after conn start but before conn end for
   the same UID.
 - Use seconds or minutes for human or bulk workflow relationships; do not force everything into microseconds.
+- Web session timing uses `web.session_navigation` for user-driven page-to-page actions and `web.asset_*_after_page` / `web.tool_request_gap` for render fanout and tool/API bursts.
+- Keep the default `network_sensor_observation` profile in low milliseconds for well-synced Zeek fleets; use overlays only when modeling known sensor clock drift or queued/remote capture paths.
 - Run `eforge validate-config` after overlay changes; it rejects invalid relationship classes, positions, negative windows, and inverted min/max ranges.
 
 ---

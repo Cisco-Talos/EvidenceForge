@@ -1,0 +1,46 @@
+# auth_noise.yaml — Baseline authentication noise profiles.
+#
+# User customizations go in:
+#   .eforge/config/activity/auth_noise.yaml
+#
+# Overlay behavior: nested dictionaries merge with package defaults.
+
+scheduled_stale_credentials:
+  # Candidate disabled service accounts for stale scheduled-task failures.
+  account_base_names:
+    - svc_backup
+    - svc_monitor
+    - svc_report
+    - svc_deploy
+    - svc_scan
+    - svc_patch
+    - svc_build
+    - svc_sync
+    - svc_jobs
+    - svc_batch
+
+  host_count_min: 1
+  host_count_max: 2
+
+  # Real stale scheduled tasks tend to cluster around automation intervals,
+  # but retries, queueing, and maintenance windows keep them from landing on
+  # exact modulo-hour boundaries.
+  interval_ranges:
+    - min_minutes: 55
+      max_minutes: 95
+      weight: 30
+    - min_minutes: 105
+      max_minutes: 155
+      weight: 45
+    - min_minutes: 170
+      max_minutes: 260
+      weight: 25
+
+  first_occurrence_seconds_min: 0
+  first_occurrence_seconds_max: 2700
+  jitter_seconds_min: -420
+  jitter_seconds_max: 780
+  skip_probability: 0.16
+  backoff_probability: 0.10
+  backoff_seconds_min: 900
+  backoff_seconds_max: 3600

@@ -1,0 +1,140 @@
+# Source-observation profiles control optional realism gaps after canonical
+# events are planned. The default complete profile preserves training-friendly
+# perfect coverage and correlation.
+
+profiles:
+  complete:
+    description: Perfect source coverage for training-friendly datasets.
+    default:
+      missingness: 0.0
+      delay_ms:
+        min_ms: 0
+        max_ms: 0
+      host_missingness_multiplier:
+        min: 1.0
+        max: 1.0
+    sources: {}
+
+  enterprise_standard:
+    description: Mild source-native gaps for realistic enterprise collection.
+    default:
+      missingness: 0.0
+      delay_ms:
+        min_ms: 0
+        max_ms: 0
+      host_missingness_multiplier:
+        min: 0.85
+        max: 1.15
+    sources:
+      windows_security:
+        missingness: 0.001
+        delay_ms:
+          min_ms: 0
+          max_ms: 100
+      sysmon:
+        missingness: 0.005
+        delay_ms:
+          min_ms: 5
+          max_ms: 250
+      ecar:
+        missingness: 0.01
+        delay_ms:
+          min_ms: 10
+          max_ms: 500
+      syslog:
+        missingness: 0.003
+        delay_ms:
+          min_ms: 0
+          max_ms: 250
+      bash_history:
+        missingness: 0.002
+        delay_ms:
+          min_ms: 0
+          max_ms: 0
+      zeek:
+        missingness: 0.002
+        delay_ms:
+          min_ms: 0
+          max_ms: 3
+      proxy:
+        missingness: 0.002
+        delay_ms:
+          min_ms: 0
+          max_ms: 750
+      web:
+        missingness: 0.003
+        delay_ms:
+          min_ms: 0
+          max_ms: 500
+      asa:
+        missingness: 0.002
+        delay_ms:
+          min_ms: 0
+          max_ms: 100
+      ids:
+        missingness: 0.005
+        delay_ms:
+          min_ms: 0
+          max_ms: 50
+
+  messy_collection:
+    description: More visibly incomplete source coverage for blind realism evaluation.
+    default:
+      missingness: 0.0
+      delay_ms:
+        min_ms: 0
+        max_ms: 0
+      host_missingness_multiplier:
+        min: 0.65
+        max: 1.45
+    sources:
+      windows_security:
+        missingness: 0.003
+        delay_ms:
+          min_ms: 0
+          max_ms: 300
+      sysmon:
+        missingness: 0.015
+        delay_ms:
+          min_ms: 10
+          max_ms: 1500
+      ecar:
+        missingness: 0.025
+        delay_ms:
+          min_ms: 25
+          max_ms: 2500
+      syslog:
+        missingness: 0.01
+        delay_ms:
+          min_ms: 0
+          max_ms: 1000
+      bash_history:
+        missingness: 0.006
+        delay_ms:
+          min_ms: 0
+          max_ms: 0
+      zeek:
+        missingness: 0.006
+        delay_ms:
+          min_ms: 0
+          max_ms: 8
+      proxy:
+        missingness: 0.007
+        delay_ms:
+          min_ms: 0
+          max_ms: 3000
+      web:
+        missingness: 0.01
+        delay_ms:
+          min_ms: 0
+          max_ms: 1500
+      asa:
+        missingness: 0.006
+        delay_ms:
+          min_ms: 0
+          max_ms: 500
+      ids:
+        missingness: 0.02
+        delay_ms:
+          min_ms: 0
+          max_ms: 250

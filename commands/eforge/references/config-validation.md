@@ -81,6 +81,12 @@ Run `eforge info <field>` to get specific values (e.g., `eforge info paths.activ
 | 34 | create_remote_thread_patterns.yaml structure | ERROR | Baseline pair missing source/target PID keys, image paths, or positive weight |
 | 35 | smb_file_transfers.yaml structure | ERROR | Missing SMB file-analysis thresholds/probabilities, invalid probability ranges, empty MIME/analyzer lists, invalid filename templates, or non-positive weights |
 | 36 | kerberos_realism.yaml structure | ERROR | Invalid Kerberos 4768 pre-auth/ticket/encryption distribution, unsupported hex values, PKINIT without certificate profile, non-PKINIT with certificate fields, excessive no-preauth/PKINIT/RC4 weights, or malformed certificate profile fields |
+| 37 | web_session_profiles.yaml structure | ERROR | Invalid inbound web visitor class, missing User-Agent pool, malformed configured request, or invalid request-count range |
+| 38 | auth_noise.yaml structure | ERROR | Invalid stale scheduled-credential account pool, host-count range, recurrence interval range, jitter range, skip probability, or backoff bounds |
+| 39 | endpoint_noise.yaml structure | ERROR | Invalid Windows scheduled-process timing bounds, skip probability, or DHCP registry emission policy |
+| 40 | observation_profiles.yaml structure | ERROR | Invalid source-family name, missing `complete` profile, invalid missingness probability, or inverted delay/host multiplier range |
+| 41 | host_activity_profiles.yaml structure | ERROR | Invalid host/persona/role rate-family name, missing core host type, malformed multiplier/bounds range, malformed firewall deny burst settings, or invalid artifact variant pools |
+| 42 | tls_realism.yaml chain metadata | ERROR | Invalid TLS subject-key profile fields or RSA/ECDSA child signature algorithm mismatch |
 
 ## Scenario Validation: traffic_rates
 

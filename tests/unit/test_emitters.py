@@ -599,6 +599,60 @@ class TestWindowsEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
 
+    def test_process_create_shifted_after_visible_logon(self, format_def, temp_output):
+        """Security 4688 should not visibly precede its same-session 4624 row."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_time = process_time + timedelta(milliseconds=1)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "LogonType": 11,
+            },
+        ]
+
+        emitter._shift_process_creates_after_logons()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == logon_time + timedelta(milliseconds=1)
+
+    def test_process_create_not_shifted_after_type7_unlock(self, format_def, temp_output):
+        """Type 7 unlock 4624 rows are not original session creation events."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        unlock_time = process_time + timedelta(minutes=5)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": unlock_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "LogonType": 7,
+            },
+        ]
+
+        emitter._shift_process_creates_after_logons()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == process_time
+
     def test_spooled_process_create_shifted_after_visible_parent_create(
         self, format_def, temp_output
     ):
@@ -629,6 +683,36 @@ class TestWindowsEventEmitter:
 
         child = next(event for event in events if event["NewProcessId"] == "0x1084")
         assert child["TimeCreated"] == parent_time + timedelta(milliseconds=1)
+        emitter._cleanup_spool_unlocked()
+
+    def test_spooled_process_create_shifted_after_visible_logon(self, format_def, temp_output):
+        """Spooled Security 4688 fixups should preserve logon-before-process ordering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_time = process_time + timedelta(milliseconds=1)
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": process_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "SubjectLogonId": "0xabc123",
+                "NewProcessId": "0x1084",
+            },
+            {
+                "EventID": 4624,
+                "TimeCreated": logon_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "TargetLogonId": "0xabc123",
+                "LogonType": 11,
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_creates_after_logons_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        process = next(event for event in events if event["EventID"] == 4688)
+        assert process["TimeCreated"] == logon_time + timedelta(milliseconds=1)
         emitter._cleanup_spool_unlocked()
 
     def test_windows_time_created_spreads_large_same_timestamp_clusters(self):

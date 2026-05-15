@@ -20,6 +20,7 @@ _MAX_RELATIONSHIP_MS = 86_400_000
 _MAX_COLLISION_NEAR_ZERO_UNTIL = 10_000
 _MAX_COLLISION_GAP_US = 1_000_000
 _MAX_COLLISION_GAP_MS = 60_000
+_MAX_SENSOR_TIMING_US = 1_000_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,16 @@ class TimingWindow:
     max_ms: int
     position: Literal["before", "after"]
     relationship_class: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkSensorObservationTiming:
+    """Per-sensor observation timing bounds for well-synced network sensors."""
+
+    clock_skew_min_us: int
+    clock_skew_max_us: int
+    path_delay_min_us: int
+    path_delay_max_us: int
 
 
 def load_timing_profiles() -> dict[str, Any]:
@@ -57,6 +68,24 @@ def _safe_int(value: Any, fallback: int, *, minimum: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = fallback
     return max(minimum, min(parsed, maximum))
+
+
+def _safe_int_range(
+    value: Any,
+    *,
+    fallback_min: int,
+    fallback_max: int,
+    minimum: int,
+    maximum: int,
+) -> tuple[int, int]:
+    """Read a ``{min, max}`` mapping and fall back when the range is invalid."""
+    if not isinstance(value, dict):
+        return fallback_min, fallback_max
+    min_value = _safe_int(value.get("min"), fallback_min, minimum=minimum, maximum=maximum)
+    max_value = _safe_int(value.get("max"), fallback_max, minimum=minimum, maximum=maximum)
+    if max_value < min_value:
+        return fallback_min, fallback_max
+    return min_value, max_value
 
 
 def get_timing_window(
@@ -117,6 +146,41 @@ def sample_packet_timing_delta(key: str, *, seed_parts: tuple[Any, ...] = ()) ->
     seed = "packet_timing_delta:" + key + ":" + ":".join(str(part) for part in seed_parts)
     rng = random.Random(_stable_seed(seed))
     return base_delta + timedelta(microseconds=rng.randint(37, 997))
+
+
+def network_sensor_observation_timing() -> NetworkSensorObservationTiming:
+    """Return safe timing bounds for a well-synced Zeek/network sensor fleet."""
+    data = load_timing_profiles().get("network_sensor_observation", {})
+    if not isinstance(data, dict):
+        data = {}
+    profiles = data.get("profiles", {})
+    if not isinstance(profiles, dict):
+        profiles = {}
+    default_profile = data.get("default_profile", "well_synced")
+    profile = profiles.get(default_profile, {})
+    if not isinstance(profile, dict):
+        profile = {}
+
+    skew_min, skew_max = _safe_int_range(
+        profile.get("clock_skew_us"),
+        fallback_min=-1_500,
+        fallback_max=1_500,
+        minimum=-_MAX_SENSOR_TIMING_US,
+        maximum=_MAX_SENSOR_TIMING_US,
+    )
+    delay_min, delay_max = _safe_int_range(
+        profile.get("path_delay_us"),
+        fallback_min=50,
+        fallback_max=2_000,
+        minimum=0,
+        maximum=_MAX_SENSOR_TIMING_US,
+    )
+    return NetworkSensorObservationTiming(
+        clock_skew_min_us=skew_min,
+        clock_skew_max_us=skew_max,
+        path_delay_min_us=delay_min,
+        path_delay_max_us=delay_max,
+    )
 
 
 def windows_collision_spacing_config() -> dict[str, int]:

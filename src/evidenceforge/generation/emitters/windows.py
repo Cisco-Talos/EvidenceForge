@@ -1498,6 +1498,36 @@ class WindowsEventEmitter(LogEmitter):
             if not changed:
                 break
 
+    def _shift_spooled_process_creates_after_logons_unlocked(self) -> None:
+        """Prevent spooled Security 4688 rows from preceding same-session 4624 rows."""
+        logon_times: dict[tuple[str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4624 or str(event.get("LogonType") or "") == "7":
+                continue
+            ts = event.get("TimeCreated")
+            logon_id = str(event.get("TargetLogonId") or "")
+            key = (str(event.get("Computer", "")), logon_id)
+            if isinstance(ts, datetime) and logon_id:
+                logon_times[key] = min(ts, logon_times.get(key, ts))
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+                continue
+            logon_id = str(event.get("SubjectLogonId") or "")
+            if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+                continue
+            key = (str(event.get("Computer", "")), logon_id)
+            logon_time = logon_times.get(key)
+            if logon_time is not None and ts <= logon_time:
+                event["TimeCreated"] = logon_time + timedelta(milliseconds=1)
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
     def _shift_spooled_logoffs_after_dependents_unlocked(self) -> None:
         """Prevent spooled 4634 records from preceding same-session dependents."""
         latest_dependent: dict[tuple[str, str], datetime] = {}
@@ -1629,12 +1659,14 @@ class WindowsEventEmitter(LogEmitter):
 
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
+            self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
             events = self._iter_spooled_events_unlocked()
         else:
+            self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()
@@ -1800,12 +1832,36 @@ class WindowsEventEmitter(LogEmitter):
                     dropped_indexes.add(index)
                     break
 
-        if dropped_indexes:
-            self._event_dicts = [
-                event
-                for index, event in enumerate(self._event_dicts)
-                if index not in dropped_indexes
-            ]
+            if dropped_indexes:
+                self._event_dicts = [
+                    event
+                    for index, event in enumerate(self._event_dicts)
+                    if index not in dropped_indexes
+                ]
+
+    def _shift_process_creates_after_logons(self) -> None:
+        """Prevent visible Security 4688 rows from preceding same-session 4624 rows."""
+        logon_times: dict[tuple[str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 4624 or str(event.get("LogonType") or "") == "7":
+                continue
+            ts = event.get("TimeCreated")
+            logon_id = str(event.get("TargetLogonId") or "")
+            key = (str(event.get("Computer", "")), logon_id)
+            if isinstance(ts, datetime) and logon_id:
+                logon_times[key] = min(ts, logon_times.get(key, ts))
+
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime) or event.get("EventID") != 4688:
+                continue
+            logon_id = str(event.get("SubjectLogonId") or "")
+            if not logon_id or logon_id in {"0x3e7", "0x3e4", "0x3e5", "-"}:
+                continue
+            key = (str(event.get("Computer", "")), logon_id)
+            logon_time = logon_times.get(key)
+            if logon_time is not None and ts <= logon_time:
+                event["TimeCreated"] = logon_time + timedelta(milliseconds=1)
 
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Security 4688 children from preceding parent 4688 rows."""

@@ -30,6 +30,7 @@ Sub-scores:
 import logging
 from typing import Any
 
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
     ProgressCallback,
@@ -92,6 +93,7 @@ class ParseabilityScorer(DimensionScorer):
         self,
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
+        context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         progress("sub_score_start", {"name": "Spec Conformance", "step": 1, "total": 2})
@@ -117,7 +119,8 @@ class ParseabilityScorer(DimensionScorer):
         """Spec conformance: parse errors + strict-mode validation failures.
 
         Counts records where the parser returned errors OR the strict validator
-        (RFC5424 syslog, Zeek typed columns, eCAR schema, Windows XML) rejected
+        (RFC 5424 syslog with legacy fallback, Zeek typed columns, eCAR schema, Windows XML)
+        rejected
         the record. These failures indicate a downstream parser would reject the
         record entirely.
         """

@@ -27,6 +27,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
 from evidenceforge.generation.engine import GenerationEngine
 from evidenceforge.generation.engine.storyline import _estimate_process_lifetime
 from evidenceforge.models import (
@@ -872,7 +873,7 @@ class TestGenerationEngine:
     @patch("evidenceforge.generation.engine.emitter_setup.WindowsEventEmitter")
     @patch("evidenceforge.generation.engine.emitter_setup.SysmonEventEmitter")
     @patch("evidenceforge.generation.engine.emitter_setup.load_format")
-    def test_generate_skips_ground_truth_without_malicious_events(
+    def test_generate_calls_ground_truth_without_malicious_events(
         self,
         mock_load_format,
         mock_sysmon,
@@ -895,7 +896,67 @@ class TestGenerationEngine:
         minimal_scenario,
         tmp_path,
     ):
-        """Should NOT generate ground truth for baseline-only scenarios."""
+        """Baseline-only scenarios should still generate matched sidecars."""
+        mock_format_def = Mock()
+        mock_format_def.output.file_extension = ".log"
+        mock_load_format.return_value = mock_format_def
+
+        mock_activity_instance = Mock()
+        mock_activity_instance.get_baseline_pattern.return_value = []
+        mock_activity_gen.return_value = mock_activity_instance
+
+        mock_gt_instance = Mock()
+        mock_gt_gen.return_value = mock_gt_instance
+
+        engine = GenerationEngine(minimal_scenario, tmp_path)
+        engine.generate()
+
+        assert mock_gt_gen.called
+        assert mock_gt_gen.call_args.kwargs["malicious_events"] == []
+        assert mock_gt_gen.call_args.kwargs["red_herring_events"] == []
+        assert mock_gt_instance.generate.called
+        assert (tmp_path / OBSERVATION_MANIFEST_FILENAME).exists()
+
+    @patch("evidenceforge.generation.engine.core.ActivityGenerator")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekPacketFilterEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekPeEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekOcspEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekX509Emitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekWeirdEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekNtpEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekDhcpEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekFilesEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekSslEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekHttpEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekDnsEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.ZeekEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.WindowsEventEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.SysmonEventEmitter")
+    @patch("evidenceforge.generation.engine.emitter_setup.load_format")
+    def test_generate_baseline_only_writes_ground_truth_and_manifest(
+        self,
+        mock_load_format,
+        mock_sysmon,
+        mock_windows,
+        mock_zeek,
+        mock_zeek_dns,
+        mock_zeek_http,
+        mock_zeek_ssl,
+        mock_zeek_files,
+        mock_zeek_dhcp,
+        mock_zeek_ntp,
+        mock_zeek_weird,
+        mock_zeek_x509,
+        mock_zeek_ocsp,
+        mock_zeek_pe,
+        mock_zeek_pf,
+        mock_zeek_reporter,
+        mock_activity_gen,
+        minimal_scenario,
+        tmp_path,
+    ):
+        """A successful baseline-only generation writes the complete sidecar set."""
         mock_format_def = Mock()
         mock_format_def.output.file_extension = ".log"
         mock_load_format.return_value = mock_format_def
@@ -907,8 +968,12 @@ class TestGenerationEngine:
         engine = GenerationEngine(minimal_scenario, tmp_path)
         engine.generate()
 
-        # Ground truth generator should NOT be called
-        assert not mock_gt_gen.called
+        ground_truth = tmp_path / "GROUND_TRUTH.md"
+        manifest = tmp_path / OBSERVATION_MANIFEST_FILENAME
+        assert ground_truth.exists()
+        assert manifest.exists()
+        assert "No malicious activities" in ground_truth.read_text()
+        assert "No malicious events were generated" in ground_truth.read_text()
 
     @patch("evidenceforge.generation.engine.core.ActivityGenerator")
     @patch("evidenceforge.generation.engine.emitter_setup.ZeekReporterEmitter")

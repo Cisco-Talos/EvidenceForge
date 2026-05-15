@@ -111,6 +111,55 @@ relationships:
     position: after
     min_ms: 800
     max_ms: 2500
+  web.session_navigation:
+    class: human_workflow
+    position: after
+    min_ms: 3000
+    max_ms: 30000
+  web.asset_stylesheet_script_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 50
+    max_ms: 200
+  web.asset_image_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 200
+    max_ms: 800
+  web.asset_font_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 300
+    max_ms: 600
+  web.asset_api_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 500
+    max_ms: 2000
+  web.asset_other_after_page:
+    class: burst_fanout
+    position: after
+    min_ms: 100
+    max_ms: 500
+  web.tool_request_gap:
+    class: burst_fanout
+    position: after
+    min_ms: 120
+    max_ms: 1500
+
+network_sensor_observation:
+  # Default assumes security infrastructure with good time sync and local tap
+  # placement. These bounds apply when multiple Zeek sensors observe the same
+  # packet/flow and should stay in the low-millisecond range.
+  default_profile: well_synced
+  profiles:
+    well_synced:
+      clock_skew_us:
+        min: -1500
+        max: 1500
+      path_delay_us:
+        min: 50
+        max: 2000
 
 windows_event_time:
   collision_spacing:

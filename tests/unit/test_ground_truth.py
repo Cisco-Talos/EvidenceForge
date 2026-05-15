@@ -177,6 +177,31 @@ class TestGroundTruthGenerator:
         assert "| 2024-01-15 10:30:00 UTC | attacker | TEST-01 | Process |" in timeline
         assert "| 2024-01-15 10:35:00 UTC | attacker | TEST-01 | Connection |" in timeline
 
+    def test_source_evidence_status_section_for_non_complete_profile(
+        self, minimal_scenario, malicious_events, tmp_path
+    ):
+        """Ground truth documents source evidence status when observation is imperfect."""
+        minimal_scenario.observation_profile = "enterprise_standard"
+        malicious_events[0]["storyline_cluster_id"] = "evt-test-1"
+        output_path = tmp_path / "GROUND_TRUTH.md"
+        generator = GroundTruthGenerator(
+            minimal_scenario,
+            malicious_events,
+            source_evidence_status={
+                "evt-test-1": {
+                    "sysmon": {"visible": 2, "delayed": 1},
+                    "ecar": {"dropped": 1},
+                }
+            },
+        )
+
+        generator.generate(output_path)
+        content = output_path.read_text()
+
+        assert "## Source Evidence Status" in content
+        assert "| evt-test-1 | ecar | dropped: 1 |" in content
+        assert "| evt-test-1 | sysmon | delayed: 1, visible: 2 |" in content
+
     def test_create_timeline_sorted_by_time(self, minimal_scenario):
         """_create_timeline() should sort events chronologically."""
         # Create events out of order
@@ -443,6 +468,18 @@ class TestGroundTruthGenerator:
         formatted = generator._format_iocs({})
 
         assert "No IOCs extracted" in formatted
+
+    def test_format_iocs_empty_categories(self, minimal_scenario, malicious_events):
+        """_format_iocs() should not emit blank headings for empty IOC categories."""
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+
+        formatted = generator._format_iocs(
+            {"network": set(), "processes": set(), "users": set(), "files": set()}
+        )
+
+        assert "No IOCs extracted" in formatted
+        assert "### Network IOCs" not in formatted
+        assert "### Process IOCs" not in formatted
 
     def test_format_iocs_sorted(self, minimal_scenario, malicious_events):
         """_format_iocs() should sort IOCs alphabetically."""

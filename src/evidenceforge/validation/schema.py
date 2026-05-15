@@ -207,6 +207,7 @@ class ScenarioValidator:
         self._validate_expansion_redundancy()
         self._validate_process_network_pairing()
         self._validate_firewall_config()
+        self._validate_observation_profile()
         self._sort_issues()
         return self.issues
 
@@ -217,6 +218,25 @@ class ScenarioValidator:
             True if any errors found, False otherwise
         """
         return any(issue.severity == "error" for issue in self.issues)
+
+    def _validate_observation_profile(self) -> None:
+        """Validate that the scenario references a configured observation profile."""
+        from evidenceforge.config.observation_profiles import observation_profile_names
+
+        available = observation_profile_names()
+        profile = self.scenario.observation_profile
+        if profile not in available:
+            self.issues.append(
+                ValidationIssue(
+                    severity="error",
+                    field_path="observation_profile",
+                    message=f"Unknown observation_profile: {profile}",
+                    suggestion=(
+                        "Use one of the configured observation profiles: "
+                        f"{', '.join(sorted(available))}"
+                    ),
+                )
+            )
 
     def _validate_user_persona_references(self) -> None:
         """Check that user persona references exist in personas list."""

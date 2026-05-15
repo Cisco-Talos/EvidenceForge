@@ -22,7 +22,7 @@
 
 """Tests for EventDispatcher routing, visibility filtering, and StateManager.apply()."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
@@ -37,6 +37,11 @@ from evidenceforge.events import (
 )
 from evidenceforge.events.contexts import SyslogContext
 from evidenceforge.events.dispatcher import FORMAT_GROUPS, EventDispatcher
+from evidenceforge.events.observation import (
+    SOURCE_FAMILIES,
+    ObservationPolicy,
+    source_family_for_format,
+)
 from evidenceforge.generation.state_manager import StateManager
 
 
@@ -106,6 +111,141 @@ class TestDispatchRouting:
 
         assert event.storyline_cluster_id == "story-001"
         assert event.storyline_origin is False
+
+
+class TestObservationProfiles:
+    """Tests for optional source-observation policy in dispatcher."""
+
+    def test_complete_profile_preserves_visible_emission(self):
+        """The default complete profile keeps current perfect-coverage behavior."""
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("sysmon", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_sysmon": emitter},
+        )
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        dispatcher.dispatch(event)
+
+        emitter.emit.assert_called_once_with(event)
+        assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"visible": 1}
+
+    def test_source_missingness_drops_rendering_without_skipping_state(self, monkeypatch):
+        """Non-complete profiles can drop source rows without corrupting canonical state."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "sysmon": {
+                        "missingness": 1.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("sysmon", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_sysmon": emitter},
+            observation_policy=ObservationPolicy("messy_test"),
+        )
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        dispatcher.dispatch(event)
+
+        sm.apply.assert_called_once_with(event)
+        emitter.emit.assert_not_called()
+        assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"dropped": 1}
+
+    def test_source_delay_uses_copy_and_preserves_canonical_state(self, monkeypatch):
+        """Source delays render a timestamp-adjusted copy while state sees canonical time."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "sysmon": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 17, "max_ms": 17},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        emitter = _make_mock_emitter("sysmon", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"windows_event_sysmon": emitter},
+            observation_policy=ObservationPolicy("delay_test"),
+        )
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+        dispatcher.dispatch(event)
+
+        sm.apply.assert_called_once_with(event)
+        emitted_event = emitter.emit.call_args.args[0]
+        assert emitted_event is not event
+        assert emitted_event.timestamp == event.timestamp + timedelta(milliseconds=17)
+        assert event.timestamp == _make_ts()
+        assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"delayed": 1}
+
+    def test_network_visibility_records_filtered_source_status(self):
+        """Network visibility filtering is reflected in source evidence status."""
+        sm = MagicMock(spec=StateManager)
+        zeek = _make_mock_emitter("zeek_conn", handles=True)
+        dispatcher = EventDispatcher(state_manager=sm, emitters={"zeek_conn": zeek})
+        dispatcher.storyline_cluster_id = "story-001"
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.50",
+                src_port=54321,
+                dst_ip="10.0.1.50",
+                dst_port=443,
+                protocol="tcp",
+            ),
+            local_only=True,
+        )
+        dispatcher.dispatch(event)
+
+        zeek.emit.assert_not_called()
+        assert dispatcher.source_evidence_status["story-001"]["zeek"] == {"filtered": 1}
+
+    def test_pre_dispatch_network_skip_records_filtered_source_status(self):
+        """Pre-dispatch unobservable storyline connections are reflected in manifests."""
+        sm = MagicMock(spec=StateManager)
+        zeek = _make_mock_emitter("zeek_conn", handles=True)
+        ecar = _make_mock_emitter("ecar", handles=True)
+        dispatcher = EventDispatcher(state_manager=sm, emitters={"zeek_conn": zeek, "ecar": ecar})
+        dispatcher.storyline_cluster_id = "story-001"
+
+        dispatcher.record_filtered_network_observation()
+
+        assert dispatcher.source_evidence_status["story-001"]["zeek"] == {"filtered": 1}
+        assert "ecar" not in dispatcher.source_evidence_status["story-001"]
+
+    def test_all_emitter_formats_map_to_source_families(self):
+        """Every current emitter belongs to a source-observation family."""
+        from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
+
+        for format_name in _build_emitter_classes():
+            assert source_family_for_format(format_name) in SOURCE_FAMILIES
 
 
 class TestNetworkVisibilityFiltering:
@@ -468,8 +608,8 @@ class TestCanHandleDefault:
         emitter.close()
 
         lines = output_path.read_text(encoding="utf-8").splitlines()
-        assert "19:00:53" in lines[0]
-        assert "20:01:25" in lines[1]
+        assert lines[0].startswith("<86>1 2024-10-14T19:00:53.000000Z")
+        assert lines[1].startswith("<86>1 2024-10-14T20:01:25.000000Z")
 
     def test_syslog_normalizes_logind_session_ids_in_rendered_order(self, tmp_path):
         """Rendered New-session IDs should not move backward after final syslog sort."""

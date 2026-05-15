@@ -54,6 +54,7 @@ class GroundTruthGenerator:
         scenario: Scenario,
         malicious_events: list[dict],
         red_herring_events: list[dict] | None = None,
+        source_evidence_status: dict[str, dict[str, dict[str, int]]] | None = None,
     ):
         """Initialize ground truth generator.
 
@@ -65,6 +66,7 @@ class GroundTruthGenerator:
         self.scenario = scenario
         self.malicious_events = malicious_events
         self.red_herring_events = red_herring_events or []
+        self.source_evidence_status = source_evidence_status or {}
 
     def generate(self, output_path: Path) -> None:
         """Generate GROUND_TRUTH.md file.
@@ -88,6 +90,11 @@ class GroundTruthGenerator:
         # 2. Timeline of Key Events
         content.append("\n## Timeline\n")
         content.append(self._create_timeline())
+
+        # 3. Source evidence status for profiles with imperfect observation.
+        if self._include_source_evidence_status():
+            content.append("\n## Source Evidence Status\n")
+            content.append(self._create_source_evidence_status_section())
 
         # 3. Indicators of Compromise
         content.append("\n## Indicators of Compromise (IOCs)\n")
@@ -299,6 +306,36 @@ class GroundTruthGenerator:
         else:
             return event.get("activity", "N/A")
 
+    def _include_source_evidence_status(self) -> bool:
+        """Return True when ground truth should show source observation status."""
+        if not self.source_evidence_status:
+            return False
+        if self.scenario.observation_profile != "complete":
+            return True
+        for source_status in self.source_evidence_status.values():
+            for counts in source_status.values():
+                if any(status != "visible" and count for status, count in counts.items()):
+                    return True
+        return False
+
+    def _create_source_evidence_status_section(self) -> str:
+        """Create a compact per-storyline source evidence status table."""
+        lines = [
+            "Canonical ground truth remains authoritative. Source rows may be "
+            "`visible`, `delayed`, `dropped`, `filtered`, or `out_of_window` depending on "
+            "the selected observation profile and sensor placement.\n",
+            "| Storyline ID | Source | Status Counts |",
+            "|--------------|--------|---------------|",
+        ]
+        for cluster_id, source_status in sorted(self.source_evidence_status.items()):
+            for source, counts in sorted(source_status.items()):
+                rendered_counts = ", ".join(
+                    f"{status}: {count}" for status, count in sorted(counts.items()) if count
+                )
+                if rendered_counts:
+                    lines.append(f"| {cluster_id} | {source} | {rendered_counts} |")
+        return "\n".join(lines) + "\n"
+
     def _extract_iocs(self) -> dict[str, set]:
         """Extract indicators of compromise from malicious events.
 
@@ -472,34 +509,34 @@ class GroundTruthGenerator:
         Returns:
             Formatted IOC sections (Markdown)
         """
-        if not iocs:
+        if not iocs or not any(values for values in iocs.values()):
             return "*No IOCs extracted.*\n"
 
         sections = []
 
         # Network IOCs
-        if "network" in iocs:
+        if iocs.get("network"):
             sections.append("### Network IOCs\n")
             for ioc in sorted(iocs["network"]):
                 sections.append(f"- {ioc}")
             sections.append("")
 
         # Process IOCs
-        if "processes" in iocs:
+        if iocs.get("processes"):
             sections.append("### Process IOCs\n")
             for ioc in sorted(iocs["processes"]):
                 sections.append(f"- {ioc}")
             sections.append("")
 
         # User IOCs
-        if "users" in iocs:
+        if iocs.get("users"):
             sections.append("### User IOCs\n")
             for ioc in sorted(iocs["users"]):
                 sections.append(f"- {ioc} (compromised account)")
             sections.append("")
 
         # File IOCs
-        if "files" in iocs:
+        if iocs.get("files"):
             sections.append("### File IOCs\n")
             for ioc in sorted(iocs["files"]):
                 sections.append(f"- {ioc}")

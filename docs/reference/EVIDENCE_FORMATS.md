@@ -10,7 +10,8 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 
 ```
 output/
-  GROUND_TRUTH.md                          # Attack narrative, timeline, IOCs
+  GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
+  OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
   ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events
@@ -24,7 +25,7 @@ output/
     files.json                             # Zeek files.log
     ...                                    # Other Zeek logs
   ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
-  syslog.log                               # Linux syslog (BSD format)
+  syslog.log                               # Linux syslog (RFC 5424)
   snort_alert.log                          # Snort/Suricata IDS alerts
   <fw-hostname>/                           # Per-firewall directories
     cisco_asa.log                          # Cisco ASA firewall syslog
@@ -173,9 +174,9 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 ## Linux Syslog
 
 **File:** `syslog.log`
-**Format:** BSD syslog (RFC 3164 text format)
+**Format:** RFC 5424 syslog
 
-Authentication and system logs from Linux hosts. All syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent.
+Authentication and system logs from Linux hosts. Generated syslog uses RFC 5424 with year-bearing ISO/RFC3339 timestamps. `eforge eval` still accepts older BSD/RFC3164-style syslog as a legacy ingest fallback. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows reuse the same source port as the companion Zeek SSH connection tuple.
 
 | Program | Description | Notes |
 |---------|-------------|-------|
@@ -313,7 +314,7 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 
 **Status and byte semantics:** For explicit proxy mode, client-side Zeek HTTP records describe the client-to-proxy exchange. Plain HTTP denials therefore show the proxy's status code and proxy response size, not the origin's status/body. For intercepted HTTPS, the CONNECT setup status is tracked separately from the inspected request status, so a successful tunnel setup can coexist with a denied inspected GET.
 
-**Session depth:** Persona HTTP traffic generates multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, and fonts, producing realistic request clusters in the proxy log. The number of pages and subresources per session is controlled by the persona's `browsing_intensity` setting (light/normal/heavy).
+**Session depth:** Persona HTTP traffic and inbound `web_server` human visitors generate multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, fonts, and same-origin API calls, producing realistic request clusters in proxy and web access logs. Persona browsing depth is controlled by `browsing_intensity`; inbound web visitor classes, tool/API requests, and User-Agent pools are controlled by `web_session_profiles.yaml`.
 
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared

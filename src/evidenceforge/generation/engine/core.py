@@ -119,7 +119,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         2. Generate baseline activity (hour-by-hour iteration)
         3. Execute storyline events (if present)
         4. Finalize and close emitters
-        5. Generate GROUND_TRUTH.md (if malicious activity present)
+        5. Generate GROUND_TRUTH.md and OBSERVATION_MANIFEST.json sidecars
         """
         logger.info(f"Starting generation for scenario: {self.scenario.name}")
 
@@ -185,17 +185,20 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self._finalize()
             self._report_progress("phase_end", {"phase": "finalize"})
 
-        # Phase 5: Generate ground truth (if malicious activity or red herrings present)
-        if self.malicious_events or self.red_herring_events:
-            logger.info(
-                f"Generating GROUND_TRUTH.md with {len(self.malicious_events)} malicious events"
-            )
-            self._report_progress(
-                "phase_start",
-                {"phase": "ground_truth", "description": "Generating ground truth documentation"},
-            )
-            self._generate_ground_truth()
-            self._report_progress("phase_end", {"phase": "ground_truth"})
+        # Phase 5: Generate sidecars for every successful run. Baseline-only
+        # datasets still need an empty GROUND_TRUTH.md so CLI overwrite swaps
+        # can keep data and metadata as a matched pair.
+        logger.info(
+            "Generating GROUND_TRUTH.md with %d malicious events and %d red herrings",
+            len(self.malicious_events),
+            len(self.red_herring_events),
+        )
+        self._report_progress(
+            "phase_start",
+            {"phase": "ground_truth", "description": "Generating ground truth documentation"},
+        )
+        self._generate_ground_truth()
+        self._report_progress("phase_end", {"phase": "ground_truth"})
 
         logger.info("Generation complete")
 
@@ -266,11 +269,14 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             }
 
         # Initialize event dispatcher and activity generator
+        from evidenceforge.events.observation import ObservationPolicy
+
         self.dispatcher = EventDispatcher(
             state_manager=self.state_manager,
             emitters=self.emitters,
             visibility_engine=visibility_engine,
             output_start_time=self.start_time,
+            observation_policy=ObservationPolicy(self.scenario.observation_profile),
         )
         self.activity_generator = ActivityGenerator(
             state_manager=self.state_manager,
@@ -461,17 +467,29 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         logger.info("All emitters closed")
 
     def _generate_ground_truth(self) -> None:
-        """Generate GROUND_TRUTH.md documentation."""
+        """Generate GROUND_TRUTH.md and observation manifest sidecars."""
+        from evidenceforge.events.observation_manifest import (
+            OBSERVATION_MANIFEST_FILENAME,
+            write_observation_manifest,
+        )
+
         self.ground_truth_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.ground_truth_dir / "GROUND_TRUTH.md"
+        source_evidence_status = self.dispatcher.source_evidence_status
 
         generator = GroundTruthGenerator(
             scenario=self.scenario,
             malicious_events=self.malicious_events,
             red_herring_events=self.red_herring_events,
+            source_evidence_status=source_evidence_status,
         )
 
         generator.generate(output_path)
+        write_observation_manifest(
+            self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
+            self.scenario,
+            source_evidence_status,
+        )
         logger.info(f"Ground truth documentation generated: {output_path}")
 
     def _get_next_event_record_id(self) -> int:

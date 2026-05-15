@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.models import PillarScore, SubScore
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.models.scenario import Scenario
@@ -71,6 +72,7 @@ class DimensionScorer(ABC):
         self,
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
+        context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         """Score a dataset on this pillar.
@@ -78,6 +80,7 @@ class DimensionScorer(ABC):
         Args:
             records: Parsed records grouped by format name.
             scenario: The scenario used to generate the dataset.
+            context: Optional metadata sidecars discovered for the dataset.
             progress: Optional callback for reporting sub-score progress.
 
         Returns:

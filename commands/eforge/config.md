@@ -57,6 +57,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Add proxy URI templates | `proxy_uri_templates.yaml` | `dns_registry.yaml` (validate domain exists); use `domain_class` and `referrer_policy` for certificate/update infrastructure |
 | Modify proxy User-Agent pools | `proxy_user_agents.yaml` | `dns_registry.yaml` for package/update hostnames |
 | Add site map entries | `site_maps.yaml` | `dns_registry.yaml` (validate domain exists) |
+| Modify inbound web visitor mix | `web_session_profiles.yaml` | `site_maps.yaml`, `traffic_rates.yaml`, `timing_profiles.yaml` |
 | Modify bash commands | `bash_commands.yaml` | Validate role names match persona names; keep `typo_model` rates/counts realistic |
 | Modify traffic rate defaults | `traffic_rates.yaml` | (standalone — intensity-based rate table for all system traffic) |
 | Modify systemd schedules | `systemd_schedules.yaml` | (standalone) |
@@ -65,7 +66,12 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify CallTrace patterns | `calltrace_patterns.yaml` | (standalone — Event 10 ProcessAccess call chain templates) |
 | Modify ProcessAccess masks | `process_access_patterns.yaml` | (standalone — Event 10 baseline source/target pairs and GrantedAccess masks) |
 | Modify CreateRemoteThread pairs | `create_remote_thread_patterns.yaml` | (standalone — Event 8 baseline source/target pairs) |
+| Modify TLS chain/OCSP/SNI realism | `tls_realism.yaml` | `dns_registry.yaml` for OCSP responder hosts and domains selected by `dns_tags` |
 | Modify Windows auth realism | `windows_auth_realism.yaml` | (standalone — Security log auth timing and failed-logon profile knobs) |
+| Modify baseline auth noise | `auth_noise.yaml` | (standalone — stale scheduled-credential accounts and irregular recurrence timing) |
+| Modify endpoint background noise | `endpoint_noise.yaml` | (standalone — scheduled-process timing and DHCP registry emission policy) |
+| Modify host activity distribution | `host_activity_profiles.yaml` | (standalone — host/persona/role rate-family multipliers, firewall deny bursts, and artifact variants) |
+| Modify source observation coverage | `observation_profiles.yaml` | Scenario `observation_profile` selects the named profile; generated `OBSERVATION_MANIFEST.json` lets eval account for expected gaps; keep `complete` as the default training profile |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |
@@ -86,7 +92,7 @@ Also read the relevant reference doc for field schemas and conventions:
 | Applications, spawn rules, processes | `references/config-apps-processes.md` |
 | Sysmon filters, EDR pools, CallTrace, ProcessAccess masks, CreateRemoteThread pairs | `references/config-apps-processes.md` (Sysmon sections) |
 | Persona file structure | `references/config-personas.md` |
-| Host activity (bash, systemd, syslog) | `references/config-host-activity.md` |
+| Host activity (bash, systemd, syslog, endpoint noise) | `references/config-host-activity.md` |
 | Timing profiles | `references/config-host-activity.md` |
 | Format definitions | `references/config-formats.md` (read-only reference — not user-customizable) |
 | Evaluation rules | `references/config-evaluation.md` (read-only reference — not user-customizable) |

@@ -114,7 +114,7 @@ def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
 
 
 def validate_config() -> ValidationResult:
-    """Run all 27 validation checks across config files.
+    """Run validation checks across config files.
 
     Uses the same loader paths the engine uses (including overlay merges).
     """
@@ -167,6 +167,9 @@ def validate_config() -> ValidationResult:
         },
         "activity/process_access_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
+        },
+        "activity/auth_noise.yaml": {
+            "dict_fields": {"scheduled_stale_credentials"},
         },
         "activity/create_remote_thread_patterns.yaml": {
             "list_fields": {"baseline_pairs": None},
@@ -227,17 +230,33 @@ def validate_config() -> ValidationResult:
                 "dll_pool",
             },
         },
+        "activity/endpoint_noise.yaml": {
+            "dict_fields": {"windows_scheduled_processes", "registry_noise"},
+        },
+        "activity/host_activity_profiles.yaml": {
+            "dict_fields": {
+                "rate_families",
+                "host_types",
+                "role_profiles",
+                "persona_profiles",
+                "artifact_variants",
+                "firewall_deny",
+            },
+        },
         "activity/ids_signatures.yaml": {
             "list_fields": {"signatures": None},
         },
         "activity/web_scan_presets.yaml": {
             "dict_fields": {"presets"},
         },
+        "activity/web_session_profiles.yaml": {
+            "dict_fields": {"visitor_classes", "user_agent_pools"},
+        },
         "activity/traffic_rates.yaml": {
             "dict_fields": {"low", "medium", "high"},
         },
         "activity/timing_profiles.yaml": {
-            "dict_fields": {"relationships", "windows_event_time"},
+            "dict_fields": {"relationships", "windows_event_time", "network_sensor_observation"},
         },
     }
 
@@ -432,12 +451,18 @@ def validate_config() -> ValidationResult:
     # Load all data through overlay-aware loaders for consistency.
     # Every config file should be loaded via its loader (not raw yaml.safe_load)
     # so that overlay customizations are visible to validation.
+    from evidenceforge.config.observation_profiles import load_observation_profiles
     from evidenceforge.generation.activity.application_catalog import load_catalog
+    from evidenceforge.generation.activity.auth_noise import load_auth_noise_config
     from evidenceforge.generation.activity.create_remote_thread_patterns import (
         load_create_remote_thread_config,
         load_create_remote_thread_patterns,
     )
     from evidenceforge.generation.activity.dns_registry import load_dns_registry
+    from evidenceforge.generation.activity.endpoint_noise import load_endpoint_noise
+    from evidenceforge.generation.activity.host_activity_profiles import (
+        load_host_activity_profiles,
+    )
     from evidenceforge.generation.activity.ids_signatures import load_ids_signatures
     from evidenceforge.generation.activity.process_access_patterns import (
         load_process_access_patterns,
@@ -451,6 +476,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
+    from evidenceforge.generation.activity.web_session_profiles import load_web_session_profiles
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
@@ -460,15 +486,20 @@ def validate_config() -> ValidationResult:
     spawn_data = load_spawn_rules()
     process_net_data = load_process_network_map()
     process_access_data = load_process_access_patterns()
+    auth_noise_data = load_auth_noise_config()
     create_remote_thread_data = load_create_remote_thread_patterns()
     create_remote_thread_config = load_create_remote_thread_config()
     proxy_data = load_proxy_uri_templates()
     proxy_ua_data = load_proxy_user_agents()
     site_data = load_site_maps()
     sys_proc_data = load_system_processes()
+    endpoint_noise_data = load_endpoint_noise()
+    host_activity_profiles_data = load_host_activity_profiles()
+    observation_profiles_data = load_observation_profiles()
     tls_realism_data = load_tls_realism()
     windows_auth_data = load_windows_auth_realism()
     timing_profiles_data = load_timing_profiles()
+    web_session_profiles_data = load_web_session_profiles()
 
     # Collect file count (package + overlay)
     yaml_files: list[Path] = []
@@ -948,6 +979,94 @@ def validate_config() -> ValidationResult:
                 )
             )
 
+    sensor_timing = timing_profiles_data.get("network_sensor_observation", {})
+    if not isinstance(sensor_timing, dict):
+        result.issues.append(
+            Issue("ERROR", "timing_profiles.yaml", "network_sensor_observation must be a mapping")
+        )
+    else:
+        default_profile = sensor_timing.get("default_profile")
+        profiles = sensor_timing.get("profiles")
+        if not isinstance(default_profile, str) or not default_profile:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "network_sensor_observation.default_profile must be a non-empty string",
+                )
+            )
+        if not isinstance(profiles, dict) or not profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    "network_sensor_observation.profiles must be a non-empty mapping",
+                )
+            )
+        elif isinstance(default_profile, str) and default_profile not in profiles:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "timing_profiles.yaml",
+                    f'network_sensor_observation.default_profile "{default_profile}" is not defined',
+                )
+            )
+        if isinstance(profiles, dict):
+            for profile_name, profile_data in profiles.items():
+                if not isinstance(profile_data, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "timing_profiles.yaml",
+                            f'Network sensor profile "{profile_name}" must be a mapping',
+                        )
+                    )
+                    continue
+                for field_name, minimum in {
+                    "clock_skew_us": -1_000_000,
+                    "path_delay_us": 0,
+                }.items():
+                    bounds = profile_data.get(field_name)
+                    if not isinstance(bounds, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name} must be a mapping",
+                            )
+                        )
+                        continue
+                    min_value = bounds.get("min")
+                    max_value = bounds.get("max")
+                    if not isinstance(min_value, int) or min_value < minimum:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name}.min must be an integer >= {minimum}",
+                            )
+                        )
+                    if not isinstance(max_value, int) or max_value > 1_000_000:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name}.max must be an integer <= 1000000",
+                            )
+                        )
+                    if (
+                        isinstance(min_value, int)
+                        and isinstance(max_value, int)
+                        and max_value < min_value
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "timing_profiles.yaml",
+                                f"network_sensor_observation.profiles.{profile_name}.{field_name}.max must be >= min",
+                            )
+                        )
+
     # Check 8: Orphaned site maps
     for domain in site_domains - dns_domain_set:
         result.issues.append(
@@ -981,6 +1100,127 @@ def validate_config() -> ValidationResult:
                 "INFO", "dns_registry.yaml", f'Domain "{domain}" (web/saas) has no site_maps entry'
             )
         )
+
+    # --- Inbound web visitor profile integrity ---
+    web_visitor_classes = web_session_profiles_data.get("visitor_classes", {})
+    web_ua_pools = web_session_profiles_data.get("user_agent_pools", {})
+    if not isinstance(web_visitor_classes, dict) or not web_visitor_classes:
+        result.issues.append(
+            Issue("ERROR", "web_session_profiles.yaml", "visitor_classes must be a mapping")
+        )
+    if not isinstance(web_ua_pools, dict) or not web_ua_pools:
+        result.issues.append(
+            Issue("ERROR", "web_session_profiles.yaml", "user_agent_pools must be a mapping")
+        )
+    if isinstance(web_visitor_classes, dict) and isinstance(web_ua_pools, dict):
+        for class_name, class_data in web_visitor_classes.items():
+            if not isinstance(class_data, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" must be a mapping',
+                    )
+                )
+                continue
+            if class_data.get("kind") not in {"session", "requests"}:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" kind must be "session" or "requests"',
+                    )
+                )
+            weight = class_data.get("weight")
+            if not isinstance(weight, int | float) or isinstance(weight, bool) or weight <= 0:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" weight must be positive',
+                    )
+                )
+            pool_name = class_data.get("user_agent_pool")
+            if not isinstance(pool_name, str) or pool_name not in web_ua_pools:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" references missing user_agent_pool "{pool_name}"',
+                    )
+                )
+            by_os = class_data.get("user_agent_pool_by_os")
+            if by_os is not None and not isinstance(by_os, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'Visitor class "{class_name}" user_agent_pool_by_os must be a mapping',
+                    )
+                )
+            if isinstance(by_os, dict):
+                for os_name, os_pool in by_os.items():
+                    if not isinstance(os_name, str) or not isinstance(os_pool, str):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" user_agent_pool_by_os must map strings to strings',
+                            )
+                        )
+                        continue
+                    if os_pool not in web_ua_pools:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" references missing OS user_agent_pool "{os_pool}"',
+                            )
+                        )
+            if class_data.get("kind") == "requests":
+                request_count = class_data.get("request_count")
+                if (
+                    not isinstance(request_count, list)
+                    or len(request_count) != 2
+                    or not all(isinstance(value, int) and value > 0 for value in request_count)
+                    or request_count[1] < request_count[0]
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'Visitor class "{class_name}" request_count must be [min, max] positive integers',
+                        )
+                    )
+                requests = class_data.get("requests")
+                if not isinstance(requests, list) or not requests:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'Visitor class "{class_name}" requests must be a non-empty list',
+                        )
+                    )
+                    continue
+                for index, request in enumerate(requests):
+                    if not isinstance(request, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} must be a mapping',
+                            )
+                        )
+                        continue
+                    for required in ("path", "method", "status", "type"):
+                        if required not in request:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "web_session_profiles.yaml",
+                                    f'Visitor class "{class_name}" request {index} missing "{required}"',
+                                )
+                            )
 
     # --- Checks 11-13: Traffic Profile Integrity ---
     role_traffic = traffic_data.get("role_traffic", {})
@@ -1462,6 +1702,7 @@ def validate_config() -> ValidationResult:
     # --- Schema validation: validate merged entries against Pydantic models ---
     from evidenceforge.config.schemas import (
         ApplicationEntry,
+        AuthNoiseConfig,
         ConnectionEntry,
         CreateRemoteThreadNoiseConfig,
         CreateRemoteThreadPatternEntry,
@@ -1469,7 +1710,10 @@ def validate_config() -> ValidationResult:
         DnsTunnelRttConfig,
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
+        EndpointNoiseConfig,
+        HostActivityProfilesConfig,
         KerberosRealismConfig,
+        ObservationProfilesConfig,
         OuiEntry,
         PersonaEntry,
         ProcessAccessPatternEntry,
@@ -1593,6 +1837,20 @@ def validate_config() -> ValidationResult:
                 edr_pools_data.get("file_side_effect_profiles", []),
                 EdrFileSideEffectProfile,
                 "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
+    if endpoint_noise_data:
+        _SCHEMA_CHECKS.append(([endpoint_noise_data], EndpointNoiseConfig, "endpoint_noise.yaml"))
+    if observation_profiles_data:
+        _SCHEMA_CHECKS.append(
+            ([observation_profiles_data], ObservationProfilesConfig, "observation_profiles.yaml")
+        )
+    if host_activity_profiles_data:
+        _SCHEMA_CHECKS.append(
+            (
+                [host_activity_profiles_data],
+                HostActivityProfilesConfig,
+                "host_activity_profiles.yaml",
             )
         )
 
@@ -1830,6 +2088,10 @@ def validate_config() -> ValidationResult:
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:
         result.issues.append(Issue("ERROR", "windows_auth_realism.yaml", err))
+
+    err = validate_entry(auth_noise_data, AuthNoiseConfig, "auth_noise.yaml")
+    if err:
+        result.issues.append(Issue("ERROR", "auth_noise.yaml", err))
 
     if isinstance(proxy_ua_data.get("domain_overrides"), dict):
         _SCHEMA_CHECKS.append(

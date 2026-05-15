@@ -47,13 +47,29 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | nothing | Standalone rate table |
-| **depended on by** | Engine (runtime) | Drives all baseline traffic rate calculations (user activity, web, DNS, SMB, Kerberos, LDAP, persona connections) |
+| **depended on by** | Engine (runtime) | Drives all baseline traffic rate calculations (user activity, web top-level actions, DNS, SMB, Kerberos, LDAP, persona connections) |
+
+### host_activity_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | scenario host metadata | Uses system type, roles, assigned users, primary systems, and user personas to resolve coarse activity multipliers |
+| depends on | `traffic_rates.yaml` | Multiplies resolved baseline rates after global intensity and scenario `baseline_activity.traffic_rates` overrides are applied |
+| **depended on by** | Engine (runtime) | Shapes host/persona/role baseline volume, endpoint noise, Linux/syslog shell activity, firewall deny bursts, IDS/ICMP rates, and encoded PowerShell artifact variation |
+| validated by | `eforge validate-config` | Enforces known rate-family names, ordered positive bounds, core host types, firewall deny burst settings, and artifact variant pools |
+
+### web_session_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | `site_maps.yaml` | Human visitor sessions use site maps to expand top-level page loads into assets and same-origin API calls |
+| depends on | `traffic_rates.yaml` | `web` rates count top-level visitor actions; subresources are dependent fanout |
+| depends on | `timing_profiles.yaml` | Uses web session/navigation and asset/tool fanout timing relationships |
+| **depended on by** | Engine (runtime) | Drives inbound `web_server` visitor classes, tool/API request shapes, status codes, and User-Agents |
 
 ### timing_profiles.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | nothing | Standalone timing relationship profile |
-| **depended on by** | Engine (runtime) | Drives causal prerequisite offsets, source-latency offsets, teardown margins, and Windows/Sysmon tied-timestamp collision spacing |
+| **depended on by** | Engine (runtime) | Drives causal prerequisite offsets, source-latency offsets, web session/fanout timing, sensor observation timing, teardown margins, and Windows/Sysmon tied-timestamp collision spacing |
 | validated by | `eforge validate-config` | Enforces valid relationship classes, before/after positions, non-negative timing windows, and coherent min/max bounds |
 
 ### kerberos_realism.yaml
@@ -137,6 +153,26 @@ Each row is a file; columns show what it depends on and what depends on it.
 | depends on | nothing | Standalone (uses distro/role filters) |
 | **depended on by** | Engine (runtime) | Adds diversity to syslog baseline |
 
+### auth_noise.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone authentication-noise profile data |
+| **depended on by** | Engine (runtime) | Drives stale scheduled-credential account pools, recurrence timing, jitter, skips, and backoff |
+
+### endpoint_noise.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | nothing | Standalone endpoint background timing and registry-emission policy data |
+| **depended on by** | Engine (runtime) | Drives Windows scheduled-process trigger windows, host drift, skips, and DHCP interface registry write policy |
+| validated by | `eforge validate-config` | Enforces coherent timing bounds, probability ranges, and non-empty DHCP registry value lists |
+
+### observation_profiles.yaml
+| Direction | File | Relationship |
+|-----------|------|-------------|
+| depends on | scenario `observation_profile` | The scenario selects a named profile; the profile file owns source-level missingness/delay values |
+| **depended on by** | Event dispatcher, GROUND_TRUTH.md, OBSERVATION_MANIFEST.json, `eforge eval` | Applies deterministic source-observation drops/delays after canonical state updates, reports source evidence status, and lets eval distinguish expected gaps from missing visible evidence |
+| validated by | `eforge validate-config` and `eforge validate` | Config validation checks source-family names/ranges; scenario validation checks that the named profile exists |
+
 ### network_params.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
@@ -152,8 +188,9 @@ Each row is a file; columns show what it depends on and what depends on it.
 ### tls_realism.yaml
 | Direction | File | Relationship |
 |-----------|------|-------------|
-| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates match issuer names/patterns selected from issuer config; OCSP responder hosts must exist in dns_registry; destination profiles can pull domains by DNS tag |
-| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+| depends on | tls_issuers.yaml, dns_registry.yaml | Chain templates and subject-key profiles match issuer names/patterns selected from issuer config; OCSP responder hosts must exist in dns_registry; destination profiles can pull domains by DNS tag |
+| **depended on by** | Engine (runtime) | Drives Zeek TLS SAN, x509 chain depth, issuer-compatible certificate signature algorithms, OCSP cache/status behavior, and profiled TLS SNI/destination selection |
+| validated by | `eforge validate-config` | Enforces coherent chain profile structure, non-empty subject-key patterns, and RSA/ECDSA child signature compatibility |
 
 ### smb_file_transfers.yaml
 | Direction | File | Relationship |

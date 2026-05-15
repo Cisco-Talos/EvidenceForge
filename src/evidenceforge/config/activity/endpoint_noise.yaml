@@ -1,0 +1,37 @@
+# Endpoint baseline noise policy for Windows scheduled/background process and
+# ambient registry telemetry.
+#
+# User customizations go in:
+#   .eforge/config/activity/endpoint_noise.yaml
+#
+# Overlay behavior: nested dicts merge and lists extend.
+
+windows_scheduled_processes:
+  count_min: 2
+  count_max: 5
+  trigger_window_start_seconds: 90
+  trigger_window_end_seconds: 3510
+  slot_spacing_seconds: 300
+  host_phase_window_seconds: 900
+  jitter_seconds_min: -42
+  jitter_seconds_max: 73
+  skip_probability: 0.08
+
+registry_noise:
+  dhcp_interface_values:
+    value_names:
+      - DhcpIPAddress
+      - DhcpNameServer
+    require_dhcp_state: true
+    emit_on_lease_events: true
+    suppress_system_types:
+      - server
+      - domain_controller
+    suppress_roles:
+      - domain_controller
+      - dns_server
+      - file_server
+      - web_server
+      - forward_proxy
+      - app_server
+      - database

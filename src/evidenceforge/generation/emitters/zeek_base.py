@@ -46,6 +46,7 @@ from threading import Lock
 from typing import Any
 
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.activity.timing_profiles import network_sensor_observation_timing
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -76,18 +77,21 @@ def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: f
 
 def _sensor_clock_skew_us(hostname: str) -> int:
     """Return stable per-sensor clock skew in microseconds."""
+    timing = network_sensor_observation_timing()
     seed = _stable_seed(f"zeek_sensor_clock_skew:{hostname}")
-    return (seed % 800_001) - 400_000
+    width = timing.clock_skew_max_us - timing.clock_skew_min_us + 1
+    return timing.clock_skew_min_us + (seed % max(1, width))
 
 
 def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
     """Return per-flow capture timestamp variance for a sensor observation."""
+    timing = network_sensor_observation_timing()
     seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}")
     # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
-    # all add small positive path delay. The stable per-sensor clock skew owns
-    # the sign of cross-sensor offsets, so identical paths do not flip earlier
-    # and later flow-by-flow like independent synthetic jitter.
-    return 5_000 + (seed % 75_001)
+    # add a small positive delay. The profile keeps this consistent with a
+    # well-synced sensor fleet instead of synthetic hundreds-of-ms offsets.
+    width = timing.path_delay_max_us - timing.path_delay_min_us + 1
+    return timing.path_delay_min_us + (seed % max(1, width))
 
 
 def _jitter_numeric_observation(

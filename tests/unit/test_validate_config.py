@@ -42,6 +42,167 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
+        from evidenceforge.generation.activity import endpoint_noise
+
+        def load_invalid_endpoint_noise():
+            return {
+                "windows_scheduled_processes": {
+                    "count_min": 5,
+                    "count_max": 2,
+                    "trigger_window_start_seconds": 3510,
+                    "trigger_window_end_seconds": 90,
+                    "slot_spacing_seconds": 300,
+                    "host_phase_window_seconds": 900,
+                    "jitter_seconds_min": 20,
+                    "jitter_seconds_max": -20,
+                    "skip_probability": 0.05,
+                },
+                "registry_noise": {
+                    "dhcp_interface_values": {
+                        "value_names": ["DhcpIPAddress"],
+                        "require_dhcp_state": True,
+                        "emit_on_lease_events": True,
+                        "suppress_system_types": ["server", "domain_controller"],
+                        "suppress_roles": ["domain_controller"],
+                    }
+                },
+            }
+
+        monkeypatch.setattr(endpoint_noise, "load_endpoint_noise", load_invalid_endpoint_noise)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "endpoint_noise.yaml"
+            and "count_min must be <= count_max" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_observation_profile_source(self, monkeypatch):
+        from evidenceforge.config import observation_profiles
+
+        def load_invalid_observation_profiles():
+            return {
+                "profiles": {
+                    "complete": {
+                        "description": "bad",
+                        "default": {
+                            "missingness": 0.0,
+                            "delay_ms": {"min_ms": 0, "max_ms": 0},
+                            "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                        },
+                        "sources": {"zeek_http": {"missingness": 0.1}},
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            observation_profiles,
+            "load_observation_profiles",
+            load_invalid_observation_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "observation_profiles.yaml"
+            and "unknown observation source families" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_unknown_host_activity_family(self, monkeypatch):
+        from evidenceforge.generation.activity import host_activity_profiles
+
+        real_loader = host_activity_profiles.load_host_activity_profiles
+
+        def load_invalid_host_activity_profiles():
+            data = real_loader()
+            host_types = dict(data["host_types"])
+            workstation = dict(host_types["workstation"])
+            workstation["families"] = {**workstation.get("families", {}), "zeek_magic": 1.5}
+            host_types["workstation"] = workstation
+            return {**data, "host_types": host_types}
+
+        monkeypatch.setattr(
+            host_activity_profiles,
+            "load_host_activity_profiles",
+            load_invalid_host_activity_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "host_activity_profiles.yaml"
+            and "unknown activity families" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_third_party_module_with_microsoft_identity(self, monkeypatch):
+        from evidenceforge.generation.activity import application_catalog
+
+        real_catalog_loader = application_catalog.load_catalog
+
+        def load_invalid_catalog():
+            data = real_catalog_loader()
+            apps = [dict(app) for app in data.get("applications", [])]
+            windows = dict(apps[0]["platforms"]["windows"])
+            windows["loaded_modules"] = [
+                {
+                    "path": r"C:\Program Files\Google\Chrome\Application\chrome_elf.dll",
+                    "signature": "Microsoft Windows",
+                }
+            ]
+            apps[0] = {
+                **apps[0],
+                "platforms": {**apps[0]["platforms"], "windows": windows},
+            }
+            return {**data, "applications": apps}
+
+        monkeypatch.setattr(application_catalog, "load_catalog", load_invalid_catalog)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "application_catalog.yaml"
+            and "must use a native signer" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_incompatible_tls_subject_key_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            certificate_chains = dict(data.get("certificate_chains", {}))
+            certificate_chains["subject_key_profiles"] = [
+                {
+                    "subject_patterns": ["CN=Invalid ECDSA CA*"],
+                    "issuer_family": "invalid_ecdsa",
+                    "key_type": "ecdsa",
+                    "key_length": 256,
+                    "child_signature_algorithms": ["sha256WithRSAEncryption"],
+                }
+            ]
+            return {**data, "certificate_chains": certificate_chains}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "ecdsa issuer profiles cannot use RSA child signature algorithms" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_warns_for_unknown_ocsp_responder(self, monkeypatch):
         from evidenceforge.generation.activity import dns_registry, tls_realism
 
@@ -377,6 +538,41 @@ class TestValidateConfig:
         assert any(
             issue.severity == "ERROR"
             and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_auth_noise_ranges(self, monkeypatch):
+        from evidenceforge.generation.activity import auth_noise
+
+        def load_invalid_auth_noise_config():
+            return {
+                "scheduled_stale_credentials": {
+                    "account_base_names": ["svc_backup"],
+                    "host_count_min": 3,
+                    "host_count_max": 1,
+                    "interval_ranges": [{"min_minutes": 120, "max_minutes": 60, "weight": 1}],
+                    "first_occurrence_seconds_min": 0,
+                    "first_occurrence_seconds_max": 2700,
+                    "jitter_seconds_min": -420,
+                    "jitter_seconds_max": 780,
+                    "skip_probability": 0.10,
+                    "backoff_probability": 0.10,
+                    "backoff_seconds_min": 900,
+                    "backoff_seconds_max": 3600,
+                }
+            }
+
+        monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "auth_noise.yaml"
+            and (
+                "max_minutes must be greater than or equal to min_minutes" in issue.message
+                or "host_count_max must be greater than or equal to host_count_min" in issue.message
+            )
             for issue in result.issues
         )
 

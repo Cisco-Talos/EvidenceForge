@@ -1079,6 +1079,25 @@ def _dns_rtt(rng: random.Random, resolver_ip: str | None = None) -> float:
         return rng.uniform(0.080, 0.250)  # Slow/distant: 80-250ms
 
 
+def _jitter_default_connection_duration(
+    duration: float | None,
+    *,
+    caller_provided_duration: bool,
+    seed_parts: tuple[Any, ...],
+) -> float | None:
+    """Diversify generator-owned placeholder durations without changing authored values."""
+    if caller_provided_duration or duration is None:
+        return duration
+    anchors = (0.8, 2.0, 0.2, 0.1, 0.02, 0.01)
+    if not any(math.isclose(duration, anchor, rel_tol=0.0, abs_tol=1e-9) for anchor in anchors):
+        return duration
+    seed = _stable_seed("default_conn_duration:" + ":".join(str(part) for part in seed_parts))
+    rng = random.Random(seed)
+    if duration <= 0.02:
+        return max(0.0005, duration * rng.uniform(0.55, 1.85) + rng.uniform(0.0002, 0.004))
+    return max(0.001, duration * rng.uniform(0.82, 1.24) + rng.uniform(-0.015, 0.035))
+
+
 def _dns_registrable_domain(hostname: str) -> str:
     """Return a practical DNS owner name for mail/TXT companion lookups."""
     parts = [part for part in hostname.rstrip(".").split(".") if part]
@@ -1550,6 +1569,22 @@ def _tls_key_for_certificate_name(
     if any(marker in name for marker in ("ecdsa", "ecc", " ec ", "-ec")):
         return "ecdsa", 256 if key_type != "ecdsa" else key_length
     return key_type, key_length
+
+
+def _tls_signature_algorithm_for_issuer(
+    issuer_name: str,
+    *,
+    fallback_key_type: str = "rsa",
+    fallback_key_length: int = 2048,
+) -> str:
+    """Return the certificate signature algorithm implied by the issuer key."""
+    from evidenceforge.generation.activity.tls_realism import signature_algorithm_for_issuer
+
+    return signature_algorithm_for_issuer(
+        issuer_name,
+        fallback_type=fallback_key_type,
+        fallback_length=fallback_key_length,
+    )
 
 
 class ActivityGenerator:
@@ -2474,7 +2509,11 @@ class ActivityGenerator:
             certificate_not_valid_before=validity[0],
             certificate_not_valid_after=validity[1],
             certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-            certificate_sig_alg="ecdsa-with-SHA256" if is_ecdsa else "sha256WithRSAEncryption",
+            certificate_sig_alg=_tls_signature_algorithm_for_issuer(
+                issuer_cfg["name"],
+                fallback_key_type=key_type,
+                fallback_key_length=key_length,
+            ),
             certificate_key_type=key_type,
             certificate_key_length=key_length,
             certificate_exponent="65537" if not is_ecdsa else "",
@@ -2745,7 +2784,9 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import X509Context
         from evidenceforge.generation.activity.tls_realism import (
             certificate_chain_config,
+            certificate_subject_key_profile,
             chain_template_for_issuer,
+            signature_algorithm_for_issuer,
         )
 
         chain = [leaf]
@@ -2809,6 +2850,11 @@ class ActivityGenerator:
                 selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
                 key_type = str(selected_key.get("type", "rsa"))
                 key_length = int(selected_key.get("length", 2048))
+                key_type, key_length = certificate_subject_key_profile(
+                    subject,
+                    fallback_type=key_type,
+                    fallback_length=key_length,
+                )
                 key_type, key_length = _tls_key_for_certificate_name(subject, key_type, key_length)
                 serial_seed = "|".join(
                     [
@@ -2851,6 +2897,11 @@ class ActivityGenerator:
             key_type = str(profile["certificate_key_type"])
             key_length = int(profile["certificate_key_length"])
             is_ecdsa = key_type == "ecdsa"
+            signature_alg = signature_algorithm_for_issuer(
+                str(profile["certificate_issuer"]),
+                fallback_type=key_type,
+                fallback_length=key_length,
+            )
             chain.append(
                 X509Context(
                     fuid=generate_stable_zeek_uid(
@@ -2865,9 +2916,7 @@ class ActivityGenerator:
                     certificate_not_valid_before=int(profile["certificate_not_valid_before"]),
                     certificate_not_valid_after=int(profile["certificate_not_valid_after"]),
                     certificate_key_alg="id-ecPublicKey" if is_ecdsa else "rsaEncryption",
-                    certificate_sig_alg="ecdsa-with-SHA256"
-                    if is_ecdsa
-                    else "sha256WithRSAEncryption",
+                    certificate_sig_alg=signature_alg,
                     certificate_key_type=key_type,
                     certificate_key_length=key_length,
                     certificate_exponent="65537" if not is_ecdsa else "",
@@ -3433,6 +3482,22 @@ class ActivityGenerator:
             user_sid = self._get_sid(effective_username)
             failure_reason = "%%2307"
 
+        remote_linux_source = (
+            _get_os_category(system.os) == "linux"
+            and source_ip not in (None, "-")
+            and source_ip != system.ip
+        )
+        linux_ssh_source_port = None
+        if remote_linux_source and source_ip is not None:
+            linux_ssh_source_port = self._allocate_ephemeral_port(
+                source_ip,
+                system.ip,
+                22,
+                "tcp",
+                time,
+                self._os_for_ip(source_ip),
+            )
+
         event = SecurityEvent(
             timestamp=time,
             event_type="failed_logon",
@@ -3445,8 +3510,10 @@ class ActivityGenerator:
                 failure_reason=failure_reason,
                 failure_status="0xc000006d",
                 failure_substatus=substatus,
-                source_ip=auth_source_ip,
-                source_port=failed_profile["source_port"],
+                source_ip=(
+                    source_ip if remote_linux_source and source_ip is not None else auth_source_ip
+                ),
+                source_port=linux_ssh_source_port or failed_profile["source_port"],
                 auth_package=failed_profile["auth_package"],
                 logon_process=failed_profile["logon_process"],
                 lm_package=failed_profile["lm_package"],
@@ -3466,6 +3533,7 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             if source_ip and source_ip != "-":
+                ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
                     pid=_get_rng().randint(5000, 60000),
@@ -3473,7 +3541,7 @@ class ActivityGenerator:
                     severity=4,
                     message=(
                         f"Failed password for {effective_username} from {source_ip} "
-                        f"port {_ephemeral_port(_get_rng(), 'linux')} ssh2"
+                        f"port {ssh_source_port} ssh2"
                     ),
                 )
             else:
@@ -3487,6 +3555,15 @@ class ActivityGenerator:
                         f"logname= uid=0 euid=0 tty=tty1 ruser= rhost= user={effective_username}"
                     ),
                 )
+
+        if remote_linux_source and source_ip is not None and linux_ssh_source_port is not None:
+            self._emit_failed_linux_ssh_network_connection(
+                system=system,
+                time=time,
+                source_ip=source_ip,
+                source_port=linux_ssh_source_port,
+                rng=rng,
+            )
 
         self.dispatcher.dispatch(event)
 
@@ -3650,6 +3727,30 @@ class ActivityGenerator:
         if rdns:
             return rdns.split(".", 1)[0].upper()
         return source_ip
+
+    def _emit_failed_linux_ssh_network_connection(
+        self,
+        system: System,
+        time: datetime,
+        source_ip: str,
+        source_port: int,
+        rng: random.Random,
+    ) -> None:
+        """Emit source-matched Zeek SSH evidence for a failed Linux sshd logon."""
+        conn_time = time - timedelta(milliseconds=rng.randint(35, 450))
+        self.generate_connection(
+            src_ip=source_ip,
+            dst_ip=system.ip,
+            time=conn_time,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=rng.uniform(0.12, 3.5),
+            orig_bytes=rng.randint(260, 1800),
+            resp_bytes=rng.randint(240, 2600),
+            src_port=source_port,
+            conn_state=rng.choices(["SF", "RSTR"], weights=[78, 22], k=1)[0],
+        )
 
     def _maybe_emit_failed_logon_network_connection(
         self,
@@ -4493,7 +4594,8 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.dll_load_profiles import get_dlls_for_process
 
             dll_profiles = get_dlls_for_process(_exe_lower)
-            dll_path = rng.choice(dll_profiles)["path"] if dll_profiles else ""
+            dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
+            dll_path = dll_profile.get("path", "")
             module_delay_ms = rng.randint(120, 1500)
             process_start = running_proc.start_time if running_proc is not None else None
             if dll_path and self._mark_loaded_module(
@@ -4517,7 +4619,12 @@ class ActivityGenerator:
                             logon_id=process_logon_id,
                             start_time=process_start,
                         ),
-                        image_load=ImageLoadContext(image_loaded=dll_path),
+                        image_load=ImageLoadContext(
+                            image_loaded=dll_path,
+                            signed=bool(dll_profile.get("signed", True)),
+                            signature=str(dll_profile.get("signature", "Microsoft Windows")),
+                            signature_status=str(dll_profile.get("signature_status", "Valid")),
+                        ),
                         edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
                         storyline_origin=from_storyline,
                     )
@@ -4876,6 +4983,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
+        caller_provided_duration = duration is not None
         caller_provided_conn_state = conn_state is not None
         caller_provided_payload = (
             service is not None
@@ -5177,7 +5285,19 @@ class ActivityGenerator:
                         _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
                     ).randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
                 )
-            client_duration = min(duration or 0.2, 2.0)
+            proxy_client_cap = random.Random(
+                _stable_seed(
+                    "proxy_client_duration_cap:"
+                    f"{src_ip}:{proxy_sys.ip}:{dst_ip}:{dst_port}:{time.timestamp()}"
+                )
+            ).uniform(1.72, 2.36)
+            client_duration = min(duration if duration is not None else 0.2, proxy_client_cap)
+            if duration is None:
+                client_duration = _jitter_default_connection_duration(
+                    client_duration,
+                    caller_provided_duration=False,
+                    seed_parts=(src_ip, proxy_sys.ip, dst_ip, dst_port, time, "proxy_client"),
+                )
             if dst_port == 443 and proxy_context.status_code < 400:
                 client_duration = duration or _get_rng().uniform(0.5, 10.0)
                 if proxy_context.method == "CONNECT":
@@ -5195,7 +5315,11 @@ class ActivityGenerator:
                     client_orig_bytes += framing_rng.randint(160, 900)
                     client_resp_bytes += framing_rng.randint(180, 2400)
             if will_emit_egress:
-                egress_duration = duration or 0.1
+                egress_duration = duration or _jitter_default_connection_duration(
+                    0.1,
+                    caller_provided_duration=False,
+                    seed_parts=(proxy_sys.ip, dst_ip, dst_port, time, "proxy_egress"),
+                )
                 response_flush = random.Random(
                     _stable_seed(f"proxy_response_flush:{src_ip}:{dst_ip}:{time.timestamp()}")
                 ).uniform(0.02, 0.25)
@@ -5394,6 +5518,8 @@ class ActivityGenerator:
                 self.dispatcher.visibility_engine if self.dispatcher else None
             )
             if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
+                if self.dispatcher is not None:
+                    self.dispatcher.record_filtered_network_observation()
                 logger.debug(
                     f"Skipping connection {src_ip} -> {dst_ip}: "
                     f"not observable by any configured sensor"
@@ -5495,7 +5621,15 @@ class ActivityGenerator:
                     resp_bytes=resp_bytes,
                 )
         elif service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
-            duration = min(duration or 0.02, 0.08)
+            duration = min(
+                duration
+                or _jitter_default_connection_duration(
+                    0.02,
+                    caller_provided_duration=False,
+                    seed_parts=(src_ip, dst_ip, dst_port, time, "dns_default"),
+                ),
+                0.08,
+            )
             orig_bytes = min(max(orig_bytes or 40, 40), 260)
             if resp_bytes is None:
                 resp_bytes = 120
@@ -5732,6 +5866,21 @@ class ActivityGenerator:
             http_min_duration = (http_timing.max_ms + 5) / 1000
             if duration is None or duration < http_min_duration:
                 duration = http_min_duration + rng.uniform(0.0, 0.025)
+
+        duration_locked_to_dns_rtt = (
+            service == "dns"
+            and proto in ("udp", "tcp")
+            and dst_port == 53
+            and dns is not None
+            and dns.rtt is not None
+            and duration is not None
+            and math.isclose(duration, dns.rtt, rel_tol=0.0, abs_tol=1e-9)
+        )
+        duration = _jitter_default_connection_duration(
+            duration,
+            caller_provided_duration=caller_provided_duration or duration_locked_to_dns_rtt,
+            seed_parts=(src_ip, src_port, dst_ip, dst_port, proto, service or "", time),
+        )
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
