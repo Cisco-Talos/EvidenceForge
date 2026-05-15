@@ -1,0 +1,268 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# SPDX-License-Identifier: MIT
+
+"""Tests for the SOF-ELK Zeek external parser harness."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from tests.helpers.sof_elk_zeek import (
+    FAILURE_REPORT_FILENAME,
+    SOF_ELK_FILTER_FILES,
+    DnsExpectation,
+    SofElkParserError,
+    StagedLog,
+    ZeekStageManifest,
+    build_sof_elk_zeek_configs,
+    stage_zeek_logs,
+    validate_parsed_output,
+)
+
+
+def test_stage_zeek_logs_preserves_sensor_subdirectories(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    source_root = fixtures_dir / "external_parser" / "zeek"
+
+    manifest = stage_zeek_logs(source_root, tmp_path)
+
+    staged_paths = {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs}
+    assert staged_paths == {
+        Path("zeek/sensor-a/conn.log"),
+        Path("zeek/sensor-a/dns.log"),
+    }
+    assert manifest.expected_counts == {"zeek_conn": 2, "zeek_dns": 2}
+    assert manifest.dns_expectations[("DZlXkN35cGKtEu5678", "www.example.com")] == (
+        DnsExpectation(answers=True, ttls=True)
+    )
+
+
+def test_stage_zeek_logs_adapts_flat_generated_files_for_sof_elk(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "generated"
+    source_root.mkdir()
+    fixture_root = fixtures_dir / "external_parser" / "zeek" / "sensor-a"
+    (source_root / "zeek_conn.json").write_text(
+        (fixture_root / "conn.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (source_root / "zeek_dns.json").write_text(
+        (fixture_root / "dns.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    manifest = stage_zeek_logs(source_root, tmp_path / "stage")
+
+    staged_paths = {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs}
+    assert staged_paths == {
+        Path("zeek/default/conn.log"),
+        Path("zeek/default/dns.log"),
+    }
+    assert manifest.expected_counts == {"zeek_conn": 2, "zeek_dns": 2}
+
+
+def test_stage_zeek_logs_keeps_corrupt_dns_for_external_parser(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source" / "sensor-a"
+    source_dir.mkdir(parents=True)
+    (source_dir / "dns.json").write_text(
+        '{"ts":"1742036200.000000","uid":"BROKEN",\n',
+        encoding="utf-8",
+    )
+
+    manifest = stage_zeek_logs(tmp_path / "source", tmp_path / "stage")
+
+    assert manifest.expected_counts == {"zeek_conn": 0, "zeek_dns": 1}
+    assert manifest.dns_expectations == {}
+    assert (manifest.logstash_root / "zeek" / "sensor-a" / "dns.log").exists()
+
+
+def test_build_sof_elk_zeek_configs_reuses_sof_elk_filebeat_input(tmp_path: Path) -> None:
+    sof_elk_dir = tmp_path / "sof-elk"
+    (sof_elk_dir / "lib" / "filebeat_inputs").mkdir(parents=True)
+    (sof_elk_dir / "configfiles").mkdir()
+    (sof_elk_dir / "lib" / "filebeat_inputs" / "zeek.yml").write_text(
+        "- type: filestream\n  paths:\n    - /logstash/zeek/**/conn.*\n",
+        encoding="utf-8",
+    )
+    for filter_file in SOF_ELK_FILTER_FILES:
+        (sof_elk_dir / "configfiles" / filter_file).write_text(
+            "filter { }\n",
+            encoding="utf-8",
+        )
+
+    pipeline_dir, filebeat_config = build_sof_elk_zeek_configs(sof_elk_dir, tmp_path)
+
+    assert "/usr/local/sof-elk/lib/filebeat_inputs/zeek.yml" in filebeat_config.read_text(
+        encoding="utf-8"
+    )
+    assert 'path => "/parsed-output/%{[labels][type]}.jsonl"' in (
+        pipeline_dir / "9999-output-jsonl.conf"
+    ).read_text(encoding="utf-8")
+    for filter_file in SOF_ELK_FILTER_FILES:
+        assert (pipeline_dir / filter_file).exists()
+
+
+def test_validate_parsed_output_accepts_expected_sof_elk_fields(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    manifest = stage_zeek_logs(fixtures_dir / "external_parser" / "zeek", tmp_path / "stage")
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    _write_jsonl(
+        parsed_dir / "zeek_conn.jsonl",
+        [
+            _parsed_conn("CYkWjM24bFJsDt1234"),
+            _parsed_conn("DZlXkN35cGKtEu5678"),
+        ],
+    )
+    _write_jsonl(
+        parsed_dir / "zeek_dns.jsonl",
+        [
+            _parsed_dns("DZlXkN35cGKtEu5678", "www.example.com", with_answers=True),
+            _parsed_dns("DQsVmE1aY4JnZq0002", "missing.example.com", with_answers=False),
+        ],
+    )
+
+    events_by_type = validate_parsed_output(manifest, parsed_dir)
+
+    assert len(events_by_type["zeek_conn"]) == 2
+    assert len(events_by_type["zeek_dns"]) == 2
+
+
+def test_validate_parsed_output_reports_parser_failure_tags(tmp_path: Path) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "conn.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "conn.log",
+                log_type="zeek_conn",
+                record_count=1,
+            ),
+        ),
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    failed_event = _parsed_conn("BROKEN")
+    failed_event["tags"] = ["zeek", "_jsonparsefailure"]
+    _write_jsonl(parsed_dir / "zeek_conn.jsonl", [failed_event])
+
+    with pytest.raises(SofElkParserError, match="_jsonparsefailure") as excinfo:
+        validate_parsed_output(manifest, parsed_dir)
+
+    report_path = parsed_dir / FAILURE_REPORT_FILENAME
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert str(report_path) in str(excinfo.value)
+    assert report["failure_tag_counts"]["zeek_conn"]["_jsonparsefailure"] == 1
+    assert report["sample_failures"][0]["zeek_session_id"] == "BROKEN"
+
+
+def test_validate_parsed_output_reports_dns_answer_loss(tmp_path: Path) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "dns.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "dns.log",
+                log_type="zeek_dns",
+                record_count=1,
+            ),
+        ),
+        dns_expectations={
+            ("DNS1", "www.example.com"): DnsExpectation(answers=True, ttls=True),
+        },
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    _write_jsonl(
+        parsed_dir / "zeek_dns.jsonl",
+        [_parsed_dns("DNS1", "www.example.com", with_answers=False)],
+    )
+
+    with pytest.raises(SofElkParserError, match="dns.answers.data"):
+        validate_parsed_output(manifest, parsed_dir)
+
+
+def _write_jsonl(path: Path, events: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(f"{json.dumps(event, sort_keys=True)}\n" for event in events),
+        encoding="utf-8",
+    )
+
+
+def _parsed_conn(session_id: str) -> dict[str, object]:
+    return {
+        "tags": ["filebeat", "zeek", "zeek_json"],
+        "labels": {"type": "zeek_conn"},
+        "zeek": {
+            "session_id": session_id,
+            "connection": {"state": "SF"},
+        },
+        "source": {
+            "ip": "10.0.10.50",
+            "port": 54321,
+            "bytes": 1024,
+            "packets": 10,
+        },
+        "destination": {
+            "ip": "93.184.216.34",
+            "port": 443,
+            "bytes": 4096,
+            "packets": 8,
+        },
+        "network": {"transport": "tcp"},
+    }
+
+
+def _parsed_dns(
+    session_id: str,
+    question_name: str,
+    *,
+    with_answers: bool,
+) -> dict[str, object]:
+    event: dict[str, object] = {
+        "tags": ["filebeat", "zeek", "zeek_json", "dns_record"],
+        "labels": {"type": "zeek_dns"},
+        "zeek": {"session_id": session_id},
+        "source": {"ip": "10.0.10.51", "port": 12345},
+        "destination": {"ip": "10.0.20.10", "port": 53},
+        "network": {"transport": "udp"},
+        "dns": {
+            "question": {"name": question_name, "type": "A"},
+            "response": {"code": "NOERROR"},
+        },
+    }
+    if with_answers:
+        event["dns"] = {
+            "question": {"name": question_name, "type": "A"},
+            "response": {"code": "NOERROR"},
+            "answers": {"data": "93.184.216.34", "ttl": 3600},
+        }
+    return event

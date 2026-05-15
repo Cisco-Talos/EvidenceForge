@@ -62,6 +62,17 @@ touches generation behavior or before a release PR:
 uv run pytest --include-slow -m slow --no-cov --durations=20
 ```
 
+Run optional third-party parser validation when touching emitted log formats
+covered by an external parser harness:
+
+```bash
+uv run pytest --include-external-parsers -m external_parser --no-cov
+```
+
+See [External Parser Validation](docs/reference/external-parser-validation.md)
+for the SOF-ELK Zeek harness architecture, manual full-dataset commands, and
+failure report details.
+
 Coverage is reserved for final readiness checks before opening a `dev` → `main`
 release PR:
 
@@ -117,6 +128,8 @@ uv run ruff format --check .
 
 - `@pytest.mark.slow`: large dataset and workload tests, skipped by default and normally
   run without coverage instrumentation
+- `@pytest.mark.external_parser`: third-party parser container tests, skipped by default
+  and normally run only in an explicitly opted-in local or CI lane
 
 ```bash
 # Normal fast run
@@ -124,6 +137,9 @@ uv run pytest --no-cov
 
 # Slow comprehensive run
 uv run pytest --include-slow -m slow --no-cov --durations=20
+
+# External parser run
+uv run pytest --include-external-parsers -m external_parser --no-cov
 
 # Release coverage gate
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70

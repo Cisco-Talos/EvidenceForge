@@ -36,6 +36,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Document SOF-ELK external parser validation — added human/agent docs for the harness architecture, commands, cache/container behavior, staging layout, artifact locations, failure reports, and current medium-dataset finding.
+- [x] Add full generated-dataset SOF-ELK Zeek check — adapted flat generated Zeek conn/dns files into SOF-ELK staging paths and ran the medium dataset through the parser harness; ingestion/counts matched, with 341 SOF-ELK DNS grok failures on PTR/NS/MX/SOA answer records to triage next.
+- [x] Harden SOF-ELK parser harness container lifecycle — labeled harness containers for easier leftover discovery and kept cleanup behavior explicit.
+- [x] Add SOF-ELK-style external parser validation for Zeek conn/dns — implemented an optional pytest lane that stages generated Zeek logs under SOF-ELK paths, runs pinned Filebeat + Logstash containers against a runtime-downloaded SOF-ELK checkout, captures parsed JSONL, and fails on parse/count/field errors.
 - [x] Move coverage to the release lane — default/local and feature-PR tests now run without coverage, final `dev` → `main` readiness keeps explicit coverage and slow comprehensive gates, CI/docs/agent guidance are updated, workflow YAML parses, Ruff checks pass, and `uv run pytest --no-cov` passed in 34.74s.
 - [x] Refresh the v0.7.0 `dev` -> `main` release PR after PR #162 merged into `dev` — confirmed the release PR head includes merge commit `87ac753`, kept the version at `0.7.0`, and updated the changelog with the calibration-cleanup work from PR #162.
 - [x] Split slow comprehensive tests from coverage instrumentation in CI and update contributor/agent testing guidance — normal coverage gate passed at 79.38% with slow tests skipped; slow comprehensive suite passed separately with `--no-cov` in 2m36s; Ruff checks passed.
