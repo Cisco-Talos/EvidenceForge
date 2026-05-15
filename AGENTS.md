@@ -69,7 +69,7 @@ When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line su
 
 **Testing:**
 - pytest with pytest-cov, pytest-asyncio, pytest-mock, pytest-benchmark
-- Separate test markers: `@pytest.mark.slow` for large dataset tests (not run by default)
+- Separate test markers: `@pytest.mark.slow` for large dataset/workload tests (not run by default). Run slow tests with `--no-cov` unless you are specifically profiling coverage behavior, because coverage instrumentation makes the generator workload much slower.
 - Target coverage: 95%+ overall, 95%+ for core generation engine
 
 **Format Support:**

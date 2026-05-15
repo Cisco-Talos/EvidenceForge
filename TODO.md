@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Split slow comprehensive tests from coverage instrumentation in CI and update contributor/agent testing guidance — normal coverage gate passed at 79.38% with slow tests skipped; slow comprehensive suite passed separately with `--no-cov` in 2m36s; Ruff checks passed.
 - [x] Prepare `dev` → `main` PR — inspected `main..dev`, applied the required v0.6.2 version/changelog bump on `dev`, ran release checks, pushed, and opened the PR into `main`.
 - [x] Retargeted and merged PR fixes #138-#141 into `dev`, then reworked PR #137 against current `dev` so Windows event spool hardening preserves all current emitter fixup passes before merge.
 - [x] Remediate Windows singleton PID path traversal telemetry suppression — canonicalize Windows singleton paths with ntpath before seeded PID reuse and cover traversal variants with a unit test.

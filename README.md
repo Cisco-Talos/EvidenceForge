@@ -244,12 +244,15 @@ uv sync
 # Run tests (1400+ tests)
 uv run pytest
 
+# Run slow comprehensive workload tests without coverage instrumentation
+uv run pytest --include-slow -m slow --no-cov --durations=20
+
 # Run specific test suite
 uv run pytest tests/unit/test_network_visibility.py -v
 
 # Lint and format
-uv run ruff check src/ tests/
-uv run ruff format src/ tests/
+uv run ruff check .
+uv run ruff format --check .
 ```
 
 ### Tech Stack
