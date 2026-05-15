@@ -12,6 +12,7 @@ This minor release packages the latest `dev` branch realism, observation, and CI
 
 - Added observation profiles and an observation-aware evaluation manifest so generated datasets can model source-specific coverage and missingness more explicitly (`0ed18df`, `599a40e`).
 - Improved source identity metadata, endpoint baseline noise policy, and host activity distribution realism for more believable source-native evidence (`317decd`, `5931c8a`, `c8f6226`).
+- Cleaned calibration evaluation warnings by tightening observation-aware causality matching, sensor-filtered observation-manifest accounting, OCSP optional-field rendering, and visible Windows logon-before-process ordering (`e771e77`).
 
 **Source-native timing and log texture**
 
@@ -26,6 +27,7 @@ This minor release packages the latest `dev` branch realism, observation, and CI
 **Validation**
 
 - Release-prep validation passed `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest --cov-report=xml` (`3030 passed`, `37 skipped`, `79.82%` coverage), and `uv run pytest --include-slow -m slow --no-cov --durations=20` (`13 passed`, `1 skipped`, `1:08`).
+- PR #162 cleanup validation passed `uv run eforge validate-config`, `uv run eforge validate scenarios/iteration-test/scenario.yaml`, `uv run eforge generate scenarios/iteration-test/scenario.yaml --verbose --force`, `uv run eforge eval scenarios/iteration-test/data --scenario scenarios/iteration-test/scenario.yaml --format json --verbose` (`94.64`, all hard gates passing), focused regressions (`164 passed`), and `uv run pytest -v` (`3075 passed`, `15 skipped`).
 
 ## v0.6.3 (2026-05-13)
 
