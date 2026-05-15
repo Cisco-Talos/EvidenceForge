@@ -2119,11 +2119,20 @@ class StorylineMixin:
                 )
                 if seg:
                     if is_external_scan:
-                        segment_systems = [
-                            candidate
-                            for candidate in self.scenario.environment.systems
-                            if candidate.hostname in (seg.systems or [])
-                        ]
+                        segment_hostnames = set(seg.systems or [])
+                        if segment_hostnames:
+                            segment_systems = [
+                                candidate
+                                for candidate in self.scenario.environment.systems
+                                if candidate.hostname in segment_hostnames
+                            ]
+                        else:
+                            net = ipaddress.ip_network(seg.cidr, strict=False)
+                            segment_systems = [
+                                candidate
+                                for candidate in self.scenario.environment.systems
+                                if ipaddress.ip_address(candidate.ip) in net
+                            ]
                         all_hosts = []
                         for candidate in segment_systems:
                             public_target = (

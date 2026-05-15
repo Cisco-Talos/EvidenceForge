@@ -203,6 +203,103 @@ class TestObservationProfiles:
         assert event.timestamp == _make_ts()
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"delayed": 1}
 
+    def test_zeek_observation_delay_is_coherent_per_uid(self, monkeypatch):
+        """Zeek protocol rows for one UID should share source collection delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        http = _make_mock_emitter("zeek_http", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_conn": conn, "zeek_http": http},
+            observation_policy=ObservationPolicy("zeek_delay_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        conn_event = conn.emit.call_args.args[0]
+        http_event = http.emit.call_args.args[0]
+        assert conn_event.timestamp == http_event.timestamp
+        assert conn_event.timestamp > event.timestamp
+
+    def test_syslog_ssh_lifecycle_delay_preserves_session_order(self, monkeypatch):
+        """SSH lifecycle syslog rows with one sshd PID should share collection delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "syslog": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("syslog_delay_test")
+        host = HostContext(
+            hostname="APP-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        connection = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="syslog",
+            src_host=host,
+            syslog=SyslogContext(
+                app_name="sshd",
+                pid=5158,
+                message='Connection from 10.0.1.10 port 52713 on 10.0.3.10 port 22 rdomain ""',
+            ),
+        )
+        accepted = SecurityEvent(
+            timestamp=_make_ts() + timedelta(milliseconds=120),
+            event_type="ssh_session",
+            dst_host=host,
+            syslog=SyslogContext(
+                app_name="sshd",
+                pid=5158,
+                message="Accepted publickey for admin from 10.0.1.10 port 52713 ssh2",
+            ),
+        )
+
+        delay = policy.decide("syslog", connection).delay
+        assert delay == policy.decide("syslog", accepted).delay
+        assert connection.timestamp + delay < accepted.timestamp + delay
+
     def test_network_visibility_records_filtered_source_status(self):
         """Network visibility filtering is reflected in source evidence status."""
         sm = MagicMock(spec=StateManager)

@@ -30,6 +30,10 @@ from evidenceforge.models.scenario import (
     DnsQueryEventSpec,
     DnsTunnelEventSpec,
     ExplicitCredentialsEventSpec,
+    NetworkConfig,
+    NetworkSegment,
+    NetworkSensor,
+    PortScanEventSpec,
     WebScanEventSpec,
     WorkstationLockEventSpec,
     WorkstationUnlockEventSpec,
@@ -566,6 +570,80 @@ class TestPortScanConnectionProfile:
 
         assert all(sample[0] for sample in samples)
         assert {sample[1] for sample in samples} >= {"S0", "REJ"}
+
+
+class TestPortScanTargetResolution:
+    def test_external_target_segment_uses_inferred_segment_members(self):
+        """External segment scans should work when segment.systems is omitted."""
+        from unittest.mock import Mock
+
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        web = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        network = NetworkConfig(
+            public_cidrs=["203.14.220.0/28"],
+            segments=[
+                NetworkSegment(name="dmz", cidr="10.10.3.0/24", exposure="both"),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw-perimeter",
+                    monitoring_segments=["dmz"],
+                    log_formats=["cisco_asa"],
+                )
+            ],
+        )
+
+        class Visibility:
+            _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def get_public_inbound_address(ip: str) -> str | None:
+                return "203.14.220.10" if ip == "10.10.3.10" else None
+
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[web, proxy], network=network)
+        )
+        engine.dispatcher = SimpleNamespace(visibility_engine=Visibility())
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {web.ip: web, proxy.ip: proxy}
+
+        spec = PortScanEventSpec(
+            source_ip="185.70.41.45",
+            target_segment="dmz",
+            target_count=8,
+            ports=[80],
+            scan_rate=10,
+        )
+        event = engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="apache", full_name="Apache", email="apache@example.com"),
+            system=web,
+            time=start,
+            activity="External DMZ scan",
+            explicit_types={"port_scan"},
+        )
+
+        assert event["target_count"] == 1
+        assert event["total_connections"] == 1
+        connection_kwargs = engine.activity_generator.generate_connection.call_args.kwargs
+        assert connection_kwargs["src_ip"] == "185.70.41.45"
+        assert connection_kwargs["dst_ip"] == "203.14.220.10"
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────

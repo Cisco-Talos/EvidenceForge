@@ -341,7 +341,7 @@ class TestTlsIssuers:
         }
 
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
-        assert "download.windowsupdate.com" not in linux_domains
+        assert not {domain for domain in linux_domains if "windowsupdate.com" in domain}
 
     def test_tls_destination_picker_excludes_cleartext_cert_infra_domains(self):
         """OCSP/CRL responders are HTTP objects, not direct TLS SNI destinations."""
@@ -379,6 +379,14 @@ class TestTlsIssuers:
         assert any(
             "Sectigo" in subject or "USERTrust" in subject for subject in sectigo["intermediates"]
         )
+        lets_encrypt_rsa = chain_template_for_issuer("CN=R3, O=Let's Encrypt, C=US")
+        lets_encrypt_ecdsa = chain_template_for_issuer("CN=E1, O=Let's Encrypt, C=US")
+        assert lets_encrypt_rsa["intermediates"] == [
+            "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+        ]
+        assert lets_encrypt_ecdsa["intermediates"] == [
+            "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
+        ]
 
     def test_tls_destination_servers_avoid_human_saas_profiles(self):
         """Server-origin TLS background should not pick browser/SaaS-heavy destinations."""
@@ -822,9 +830,9 @@ class TestTlsIssuers:
     def test_intermediate_signature_algorithm_follows_issuer_key(self):
         """Intermediate certificate signatures should be signed by the issuer key."""
         generator = ActivityGenerator(StateManager(), {})
-        issuer_name = "CN=E1, O=Let's Encrypt, C=US"
+        issuer_name = "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
         intermediate = None
-        for seed in range(1, 50):
+        for seed in range(1, 200):
             chain = generator._build_tls_certificate_chain(
                 leaf=X509Context(
                     fuid="FLeaf",
@@ -837,6 +845,8 @@ class TestTlsIssuers:
                 connection_uid=f"CLeE1{seed}",
                 rng=random.Random(seed),
             )
+            if len(chain) < 2:
+                continue
             candidate = chain[1]
             if (
                 certificate_subject_key_profile(candidate.certificate_subject)[0]
