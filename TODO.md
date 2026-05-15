@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Correct external-parser scope progress semantics — host/logtype/subtype bars now advance while parsed records are checked, not while files are staged or containers are still running, and the validator bar completes with a failed status when parsed-output validation fails.
 - [x] Move external-parser progress bars from discovery to validator execution — discovery now stays a plain summary/warning step, while the SOF-ELK validator phase shows stage plus host/logtype/subtype progress as files are handed to the parser harness.
 - [x] Add automatic external-parser validator discovery and progress reporting — runner now scans generated data, runs matching validators without requiring names like `sof-elk-zeek`, warns on unsupported log families, shows host/logtype/subtype plus validator-stage progress, and preserves focused validator mode for debugging.
 - [x] Expand SOF-ELK external parser validation across the Zeek family — staged every generated EvidenceForge Zeek file, included matching SOF-ELK filters where available, added supplemental Filebeat inputs for EvidenceForge-only Zeek files, preserved artifact/report output, and added a runner script ready for future parser families.

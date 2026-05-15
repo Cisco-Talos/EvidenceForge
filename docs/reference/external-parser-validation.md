@@ -47,7 +47,8 @@ At runtime it:
    validator.
 3. Runs every matching validator. Today that means SOF-ELK for Zeek files. The
    validator phase shows stage progress plus host/sensor, log family, and
-   subtype progress for the files being handed to that validator.
+   subtype progress while parsed records are checked after the third-party
+   parser has produced output.
 4. Clones SOF-ELK at the pinned commit into an external cache, not into this
    repository.
 5. Stages generated Zeek files under a temporary SOF-ELK-style tree:

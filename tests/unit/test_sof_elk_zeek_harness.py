@@ -96,25 +96,53 @@ def test_stage_zeek_logs_adapts_flat_generated_files_for_sof_elk(
     assert manifest.expected_counts == {"zeek_conn": 2, "zeek_dns": 2}
 
 
-def test_stage_zeek_logs_reports_validator_scope_progress(
+def test_validate_parsed_output_reports_validator_scope_progress(
     fixtures_dir: Path,
     tmp_path: Path,
 ) -> None:
-    events: list[tuple[str, dict[str, object]]] = []
+    manifest = stage_zeek_logs(fixtures_dir / "external_parser" / "zeek", tmp_path / "stage")
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    _write_jsonl(
+        parsed_dir / "zeek_conn.jsonl",
+        [
+            _with_log_path(_parsed_conn("CYkWjM24bFJsDt1234"), "/logstash/zeek/sensor-a/conn.log"),
+            _with_log_path(_parsed_conn("DZlXkN35cGKtEu5678"), "/logstash/zeek/sensor-a/conn.log"),
+        ],
+    )
+    _write_jsonl(
+        parsed_dir / "zeek_dns.jsonl",
+        [
+            _with_log_path(
+                _parsed_dns("DZlXkN35cGKtEu5678", "www.example.com", with_answers=True),
+                "/logstash/zeek/sensor-a/dns.log",
+            ),
+            _with_log_path(
+                _parsed_dns("DQsVmE1aY4JnZq0002", "missing.example.com", with_answers=False),
+                "/logstash/zeek/sensor-a/dns.log",
+            ),
+        ],
+    )
+    progress_events: list[tuple[str, dict[str, object]]] = []
 
     def progress_callback(event_type: str, data: dict[str, object]) -> None:
-        events.append((event_type, data))
+        progress_events.append((event_type, data))
 
-    stage_zeek_logs(
-        fixtures_dir / "external_parser" / "zeek",
-        tmp_path,
-        progress_callback=progress_callback,
-    )
+    validate_parsed_output(manifest, parsed_dir, progress_callback=progress_callback)
 
-    scopes = [data for event_type, data in events if event_type == "validator_scope"]
-    assert {(scope["host"], scope["logtype"], scope["subtype"]) for scope in scopes} == {
-        ("sensor-a", "zeek", "conn"),
-        ("sensor-a", "zeek", "dns"),
+    scopes = [
+        data for event_type, data in progress_events if event_type == "validator_scope_progress"
+    ]
+    assert scopes[-1] == {
+        "host": "sensor-a",
+        "host_completed": 4,
+        "host_total": 4,
+        "logtype": "zeek",
+        "logtype_completed": 4,
+        "logtype_total": 4,
+        "subtype": "dns",
+        "subtype_completed": 2,
+        "subtype_total": 2,
     }
 
 
@@ -270,6 +298,11 @@ def _write_jsonl(path: Path, events: list[dict[str, object]]) -> None:
         "".join(f"{json.dumps(event, sort_keys=True)}\n" for event in events),
         encoding="utf-8",
     )
+
+
+def _with_log_path(event: dict[str, object], path: str) -> dict[str, object]:
+    event["log"] = {"file": {"path": path}}
+    return event
 
 
 def _parsed_conn(session_id: str) -> dict[str, object]:

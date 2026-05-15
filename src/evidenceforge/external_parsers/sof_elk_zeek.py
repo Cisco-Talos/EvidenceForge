@@ -69,6 +69,7 @@ FAILURE_TAGS = {
 JsonObject = dict[str, Any]
 LogType = str
 ProgressCallback = Callable[[str, dict[str, Any]], None]
+ScopeKey = tuple[str, str, str]
 
 
 def _noop_progress(_event_type: str, _data: dict[str, Any]) -> None:
@@ -359,17 +360,12 @@ def find_container_runtime() -> str:
     )
 
 
-def stage_zeek_logs(
-    source_root: Path,
-    staging_root: Path,
-    progress_callback: ProgressCallback = _noop_progress,
-) -> ZeekStageManifest:
+def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
     """Stage generated Zeek JSON files under SOF-ELK's `/logstash/zeek/**` layout.
 
     Args:
         source_root: Root containing generated Zeek files.
         staging_root: Temporary directory where the SOF-ELK-style tree is created.
-        progress_callback: Optional callback for staged log scope progress.
 
     Returns:
         Manifest describing staged files and expected parsed output counts.
@@ -397,16 +393,6 @@ def stage_zeek_logs(
                         log_type=spec.log_type,
                         record_count=record_count,
                     )
-                )
-                progress_callback(
-                    "validator_scope",
-                    {
-                        "host": sensor,
-                        "logtype": "zeek",
-                        "subtype": spec.staged_name.removesuffix(".log"),
-                        "source": str(source),
-                        "record_count": record_count,
-                    },
                 )
                 if spec.log_type == "zeek_dns":
                     dns_expectations.update(_dns_expectations(source))
@@ -560,7 +546,7 @@ def run_sof_elk_zeek_parser(
         directory.mkdir(parents=True, exist_ok=True)
 
     progress_callback("validator_step", {"description": "Staging Zeek files"})
-    manifest = stage_zeek_logs(source_root, staging_dir, progress_callback=progress_callback)
+    manifest = stage_zeek_logs(source_root, staging_dir)
     progress_callback("validator_step", {"description": "Preparing SOF-ELK checkout"})
     sof_elk_dir = ensure_sof_elk_checkout(cache_dir)
     progress_callback("validator_step", {"description": "Building runtime config"})
@@ -583,7 +569,15 @@ def run_sof_elk_zeek_parser(
         timeout_seconds=timeout_seconds,
     )
     progress_callback("validator_step", {"description": "Checking parsed output"})
-    events_by_type = validate_parsed_output(manifest, parsed_dir)
+    try:
+        events_by_type = validate_parsed_output(
+            manifest,
+            parsed_dir,
+            progress_callback=progress_callback,
+        )
+    except SofElkParserError:
+        progress_callback("validator_done", {"description": "SOF-ELK Zeek failed"})
+        raise
     progress_callback("validator_done", {"description": "SOF-ELK Zeek complete"})
     return SofElkZeekResult(
         manifest=manifest,
@@ -597,12 +591,14 @@ def run_sof_elk_zeek_parser(
 def validate_parsed_output(
     manifest: ZeekStageManifest,
     parsed_dir: Path,
+    progress_callback: ProgressCallback = _noop_progress,
 ) -> dict[LogType, list[JsonObject]]:
     """Validate SOF-ELK JSONL output against staged input counts and fields.
 
     Args:
         manifest: Staging manifest describing expected input records.
         parsed_dir: Directory containing SOF-ELK JSONL outputs.
+        progress_callback: Optional callback for parsed-record validation progress.
 
     Returns:
         Parsed events grouped by SOF-ELK label type.
@@ -614,6 +610,12 @@ def validate_parsed_output(
     failures: list[str] = []
     failure_events: list[JsonObject] = []
     events_by_type: dict[LogType, list[JsonObject]] = {log_type: [] for log_type in LOG_TYPES}
+    scope_by_container_path = _scope_by_container_path(manifest)
+    fallback_scope_by_log_type = _fallback_scope_by_log_type(manifest)
+    expected_by_host, expected_by_logtype, expected_by_subtype = _scope_expected_counts(manifest)
+    completed_by_host: Counter[str] = Counter()
+    completed_by_logtype: Counter[tuple[str, str]] = Counter()
+    completed_by_subtype: Counter[ScopeKey] = Counter()
 
     for log_type, expected_count in manifest.expected_counts.items():
         output_path = parsed_dir / f"{log_type}.jsonl"
@@ -626,6 +628,20 @@ def validate_parsed_output(
             )
 
         for index, event in enumerate(events, start=1):
+            scope = _event_scope(
+                event, log_type, scope_by_container_path, fallback_scope_by_log_type
+            )
+            if scope is not None:
+                _update_scope_progress(
+                    scope=scope,
+                    expected_by_host=expected_by_host,
+                    expected_by_logtype=expected_by_logtype,
+                    expected_by_subtype=expected_by_subtype,
+                    completed_by_host=completed_by_host,
+                    completed_by_logtype=completed_by_logtype,
+                    completed_by_subtype=completed_by_subtype,
+                    progress_callback=progress_callback,
+                )
             event_failures = _event_failures(log_type, index, event, manifest)
             failures.extend(event_failures)
             if event_failures:
@@ -650,6 +666,89 @@ def validate_parsed_output(
         )
 
     return events_by_type
+
+
+def _scope_by_container_path(manifest: ZeekStageManifest) -> dict[str, ScopeKey]:
+    return {
+        _container_log_path(manifest, log): _scope_for_staged_log(manifest, log)
+        for log in manifest.logs
+    }
+
+
+def _fallback_scope_by_log_type(manifest: ZeekStageManifest) -> dict[LogType, ScopeKey]:
+    scopes: dict[LogType, ScopeKey] = {}
+    for log in manifest.logs:
+        scopes.setdefault(log.log_type, _scope_for_staged_log(manifest, log))
+    return scopes
+
+
+def _scope_expected_counts(
+    manifest: ZeekStageManifest,
+) -> tuple[Counter[str], Counter[tuple[str, str]], Counter[ScopeKey]]:
+    expected_by_host: Counter[str] = Counter()
+    expected_by_logtype: Counter[tuple[str, str]] = Counter()
+    expected_by_subtype: Counter[ScopeKey] = Counter()
+    for log in manifest.logs:
+        host, logtype, subtype = _scope_for_staged_log(manifest, log)
+        expected_by_host[host] += log.record_count
+        expected_by_logtype[(host, logtype)] += log.record_count
+        expected_by_subtype[(host, logtype, subtype)] += log.record_count
+    return expected_by_host, expected_by_logtype, expected_by_subtype
+
+
+def _scope_for_staged_log(manifest: ZeekStageManifest, log: StagedLog) -> ScopeKey:
+    relative = log.staged.relative_to(manifest.logstash_root)
+    parts = relative.parts
+    host = parts[1] if len(parts) >= 3 and parts[0] == "zeek" else str(relative.parent)
+    subtype = Path(parts[-1]).stem
+    return host, "zeek", subtype
+
+
+def _container_log_path(manifest: ZeekStageManifest, log: StagedLog) -> str:
+    return f"/logstash/{log.staged.relative_to(manifest.logstash_root).as_posix()}"
+
+
+def _event_scope(
+    event: JsonObject,
+    log_type: LogType,
+    scope_by_container_path: dict[str, ScopeKey],
+    fallback_scope_by_log_type: dict[LogType, ScopeKey],
+) -> ScopeKey | None:
+    log_file_path = _get_path(event, "log.file.path")
+    if isinstance(log_file_path, str) and log_file_path in scope_by_container_path:
+        return scope_by_container_path[log_file_path]
+    return fallback_scope_by_log_type.get(log_type)
+
+
+def _update_scope_progress(
+    *,
+    scope: ScopeKey,
+    expected_by_host: Counter[str],
+    expected_by_logtype: Counter[tuple[str, str]],
+    expected_by_subtype: Counter[ScopeKey],
+    completed_by_host: Counter[str],
+    completed_by_logtype: Counter[tuple[str, str]],
+    completed_by_subtype: Counter[ScopeKey],
+    progress_callback: ProgressCallback,
+) -> None:
+    host, logtype, subtype = scope
+    completed_by_host[host] += 1
+    completed_by_logtype[(host, logtype)] += 1
+    completed_by_subtype[scope] += 1
+    progress_callback(
+        "validator_scope_progress",
+        {
+            "host": host,
+            "host_completed": completed_by_host[host],
+            "host_total": expected_by_host[host],
+            "logtype": logtype,
+            "logtype_completed": completed_by_logtype[(host, logtype)],
+            "logtype_total": expected_by_logtype[(host, logtype)],
+            "subtype": subtype,
+            "subtype_completed": completed_by_subtype[scope],
+            "subtype_total": expected_by_subtype[scope],
+        },
+    )
 
 
 def _run_containers(
