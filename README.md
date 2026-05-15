@@ -241,11 +241,14 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive in
 # Install dependencies
 uv sync
 
-# Run tests (1400+ tests)
-uv run pytest
+# Run tests without coverage instrumentation (skips slow by default)
+uv run pytest --no-cov
 
 # Run slow comprehensive workload tests without coverage instrumentation
 uv run pytest --include-slow -m slow --no-cov --durations=20
+
+# Run the release coverage gate before a dev -> main PR
+uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
 # Run specific test suite
 uv run pytest tests/unit/test_network_visibility.py -v

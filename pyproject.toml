@@ -78,8 +78,6 @@ addopts = [
     "-v",
     "--strict-markers",
     "--tb=short",
-    "--cov=evidenceforge",
-    "--cov-report=term-missing",
 ]
 filterwarnings = [
     "error",

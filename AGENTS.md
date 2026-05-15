@@ -69,6 +69,10 @@ When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line su
 
 **Testing:**
 - pytest with pytest-cov, pytest-asyncio, pytest-mock, pytest-benchmark
+- Default test runs should avoid coverage instrumentation: use `uv run pytest --no-cov`
+  for normal local and feature-PR validation. Coverage is a release/readiness
+  gate before `dev` → `main`, run explicitly with
+  `uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70`.
 - Separate test markers: `@pytest.mark.slow` for large dataset/workload tests (not run by default). Run slow tests with `--no-cov` unless you are specifically profiling coverage behavior, because coverage instrumentation makes the generator workload much slower.
 - Target coverage: 95%+ overall, 95%+ for core generation engine
 
@@ -323,6 +327,10 @@ When adding or significantly modifying event types, emitters, or the event schem
 **Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/fixtures/` (shared data)
 
 **Coverage targets:** 95%+ overall, 95%+ core engine, 90%+ formats, 85%+ CLI. Exclude: `__main__.py`, type stubs, test fixtures.
+
+**Default validation:** run `uv run pytest --no-cov` for normal development and
+feature PRs. Run the explicit coverage command only for release readiness before
+opening or updating a `dev` → `main` PR.
 
 **Conventions:**
 - Test naming: `test_<function>_<scenario>_<expected_result>`

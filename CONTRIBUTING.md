@@ -46,14 +46,27 @@ We expect new pull requests to include tests for any affected behavior, and, as
 we follow semantic versioning, we may reserve breaking changes until the next
 major version release.
 
-Before submitting, run the normal coverage-gated suite, the slow comprehensive
-suite without coverage instrumentation, and lint/format checks:
+Before submitting a regular feature or fix pull request, run the normal suite
+without coverage instrumentation plus lint/format checks:
 
 ```bash
-uv run pytest
-uv run pytest --include-slow -m slow --no-cov --durations=20
+uv run pytest --no-cov
 uv run ruff check .
 uv run ruff format --check .
+```
+
+Run the slow comprehensive workload suite without coverage when your change
+touches generation behavior or before a release PR:
+
+```bash
+uv run pytest --include-slow -m slow --no-cov --durations=20
+```
+
+Coverage is reserved for final readiness checks before opening a `dev` → `main`
+release PR:
+
+```bash
+uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 ```
 
 ### Commit Messages
@@ -92,8 +105,8 @@ cd EvidenceForge
 # Install dependencies (requires uv: https://docs.astral.sh/uv/)
 uv sync
 
-# Run the test suite (1100+ tests, skips slow by default)
-uv run pytest
+# Run the test suite without coverage instrumentation (skips slow by default)
+uv run pytest --no-cov
 
 # Lint and format
 uv run ruff check .
@@ -106,8 +119,14 @@ uv run ruff format --check .
   run without coverage instrumentation
 
 ```bash
-uv run pytest                                               # Normal coverage-gated run
-uv run pytest --include-slow -m slow --no-cov --durations=20 # Slow comprehensive run
+# Normal fast run
+uv run pytest --no-cov
+
+# Slow comprehensive run
+uv run pytest --include-slow -m slow --no-cov --durations=20
+
+# Release coverage gate
+uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 ```
 
 ## Code Style

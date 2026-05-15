@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Move coverage to the release lane — default/local and feature-PR tests now run without coverage, final `dev` → `main` readiness keeps explicit coverage and slow comprehensive gates, CI/docs/agent guidance are updated, workflow YAML parses, Ruff checks pass, and `uv run pytest --no-cov` passed in 34.74s.
 - [x] Refresh the v0.7.0 `dev` -> `main` release PR after PR #162 merged into `dev` — confirmed the release PR head includes merge commit `87ac753`, kept the version at `0.7.0`, and updated the changelog with the calibration-cleanup work from PR #162.
 - [x] Split slow comprehensive tests from coverage instrumentation in CI and update contributor/agent testing guidance — normal coverage gate passed at 79.38% with slow tests skipped; slow comprehensive suite passed separately with `--no-cov` in 2m36s; Ruff checks passed.
 - [x] Prepare `dev` → `main` PR for the slow-test CI split — inspected `main..dev`, applied the required v0.7.0 version/changelog bump, stabilized the slow gate, ran release checks, pushed `dev`, and opened the PR into `main`.
