@@ -4443,7 +4443,11 @@ class BaselineMixin:
                     svc_offset = rng.uniform(0, 3599)
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
                     self.state_manager.set_current_time(svc_ts)
-                    svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
+                    svc_image, svc_cmd, svc_parent_key = _pick_svc(
+                        rng,
+                        sys_type_str,
+                        system,
+                    )
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
@@ -4627,7 +4631,7 @@ class BaselineMixin:
                 ):
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
-                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
+                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng, system)
                     parent_pid = sys_pids.get(
                         task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
@@ -5904,6 +5908,7 @@ class BaselineMixin:
         def _status_message(status: int) -> str:
             return {
                 200: "OK",
+                304: "Not Modified",
                 403: "Forbidden",
                 404: "Not Found",
                 405: "Method Not Allowed",
@@ -5985,6 +5990,15 @@ class BaselineMixin:
                     if req.hostname != http_host:
                         continue
                     req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+                    if is_stable_resource_path(req.path) and not req.is_page_load:
+                        cache_seen = getattr(self, "_web_static_cache_seen", None)
+                        if not isinstance(cache_seen, dict):
+                            cache_seen = self._web_static_cache_seen = {}
+                        cache_key = (client_ip, http_host, req.path)
+                        if cache_key in cache_seen:
+                            cache_seen[cache_key] += 1
+                            continue
+                        cache_seen[cache_key] = 1
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=effective_dst_ip,

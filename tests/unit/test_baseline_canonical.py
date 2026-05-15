@@ -1285,6 +1285,89 @@ class TestWebAccessExternalVisitors:
             kw["http"].uri.endswith(".css") or kw["http"].uri.endswith(".js") for kw in collected
         )
 
+    def test_web_server_access_uses_browser_cache_for_repeated_static_assets(self, monkeypatch):
+        """Repeated browser assets from one client should not all hit the server."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import browsing_session, web_session_profiles
+        from evidenceforge.generation.activity.browsing_session import BrowsingRequest
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/",
+                    method="GET",
+                    content_type="text/html",
+                    referrer="",
+                    trans_depth=1,
+                    is_page_load=True,
+                    response_body_len=4096,
+                    request_body_len=0,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=900,
+                    hostname=kwargs["hostname"],
+                    path="/assets/js/app.bundle.1234abcd.js",
+                    method="GET",
+                    content_type="application/javascript",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=2,
+                    is_page_load=False,
+                    response_body_len=180_000,
+                    request_body_len=0,
+                ),
+            ],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (2, 2)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.4.20"
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(4),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        page_rows = [kw for kw in collected if kw["http"].uri == "/"]
+        asset_rows = [
+            kw for kw in collected if kw["http"].uri == "/assets/js/app.bundle.1234abcd.js"
+        ]
+        assert len(page_rows) == 2
+        assert len(asset_rows) == 1
+        assert asset_rows[0]["http"].status_code == 200
+
     def test_web_server_access_keeps_scanner_requests_source_native(self, monkeypatch):
         """Scanner visitors should keep configured error paths and blank referrers."""
         from random import Random

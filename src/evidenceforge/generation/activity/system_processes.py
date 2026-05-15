@@ -63,7 +63,11 @@ def get_system_binary_exes() -> set[str]:
     return exes
 
 
-def get_system_binary_path(exe_name: str, username: str | None = None) -> str | None:
+def get_system_binary_path(
+    exe_name: str,
+    username: str | None = None,
+    host: Any | None = None,
+) -> str | None:
     """Look up the full image path for a system binary by exe name.
 
     Case-insensitive lookup. Resolves ``{username}`` placeholders if
@@ -91,6 +95,8 @@ def get_system_binary_path(exe_name: str, username: str | None = None) -> str | 
         else:
             # No username context — return None to let caller fall back
             return None
+    if path:
+        path = _resolve_host_placeholders(path, host)
     return path
 
 
@@ -106,7 +112,28 @@ def _resolve_template(template: str, rng: random.Random, entry_params: dict | No
     return result
 
 
-def pick_scheduled_task(rng: random.Random) -> tuple[str, str, str]:
+def _windows_servicing_stack_version(host: Any | None) -> str:
+    """Return a plausible servicing-stack component version for a Windows host."""
+    os_name = str(getattr(host, "os", "") or "").lower() if host is not None else ""
+    system_type = str(getattr(host, "system_type", getattr(host, "type", "")) or "").lower()
+    if "windows 11" in os_name:
+        return "10.0.22621.3155"
+    if "server" in os_name or system_type in {"server", "domain_controller"}:
+        if "2019" in os_name:
+            return "10.0.17763.5329"
+        return "10.0.20348.2322"
+    return "10.0.19041.3636"
+
+
+def _resolve_host_placeholders(value: str, host: Any | None = None) -> str:
+    """Resolve host-owned placeholders in system-process paths and commands."""
+    return value.replace(
+        "{servicing_stack_version}",
+        _windows_servicing_stack_version(host),
+    )
+
+
+def pick_scheduled_task(rng: random.Random, host: Any | None = None) -> tuple[str, str, str]:
     """Pick a random scheduled task.
 
     Returns (image_path, command_line, parent_key).
@@ -119,11 +146,17 @@ def pick_scheduled_task(rng: random.Random) -> tuple[str, str, str]:
     entry = rng.choice(tasks)
     cmd_template = rng.choice(entry["command_templates"])
     cmd = _resolve_template(cmd_template, rng, entry.get("params"))
-    return entry["image"], cmd, entry.get("parent", "services")
+    return (
+        _resolve_host_placeholders(entry["image"], host),
+        _resolve_host_placeholders(cmd, host),
+        entry.get("parent", "services"),
+    )
 
 
 def pick_system_service_process(
-    rng: random.Random, host_type: str = "workstation"
+    rng: random.Random,
+    host_type: str = "workstation",
+    host: Any | None = None,
 ) -> tuple[str, str, str]:
     """Pick a random system service process appropriate for the host role.
 
@@ -151,4 +184,8 @@ def pick_system_service_process(
     entry = rng.choice(pool)
     cmd_template = rng.choice(entry["command_templates"])
     cmd = _resolve_template(cmd_template, rng, entry.get("params"))
-    return entry["image"], cmd, entry.get("parent", "services")
+    return (
+        _resolve_host_placeholders(entry["image"], host),
+        _resolve_host_placeholders(cmd, host),
+        entry.get("parent", "services"),
+    )

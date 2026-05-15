@@ -277,7 +277,6 @@ class SyslogEmitter(HostMultiplexEmitter):
         next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
         prewindow_next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
         rewritten_by_original: dict[tuple[str, str], int] = {}
-        prewindow_removed_by_original: dict[tuple[str, str], int] = {}
         normalized: list[str] = []
         for index, line in enumerate(lines):
             new_match = _LOGIND_NEW_SESSION_RE.search(line)
@@ -304,22 +303,17 @@ class SyslogEmitter(HostMultiplexEmitter):
                 rewritten = rewritten_by_original.get(key)
                 if rewritten is None:
                     pid = removed_match.group("pid")
-                    session = int(removed_match.group("session"))
-                    first_visible = max(2, first_by_pid.get(pid, session + 1))
-                    if session >= first_visible:
-                        rewritten = prewindow_removed_by_original.get(key)
-                        if rewritten is None:
-                            step_seed = _stable_seed(
-                                "syslog_logind_prewindow_session_step:"
-                                f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
-                            )
-                            prewindow_next_by_pid[pid] = (
-                                prewindow_next_by_pid.get(pid, first_visible - 1)
-                                - 1
-                                - (step_seed % 3)
-                            )
-                            rewritten = prewindow_next_by_pid[pid]
-                            prewindow_removed_by_original[key] = rewritten
+                    first_visible = max(
+                        2, first_by_pid.get(pid, int(removed_match.group("session")) + 1)
+                    )
+                    step_seed = _stable_seed(
+                        "syslog_logind_prewindow_session_step:"
+                        f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
+                    )
+                    prewindow_next_by_pid[pid] = (
+                        prewindow_next_by_pid.get(pid, first_visible - 1) - 1 - (step_seed % 3)
+                    )
+                    rewritten = prewindow_next_by_pid[pid]
                 if rewritten is not None:
                     line = (
                         f"{line[: removed_match.start('session')]}"

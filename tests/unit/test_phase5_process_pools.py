@@ -23,6 +23,7 @@
 """Unit tests for Phase 5.1.4: Expanded process template pools."""
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from evidenceforge.generation.activity import (
@@ -32,7 +33,10 @@ from evidenceforge.generation.activity import (
     PROCESS_TEMPLATES_LINUX,
     ActivityGenerator,
 )
-from evidenceforge.generation.activity.system_processes import load_system_processes
+from evidenceforge.generation.activity.system_processes import (
+    _resolve_host_placeholders,
+    load_system_processes,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
@@ -113,6 +117,19 @@ class TestProcessPoolSize:
         assert "SearchProtocolHost.exe {search_pipe_args}" == command
         assert all("S-1-5-21 1" not in arg for arg in params)
         assert all("UsGthrCtrlFltPipeMssGthrPipe" in arg for arg in params)
+
+    def test_tiworker_servicing_stack_placeholder_resolves_by_host_build(self):
+        """TiWorker WinSxS component paths should follow the host OS family."""
+        template = (
+            r"C:\Windows\WinSxS\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_"
+            r"{servicing_stack_version}_none_7c91d6e7c9f7f1f5\TiWorker.exe"
+        )
+
+        workstation = SimpleNamespace(os="Windows 10 Enterprise", type="workstation")
+        server = SimpleNamespace(os="Windows Server 2022", type="server")
+
+        assert "10.0.19041.3636" in _resolve_host_placeholders(template, workstation)
+        assert "10.0.20348.2322" in _resolve_host_placeholders(template, server)
 
 
 class TestBaselinePatterns:

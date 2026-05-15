@@ -504,6 +504,9 @@ class SysmonEventEmitter(LogEmitter):
             return metadata
         if not cls._is_windows_os_binary_path(image_path):
             return metadata
+        component_version = cls._servicing_stack_version_from_path(image_path)
+        if component_version and orig.lower() == "tiworker.exe":
+            return component_version, desc, prod, company, orig
         return cls._host_windows_file_version(host), desc, prod, company, orig
 
     @staticmethod
@@ -514,6 +517,19 @@ class SysmonEventEmitter(LogEmitter):
             or "\\windows\\syswow64\\" in image_lower
             or image_lower.startswith("c:\\windows\\")
         )
+
+    @staticmethod
+    def _servicing_stack_version_from_path(image_path: str) -> str:
+        image_lower = image_path.replace("/", "\\").lower()
+        marker = "microsoft-windows-servicingstack_31bf3856ad364e35_"
+        if marker not in image_lower:
+            return ""
+        tail = image_lower.split(marker, 1)[1]
+        version = tail.split("_", 1)[0]
+        parts = version.split(".")
+        if len(parts) == 4 and all(part.isdigit() for part in parts):
+            return version
+        return ""
 
     @staticmethod
     def _host_windows_file_version(host: Any) -> str:

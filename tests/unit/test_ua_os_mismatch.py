@@ -135,6 +135,20 @@ class TestProxyUriOsFiltering:
             assert content_type in allowed_types
             assert referrer_policy == "none"
 
+    def test_standalone_static_proxy_paths_do_not_claim_same_origin_referrers(self):
+        """Single proxy asset requests should not imply an unseen page load."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        path, _content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
+            random.Random(0),
+            "example.org",
+            ["web"],
+            source_os="windows",
+        )
+
+        assert path == "/favicon.ico"
+        assert referrer_policy == "none"
+
     def test_non_browser_proxy_domains_are_not_browser_session_targets(self):
         """Proxy domain_class controls whether a host can use browser-style site maps."""
         from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain

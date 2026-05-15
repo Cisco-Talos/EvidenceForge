@@ -800,6 +800,54 @@ class TestCanHandleDefault:
         assert first_removed < new_session
         assert later_removed == new_session
 
+    def test_syslog_rewrites_duplicate_prewindow_logind_removals_uniquely(self, tmp_path):
+        """Removed-only logind rows should not collapse to one duplicate session ID."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        for timestamp, message in [
+            (
+                datetime(2024, 3, 18, 12, 1, 55, tzinfo=UTC),
+                "Removed session 12940.",
+            ),
+            (
+                datetime(2024, 3, 18, 12, 9, 11, tzinfo=UTC),
+                "Removed session 12940.",
+            ),
+            (
+                datetime(2024, 3, 18, 12, 18, 13, tzinfo=UTC),
+                "New session 12945 of user root.",
+            ),
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "systemd-logind",
+                    "pid": 24094,
+                    "facility": 10,
+                    "severity": 6,
+                    "message": message,
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        removed_sessions = [
+            int(line.split("Removed session ", 1)[1].rstrip("."))
+            for line in lines
+            if "Removed session" in line
+        ]
+        new_session = int(lines[-1].split("New session ", 1)[1].split(" ", 1)[0])
+
+        assert len(removed_sessions) == len(set(removed_sessions))
+        assert all(session < new_session for session in removed_sessions)
+
     def test_syslog_sorts_same_second_ssh_lifecycle(self, tmp_path):
         """Same-second SSH syslog groups should keep lifecycle order."""
         from datetime import UTC, datetime

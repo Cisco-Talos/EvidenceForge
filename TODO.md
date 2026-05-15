@@ -265,6 +265,22 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
   - Loop 5 regeneration/eval hard-probe follow-up fix pass completed and verified: regeneration from `508501c` passed quantitative eval at `95.70` JSON overall (`96/100` human-readable) across `83,915` records, and hard probes kept Zeek `trans_depth`, service-logon parentage, DB role drift, Windows eCAR TID shape, Zeek analyzer timing bounds, and SSH ordering clean. The same probes caught remaining curl/proxy host mismatches caused by profile-driven traffic being attributed to a still-running one-shot CLI process; fixed canonical connection generation to derive HTTP/proxy destination metadata from the owning process command when an attributed PID has a concrete HTTP URL. Verification passed with focused CLI/proxy tests, related activity/source tests (`340 passed, 1 skipped`), `uv run eforge validate-config`, Ruff checks/format checks, and full normal `uv run pytest --no-cov -q` (`3077 passed, 37 skipped`).
   - Loop 5 final regeneration/eval completed from commit `811b2f1`: regenerated `scenarios/iteration-test/scenario.yaml`, quantitative eval passed at `95.26` JSON overall (`95/100` human-readable) across `93,567` records, and hard probes found zero CLI/proxy host mismatches, zero `api.example.com` remnants, zero HTTP `trans_depth > 1` rows, zero service-logon Explorer/medium-integrity/nonzero-terminal contradictions, zero DB-host web-admin command hits, zero expandable Linux quoted-glob commands, zero Windows eCAR TID morphology violations, zero Zeek file/x509 connection-bound violations, and zero SSH exact-one-second/order violations.
   - Loop 5 blind review completed against `/private/tmp/eforge-assess-loop5-neutral-811b2f1-20260515T2109/data`. Blind synthetic-confidence scores were Threat Hunter `72`, Detection `72`, Network `78`, Host/EDR `78` (average `75.0`). Top next fix targets are duplicate Linux `systemd-logind` session removals/SSH lifecycle state, web asset-before-document ordering plus cache behavior, Windows WinSxS component path/build identity, PsExec service-process lineage/privilege semantics, and lower-priority endpoint observation smoothness/command-pool variance.
+  - Loop 6 fix pass completed and verified: duplicate pre-window `systemd-logind`
+    removals now receive unique rendered session IDs, web page-asset fanout timing
+    stays beyond source-observation delay windows, repeated fingerprinted web assets
+    are served from browser cache instead of repeatedly hitting the server, standalone
+    proxy static-asset requests no longer claim unseen same-origin page referrers,
+    and TiWorker WinSxS component paths/metadata resolve by host Windows build.
+    Verification passed with `uv run eforge validate-config`, focused
+    syslog/web/proxy/TiWorker regressions, `uv run ruff check .`,
+    `uv run ruff format --check .`, and full normal `uv run pytest --no-cov -q`
+    (`3082 passed, 37 skipped`).
+  - [x] Loop 6 hard-probe follow-up: one residual rendered Zeek DMZ static asset
+    still appeared before its same-origin page after source-native conn/http offsets,
+    so widened the data-driven web asset fanout windows beyond the combined Zeek
+    observation offsets. Verification passed with focused timing/cache regressions,
+    `uv run eforge validate-config`, Ruff checks/format checks, and full normal
+    `uv run pytest --no-cov -q` (`3082 passed, 37 skipped`).
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 

@@ -14,7 +14,10 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
+from evidenceforge.generation.activity.http_content import (
+    is_stable_resource_path,
+    normalize_mime_type_for_path,
+)
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -166,5 +169,7 @@ def pick_proxy_uri(
     path = _substitute_vars(rng, path, data)
 
     content_type = normalize_mime_type_for_path(path, content_type)
+    if referrer_policy != "none" and is_stable_resource_path(path):
+        referrer_policy = "none"
 
     return path, content_type, method, user_agent, referrer_policy
