@@ -705,6 +705,36 @@ class TestBeaconProxyMatcher:
         assert scorer._beacon_dst_matches(fields, "evil.example.com")
         assert not scorer._beacon_dst_matches(fields, "other.example.com")
 
+    def test_search_finds_explicit_proxy_beacon_by_hostname(self):
+        """Beacon evidence can be indexed by proxy host, not only by origin IPs."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        proxy_rec = _record(
+            "proxy_access",
+            {"host": "api.evil.example.com", "status_code": 200, "method": "GET"},
+            ts=T0 + timedelta(seconds=10),
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="allowed c2",
+            details={
+                "dst_ip": "45.33.32.30",
+                "dst_port": 443,
+                "hostname": "api.evil.example.com",
+            },
+            event_types=["beacon"],
+        )
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index({"proxy_access": [proxy_rec]})
+
+        traces = scorer._search_for_event_indexed(event, "beacon", index)
+
+        assert traces == [proxy_rec]
+
     def test_beacon_allow_proxy_matches_ip_url_host(self):
         """_beacon_dst_matches should match IP found in the URL authority host."""
         scorer = CrossSourceScorer()
@@ -794,6 +824,623 @@ class TestBeaconProxyMatcher:
         )
         scorer = CrossSourceScorer()
         assert not scorer._record_matches(proxy_rec, "proxy_access", event, "beacon")
+
+    def test_logoff_matcher_accepts_ecar_logout(self):
+        """eCAR USER_SESSION/LOGOUT rows should satisfy logoff event presence."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        logout_rec = _record(
+            "ecar",
+            {
+                "hostname": "APP-INT-01",
+                "object": "USER_SESSION",
+                "action": "LOGOUT",
+                "principal": "root",
+            },
+            ts=T0,
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="APP-INT-01",
+            system_ip="10.10.2.30",
+            activity="logout",
+            details={},
+            event_types=["logoff"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert scorer._record_matches(logout_rec, "ecar", event, "logoff")
+
+    def test_logoff_matcher_rejects_wrong_windows_user(self):
+        """Windows logoff rows should not attach to another user's same-host session."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="svc_mhsync",
+            system="FILE-SRV-01",
+            system_ip="10.10.2.20",
+            activity="logout",
+            details={},
+            event_types=["logoff"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(
+            _record(
+                "windows_event_security",
+                {
+                    "EventID": 4634,
+                    "Computer": "FILE-SRV-01",
+                    "TargetUserName": "sophia.martinez",
+                },
+                ts=T0,
+            ),
+            "windows_event_security",
+            event,
+            "logoff",
+        )
+        assert scorer._record_matches(
+            _record(
+                "windows_event_security",
+                {
+                    "EventID": 4634,
+                    "Computer": "FILE-SRV-01",
+                    "TargetUserName": "svc_mhsync",
+                },
+                ts=T0,
+            ),
+            "windows_event_security",
+            event,
+            "logoff",
+        )
+
+    def test_zeek_connection_match_requires_authored_source_ip(self):
+        """A same-destination Zeek row should not match if source_ip disagrees."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="attacker",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="SQL injection",
+            details={"source_ip": "185.70.41.45", "dst_ip": "10.10.3.10"},
+            event_types=["connection"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._connection_matches_zeek(
+            {"id.orig_h": "10.10.3.20", "id.resp_h": "10.10.3.10"},
+            event,
+        )
+        assert scorer._connection_matches_zeek(
+            {"id.orig_h": "185.70.41.45", "id.resp_h": "10.10.3.10"},
+            event,
+        )
+
+    def test_zeek_connection_match_prefers_explicit_tuple_over_story_host(self):
+        """Explicit source/destination/port should beat the storyline system IP fallback."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="APP-INT-01",
+            system_ip="10.10.2.30",
+            activity="failed ssh pivot",
+            details={
+                "source_ip": "10.10.3.10",
+                "dst_ip": "10.10.3.20",
+                "dst_port": 22,
+            },
+            event_types=["connection"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._connection_matches_zeek(
+            {
+                "id.orig_h": "10.10.2.30",
+                "id.orig_p": 8,
+                "id.resp_h": "10.10.3.20",
+                "id.resp_p": 0,
+            },
+            event,
+        )
+        assert not scorer._connection_matches_zeek(
+            {
+                "id.orig_h": "10.10.3.10",
+                "id.orig_p": 50000,
+                "id.resp_h": "10.10.3.20",
+                "id.resp_p": 8080,
+            },
+            event,
+        )
+        assert scorer._connection_matches_zeek(
+            {
+                "id.orig_h": "10.10.3.10",
+                "id.orig_p": 50000,
+                "id.resp_h": "10.10.3.20",
+                "id.resp_p": 22,
+            },
+            event,
+        )
+
+    def test_ecar_connection_match_uses_directional_ip_roles(self):
+        """A reverse callback should not match an earlier inbound upload tuple."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="apache",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="upload and reverse shell",
+            details={"dst_ip": "45.33.32.30"},
+            event_types=["connection"],
+            sub_details=[
+                {
+                    "source_ip": "185.70.41.45",
+                    "dst_ip": "10.10.3.10",
+                    "description": "web shell upload",
+                },
+                {"dst_ip": "45.33.32.30", "description": "reverse shell callback"},
+            ],
+        )
+
+        assert not CrossSourceScorer._connection_ip_matches(
+            {"src_ip": "10.10.3.10", "dst_ip": "185.70.41.45"},
+            event,
+        )
+        assert CrossSourceScorer._connection_ip_matches(
+            {"src_ip": "10.10.3.10", "dst_ip": "45.33.32.30"},
+            event,
+        )
+
+    def test_ecar_connection_match_ignores_partial_source_only_detail_when_dst_exists(self):
+        """Mixed connection/session details should not match by source IP alone."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="APP-INT-01",
+            system_ip="10.10.2.30",
+            activity="ssh pivot",
+            details={"dst_ip": "10.10.3.20", "dst_port": 22, "source_ip": "10.10.3.10"},
+            event_types=["connection", "ssh_session"],
+            sub_details=[
+                {"dst_ip": "10.10.3.20", "dst_port": 22, "source_ip": "10.10.3.10"},
+                {"source_ip": "10.10.3.10"},
+            ],
+        )
+
+        assert not CrossSourceScorer._connection_ip_matches(
+            {"src_ip": "10.10.3.10", "dst_ip": "10.10.3.20", "dst_port": 8080},
+            event,
+        )
+        assert CrossSourceScorer._connection_ip_matches(
+            {"src_ip": "10.10.3.10", "dst_ip": "10.10.3.20", "dst_port": 22},
+            event,
+        )
+
+    def test_ssh_session_match_requires_actor_and_source_for_accept_line(self):
+        """SSH session traces should not attach unrelated same-host logins."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="APP-INT-01",
+            system_ip="10.10.2.30",
+            activity="ssh pivot",
+            details={"source_ip": "10.10.3.10"},
+            event_types=["ssh_session"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(
+            _record(
+                "syslog",
+                {
+                    "hostname": "APP-INT-01",
+                    "message": "Accepted password for aisha.johnson from 10.10.1.35 port 58516 ssh2",
+                },
+                ts=T0,
+            ),
+            "syslog",
+            event,
+            "ssh_session",
+        )
+        assert scorer._record_matches(
+            _record(
+                "syslog",
+                {
+                    "hostname": "APP-INT-01",
+                    "message": "Accepted password for root from 10.10.3.10 port 36592 ssh2",
+                },
+                ts=T0,
+            ),
+            "syslog",
+            event,
+            "ssh_session",
+        )
+
+    def test_failed_logon_indicator_uses_target_username(self):
+        """Failed-logon rows should be checked against the target account, not actor."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="LT-MRIVERA-02",
+            system_ip="10.10.1.99",
+            activity="wrong password fumble",
+            details={"target_username": "aisha.johnson"},
+            event_types=["failed_logon"],
+        )
+
+        assert CrossSourceScorer._username_indicator_matches("aisha.johnson", event)
+        assert not CrossSourceScorer._username_indicator_matches("root", event)
+
+    def test_ipv4_mapped_source_indicator_matches_plain_ipv4(self):
+        """Windows IPv4-mapped addresses should not create source mismatch noise."""
+        assert CrossSourceScorer._ip_matches("::ffff:10.10.1.99", "10.10.1.99")
+
+    def test_group_member_indicator_uses_member_name_not_group_target(self):
+        """4728 TargetUserName is the group, while MemberName carries the account."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="SYSTEM",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="add backdoor account",
+            details={"member_name": "svc_mhsync", "group_name": "Domain Admins"},
+            event_types=["group_member_added"],
+        )
+        trace = _record(
+            "windows_event_security",
+            {
+                "EventID": 4728,
+                "Computer": "DC-01",
+                "TargetUserName": "Domain Admins",
+                "MemberName": "CN=svc_mhsync,CN=Users,DC=corp,DC=local",
+            },
+            ts=T0,
+        )
+
+        assert CausalityScorer()._check_indicators(event, trace)[0] == ("username", True)
+
+    def test_web_scan_matcher_requires_nikto_profile_evidence(self):
+        """Web scan traces should not attach generic favicon/browser requests."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="nikto web scan",
+            details={
+                "source_ip": "185.70.41.45",
+                "dst_ip": "10.10.3.10",
+                "dst_port": 443,
+                "preset": "nikto",
+            },
+            event_types=["web_scan"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(
+            ParsedRecord(
+                source_format="web_access",
+                raw="test",
+                fields={
+                    "client_ip": "185.70.41.45",
+                    "user_agent": "Mozilla/5.0 Chrome/121.0",
+                },
+                timestamp=T0,
+                source_host="WEB-EXT-01",
+            ),
+            "web_access",
+            event,
+            "web_scan",
+        )
+        assert scorer._record_matches(
+            ParsedRecord(
+                source_format="web_access",
+                raw="test",
+                fields={
+                    "client_ip": "185.70.41.45",
+                    "user_agent": "Mozilla/5.00 (Nikto/2.1.6)",
+                },
+                timestamp=T0,
+                source_host="WEB-EXT-01",
+            ),
+            "web_access",
+            event,
+            "web_scan",
+        )
+        assert not scorer._record_matches(
+            _record(
+                "zeek_conn",
+                {
+                    "id.orig_h": "185.70.41.45",
+                    "id.resp_h": "10.10.3.10",
+                    "id.resp_p": 443,
+                    "conn_state": "S0",
+                },
+                ts=T0,
+            ),
+            "zeek_conn",
+            event,
+            "web_scan",
+        )
+        assert not scorer._record_matches(
+            _record(
+                "zeek_conn",
+                {
+                    "id.orig_h": "185.70.41.45",
+                    "id.resp_h": "10.10.3.10",
+                    "id.resp_p": 443,
+                    "conn_state": "RSTR",
+                },
+                ts=T0,
+            ),
+            "zeek_conn",
+            event,
+            "web_scan",
+        )
+
+    def test_process_matcher_requires_storyline_process_detail(self):
+        """Generic same-host process creates should not attach to precise process steps."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="SYSTEM",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="clear security log",
+            details={
+                "process_name": r"C:\Windows\System32\wevtutil.exe",
+                "command_line": "wevtutil cl Security",
+            },
+            event_types=["process"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(
+            _record(
+                "windows_event_security",
+                {
+                    "EventID": 4688,
+                    "Computer": "DC-01",
+                    "SubjectUserName": "SYSTEM",
+                    "NewProcessName": r"C:\Windows\System32\RuntimeBroker.exe",
+                    "CommandLine": "RuntimeBroker.exe -Embedding",
+                },
+                ts=T0,
+            ),
+            "windows_event_security",
+            event,
+            "process",
+        )
+        assert scorer._record_matches(
+            _record(
+                "windows_event_security",
+                {
+                    "EventID": 4688,
+                    "Computer": "DC-01",
+                    "SubjectUserName": "SYSTEM",
+                    "NewProcessName": r"C:\Windows\System32\wevtutil.exe",
+                    "CommandLine": "wevtutil cl Security",
+                },
+                ts=T0,
+            ),
+            "windows_event_security",
+            event,
+            "process",
+        )
+
+    def test_process_indicator_uses_actor_not_target_account(self):
+        """Process traces in account-management steps should validate the actor principal."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="SYSTEM",
+            system="DC-01",
+            system_ip="10.10.2.10",
+            activity="create backdoor account",
+            details={"target_username": "svc_mhsync"},
+            event_types=["process", "account_created"],
+        )
+        trace = _record(
+            "ecar",
+            {
+                "hostname": "DC-01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "principal": "SYSTEM",
+            },
+            ts=T0,
+        )
+
+        assert CausalityScorer()._check_indicators(event, trace)[0] == ("username", True)
+
+    def test_beacon_proxy_matcher_requires_expected_source_host(self):
+        """Same C2 hostname from another host should not attach to this beacon step."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="root",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="beacon",
+            details={"dst_ip": "45.33.32.30", "hostname": "api.example.net", "dst_port": 443},
+            event_types=["beacon"],
+        )
+        scorer = CrossSourceScorer()
+        scorer._proxy_ips = {"10.10.3.20"}
+
+        assert not scorer._record_matches(
+            _record(
+                "zeek_http",
+                {
+                    "id.orig_h": "10.10.2.10",
+                    "id.resp_h": "10.10.3.20",
+                    "host": "api.example.net",
+                    "status_code": 200,
+                },
+                ts=T0,
+            ),
+            "zeek_http",
+            event,
+            "beacon",
+        )
+        assert scorer._record_matches(
+            _record(
+                "zeek_http",
+                {
+                    "id.orig_h": "10.10.3.10",
+                    "id.resp_h": "10.10.3.20",
+                    "host": "api.example.net",
+                    "status_code": 200,
+                },
+                ts=T0,
+            ),
+            "zeek_http",
+            event,
+            "beacon",
+        )
+
+    def test_best_sub_detail_prefers_directional_ip_roles(self):
+        """Indicator checks should choose the reverse-shell detail for callback traces."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="apache",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="upload and reverse shell",
+            details={"dst_ip": "45.33.32.30"},
+            event_types=["connection"],
+            sub_details=[
+                {"source_ip": "185.70.41.45", "dst_ip": "10.10.3.10"},
+                {"dst_ip": "45.33.32.30"},
+            ],
+        )
+
+        best = CrossSourceScorer._best_sub_detail(
+            event,
+            {"src_ip": "10.10.3.10", "dst_ip": "45.33.32.30"},
+        )
+
+        assert best == {"dst_ip": "45.33.32.30"}
+
+    def test_raw_matcher_requires_target_format_and_fields(self):
+        """Raw storyline rows should not match every record in the time window."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="apache",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="raw apache error",
+            details={
+                "target_format": "syslog",
+                "fields": {
+                    "hostname": "WEB-EXT-01",
+                    "app_name": "apache2",
+                    "message": "SQLSTATE[42000]: syntax error near UNION SELECT",
+                },
+            },
+            event_types=["raw"],
+        )
+        scorer = CrossSourceScorer()
+
+        assert not scorer._record_matches(
+            _record("ecar", {"hostname": "WEB-EXT-01", "object": "FLOW"}, ts=T0),
+            "ecar",
+            event,
+            "raw",
+        )
+        assert not scorer._record_matches(
+            _record("syslog", {"hostname": "WEB-EXT-01", "app_name": "sshd"}, ts=T0),
+            "syslog",
+            event,
+            "raw",
+        )
+        assert scorer._record_matches(
+            _record(
+                "syslog",
+                {
+                    "hostname": "WEB-EXT-01",
+                    "app_name": "apache2",
+                    "message": "PHP message: SQLSTATE[42000]: syntax error near UNION SELECT",
+                },
+                ts=T0,
+            ),
+            "syslog",
+            event,
+            "raw",
+        )
+
+    def test_http_connection_search_allows_modest_forward_trace_drift(self):
+        """Web exploit steps may render exact network evidence a few minutes later."""
+        from evidenceforge.evaluation.storyline import ResolvedEvent
+
+        zeek_rec = _record(
+            "zeek_conn",
+            {
+                "id.orig_h": "185.70.41.45",
+                "id.resp_h": "10.10.3.10",
+                "id.resp_p": 443,
+            },
+            ts=T0 + timedelta(minutes=5),
+        )
+        event = ResolvedEvent(
+            index=0,
+            time=T0,
+            actor="apache",
+            system="WEB-EXT-01",
+            system_ip="10.10.3.10",
+            activity="SQL injection",
+            details={
+                "source_ip": "185.70.41.45",
+                "dst_ip": "10.10.3.10",
+                "dst_port": 443,
+                "method": "POST",
+                "uri": "/ehr/patient/search",
+            },
+            event_types=["connection"],
+        )
+        scorer = CrossSourceScorer()
+        index = scorer._build_host_time_index({"zeek_conn": [zeek_rec]})
+
+        assert scorer._search_for_event_indexed(event, "connection", index) == [zeek_rec]
 
 
 class TestPortScanSourceIp:

@@ -210,6 +210,7 @@ class TestEventPresence:
                         "EventID": 4688,
                         "Computer": "WS-01",
                         "SubjectUserName": "jsmith",
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
                     },
                     ts=T0 + timedelta(hours=2),
                 ),
@@ -459,6 +460,7 @@ class TestPivotLinkability:
                         "EventID": 4688,
                         "Computer": "WS-01",
                         "SubjectUserName": "jsmith",
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
                     },
                     ts=T0 + timedelta(hours=2),
                 ),
@@ -540,6 +542,7 @@ class TestTemporalIntegrity:
                         "EventID": 4688,
                         "Computer": "WS-01",
                         "SubjectUserName": "jsmith",
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
                     },
                     ts=T0 + timedelta(hours=2),
                 ),
@@ -547,6 +550,57 @@ class TestTemporalIntegrity:
         }
         scorer = SignalIntegrityScorer()
         result = scorer.score(records, scenario)
+        ti = next(s for s in result.sub_scores if s.key == "temporal_integrity")
+        assert ti.score == 100.0
+
+    def test_delayed_previous_trace_does_not_create_false_order_failure(self):
+        """Source delay on an earlier step should not make overlapping later evidence fail."""
+        scenario = _scenario_with_storyline(
+            [
+                {
+                    "id": "evt-test-15a",
+                    "time": "+1h",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Login to workstation",
+                    "events": [{"type": "logon"}],
+                },
+                {
+                    "id": "evt-test-15b",
+                    "time": "+1h1m",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Execute command",
+                    "events": [{"type": "process", "process_name": "cmd.exe"}],
+                },
+            ]
+        )
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4624,
+                        "TargetUserName": "jsmith",
+                        "Computer": "WS-01",
+                    },
+                    ts=T0 + timedelta(hours=1, seconds=90),
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "Computer": "WS-01",
+                        "SubjectUserName": "jsmith",
+                        "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
+                    },
+                    ts=T0 + timedelta(hours=1, minutes=1, seconds=10),
+                ),
+            ],
+        }
+
+        result = SignalIntegrityScorer().score(records, scenario)
+
         ti = next(s for s in result.sub_scores if s.key == "temporal_integrity")
         assert ti.score == 100.0
 

@@ -163,3 +163,7 @@ pairs:
     match_fields:
       before: TargetUserName
       after: TargetUserName
+    # 4624 rows occur on target systems while 4768 rows occur on DCs, and the
+    # shared username key is weak. A later matching TGT is not proof that a
+    # target-host logon inverted Kerberos causality.
+    allow_missing_prior: true

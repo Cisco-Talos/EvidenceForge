@@ -629,6 +629,8 @@ class TestSslUidCorrelation:
         assert ssl_ts < x509_ts <= conn_ts + ((ssl_window.max_ms + x509_window.max_ms) / 1000)
         assert x509_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
+        assert "revoketime" not in ocsp_row
+        assert "revokereason" not in ocsp_row
         assert "uid" not in ocsp_row
         assert "id.orig_h" not in ocsp_row
         assert "id.resp_h" not in ocsp_row

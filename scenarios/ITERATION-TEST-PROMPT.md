@@ -95,12 +95,13 @@
      `src_ip`. Produces ASA 106023 denies + Zeek S0 conn entries on external-facing
      sensors only (not internal sensors).
 
-  2. Web Scan (+0h30m): External attacker runs web vulnerability scanning against WEB-EXT-01.
+  2. Web Scan (+0h31m): External attacker runs web vulnerability scanning against WEB-EXT-01.
      Use a `web_scan` event with `source_ip: "185.70.41.45"`, `dst_ip: "10.10.3.10"`,
      `dst_port: 443`, `hostname: "ehr-portal.meridianhcs.com"`, `preset: nikto`,
      `rate: 10`, and exactly one termination field: `duration: "20m"`. Do not use
-     `src_ip`. Run concurrently with the port scan. Expect 733100 threat-detection
-     alerts during this phase.
+     `src_ip`. Start one minute after the port scan so timing checks do not see
+     identical step timestamps, while still overlapping the scan activity. Expect
+     733100 threat-detection alerts during this phase.
 
   3. Rogue Device (+0h45m): Attacker plugs rogue laptop into network, obtains IP via DHCP.
      Use a `dhcp_lease` event on the parent storyline `system` for the rogue device.
@@ -172,7 +173,7 @@
       interval: "10m", duration: "1h30m", jitter: 0.3, hostname, user_agent, method: GET,
       orig_bytes/resp_bytes for realistic sizing).
 
-  18. Blocked C2 (+4h30m): Attacker malware on DC-01 also attempts to beacon directly to
+  18. Blocked C2 (+4h31m): Attacker malware on DC-01 also attempts to beacon directly to
       45.33.32.30:443 — blocked by firewall (server_vlan → external not in policy). Use beacon
       event with action: deny, interval: "30m", duration: "1h30m". Denied attempts visible to
       internal sensors only.
@@ -185,7 +186,7 @@
       length_range: [10, 18], interval: "30s", duration: "45m",
       rcode_distribution for mostly NXDOMAIN).
 
-  21. Collection (+5h): Authenticate to FILE-SRV-01 with backdoor account svc_mhsync
+  21. Collection (+5h01m): Authenticate to FILE-SRV-01 with backdoor account svc_mhsync
       (logon event, type 3), enumerate shares, stage financial and patient data, compress
       with PowerShell Compress-Archive.
 
