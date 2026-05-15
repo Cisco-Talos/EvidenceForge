@@ -25,10 +25,15 @@
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.evaluation.pillars.causality import CausalityScorer
 from evidenceforge.evaluation.pillars.plausibility import PlausibilityScorer
 from evidenceforge.evaluation.visibility import VisibilityModel
+from evidenceforge.events.observation_manifest import (
+    ObservationManifest,
+    ObservationManifestEvent,
+)
 
 # Alias for tests that use the old CrossSourceScorer name
 CrossSourceScorer = CausalityScorer
@@ -558,6 +563,102 @@ class TestHostLogProfile:
         assert "pivot_linkability" in keys
         assert "temporal_integrity" in keys
         assert "storyline_trace_coverage" in keys
+
+
+class TestObservationAwareCausality:
+    """Causality coverage scoring should honor observation-profile manifests."""
+
+    def test_dropped_storyline_evidence_is_excluded_from_presence_gate(self):
+        """Expected dropped evidence should not fail event_presence."""
+        scenario = _make_scenario(
+            storyline=[
+                {
+                    "id": "step-001",
+                    "time": "+10m",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Run PowerShell",
+                    "events": [{"type": "process", "process_name": "powershell.exe"}],
+                }
+            ]
+        )
+        scenario.observation_profile = "enterprise_standard"
+        manifest = ObservationManifest(
+            scenario_name=scenario.name,
+            observation_profile="enterprise_standard",
+            collection_window={"start": "2024-01-15T10:00:00Z", "end": "2024-01-15T18:00:00Z"},
+            source_summary={"windows_security": {"dropped": 1}, "ecar": {"dropped": 1}},
+            storyline_events=[
+                ObservationManifestEvent(
+                    kind="storyline",
+                    storyline_id="step-001",
+                    index=0,
+                    actor="jsmith",
+                    system="WS-01",
+                    activity="Run PowerShell",
+                    event_types=["process"],
+                    source_status={"windows_security": {"dropped": 1}, "ecar": {"dropped": 1}},
+                )
+            ],
+        )
+
+        result = CausalityScorer().score(
+            {},
+            scenario,
+            context=EvaluationContext(observation_manifest=manifest),
+        )
+        event_presence = next(s for s in result.sub_scores if s.key == "event_presence")
+        trace_coverage = next(s for s in result.sub_scores if s.key == "storyline_trace_coverage")
+
+        assert event_presence.score == 100.0
+        assert event_presence.raw_score == 0.0
+        assert event_presence.adjusted is True
+        assert trace_coverage.score == 100.0
+        assert trace_coverage.raw_score == 0.0
+
+    def test_visible_manifest_evidence_still_fails_when_trace_is_absent(self):
+        """Observation profiles should not excuse missing evidence marked visible."""
+        scenario = _make_scenario(
+            storyline=[
+                {
+                    "id": "step-001",
+                    "time": "+10m",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Run PowerShell",
+                    "events": [{"type": "process", "process_name": "powershell.exe"}],
+                }
+            ]
+        )
+        scenario.observation_profile = "enterprise_standard"
+        manifest = ObservationManifest(
+            scenario_name=scenario.name,
+            observation_profile="enterprise_standard",
+            collection_window={"start": "2024-01-15T10:00:00Z", "end": "2024-01-15T18:00:00Z"},
+            source_summary={"windows_security": {"visible": 1}},
+            storyline_events=[
+                ObservationManifestEvent(
+                    kind="storyline",
+                    storyline_id="step-001",
+                    index=0,
+                    actor="jsmith",
+                    system="WS-01",
+                    activity="Run PowerShell",
+                    event_types=["process"],
+                    source_status={"windows_security": {"visible": 1}},
+                )
+            ],
+        )
+
+        result = CausalityScorer().score(
+            {},
+            scenario,
+            context=EvaluationContext(observation_manifest=manifest),
+        )
+        event_presence = next(s for s in result.sub_scores if s.key == "event_presence")
+
+        assert event_presence.score == 0.0
+        assert event_presence.adjusted is False
 
 
 class TestZeekDhcpIndexing:

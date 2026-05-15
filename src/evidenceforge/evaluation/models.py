@@ -19,6 +19,10 @@ class SubScore(BaseModel):
     key: str
     weight: float = Field(ge=0.0, le=1.0)
     score: float | None = Field(None, ge=0.0, le=100.0)
+    raw_score: float | None = Field(None, ge=0.0, le=100.0)
+    """Unadjusted score when profile-aware scoring changes the displayed score."""
+    adjusted: bool = False
+    """True when the score excludes expected observation-profile gaps."""
     details: str = ""
     sample_failures: list[str] = Field(default_factory=list)
     failure_summary: dict[str, dict[str, int]] = Field(default_factory=dict)

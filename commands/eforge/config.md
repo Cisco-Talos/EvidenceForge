@@ -71,7 +71,7 @@ When writing to the overlay, files are partial — they contain ONLY the user's 
 | Modify baseline auth noise | `auth_noise.yaml` | (standalone — stale scheduled-credential accounts and irregular recurrence timing) |
 | Modify endpoint background noise | `endpoint_noise.yaml` | (standalone — scheduled-process timing and DHCP registry emission policy) |
 | Modify host activity distribution | `host_activity_profiles.yaml` | (standalone — host/persona/role rate-family multipliers, firewall deny bursts, and artifact variants) |
-| Modify source observation coverage | `observation_profiles.yaml` | Scenario `observation_profile` selects the named profile; keep `complete` as the default training profile |
+| Modify source observation coverage | `observation_profiles.yaml` | Scenario `observation_profile` selects the named profile; generated `OBSERVATION_MANIFEST.json` lets eval account for expected gaps; keep `complete` as the default training profile |
 | Modify causal/source timing | `timing_profiles.yaml` | (standalone — causal prerequisite, source latency, teardown, and Windows/Sysmon collision-spacing knobs) |
 | ~~Format definitions~~ | Not user-customizable | Engine internals — requires code changes |
 | ~~Evaluation rules~~ | Not user-customizable | Must match format definitions — requires code changes |

@@ -45,6 +45,7 @@ from evidenceforge.evaluation._shared import (
     _jensen_shannon_divergence,
 )
 from evidenceforge.evaluation.anomaly import detect_anomalies
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
     ProgressCallback,
@@ -81,6 +82,7 @@ class PlausibilityScorer(DimensionScorer):
         self,
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
+        context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         enabled = {log_spec["format"] for log_spec in scenario.output.logs if "format" in log_spec}

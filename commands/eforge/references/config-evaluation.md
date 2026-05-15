@@ -21,6 +21,15 @@ Schema documentation for data quality evaluation rule files in `src/evidenceforg
 
 Controls the two-tier acceptance model for `eforge eval`. Each sub-score has a **minimum** (hard gate: dataset fails if below) and an **aspirational** target (informational stretch goal). Pillar weights must sum to 1.0.
 
+When a generated dataset includes `OBSERVATION_MANIFEST.json` beside `GROUND_TRUTH.md`,
+`eforge eval` automatically applies observation-aware coverage scoring. Non-`complete`
+profiles can adjust only coverage-style causality sub-scores (`event_presence`,
+`pivot_linkability`, `temporal_integrity`, and `storyline_trace_coverage`) by excluding
+evidence that the manifest marks `dropped`, `filtered`, or `out_of_window`. Source-native
+correctness gates such as parseability, value plausibility, field agreement, and visible causal
+ordering remain strict. Adjusted sub-scores expose `raw_score` in JSON and show `raw:<score>` in
+the text report.
+
 ### Structure
 
 ```yaml

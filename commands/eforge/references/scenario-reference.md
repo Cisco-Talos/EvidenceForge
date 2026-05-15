@@ -405,7 +405,8 @@ training-friendly perfect source coverage and correlation. Non-default profiles 
 deterministic source-level missingness and source-native delays while preserving canonical truth:
 they can make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but they
 must not create contradictory users, PIDs, ports, hashes, UIDs, or session identifiers across
-sources. `GROUND_TRUTH.md` records source evidence status when a non-complete profile is used.
+sources. `GROUND_TRUTH.md` records source evidence status for instructors, and
+`OBSERVATION_MANIFEST.json` records the same source-observation contract for automated eval.
 
 ## Storyline
 

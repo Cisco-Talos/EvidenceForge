@@ -339,6 +339,12 @@ Every sub-score now has:
 
 Thresholds are stored in `src/evidenceforge/config/evaluation/thresholds.yaml` for tuning without code changes. Calibration against purpose-built scenarios is deferred to a separate pass.
 
+Datasets generated with non-`complete` observation profiles include `OBSERVATION_MANIFEST.json`.
+When present, eval uses it to adjust coverage-style causality sub-scores for evidence that was
+intentionally `dropped`, `filtered`, or `out_of_window`. Hard correctness gates remain strict:
+observation profiles do not excuse parse failures, impossible values, source-native contradictions,
+or evidence marked `visible`/`delayed` but missing from logs.
+
 ### Calibration Plan
 
 Thresholds are currently judgment-based. After the restructure is stable, the plan is to design purpose-built calibration scenarios (known-good and known-bad), run `eforge eval` against them, and use the results to propose empirically grounded threshold values. Out of scope for v0.5.1.

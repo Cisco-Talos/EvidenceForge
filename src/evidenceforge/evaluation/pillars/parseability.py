@@ -30,6 +30,7 @@ Sub-scores:
 import logging
 from typing import Any
 
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
     ProgressCallback,
@@ -92,6 +93,7 @@ class ParseabilityScorer(DimensionScorer):
         self,
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
+        context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         progress("sub_score_start", {"name": "Spec Conformance", "step": 1, "total": 2})

@@ -24,7 +24,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `auth_noise.yaml` | `auth_noise.py` | Baseline authentication-noise profiles such as stale scheduled-credential account pools and irregular recurrence timing. |
 | `endpoint_noise.yaml` | `endpoint_noise.py` | Endpoint background timing and registry-emission policies for Windows scheduled processes and DHCP interface registry writes. |
 | `host_activity_profiles.yaml` | `host_activity_profiles.py` | Coarse host/persona/role rate multipliers for baseline volume, endpoint noise, firewall deny bursts, and data-driven artifact variation. |
-| `observation_profiles.yaml` | `config/observation_profiles.py` | Named source-observation profiles for optional source-level missingness and delays. Scenario `observation_profile` defaults to `complete`. |
+| `observation_profiles.yaml` | `config/observation_profiles.py` | Named source-observation profiles for optional source-level missingness and delays. Scenario `observation_profile` defaults to `complete`; generation records status in `OBSERVATION_MANIFEST.json` for eval. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
 | `network_params.yaml` | `network_params.py`, `engine/emitter_setup.py` | MAC address OUI prefixes, public NTP fallback servers, and DNS tunnel RTT bounds. |
 | `systemd_schedules.yaml` | `engine/baseline.py` | Systemd timer and cron job schedules (logrotate, fstrim, apt-daily, etc.). |

@@ -46,6 +46,11 @@ def format_text_report(report: QualityReport, console: Console, verbose: bool = 
     )
     if verbose and source_parts:
         console.print(f"  ({source_parts})")
+    observation = report.supplementary.get("observation_profile")
+    if observation:
+        profile = observation.get("profile", "complete")
+        manifest_note = "manifest loaded" if observation.get("manifest_present") else "no manifest"
+        console.print(f"Observation profile: {profile} ({manifest_note})")
 
     console.print()
 
@@ -183,6 +188,8 @@ def _print_sub_score(
             if ac.aspirational is not None and ac.meets_aspirational is not None:
                 asp_tag = "[green]met[/green]" if ac.meets_aspirational else "[dim]below[/dim]"
                 line += f" [asp:{ac.aspirational:.0f} {asp_tag}]"
+        if sub.adjusted and sub.raw_score is not None:
+            line += f" [dim]raw:{sub.raw_score:.0f}[/dim]"
 
         console.print(line)
 
