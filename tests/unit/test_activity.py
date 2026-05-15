@@ -43,6 +43,7 @@ from evidenceforge.generation.activity.generator import (
     _extract_image_from_command,
     _http_context_from_process_command,
     _jitter_default_connection_duration,
+    _network_effect_context_for_process,
 )
 from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
@@ -126,6 +127,18 @@ class TestProcessHttpCommandCorrelation:
 
         assert proxy_context.url == "https://api.github.com/rate_limit"
         assert proxy_context.user_agent == "curl/7.88.1"
+
+    def test_network_effect_context_keeps_rendered_cli_http_command(self):
+        """A stale process-state lookup should not retarget a rendered curl command."""
+        process_name, command_line = _network_effect_context_for_process(
+            "/usr/bin/curl",
+            "curl -s https://api.slack.com/methods/api.test",
+            "/usr/bin/wget",
+            "wget https://images.netscaler.dev/agent.dat",
+        )
+
+        assert process_name == "/usr/bin/curl"
+        assert command_line == "curl -s https://api.slack.com/methods/api.test"
 
 
 class TestNetworkValidation:

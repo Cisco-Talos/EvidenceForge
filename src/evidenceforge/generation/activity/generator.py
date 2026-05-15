@@ -390,6 +390,21 @@ def _http_context_from_process_command(
     return context, host, port, service
 
 
+def _network_effect_context_for_process(
+    process_name: str,
+    command_line: str,
+    effect_process_name: str,
+    effect_command_line: str,
+) -> tuple[str, str]:
+    """Choose the process identity used for immediate network side effects."""
+    if _extract_http_url_from_command(command_line) and _http_user_agent_for_process(
+        process_name,
+        command_line,
+    ):
+        return process_name, command_line
+    return effect_process_name, effect_command_line
+
+
 def _parse_port_tokens(tokens: list[str]) -> list[int]:
     """Parse nmap port tokens until the next option or target token."""
     ports: list[int] = []
@@ -8468,6 +8483,14 @@ class ActivityGenerator:
                         process_name,
                         command_line,
                     )
+                    network_process_name, network_command_line = (
+                        _network_effect_context_for_process(
+                            process_name,
+                            command_line,
+                            effect_process_name,
+                            effect_command_line,
+                        )
+                    )
 
                     # Spawn child/utility processes for apps that have them
                     if activity_type == "process_user_apps":
@@ -8503,8 +8526,8 @@ class ActivityGenerator:
                     # (tight PID+timestamp coupling alongside profile-driven volume)
                     self._emit_process_network_correlation(
                         system,
-                        effect_process_name,
-                        effect_command_line,
+                        network_process_name,
+                        network_command_line,
                         process_time,
                         pid,
                         rng,
