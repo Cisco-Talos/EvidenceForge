@@ -624,6 +624,65 @@ class TestWindowsProcessTreeRealism:
             f"Network logon parent should be services/svchost, got {parent_proc.image}"
         )
 
+    def test_service_logon_process_uses_service_parent_and_token(
+        self, state_manager, mock_emitters, win_system
+    ):
+        """Type 5 service logon processes should not look like Explorer children."""
+        ag, _pids = _setup_activity_gen(state_manager, mock_emitters, win_system)
+        svc_user = User(
+            username="svc_mhsync",
+            full_name="Meridian Sync Service",
+            email="svc_mhsync@example.com",
+            enabled=True,
+            persona="service",
+        )
+        logon_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        process_time = datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC)
+
+        logon_id = ag.generate_service_logon(
+            system=win_system,
+            time=logon_time,
+            service_account=svc_user.username,
+        )
+        parent_pid = ag._resolve_parent(
+            win_system,
+            svc_user,
+            process_time,
+            logon_id,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        )
+        pid = ag.generate_process(
+            user=svc_user,
+            system=win_system,
+            time=process_time,
+            logon_id=logon_id,
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=r"powershell.exe -NoP -EncodedCommand SQBtAHAAbwByAHQ=",
+            parent_pid=parent_pid,
+        )
+
+        proc = state_manager.get_process(win_system.hostname, pid)
+        assert proc is not None
+        parent_proc = state_manager.get_process(win_system.hostname, proc.parent_pid)
+        assert parent_proc is not None
+        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].lower()
+        assert parent_exe in {"services.exe", "svchost.exe"}
+        assert proc.integrity_level == "High"
+
+        process_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+        ]
+        assert process_events
+        event = process_events[-1]
+        assert event.auth.logon_type == 5
+        assert event.process.parent_image.rsplit("\\", 1)[-1].lower() in {
+            "services.exe",
+            "svchost.exe",
+        }
+        assert event.process.current_directory == "C:\\Windows\\System32\\"
+
 
 class TestLinuxProcessTreeRealism:
     """Linux process trees should use spawn rules for parent selection."""

@@ -36,6 +36,7 @@ import random
 import re
 import shlex
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Optional
@@ -1274,15 +1275,26 @@ def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
     if alias is not None:
         image, command_line = alias
         if index + 1 < len(parts):
-            command_line = f"{command_line} {shlex.join(parts[index + 1 :])}"
+            command_line = f"{command_line} {_shell_display_join(parts[index + 1 :])}"
         return image, command_line
-    command_line = shlex.join(parts[index:])
+    command_line = _shell_display_join(parts[index:])
     if parts[index].startswith("/"):
         return parts[index], command_line
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
     if mapped is not None:
         return mapped, command_line
     return None
+
+
+def _shell_display_join(parts: list[str]) -> str:
+    """Render shell argv for telemetry without quoting expandable glob tokens."""
+    rendered: list[str] = []
+    for part in parts:
+        if any(marker in part for marker in ("*", "?", "[")):
+            rendered.append(part)
+        else:
+            rendered.append(shlex.quote(part))
+    return " ".join(rendered)
 
 
 def _strip_linux_shell_redirections(parts: list[str]) -> list[str]:
@@ -3067,6 +3079,8 @@ class ActivityGenerator:
         else:
             session_kind = {
                 3: "network",
+                4: "batch",
+                5: "service",
                 10: "rdp",
             }.get(logon_type, "interactive")
 
@@ -3934,6 +3948,7 @@ class ActivityGenerator:
         process_name: str,
         command_line: str,
         parent_pid: int,
+        logon_type: int = 2,
     ) -> str:
         """Derive a source-native process working directory for Sysmon Event 1."""
         if _get_os_category(system.os) != "windows":
@@ -3949,6 +3964,8 @@ class ActivityGenerator:
         system_dir = r"C:\Windows\System32"
 
         if username in _SYSTEM_ACCOUNTS or username.endswith("$"):
+            return system_dir + "\\"
+        if logon_type == 5:
             return system_dir + "\\"
 
         parent_image = (
@@ -4268,6 +4285,7 @@ class ActivityGenerator:
             )
             self.state_manager.set_current_time(time)
         session = self.state_manager.get_session(process_logon_id)
+        process_logon_type = session.logon_type if session is not None else 2
         if session is not None and time <= session.start_time:
             offset_ms = 100 + (
                 _stable_seed(
@@ -4313,6 +4331,8 @@ class ActivityGenerator:
                 self.state_manager.set_current_time(time)
         if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
             _integrity = "Medium"
+        if _get_os_category(system.os) == "windows" and process_logon_type == 5:
+            _integrity = "High" if _integrity == "Medium" else _integrity
         if _get_os_category(system.os) == "windows":
             _integrity, _token_elevation, _mandatory_label = _windows_token_profile(
                 process_username,
@@ -4385,6 +4405,8 @@ class ActivityGenerator:
                 username=process_username,
                 user_sid=self._get_sid(process_username),
                 logon_id=process_logon_id,
+                logon_type=process_logon_type,
+                elevated=_integrity in {"High", "System"},
             ),
             process=ProcessContext(
                 pid=pid,
@@ -4408,6 +4430,7 @@ class ActivityGenerator:
                     process_name=process_name,
                     command_line=command_line,
                     parent_pid=parent_pid,
+                    logon_type=process_logon_type,
                 ),
             ),
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
@@ -4982,6 +5005,9 @@ class ActivityGenerator:
             Zeek UID (18-character string)
         """
         from evidenceforge.events.contexts import NetworkContext
+
+        if http is not None and http.trans_depth != 1:
+            http = replace(http, trans_depth=1)
 
         caller_provided_duration = duration is not None
         caller_provided_conn_state = conn_state is not None
@@ -7095,6 +7121,42 @@ class ActivityGenerator:
 
         if activity_type_or_command in _activity_type_commands:
             command_list = _activity_type_commands[activity_type_or_command]
+            if activity_type_or_command == "process_user_apps":
+                from evidenceforge.generation.activity.bash_commands import _resolve_server_role
+
+                server_role = _resolve_server_role(
+                    system.hostname,
+                    list(getattr(system, "services", []) or []),
+                )
+                if server_role == "db":
+                    command_list = [
+                        "ls -la",
+                        "tail -f /var/log/mysql/error.log",
+                        "mysql -u root -p -e 'SHOW PROCESSLIST'",
+                        "pg_isready",
+                        "du -sh /var/lib/mysql/*",
+                        "systemctl status mysql",
+                        "free -m",
+                        "uptime",
+                        "cat /etc/hostname",
+                        "ss -tulnp",
+                        "w",
+                        "htop",
+                        "ip addr show",
+                    ]
+                elif server_role != "web":
+                    web_markers = (
+                        "apache",
+                        "nginx",
+                        "certbot",
+                        "/var/www",
+                        "ab -n",
+                    )
+                    command_list = [
+                        command
+                        for command in command_list
+                        if not any(marker in command for marker in web_markers)
+                    ]
             command = _get_rng().choice(command_list)
         else:
             # Literal command string (direct commands, typos, etc.)
@@ -9153,6 +9215,7 @@ class ActivityGenerator:
             logon_type=5,
             source_ip="-",
             start_time=time,
+            session_kind="service",
         )
         host = self._build_host_context(system)
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
@@ -11086,7 +11149,7 @@ class ActivityGenerator:
             return None
         if session.system != system.hostname or session.username != user.username:
             return None
-        if session.logon_type == 3 or session.session_kind == "network":
+        if session.logon_type in {3, 5} or session.session_kind in {"network", "service"}:
             return None
 
         sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
@@ -11242,6 +11305,7 @@ class ActivityGenerator:
                     else None
                 )
             is_network_logon = active_session and active_session.logon_type == 3
+            is_service_logon = active_session and active_session.logon_type == 5
 
             if is_network_logon:
                 # Network logon: parent is services.exe or svchost.exe
@@ -11254,6 +11318,15 @@ class ActivityGenerator:
                 ]
                 if shells and rng.random() < 0.6:
                     return shells[-1][0]
+                return sys_pids.get(
+                    "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+            if is_service_logon:
+                if exe_name in self._WINDOWS_SHELLS:
+                    return sys_pids.get(
+                        "svchost_netsvcs",
+                        sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
+                    )
                 return sys_pids.get(
                     "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
                 )
@@ -11396,6 +11469,7 @@ class ActivityGenerator:
                 else None
             )
         is_network_logon = active_session and active_session.logon_type == 3
+        is_service_logon = active_session and active_session.logon_type == 5
         if is_network_logon:
             if remote_wrapper_pid is not None:
                 return remote_wrapper_pid
@@ -11429,6 +11503,15 @@ class ActivityGenerator:
             if is_shell:
                 return sys_pids.get(
                     "svchost_netsvcs", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+                )
+            return sys_pids.get(
+                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
+            )
+        if is_service_logon:
+            if is_shell:
+                return sys_pids.get(
+                    "svchost_netsvcs",
+                    sys_pids.get("svchost_dcom", sys_pids.get("services", 4)),
                 )
             return sys_pids.get(
                 "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
@@ -11550,6 +11633,22 @@ class ActivityGenerator:
         parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
         parent_image = (parent_proc.image if parent_proc is not None else "").lower()
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        session = self.state_manager.get_session(logon_id)
+        if (
+            os_category == "windows"
+            and session is not None
+            and session.logon_type == 5
+            and parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1] == "explorer.exe"
+        ):
+            sys_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+            if process_exe in self._WINDOWS_SHELLS:
+                return sys_pids.get(
+                    "svchost_netsvcs",
+                    sys_pids.get("svchost_dcom", sys_pids.get("services", parent_pid)),
+                )
+            return sys_pids.get(
+                "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", parent_pid))
+            )
         is_browser_child = process_exe in _WINDOWS_BROWSER_EXES and not (
             self._is_top_level_browser_launch(process_name, command_line)
         )

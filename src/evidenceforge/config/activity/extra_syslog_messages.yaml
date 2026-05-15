@@ -29,6 +29,7 @@ programs:
       - "[system] Activating via systemd: service name='org.freedesktop.timedate1'"
 
   - app: rsyslogd
+    weight: 1
     messages:
       - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog'"
       - '[origin software="rsyslogd"] rsyslogd was HUPed'
@@ -37,8 +38,8 @@ programs:
     transient: true
     weight: 2
     messages:
-      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status nginx"
-      - "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/systemctl reload nginx"
+      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status ssh"
+      - "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/systemctl status app-agent"
       - "ops : TTY=pts/2 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/journalctl -u ssh -n 50"
       - "ubuntu : TTY=pts/0 ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/apt list --upgradable"
 
@@ -71,6 +72,7 @@ programs:
       - "sda: remaining active paths: 1"
 
   - app: accounts-daemon
+    weight: 1
     messages:
       - "user 'admin' has logged in"
 
@@ -98,5 +100,6 @@ programs:
       - "cooling device 0 intel_powerclamp type: 0x02"
 
   - app: irqbalance
+    weight: 1
     messages:
       - "Balancing is ineffective IRQs are pinned and balanced"

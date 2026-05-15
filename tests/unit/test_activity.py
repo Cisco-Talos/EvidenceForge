@@ -3213,6 +3213,37 @@ class TestActivityGenerator:
         assert event.network.dst_port == dst_port
         assert event.network.service == "ssl"
 
+    def test_generate_connection_clamps_http_depth_for_one_request_connections(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """A fresh connection UID should not inherit page-session transaction depth."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        http = HttpContext(
+            method="GET",
+            host="portal.example.com",
+            uri="/static/app.js",
+            response_body_len=2048,
+            trans_depth=4,
+        )
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=300,
+            resp_bytes=2048,
+            http=http,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.http.trans_depth == 1
+        assert http.trans_depth == 4
+
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should include byte counts in NetworkContext."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -3698,6 +3729,41 @@ class TestActivityGenerator:
         assert terminate_events
         assert process_events[-1].timestamp < terminate_events[-1].timestamp
 
+    def test_process_user_apps_bash_pool_respects_database_role(
+        self, activity_gen, test_user, monkeypatch, mock_emitters
+    ):
+        """Generic user-app shell noise on DB hosts should not pick web-admin commands."""
+
+        class AssertingRng:
+            def choice(self, seq):
+                joined = "\n".join(seq)
+                assert "apache" not in joined
+                assert "nginx" not in joined
+                assert "certbot" not in joined
+                assert "ab -n" not in joined
+                return "du -sh /var/lib/mysql/*"
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: AssertingRng())
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["mysql"],
+            assigned_user=test_user.username,
+        )
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            "process_user_apps",
+            emit_process_telemetry=False,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.shell.command == "du -sh /var/lib/mysql/*"
+
     def test_generate_bash_command_does_not_emit_process_for_shell_builtin(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -3879,6 +3945,12 @@ class TestActivityGenerator:
             "/usr/bin/mysqldump",
             "mysqldump --single-transaction ehr patients",
         )
+
+    def test_linux_shell_glob_tokens_remain_unquoted_in_process_argv(self):
+        """Expanded shell globs should not be rendered as literal quoted wildcards."""
+        process = generator_module._linux_command_process_from_shell("du -sh /var/log/*")
+
+        assert process == ("/usr/bin/du", "du -sh /var/log/*")
 
     def test_linux_shell_control_operators_split_process_argv(self):
         """Shell control operators should separate child process argv entries."""
