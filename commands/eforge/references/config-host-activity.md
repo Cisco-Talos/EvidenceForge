@@ -430,6 +430,11 @@ profiles:
 
 Profiles are intentionally source-level, not event-type matrices. Scenario authors select a named profile; code owns safe source-native application semantics so new event types inherit their source-family default. Non-complete profiles may make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but must not create contradictory identifiers or field values across sources.
 
+Generation writes `OBSERVATION_MANIFEST.json` beside `GROUND_TRUTH.md`. `eforge eval` uses this
+sidecar to adjust only coverage-style causality scoring for expected missing evidence under
+non-`complete` profiles. The raw score remains visible in the report, and source-native
+correctness checks are not relaxed.
+
 Valid source families are `windows_security`, `sysmon`, `ecar`, `syslog`, `bash_history`, `zeek`, `proxy`, `web`, `asa`, and `ids`. Run `eforge validate-config` after overlay changes; it rejects unknown source-family names, invalid probabilities, and inverted ranges. Run `eforge validate` on scenarios that use a non-default profile so unknown profile names are caught before generation.
 
 ---

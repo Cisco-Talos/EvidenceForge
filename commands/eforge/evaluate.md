@@ -36,6 +36,7 @@ scenarios/<scenario-name>/
   scenario.yaml
   ENVIRONMENT.md
   GROUND_TRUTH.md
+  OBSERVATION_MANIFEST.json  ← optional, generated for source-observation-aware eval
   data/              ← this is the output_dir for eforge eval
 ```
 
@@ -65,6 +66,12 @@ Present a clear summary of the evaluation results. The report shows two tiers fo
 - **Minimum** (hard gate): must pass or the dataset fails overall
 - **Aspirational** (informational): a stretch target; failure here is noted but does not fail the dataset
 
+If the scenario uses `observation_profile` other than `complete`, check whether the report says
+the observation manifest was loaded. With a manifest, coverage-style causality sub-scores may be
+adjusted for expected source gaps and will show a `raw` score when the adjusted score differs.
+Do not describe this as a lowered threshold: visible contradictions, parseability failures,
+source-native field mismatches, and evidence marked `visible` or `delayed` remain real failures.
+
 For each pillar, explain what the score means in practical terms:
 
 **Pillar 1: Parseability (weight 0.30)**
@@ -81,11 +88,11 @@ For each pillar, explain what the score means in practical terms:
 
 **Pillar 3: Causality (weight 0.25)**
 - Causal Ordering: Are logon→process→logoff sequences correctly ordered? DNS before TCP? Kerberos TGT/TGS before domain logons?
-- Storyline Event Presence: Are all storyline events visible in at least one log source?
+- Storyline Event Presence: Are all expected-visible storyline events visible in at least one log source? For non-`complete` observation profiles with a manifest, source rows marked `dropped`, `filtered`, or `out_of_window` are excluded from this coverage denominator.
 - Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames from the scenario?
-- Pivot Linkability: Can a hunter pivot between consecutive attack steps using shared field values?
-- Storyline Temporal Integrity: Are attack events in the right relative order at the right times?
-- Storyline Trace Coverage: For each expected log format on each involved host, does the storyline leave a trace?
+- Pivot Linkability: Can a hunter pivot between consecutive expected-visible attack steps using shared field values?
+- Storyline Temporal Integrity: Are expected-visible attack events in the right relative order at the right times?
+- Storyline Trace Coverage: For each expected-visible log format group on each involved host, does the storyline leave a trace?
 
 **Pillar 4: Timing (weight 0.20)**
 - Attack-Chain Timing: Do elapsed times between consecutive storyline steps fall within plausible bounds? Bounds come from `timing_bounds.yaml` — default 5s–2h, with per-action-type overrides (e.g., lateral movement: 30s–1h, exfiltration: 60s–24h). First matching keyword in the step activity wins.

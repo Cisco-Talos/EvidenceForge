@@ -30,6 +30,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import DimensionScorer, ProgressCallback, _noop_callback
 from evidenceforge.evaluation.models import (
     AcceptanceCriterion,
@@ -44,6 +45,7 @@ from evidenceforge.evaluation.pillars import (
     TimingScorer,
 )
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
+from evidenceforge.events.observation_manifest import load_observation_manifest
 from evidenceforge.models.scenario import Scenario
 
 logger = logging.getLogger(__name__)
@@ -168,6 +170,8 @@ class EvaluationEngine:
         )
 
         logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
+        observation_manifest = load_observation_manifest(self.output_dir)
+        context = EvaluationContext(observation_manifest=observation_manifest)
 
         # 2. Run each available pillar scorer
         total_pillars = len(DIMENSION_SCORERS)
@@ -186,7 +190,12 @@ class EvaluationEngine:
             logger.info(f"Scoring Pillar {scorer.number}: {scorer.name}")
             pillar_score: PillarScore
             try:
-                pillar_score = scorer.score(records, self.scenario, progress=self._progress)
+                pillar_score = scorer.score(
+                    records,
+                    self.scenario,
+                    context=context,
+                    progress=self._progress,
+                )
                 pillars.append(pillar_score)
             except Exception:
                 logger.exception(f"Pillar {scorer.number} scoring failed")
@@ -225,6 +234,18 @@ class EvaluationEngine:
         supplementary: dict = {}
         for pillar in pillars:
             supplementary.update(pillar.supplementary)
+        if observation_manifest is not None:
+            supplementary["observation_profile"] = {
+                "profile": observation_manifest.observation_profile,
+                "manifest_present": True,
+                "source_summary": observation_manifest.source_summary,
+            }
+        elif self.scenario.observation_profile != "complete":
+            supplementary["observation_profile"] = {
+                "profile": self.scenario.observation_profile,
+                "manifest_present": False,
+                "source_summary": {},
+            }
 
         return QualityReport(
             scenario_name=self.scenario.name,

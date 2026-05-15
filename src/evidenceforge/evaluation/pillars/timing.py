@@ -43,6 +43,7 @@ from evidenceforge.evaluation._shared import (
     _extract_username,
     _jensen_shannon_2d,
 )
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
     ProgressCallback,
@@ -70,6 +71,7 @@ class TimingScorer(DimensionScorer):
         self,
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
+        context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         user_events = _group_by_user(records)

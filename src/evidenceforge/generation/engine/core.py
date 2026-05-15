@@ -465,17 +465,28 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
 
     def _generate_ground_truth(self) -> None:
         """Generate GROUND_TRUTH.md documentation."""
+        from evidenceforge.events.observation_manifest import (
+            OBSERVATION_MANIFEST_FILENAME,
+            write_observation_manifest,
+        )
+
         self.ground_truth_dir.mkdir(parents=True, exist_ok=True)
         output_path = self.ground_truth_dir / "GROUND_TRUTH.md"
+        source_evidence_status = self.dispatcher.source_evidence_status
 
         generator = GroundTruthGenerator(
             scenario=self.scenario,
             malicious_events=self.malicious_events,
             red_herring_events=self.red_herring_events,
-            source_evidence_status=self.dispatcher.source_evidence_status,
+            source_evidence_status=source_evidence_status,
         )
 
         generator.generate(output_path)
+        write_observation_manifest(
+            self.ground_truth_dir / OBSERVATION_MANIFEST_FILENAME,
+            self.scenario,
+            source_evidence_status,
+        )
         logger.info(f"Ground truth documentation generated: {output_path}")
 
     def _get_next_event_record_id(self) -> int:

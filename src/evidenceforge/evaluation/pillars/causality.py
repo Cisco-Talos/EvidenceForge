@@ -39,6 +39,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from evidenceforge.evaluation._shared import _condition_matches, _extract_hostname, _normalize_ts
+from evidenceforge.evaluation.context import EvaluationContext
 from evidenceforge.evaluation.dimensions import (
     DimensionScorer,
     ProgressCallback,
@@ -55,6 +56,8 @@ from evidenceforge.evaluation.storyline import (
     resolve_storyline,
 )
 from evidenceforge.evaluation.visibility import VisibilityModel
+from evidenceforge.events.observation import source_family_for_format
+from evidenceforge.events.observation_manifest import ObservationManifestEvent
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.time import parse_duration
 
@@ -70,8 +73,10 @@ class CausalityScorer(DimensionScorer):
         self,
         records: dict[str, list[ParsedRecord]],
         scenario: Scenario,
+        context: EvaluationContext | None = None,
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
+        context = context or EvaluationContext()
         storyline = scenario.storyline or []
         resolved: list[ResolvedEvent] = []
 
@@ -99,7 +104,7 @@ class CausalityScorer(DimensionScorer):
         progress("sub_score_done", {"name": "Causal Ordering", "score": s1.score})
 
         progress("sub_score_start", {"name": "Event Presence", "step": 2, "total": 6})
-        s2 = self._score_event_presence(resolved)
+        s2 = self._score_event_presence(resolved, context)
         progress("sub_score_done", {"name": "Event Presence", "score": s2.score})
 
         progress("sub_score_start", {"name": "Indicator Accuracy", "step": 3, "total": 6})
@@ -107,15 +112,15 @@ class CausalityScorer(DimensionScorer):
         progress("sub_score_done", {"name": "Indicator Accuracy", "score": s3.score})
 
         progress("sub_score_start", {"name": "Pivot Linkability", "step": 4, "total": 6})
-        s4 = self._score_pivot_linkability(resolved)
+        s4 = self._score_pivot_linkability(resolved, context)
         progress("sub_score_done", {"name": "Pivot Linkability", "score": s4.score})
 
         progress("sub_score_start", {"name": "Temporal Integrity", "step": 5, "total": 6})
-        s5 = self._score_temporal_integrity(resolved)
+        s5 = self._score_temporal_integrity(resolved, context)
         progress("sub_score_done", {"name": "Temporal Integrity", "score": s5.score})
 
         progress("sub_score_start", {"name": "Storyline Trace Coverage", "step": 6, "total": 6})
-        s6 = self._score_storyline_trace_coverage(resolved, vis, host_time_index)
+        s6 = self._score_storyline_trace_coverage(resolved, vis, host_time_index, context)
         progress("sub_score_done", {"name": "Storyline Trace Coverage", "score": s6.score})
 
         sub_scores = [s1, s2, s3, s4, s5, s6]
@@ -187,6 +192,71 @@ class CausalityScorer(DimensionScorer):
             for event_type in event.event_types:
                 traces = self._search_for_event_indexed(event, event_type, host_time_index)
                 event.traces.extend(traces)
+
+    # --- Observation-profile adjustment helpers ---
+
+    @staticmethod
+    def _manifest_event(
+        event: ResolvedEvent,
+        context: EvaluationContext,
+    ) -> ObservationManifestEvent | None:
+        manifest = context.observation_manifest
+        if manifest is None or manifest.observation_profile == "complete":
+            return None
+        return manifest.storyline_by_id().get(event.storyline_id)
+
+    @classmethod
+    def _event_observation_exempt(
+        cls,
+        event: ResolvedEvent,
+        context: EvaluationContext,
+    ) -> bool:
+        manifest_event = cls._manifest_event(event, context)
+        if manifest_event is None:
+            return False
+        return manifest_event.visible_or_delayed_count == 0 and manifest_event.non_visible_count > 0
+
+    @classmethod
+    def _format_group_observation_exempt(
+        cls,
+        event: ResolvedEvent,
+        group_formats: set[str],
+        context: EvaluationContext,
+    ) -> bool:
+        manifest_event = cls._manifest_event(event, context)
+        if manifest_event is None:
+            return False
+        source_families = {source_family_for_format(fmt) for fmt in group_formats}
+        relevant = {
+            source: counts
+            for source, counts in manifest_event.source_status.items()
+            if source in source_families
+        }
+        if not relevant:
+            return False
+        visible_or_delayed = sum(
+            counts.get("visible", 0) + counts.get("delayed", 0) for counts in relevant.values()
+        )
+        non_visible = sum(
+            counts.get("dropped", 0) + counts.get("filtered", 0) + counts.get("out_of_window", 0)
+            for counts in relevant.values()
+        )
+        return visible_or_delayed == 0 and non_visible > 0
+
+    @staticmethod
+    def _adjusted_details(
+        adjusted_details: str,
+        raw_found: int,
+        raw_total: int,
+        excluded: int,
+    ) -> str:
+        if excluded <= 0:
+            return adjusted_details
+        raw_score = (100.0 * raw_found / raw_total) if raw_total > 0 else 100.0
+        return (
+            f"{adjusted_details}; raw {raw_found}/{raw_total} ({raw_score:.1f}/100), "
+            f"{excluded} excluded by observation profile"
+        )
 
     def _search_for_event_indexed(
         self,
@@ -830,7 +900,11 @@ class CausalityScorer(DimensionScorer):
 
     # --- Sub-score 2: Event Presence ---
 
-    def _score_event_presence(self, resolved: list[ResolvedEvent]) -> SubScore:
+    def _score_event_presence(
+        self,
+        resolved: list[ResolvedEvent],
+        context: EvaluationContext,
+    ) -> SubScore:
         if not resolved:
             return SubScore(
                 name="Event Presence",
@@ -839,20 +913,39 @@ class CausalityScorer(DimensionScorer):
                 score=100.0,
                 details="No storyline events",
             )
-        total = len(resolved)
-        found = sum(1 for e in resolved if e.traces)
+        raw_total = len(resolved)
+        raw_found = sum(1 for e in resolved if e.traces)
+        total = 0
+        found = 0
+        excluded = 0
+        for event in resolved:
+            if event.traces:
+                total += 1
+                found += 1
+            elif self._event_observation_exempt(event, context):
+                excluded += 1
+            else:
+                total += 1
         failures = [
             f"Event {e.index}: {e.actor}@{e.system} '{e.activity[:60]}' — no traces"
             for e in resolved
-            if not e.traces
+            if not e.traces and not self._event_observation_exempt(e, context)
         ]
         score = (100.0 * found / total) if total > 0 else 100.0
+        raw_score = (100.0 * raw_found / raw_total) if raw_total > 0 else 100.0
         return SubScore(
             name="Event Presence",
             key="event_presence",
             weight=0.20,
             score=score,
-            details=f"{found}/{total} storyline events have traces in logs",
+            raw_score=raw_score if excluded else None,
+            adjusted=excluded > 0,
+            details=self._adjusted_details(
+                f"{found}/{total} expected-visible storyline events have traces in logs",
+                raw_found,
+                raw_total,
+                excluded,
+            ),
             sample_failures=failures[:10],
         )
 
@@ -966,7 +1059,11 @@ class CausalityScorer(DimensionScorer):
 
     # --- Sub-score 4: Pivot Linkability ---
 
-    def _score_pivot_linkability(self, resolved: list[ResolvedEvent]) -> SubScore:
+    def _score_pivot_linkability(
+        self,
+        resolved: list[ResolvedEvent],
+        context: EvaluationContext,
+    ) -> SubScore:
         if len(resolved) < 2:
             return SubScore(
                 name="Pivot Linkability",
@@ -975,12 +1072,26 @@ class CausalityScorer(DimensionScorer):
                 score=100.0,
                 details="Fewer than 2 events — nothing to link",
             )
-        total_pairs = len(resolved) - 1
+        raw_total_pairs = len(resolved) - 1
+        raw_linkable = 0
+        total_pairs = 0
         linkable = 0
+        excluded = 0
         failures: list[str] = []
-        for i in range(total_pairs):
+        for i in range(raw_total_pairs):
             a, b = resolved[i], resolved[i + 1]
-            if self._extract_indicator_values(a) & self._extract_indicator_values(b):
+            pair_linkable = bool(
+                self._extract_indicator_values(a) & self._extract_indicator_values(b)
+            )
+            if pair_linkable:
+                raw_linkable += 1
+            if (not a.traces and self._event_observation_exempt(a, context)) or (
+                not b.traces and self._event_observation_exempt(b, context)
+            ):
+                excluded += 1
+                continue
+            total_pairs += 1
+            if pair_linkable:
                 linkable += 1
             elif len(failures) < 10:
                 failures.append(
@@ -988,12 +1099,21 @@ class CausalityScorer(DimensionScorer):
                     f"({a.actor}@{a.system} → {b.actor}@{b.system})"
                 )
         score = (100.0 * linkable / total_pairs) if total_pairs > 0 else 100.0
+        raw_score = (100.0 * raw_linkable / raw_total_pairs) if raw_total_pairs > 0 else 100.0
         return SubScore(
             name="Pivot Linkability",
             key="pivot_linkability",
             weight=0.15,
             score=score,
-            details=f"{linkable}/{total_pairs} consecutive pairs share a pivotable indicator",
+            raw_score=raw_score if excluded else None,
+            adjusted=excluded > 0,
+            details=self._adjusted_details(
+                f"{linkable}/{total_pairs} expected-visible consecutive pairs share a "
+                "pivotable indicator",
+                raw_linkable,
+                raw_total_pairs,
+                excluded,
+            ),
             sample_failures=failures,
         )
 
@@ -1025,7 +1145,11 @@ class CausalityScorer(DimensionScorer):
 
     # --- Sub-score 5: Temporal Integrity ---
 
-    def _score_temporal_integrity(self, resolved: list[ResolvedEvent]) -> SubScore:
+    def _score_temporal_integrity(
+        self,
+        resolved: list[ResolvedEvent],
+        context: EvaluationContext,
+    ) -> SubScore:
         if not resolved:
             return SubScore(
                 name="Temporal Integrity",
@@ -1034,13 +1158,20 @@ class CausalityScorer(DimensionScorer):
                 score=100.0,
                 details="No storyline events",
             )
-        total = len(resolved)
+        raw_total = len(resolved)
+        raw_correct = 0
+        total = 0
         correct = 0
+        excluded = 0
         failures: list[str] = []
         prev_earliest: datetime | None = None
 
         for event in resolved:
             if not event.traces:
+                if self._event_observation_exempt(event, context):
+                    excluded += 1
+                    continue
+                total += 1
                 if len(failures) < 10:
                     failures.append(f"Event {event.index}: no traces to verify timing")
                 continue
@@ -1056,12 +1187,14 @@ class CausalityScorer(DimensionScorer):
             if not trace_times:
                 continue
 
+            total += 1
             earliest = min(trace_times)
             time_ok = abs((earliest - event.time).total_seconds()) <= TIME_TOLERANCE.total_seconds()
             order_ok = prev_earliest is None or earliest >= prev_earliest - timedelta(seconds=5)
 
             if time_ok and order_ok:
                 correct += 1
+                raw_correct += 1
             elif len(failures) < 10:
                 if not time_ok:
                     delta = (earliest - event.time).total_seconds()
@@ -1075,12 +1208,20 @@ class CausalityScorer(DimensionScorer):
             prev_earliest = earliest
 
         score = (100.0 * correct / total) if total > 0 else 100.0
+        raw_score = (100.0 * raw_correct / raw_total) if raw_total > 0 else 100.0
         return SubScore(
             name="Temporal Integrity",
             key="temporal_integrity",
             weight=0.15,
             score=score,
-            details=f"{correct}/{total} events correctly timed and ordered",
+            raw_score=raw_score if excluded else None,
+            adjusted=excluded > 0,
+            details=self._adjusted_details(
+                f"{correct}/{total} expected-visible events correctly timed and ordered",
+                raw_correct,
+                raw_total,
+                excluded,
+            ),
             sample_failures=failures,
         )
 
@@ -1091,6 +1232,7 @@ class CausalityScorer(DimensionScorer):
         resolved: list[ResolvedEvent],
         vis: VisibilityModel,
         host_time_index: dict[str, dict[str, list[ParsedRecord]]],
+        context: EvaluationContext,
     ) -> SubScore:
         if not resolved:
             return SubScore(
@@ -1101,8 +1243,11 @@ class CausalityScorer(DimensionScorer):
                 details="No storyline events",
             )
 
+        raw_total_expected = 0
+        raw_found = 0
         total_expected = 0
         found = 0
+        excluded = 0
         failures: list[str] = []
 
         for event in resolved:
@@ -1120,7 +1265,7 @@ class CausalityScorer(DimensionScorer):
                         lookup_keys.append(val)
 
             for group_name, group_formats in groups:
-                total_expected += 1
+                raw_total_expected += 1
                 group_found = False
                 for fmt in group_formats:
                     if fmt not in host_time_index.get("__formats__", {fmt: True}):
@@ -1145,20 +1290,35 @@ class CausalityScorer(DimensionScorer):
                         break
 
                 if group_found:
+                    raw_found += 1
+                    total_expected += 1
                     found += 1
+                elif self._format_group_observation_exempt(event, group_formats, context):
+                    excluded += 1
                 elif len(failures) < 10:
+                    total_expected += 1
                     failures.append(
                         f"Event {event.index}: no trace in {group_name} group "
                         f"for {event.actor}@{event.system}"
                     )
+                else:
+                    total_expected += 1
 
         score = (100.0 * found / total_expected) if total_expected > 0 else 100.0
+        raw_score = (100.0 * raw_found / raw_total_expected) if raw_total_expected > 0 else 100.0
         return SubScore(
             name="Storyline Trace Coverage",
             key="storyline_trace_coverage",
             weight=0.10,
             score=score,
-            details=f"{found}/{total_expected} expected format-traces found",
+            raw_score=raw_score if excluded else None,
+            adjusted=excluded > 0,
+            details=self._adjusted_details(
+                f"{found}/{total_expected} expected-visible format-traces found",
+                raw_found,
+                raw_total_expected,
+                excluded,
+            ),
             sample_failures=failures,
         )
 

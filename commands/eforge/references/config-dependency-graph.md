@@ -170,7 +170,7 @@ Each row is a file; columns show what it depends on and what depends on it.
 | Direction | File | Relationship |
 |-----------|------|-------------|
 | depends on | scenario `observation_profile` | The scenario selects a named profile; the profile file owns source-level missingness/delay values |
-| **depended on by** | Event dispatcher, GROUND_TRUTH.md | Applies deterministic source-observation drops/delays after canonical state updates and reports source evidence status |
+| **depended on by** | Event dispatcher, GROUND_TRUTH.md, OBSERVATION_MANIFEST.json, `eforge eval` | Applies deterministic source-observation drops/delays after canonical state updates, reports source evidence status, and lets eval distinguish expected gaps from missing visible evidence |
 | validated by | `eforge validate-config` and `eforge validate` | Config validation checks source-family names/ranges; scenario validation checks that the named profile exists |
 
 ### network_params.yaml

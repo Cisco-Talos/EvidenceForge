@@ -105,6 +105,7 @@ class ResolvedEvent:
     event_types: list[str]
     sub_details: list[dict[str, Any]] = field(default_factory=list)
     traces: list[ParsedRecord] = field(default_factory=list)
+    storyline_id: str = ""
 
 
 def _parse_event_time(time_str: str, start_time: datetime) -> datetime:
@@ -179,6 +180,7 @@ def resolve_storyline(
                 details=details,
                 event_types=event_types,
                 sub_details=sub_details,
+                storyline_id=event.id,
             )
         )
 
