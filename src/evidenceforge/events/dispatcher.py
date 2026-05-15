@@ -119,6 +119,17 @@ class EventDispatcher:
             for cluster_id, source_summaries in sorted(self._source_evidence_status.items())
         }
 
+    def record_filtered_network_observation(self) -> None:
+        """Record that a storyline network event was filtered before emitter dispatch.
+
+        Some caller paths skip unobservable network connections before building a
+        full SecurityEvent. The manifest still needs a source-status entry so
+        eval can distinguish expected sensor-placement loss from missing evidence.
+        """
+        for format_name in self.emitters:
+            if format_name in _NETWORK_FORMATS:
+                self._record_cluster_observation(format_name, "filtered")
+
     def _is_suppressed(self, timestamp: datetime) -> bool:
         """Return True if the event falls before the output window (warm-up period)."""
         if self.output_start_time is None:
@@ -301,6 +312,19 @@ class EventDispatcher:
     ) -> None:
         """Record source evidence status for storyline/red-herring ground truth."""
         cluster_id = event.storyline_cluster_id
+        if not cluster_id:
+            return
+        self._record_cluster_observation(format_name, status, cluster_id=cluster_id)
+
+    def _record_cluster_observation(
+        self,
+        format_name: str,
+        status: ObservationStatus,
+        *,
+        cluster_id: str | None = None,
+    ) -> None:
+        """Record source evidence status for the active or supplied cluster."""
+        cluster_id = cluster_id or self.storyline_cluster_id
         if not cluster_id:
             return
         source = source_family_for_format(format_name)

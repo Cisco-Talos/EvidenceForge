@@ -5518,6 +5518,8 @@ class ActivityGenerator:
                 self.dispatcher.visibility_engine if self.dispatcher else None
             )
             if visibility and not visibility.is_connection_visible(src_ip, dst_ip):
+                if self.dispatcher is not None:
+                    self.dispatcher.record_filtered_network_observation()
                 logger.debug(
                     f"Skipping connection {src_ip} -> {dst_ip}: "
                     f"not observable by any configured sensor"

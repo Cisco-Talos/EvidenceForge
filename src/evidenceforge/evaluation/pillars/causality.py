@@ -33,6 +33,7 @@ Sub-scores (weights sum to 1.0):
 
 import ipaddress
 import logging
+import re
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -174,11 +175,24 @@ class CausalityScorer(DimensionScorer):
                     "mapped_src_ip",
                     "mapped_dst_ip",
                     "client_addr",
+                    "host",
+                    "server_name",
                 ):
                     ip_val = rec.fields.get(ip_field)
                     if ip_val and ip_val not in (hostname, ""):
-                        index[f"{ip_val}|{bucket}"][format_name].append(rec)
+                        normalized = CausalityScorer._normalize_index_value(ip_val)
+                        if normalized:
+                            index[f"{normalized}|{bucket}"][format_name].append(rec)
         return dict(index)
+
+    @classmethod
+    def _normalize_index_value(cls, value: Any) -> str:
+        if value is None:
+            return ""
+        text = str(value).strip().lower()
+        if not text or text == "-":
+            return ""
+        return cls._normalize_beacon_host(text) or text
 
     # --- Trace finding ---
 
@@ -282,6 +296,8 @@ class CausalityScorer(DimensionScorer):
                     forward_extra_secs = 3600
             else:
                 forward_extra_secs = 3600
+        elif event_type == "connection":
+            forward_extra_secs = self._connection_trace_forward_secs(event)
         total_fwd_secs = TIME_TOLERANCE.total_seconds() + forward_extra_secs
         bwd_secs = TIME_TOLERANCE.total_seconds()
 
@@ -296,6 +312,12 @@ class CausalityScorer(DimensionScorer):
         explicit_src = event.details.get("source_ip")
         if explicit_src and explicit_src != event.system_ip:
             lookup_keys.append(explicit_src)
+        explicit_dst = event.details.get("dst_ip")
+        if explicit_dst:
+            lookup_keys.append(str(explicit_dst))
+        expected_hostname = event.details.get("hostname")
+        if expected_hostname:
+            lookup_keys.append(str(expected_hostname).lower())
 
         seen: set[int] = set()
         for hostname_key in lookup_keys:
@@ -319,6 +341,23 @@ class CausalityScorer(DimensionScorer):
                             found.append(record)
                             seen.add(id(record))
         return found
+
+    @staticmethod
+    def _connection_trace_forward_secs(event: ResolvedEvent) -> int:
+        """Allow modest forward trace drift for web-style connection steps.
+
+        Storyline timestamps often describe the beginning of a human-readable
+        step, while web exploit/upload evidence can fan out into several
+        request, endpoint, and network observations a few minutes later.
+        """
+        detail_sets = event.sub_details if event.sub_details else [event.details]
+        web_markers = {"method", "uri", "user_agent", "status_code"}
+        for details in detail_sets:
+            if web_markers & details.keys():
+                return 600
+            if details.get("service") in {"http", "https"}:
+                return 600
+        return 0
 
     def _record_matches(
         self,
@@ -351,20 +390,24 @@ class CausalityScorer(DimensionScorer):
                 return (
                     f.get("EventID") == 4688
                     and self._host_matches(f.get("Computer"), event.system)
+                    and self._process_detail_matches(f, event)
                     and (
                         self._user_matches(f.get("SubjectUserName"), event.actor)
                         or self._user_matches(f.get("TargetUserName"), event.actor)
                     )
                 )
             if format_name == "bash_history":
-                return self._host_matches(f.get("hostname"), event.system) and self._user_matches(
-                    f.get("username"), event.actor
+                return (
+                    self._host_matches(f.get("hostname"), event.system)
+                    and self._user_matches(f.get("username"), event.actor)
+                    and self._process_detail_matches(f, event)
                 )
             if format_name == "ecar":
                 return (
                     f.get("object") == "PROCESS"
                     and f.get("action") == "CREATE"
                     and self._host_matches(f.get("hostname"), event.system)
+                    and self._process_detail_matches(f, event)
                     and self._user_matches(f.get("principal"), event.actor)
                 )
         elif event_type == "connection":
@@ -392,23 +435,33 @@ class CausalityScorer(DimensionScorer):
                 )
         elif event_type == "create_remote_thread":
             if format_name == "windows_event_sysmon":
-                return f.get("EventID") == 8 and self._host_matches(f.get("Computer"), event.system)
+                return (
+                    f.get("EventID") == 8
+                    and self._host_matches(f.get("Computer"), event.system)
+                    and self._process_detail_matches(f, event)
+                )
             if format_name == "ecar":
                 return (
                     f.get("object") == "THREAD"
                     and f.get("action") == "REMOTE_CREATE"
                     and self._host_matches(f.get("hostname"), event.system)
+                    and self._process_detail_matches(f, event)
+                    and self._user_matches(f.get("principal"), event.actor)
                 )
         elif event_type == "process_access":
             if format_name == "windows_event_sysmon":
-                return f.get("EventID") == 10 and self._host_matches(
-                    f.get("Computer"), event.system
+                return (
+                    f.get("EventID") == 10
+                    and self._host_matches(f.get("Computer"), event.system)
+                    and self._process_detail_matches(f, event)
                 )
             if format_name == "ecar":
                 return (
                     f.get("object") == "PROCESS"
                     and f.get("action") == "OPEN"
                     and self._host_matches(f.get("hostname"), event.system)
+                    and self._process_detail_matches(f, event)
+                    and self._user_matches(f.get("principal"), event.actor)
                 )
         elif event_type == "service_installed":
             if format_name == "windows_event_security":
@@ -458,15 +511,26 @@ class CausalityScorer(DimensionScorer):
         elif event_type == "ssh_session":
             if format_name == "syslog":
                 msg = f.get("message", "")
-                return self._host_matches(f.get("hostname"), event.system) and (
+                if not self._host_matches(f.get("hostname"), event.system) or not (
                     "Accepted" in msg or "session opened" in msg
-                )
+                ):
+                    return False
+                if event.actor and event.actor not in msg:
+                    return False
+                expected_src = event.details.get("source_ip")
+                if expected_src and "Accepted" in msg and f" from {expected_src} " not in msg:
+                    return False
+                return True
             if format_name == "ecar":
-                return (
+                if not (
                     f.get("object") == "USER_SESSION"
                     and f.get("action") == "LOGIN"
                     and self._host_matches(f.get("hostname"), event.system)
-                )
+                    and self._user_matches(f.get("principal"), event.actor)
+                ):
+                    return False
+                expected_src = event.details.get("source_ip")
+                return not expected_src or f.get("src_ip") == expected_src
         elif event_type == "rdp_session":
             if format_name == "windows_event_security":
                 return (
@@ -497,6 +561,7 @@ class CausalityScorer(DimensionScorer):
                 )
         elif event_type == "beacon":
             expected_dst = event.details.get("dst_ip", "")
+            expected_hostname = event.details.get("hostname", "")
             expected_port = event.details.get("dst_port")
             action = event.details.get("action", "allow")
             if action == "deny":
@@ -517,14 +582,22 @@ class CausalityScorer(DimensionScorer):
                     denied = f.get("status_code") == 403 or f.get("cache_result") == "DENIED"
                     if not denied:
                         return False
-                    return self._beacon_dst_matches(f, expected_dst)
+                    if not self._beacon_source_matches(f, event):
+                        return False
+                    return self._beacon_dst_matches(f, expected_dst) or self._beacon_dst_matches(
+                        f, expected_hostname
+                    )
             else:
                 if format_name == "zeek_conn":
                     return (
                         f.get("id.resp_h") == expected_dst and f.get("id.resp_p") == expected_port
                     )
                 if format_name in ("proxy_access", "web_access", "zeek_http"):
-                    return self._beacon_dst_matches(f, expected_dst)
+                    if not self._beacon_source_matches(f, event):
+                        return False
+                    return self._beacon_dst_matches(f, expected_dst) or self._beacon_dst_matches(
+                        f, expected_hostname
+                    )
         elif event_type == "dns_query":
             expected_query = event.details.get("query", "")
             if format_name == "zeek_dns":
@@ -537,14 +610,23 @@ class CausalityScorer(DimensionScorer):
             expected_src = event.details.get("source_ip")
             if format_name == "web_access":
                 source_ok = not expected_src or f.get("client_ip") == expected_src
-                return source_ok and self._host_matches(record.source_host, event.system)
+                return (
+                    source_ok
+                    and self._host_matches(record.source_host, event.system)
+                    and self._web_scan_profile_matches(f, event)
+                )
             if format_name == "zeek_http":
                 source_ok = not expected_src or f.get("id.orig_h") == expected_src
-                return source_ok and f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+                return (
+                    source_ok
+                    and f.get("id.resp_h", f.get("dst_ip", "")) == expected_dst
+                    and self._web_scan_profile_matches(f, event)
+                )
             if format_name == "zeek_conn":
                 source_ok = not expected_src or f.get("id.orig_h") == expected_src
                 port_ok = expected_port is None or f.get("id.resp_p") == expected_port
-                return source_ok and f.get("id.resp_h") == expected_dst and port_ok
+                state_ok = f.get("conn_state") == "SF"
+                return source_ok and f.get("id.resp_h") == expected_dst and port_ok and state_ok
         elif event_type == "credential_spray":
             target_accounts = event.details.get("target_accounts", [])
             if format_name == "windows_event_security":
@@ -584,17 +666,125 @@ class CausalityScorer(DimensionScorer):
                 return f.get("EventID") == expected_id
         elif event_type == "logoff":
             if format_name == "windows_event_security":
-                return f.get("EventID") in (4634, 4647)
+                if f.get("EventID") not in (4634, 4647) or not self._host_matches(
+                    f.get("Computer"), event.system
+                ):
+                    return False
+                username = f.get("TargetUserName") or f.get("SubjectUserName")
+                return self._user_matches(username, event.actor)
             if format_name == "syslog":
                 msg = f.get("message", "")
-                return "session closed" in msg or "Disconnected from" in msg
+                return (
+                    self._host_matches(f.get("hostname"), event.system)
+                    and event.actor in msg
+                    and ("session closed" in msg or "Disconnected from" in msg)
+                )
             if format_name == "bash_history":
-                return f.get("command", "").startswith("exit") or f.get("command", "").startswith(
-                    "logout"
+                return (
+                    self._host_matches(f.get("hostname"), event.system)
+                    and self._user_matches(f.get("username"), event.actor)
+                    and (
+                        f.get("command", "").startswith("exit")
+                        or f.get("command", "").startswith("logout")
+                    )
+                )
+            if format_name == "ecar":
+                return (
+                    f.get("object") == "USER_SESSION"
+                    and f.get("action") == "LOGOUT"
+                    and self._host_matches(f.get("hostname"), event.system)
+                    and self._user_matches(f.get("principal"), event.actor)
                 )
         elif event_type == "raw":
-            return True
+            return self._raw_record_matches(f, format_name, event)
         return False
+
+    def _raw_record_matches(
+        self,
+        fields: dict[str, Any],
+        format_name: str,
+        event: ResolvedEvent,
+    ) -> bool:
+        target_format = event.details.get("target_format")
+        if target_format and format_name != target_format:
+            return False
+        expected_fields = event.details.get("fields")
+        if not isinstance(expected_fields, dict):
+            return True
+        for key, expected in expected_fields.items():
+            if key == "timestamp":
+                continue
+            actual = fields.get(key)
+            if key == "hostname":
+                if not self._host_matches(actual, str(expected)):
+                    return False
+                continue
+            if key == "message":
+                if not self._message_fragment_matches(expected, actual):
+                    return False
+                continue
+            if actual is not None and str(actual) != str(expected):
+                return False
+        return True
+
+    @staticmethod
+    def _message_fragment_matches(expected: Any, actual: Any) -> bool:
+        if actual is None:
+            return False
+        expected_text = str(expected)
+        actual_text = str(actual)
+        if expected_text in actual_text or actual_text in expected_text:
+            return True
+        expected_tokens = {
+            token
+            for token in re.findall(r"[A-Za-z0-9_./:%=,-]{12,}", expected_text)
+            if not token.startswith("[")
+        }
+        actual_tokens = set(re.findall(r"[A-Za-z0-9_./:%=,-]{12,}", actual_text))
+        return bool(expected_tokens & actual_tokens)
+
+    @staticmethod
+    def _process_detail_sets(event: ResolvedEvent) -> list[dict[str, Any]]:
+        detail_sets = event.sub_details if event.sub_details else [event.details]
+        process_details = [
+            details
+            for details in detail_sets
+            if details.get("process_name") or details.get("command_line")
+        ]
+        return process_details
+
+    @classmethod
+    def _process_detail_matches(cls, fields: dict[str, Any], event: ResolvedEvent) -> bool:
+        process_details = cls._process_detail_sets(event)
+        if not process_details:
+            return True
+        record_image = str(
+            fields.get("NewProcessName")
+            or fields.get("SourceImage")
+            or fields.get("image_path")
+            or fields.get("process_name")
+            or fields.get("command")
+            or ""
+        ).lower()
+        record_command = str(
+            fields.get("CommandLine") or fields.get("command_line") or fields.get("command") or ""
+        ).lower()
+        for details in process_details:
+            process_name = str(details.get("process_name") or "").lower()
+            command_line = str(details.get("command_line") or "").lower()
+            image_ok = not process_name or record_image.endswith(process_name.rsplit("\\", 1)[-1])
+            command_ok = not command_line or command_line in record_command
+            if image_ok and command_ok:
+                return True
+        return False
+
+    @staticmethod
+    def _web_scan_profile_matches(fields: dict[str, Any], event: ResolvedEvent) -> bool:
+        preset = str(event.details.get("preset") or "").lower()
+        if preset == "nikto":
+            user_agent = str(fields.get("user_agent") or "").lower()
+            return "nikto" in user_agent
+        return True
 
     def _connection_matches_zeek(self, fields: dict, event: ResolvedEvent) -> bool:
         orig_h = fields.get("id.orig_h", "")
@@ -603,12 +793,39 @@ class CausalityScorer(DimensionScorer):
         proxy_mode = getattr(self, "_proxy_mode", "transparent")
         proxy_ips = getattr(self, "_proxy_ips", set())
 
+        if "source_ip" in details and "dst_ip" in details:
+            source_ip = details["source_ip"]
+            dst_ip = details["dst_ip"]
+            if (
+                orig_h == source_ip
+                and resp_h == dst_ip
+                and self._connection_port_matches(fields, details)
+            ):
+                return True
+            if (
+                proxy_mode == "explicit"
+                and orig_h == source_ip
+                and resp_h in proxy_ips
+                and self._connection_port_matches(fields, details)
+            ):
+                return True
+            if (
+                proxy_mode == "explicit"
+                and orig_h in proxy_ips
+                and resp_h == dst_ip
+                and self._connection_port_matches(fields, details)
+            ):
+                return True
+            return False
+
         if event.system_ip and orig_h == event.system_ip:
             if "dst_ip" in details:
                 if proxy_mode == "explicit" and resp_h in proxy_ips:
-                    return True
-                return resp_h == details["dst_ip"]
-            return True
+                    return self._connection_port_matches(fields, details)
+                return resp_h == details["dst_ip"] and self._connection_port_matches(
+                    fields, details
+                )
+            return self._connection_port_matches(fields, details)
 
         if (
             proxy_mode == "explicit"
@@ -616,32 +833,89 @@ class CausalityScorer(DimensionScorer):
             and "dst_ip" in details
             and resp_h == details["dst_ip"]
         ):
-            return True
+            return self._connection_port_matches(fields, details)
 
         if "dst_ip" in details and resp_h == details["dst_ip"]:
-            return True
+            return self._connection_port_matches(fields, details)
         if "source_ip" in details and orig_h == details["source_ip"]:
-            return True
+            return self._connection_port_matches(fields, details)
         return False
 
     @staticmethod
-    def _connection_ip_matches(fields: dict, event: ResolvedEvent) -> bool:
-        src_ip = fields.get("src_ip", "")
-        dst_ip = fields.get("dst_ip", "")
-        detail_sets = event.sub_details if event.sub_details else [event.details]
-        ip_details = [d for d in detail_sets if "source_ip" in d or "dst_ip" in d]
-        if not ip_details:
+    def _connection_port_matches(fields: dict[str, Any], details: dict[str, Any]) -> bool:
+        expected_port = details.get("dst_port")
+        if expected_port is None:
             return True
-        for details in ip_details:
-            src_ok = True
-            dst_ok = True
-            if "source_ip" in details:
-                src_ok = src_ip == details["source_ip"] or dst_ip == details["source_ip"]
-            if "dst_ip" in details:
-                dst_ok = dst_ip == details["dst_ip"] or src_ip == details["dst_ip"]
-            if src_ok and dst_ok:
+        for port_field in ("id.resp_p", "dst_port"):
+            actual_port = fields.get(port_field)
+            if actual_port is None:
+                continue
+            try:
+                return int(actual_port) == int(expected_port)
+            except (TypeError, ValueError):
+                return str(actual_port) == str(expected_port)
+        return True
+
+    @staticmethod
+    def _connection_detail_sets(event: ResolvedEvent) -> list[dict[str, Any]]:
+        detail_sets = event.sub_details if event.sub_details else [event.details]
+        constrained = [
+            details
+            for details in detail_sets
+            if "source_ip" in details or "dst_ip" in details or "dst_port" in details
+        ]
+        if any("dst_ip" in details for details in constrained):
+            return [details for details in constrained if "dst_ip" in details]
+        return constrained or [event.details]
+
+    @classmethod
+    def _connection_detail_matches(
+        cls,
+        fields: dict[str, Any],
+        details: dict[str, Any],
+        *,
+        src_field: str,
+        dst_field: str,
+    ) -> bool:
+        if "source_ip" in details and fields.get(src_field) != details["source_ip"]:
+            return False
+        if "dst_ip" in details and fields.get(dst_field) != details["dst_ip"]:
+            return False
+        return cls._connection_port_matches(fields, details)
+
+    @classmethod
+    def _connection_ip_matches(cls, fields: dict, event: ResolvedEvent) -> bool:
+        for details in cls._connection_detail_sets(event):
+            if cls._connection_detail_matches(
+                fields,
+                details,
+                src_field="src_ip",
+                dst_field="dst_ip",
+            ):
                 return True
         return False
+
+    @staticmethod
+    def _expected_usernames_for_event(event: ResolvedEvent) -> set[str]:
+        details = event.details
+        expected: set[str] = set()
+        target_username = details.get("target_username")
+        if isinstance(target_username, str) and target_username:
+            expected.add(target_username)
+        target_accounts = details.get("target_accounts")
+        if isinstance(target_accounts, list):
+            expected.update(str(account) for account in target_accounts if account)
+        success = details.get("success")
+        if isinstance(success, dict) and success.get("account"):
+            expected.add(str(success["account"]))
+        return expected or {event.actor}
+
+    @classmethod
+    def _username_indicator_matches(cls, record_user: Any, event: ResolvedEvent) -> bool:
+        return any(
+            cls._user_matches(record_user, username)
+            for username in cls._expected_usernames_for_event(event)
+        )
 
     @staticmethod
     def _user_matches(record_user: Any, expected: str) -> bool:
@@ -685,6 +959,20 @@ class CausalityScorer(DimensionScorer):
                 candidates.append(candidate)
 
         return any(cls._beacon_host_matches(candidate, expected) for candidate in candidates)
+
+    def _beacon_source_matches(self, fields: dict[str, Any], event: ResolvedEvent) -> bool:
+        expected_src = event.details.get("source_ip") or event.system_ip
+        if not expected_src:
+            return True
+        proxy_ips = getattr(self, "_proxy_ips", set())
+        client_ip = fields.get("client_ip")
+        if client_ip:
+            return self._ip_matches(client_ip, expected_src)
+        orig_h = fields.get("id.orig_h")
+        resp_h = fields.get("id.resp_h")
+        if orig_h and resp_h in proxy_ips:
+            return self._ip_matches(orig_h, expected_src)
+        return True
 
     @staticmethod
     def _normalize_beacon_host(value: Any) -> str:
@@ -997,10 +1285,23 @@ class CausalityScorer(DimensionScorer):
         f = trace.fields
         details = self._best_sub_detail(event, f) if event.sub_details else event.details
 
-        for uf in ["TargetUserName", "SubjectUserName", "principal", "username"]:
-            if uf in f and f[uf]:
-                checks.append(("username", self._user_matches(f[uf], event.actor)))
-                break
+        if (
+            "group_member_added" in event.event_types
+            and f.get("EventID") in (4728, 4732, 4756)
+            and details.get("member_name")
+        ):
+            member_name = str(details["member_name"]).lower()
+            member_field = str(f.get("MemberName") or f.get("MemberSid") or "").lower()
+            checks.append(("username", member_name in member_field))
+        else:
+            for uf in ["TargetUserName", "SubjectUserName", "principal", "username"]:
+                if uf in f and f[uf]:
+                    if self._is_process_indicator_trace(f):
+                        user_ok = self._user_matches(f[uf], event.actor)
+                    else:
+                        user_ok = self._username_indicator_matches(f[uf], event)
+                    checks.append(("username", user_ok))
+                    break
         for hf in ["Computer", "hostname"]:
             if hf in f and f[hf]:
                 checks.append(("hostname", self._host_matches(f[hf], event.system)))
@@ -1008,7 +1309,7 @@ class CausalityScorer(DimensionScorer):
         if "source_ip" in details:
             for ipf in ["IpAddress", "id.orig_h", "src_ip"]:
                 if ipf in f and f[ipf] and f[ipf] != "-":
-                    source_ok = f[ipf] == details["source_ip"]
+                    source_ok = self._ip_matches(f[ipf], details["source_ip"])
                     if not source_ok and self._is_explicit_proxy_egress_trace(f, details):
                         source_ok = True
                     checks.append(("source_ip", source_ok))
@@ -1016,12 +1317,33 @@ class CausalityScorer(DimensionScorer):
         if "dst_ip" in details:
             for df in ["id.resp_h", "dst_ip"]:
                 if df in f and f[df]:
-                    dst_ok = f[df] == details["dst_ip"]
+                    dst_ok = self._ip_matches(f[df], details["dst_ip"])
                     if not dst_ok and self._is_explicit_proxy_client_trace(f, event):
                         dst_ok = True
                     checks.append(("dst_ip", dst_ok))
                     break
         return checks
+
+    @staticmethod
+    def _ip_matches(actual: Any, expected: Any) -> bool:
+        if actual == expected:
+            return True
+        try:
+            actual_ip = ipaddress.ip_address(str(actual))
+            expected_ip = ipaddress.ip_address(str(expected))
+        except ValueError:
+            return str(actual) == str(expected)
+        if actual_ip.version == 6 and getattr(actual_ip, "ipv4_mapped", None) is not None:
+            actual_ip = actual_ip.ipv4_mapped
+        if expected_ip.version == 6 and getattr(expected_ip, "ipv4_mapped", None) is not None:
+            expected_ip = expected_ip.ipv4_mapped
+        return actual_ip == expected_ip
+
+    @staticmethod
+    def _is_process_indicator_trace(fields: dict[str, Any]) -> bool:
+        return fields.get("EventID") == 4688 or (
+            fields.get("object") == "PROCESS" and fields.get("action") == "CREATE"
+        )
 
     def _is_explicit_proxy_client_trace(self, fields: dict, event: ResolvedEvent) -> bool:
         if getattr(self, "_proxy_mode", "transparent") != "explicit":
@@ -1041,17 +1363,31 @@ class CausalityScorer(DimensionScorer):
     def _best_sub_detail(event: ResolvedEvent, fields: dict) -> dict[str, Any]:
         if len(event.sub_details) <= 1:
             return event.sub_details[0] if event.sub_details else event.details
-        trace_ips: set[str] = set()
-        for ip_field in ("IpAddress", "id.orig_h", "id.resp_h", "src_ip", "dst_ip"):
-            val = fields.get(ip_field)
-            if val and val != "-":
-                trace_ips.add(val)
-        if not trace_ips:
+        source_values = {
+            str(fields[ip_field])
+            for ip_field in ("IpAddress", "id.orig_h", "src_ip")
+            if fields.get(ip_field) and fields.get(ip_field) != "-"
+        }
+        dest_values = {
+            str(fields[ip_field])
+            for ip_field in ("id.resp_h", "dst_ip")
+            if fields.get(ip_field) and fields.get(ip_field) != "-"
+        }
+        all_values = source_values | dest_values
+        if not all_values:
             return event.details
         best_detail = event.details
         best_score = -1
         for sd in event.sub_details:
-            score = sum(1 for k in ("source_ip", "dst_ip") if sd.get(k) and sd[k] in trace_ips)
+            score = 0
+            if sd.get("source_ip"):
+                score += 2 if str(sd["source_ip"]) in source_values else -2
+            if sd.get("dst_ip"):
+                score += 2 if str(sd["dst_ip"]) in dest_values else -2
+            for key in ("source_ip", "dst_ip"):
+                value = sd.get(key)
+                if value and str(value) in all_values:
+                    score += 1
             if score > best_score:
                 best_score = score
                 best_detail = sd
@@ -1164,16 +1500,18 @@ class CausalityScorer(DimensionScorer):
         correct = 0
         excluded = 0
         failures: list[str] = []
-        prev_earliest: datetime | None = None
+        prev_expected: datetime | None = None
 
         for event in resolved:
             if not event.traces:
                 if self._event_observation_exempt(event, context):
                     excluded += 1
+                    prev_expected = event.time
                     continue
                 total += 1
                 if len(failures) < 10:
                     failures.append(f"Event {event.index}: no traces to verify timing")
+                prev_expected = event.time
                 continue
 
             trace_times = []
@@ -1190,7 +1528,11 @@ class CausalityScorer(DimensionScorer):
             total += 1
             earliest = min(trace_times)
             time_ok = abs((earliest - event.time).total_seconds()) <= TIME_TOLERANCE.total_seconds()
-            order_ok = prev_earliest is None or earliest >= prev_earliest - timedelta(seconds=5)
+            # Storyline events can overlap, and source-specific telemetry can arrive after the
+            # action began. Treat a later event as ordered when its evidence does not predate the
+            # previous event's intended time, rather than requiring it to follow the previous
+            # event's earliest matched trace.
+            order_ok = prev_expected is None or earliest >= prev_expected - timedelta(seconds=5)
 
             if time_ok and order_ok:
                 correct += 1
@@ -1205,7 +1547,7 @@ class CausalityScorer(DimensionScorer):
                 if not order_ok:
                     failures.append(f"Event {event.index}: out of order relative to previous")
 
-            prev_earliest = earliest
+            prev_expected = event.time
 
         score = (100.0 * correct / total) if total > 0 else 100.0
         raw_score = (100.0 * raw_correct / raw_total) if raw_total > 0 else 100.0

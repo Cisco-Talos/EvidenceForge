@@ -227,6 +227,19 @@ class TestObservationProfiles:
         zeek.emit.assert_not_called()
         assert dispatcher.source_evidence_status["story-001"]["zeek"] == {"filtered": 1}
 
+    def test_pre_dispatch_network_skip_records_filtered_source_status(self):
+        """Pre-dispatch unobservable storyline connections are reflected in manifests."""
+        sm = MagicMock(spec=StateManager)
+        zeek = _make_mock_emitter("zeek_conn", handles=True)
+        ecar = _make_mock_emitter("ecar", handles=True)
+        dispatcher = EventDispatcher(state_manager=sm, emitters={"zeek_conn": zeek, "ecar": ecar})
+        dispatcher.storyline_cluster_id = "story-001"
+
+        dispatcher.record_filtered_network_observation()
+
+        assert dispatcher.source_evidence_status["story-001"]["zeek"] == {"filtered": 1}
+        assert "ecar" not in dispatcher.source_evidence_status["story-001"]
+
     def test_all_emitter_formats_map_to_source_families(self):
         """Every current emitter belongs to a source-observation family."""
         from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
