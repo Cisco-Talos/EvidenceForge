@@ -265,6 +265,7 @@ def test_validate_source_parsed_output_accepts_syslog_parse(tmp_path: Path) -> N
     tags = event["tags"]
     assert isinstance(tags, list)
     tags.append("_grokparsefailure_1100-03")
+    tags.append("_grokparsefail_6018-01")
     _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
 
     events = validate_source_parsed_output(manifest, parsed_dir)

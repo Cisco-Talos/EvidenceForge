@@ -117,6 +117,18 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
             "year-bearing directory name."
         ),
     ),
+    ParserTagRule(
+        validator=SOF_ELK_SYSLOG_VALIDATOR,
+        log_type="syslog",
+        tag="_grokparsefail_6018-01",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/6018-cisco_asa.conf",
+        reason=(
+            "SOF-ELK's Cisco ASA filter opportunistically runs on unparsed syslog "
+            "records. A miss on ordinary Linux syslog does not mean the syslog "
+            "record failed to parse."
+        ),
+    ),
 )
 _RULES_BY_KEY = {(rule.validator, rule.log_type, rule.tag): rule for rule in TAG_POLICY_RULES}
 

@@ -42,23 +42,20 @@ from rich.progress import (
 )
 
 from evidenceforge.external_parsers.runner import (
-    SOF_ELK_ZEEK_VALIDATOR,
     VALIDATOR_ORDER,
     ExternalParserPlan,
     detect_external_parser_plan,
     unsupported_summary,
 )
-from evidenceforge.external_parsers.sof_elk_sources import (
-    SOF_ELK_SOURCE_SPECS_BY_VALIDATOR,
-    SofElkSourceResult,
-    run_sof_elk_source_parser,
+from evidenceforge.external_parsers.sof_elk import (
+    COMBINED_VALIDATOR_NAME,
+    SofElkCombinedResult,
+    run_sof_elk_parser,
 )
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
     SofElkHarnessError,
     SofElkParserError,
-    SofElkZeekResult,
-    run_sof_elk_zeek_parser,
 )
 
 VALIDATOR_STEP_TOTAL = 6
@@ -144,22 +141,14 @@ def _run(args: argparse.Namespace) -> int:
         console.print("[yellow]Warning:[/yellow] no external validators matched this dataset")
         return 0
 
-    exit_code = 0
-    for validator in validators:
-        validator_work_dir = work_dir / validator
-        result = _run_validator(
-            validator,
-            data_dir=data_dir,
-            work_dir=validator_work_dir,
-            cache_dir=args.cache_dir,
-            timeout=args.timeout,
-            runtime=args.runtime,
-        )
-        if result != 0:
-            exit_code = result
-            break
-
-    return exit_code
+    return _run_validators(
+        validators,
+        data_dir=data_dir,
+        work_dir=work_dir / "sof-elk",
+        cache_dir=args.cache_dir,
+        timeout=args.timeout,
+        runtime=args.runtime,
+    )
 
 
 def _selected_validators(
@@ -184,8 +173,8 @@ def _print_plan_summary(plan: ExternalParserPlan, validators: tuple[str, ...]) -
         )
 
 
-def _run_validator(
-    validator: str,
+def _run_validators(
+    validators: tuple[str, ...],
     *,
     data_dir: Path,
     work_dir: Path,
@@ -193,11 +182,6 @@ def _run_validator(
     timeout: int,
     runtime: str | None,
 ) -> int:
-    display_name = _validator_display_name(validator)
-    if validator != SOF_ELK_ZEEK_VALIDATOR and validator not in SOF_ELK_SOURCE_SPECS_BY_VALIDATOR:
-        console.print(f"[yellow]Warning:[/yellow] unsupported validator skipped: {validator}")
-        return 0
-
     with Progress(
         SpinnerColumn(),
         TextColumn("[bold blue]{task.description}"),
@@ -207,7 +191,10 @@ def _run_validator(
         console=console,
         transient=False,
     ) as progress:
-        stage_task = progress.add_task(f"Validator {display_name}", total=VALIDATOR_STEP_TOTAL)
+        stage_task = progress.add_task(
+            f"Validator {COMBINED_VALIDATOR_NAME}",
+            total=VALIDATOR_STEP_TOTAL,
+        )
         host_task = progress.add_task("Host pending", total=1)
         logtype_task = progress.add_task("Logtype pending", total=1)
         subtype_task = progress.add_task("Subtype pending", total=1)
@@ -218,7 +205,7 @@ def _run_validator(
                 progress.update(
                     stage_task,
                     advance=0 if description == "Checking parsed output" else 1,
-                    description=f"Validator {display_name}: {description}",
+                    description=f"Validator {COMBINED_VALIDATOR_NAME}: {description}",
                 )
             elif event_type == "validator_scope_progress":
                 host = str(data["host"])
@@ -250,25 +237,15 @@ def _run_validator(
                 )
 
         try:
-            if validator == SOF_ELK_ZEEK_VALIDATOR:
-                result: SofElkZeekResult | SofElkSourceResult = run_sof_elk_zeek_parser(
-                    data_dir,
-                    work_dir,
-                    cache_dir=cache_dir,
-                    timeout_seconds=timeout,
-                    runtime=runtime,
-                    progress_callback=progress_callback,
-                )
-            else:
-                result = run_sof_elk_source_parser(
-                    data_dir,
-                    work_dir,
-                    SOF_ELK_SOURCE_SPECS_BY_VALIDATOR[validator],
-                    cache_dir=cache_dir,
-                    timeout_seconds=timeout,
-                    runtime=runtime,
-                    progress_callback=progress_callback,
-                )
+            result = run_sof_elk_parser(
+                data_dir,
+                work_dir,
+                validators=validators,
+                cache_dir=cache_dir,
+                timeout_seconds=timeout,
+                runtime=runtime,
+                progress_callback=progress_callback,
+            )
         except SofElkParserError as exc:
             progress.stop()
             error_console.print(f"\n[bold red]FAIL:[/bold red] {exc}")
@@ -281,20 +258,15 @@ def _run_validator(
             _print_artifact_paths(work_dir)
             return 1
 
-    _print_success(result, display_name)
+    _print_success(result)
     _print_artifact_paths(work_dir)
     return 0
 
 
-def _validator_display_name(validator: str) -> str:
-    if validator == SOF_ELK_ZEEK_VALIDATOR:
-        return "SOF-ELK Zeek"
-    spec = SOF_ELK_SOURCE_SPECS_BY_VALIDATOR.get(validator)
-    return spec.display_name if spec else validator
-
-
-def _print_success(result: SofElkZeekResult | SofElkSourceResult, display_name: str) -> None:
-    console.print(f"\n[bold green]PASS:[/bold green] {display_name} parsed staged records")
+def _print_success(result: SofElkCombinedResult) -> None:
+    console.print(
+        f"\n[bold green]PASS:[/bold green] {COMBINED_VALIDATOR_NAME} parsed staged records"
+    )
     console.print(f"Expected counts: {result.manifest.expected_counts}")
     console.print(
         "Observed counts: "

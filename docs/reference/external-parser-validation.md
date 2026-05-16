@@ -54,6 +54,8 @@ and sends all of them through the containerized SOF-ELK path.
 The Zeek harness lives in `src/evidenceforge/external_parsers/sof_elk_zeek.py`.
 Non-Zeek SOF-ELK source harnesses live in
 `src/evidenceforge/external_parsers/sof_elk_sources.py`.
+The combined runtime harness lives in
+`src/evidenceforge/external_parsers/sof_elk.py`.
 The dataset runner lives in `scripts/external_parser.py` and auto-detects which
 validators apply to the generated files under a `data/` directory.
 
@@ -62,11 +64,12 @@ At runtime it:
 1. Scans the generated `data/` directory to determine which validators apply.
 2. Warns about generated log families that do not yet have an external parser
    validator.
-3. Runs every matching validator. Today that means SOF-ELK for Zeek, Cisco ASA,
-   web access, and Linux syslog files. The
-   validator phase shows stage progress plus host/sensor, log family, and
-   subtype progress while parsed records are checked after the third-party
-   parser has produced output.
+3. Runs one combined SOF-ELK validation pass for every matching SOF-ELK-backed
+   validator. Today that means Zeek, Cisco ASA, web access, and Linux syslog
+   files share a single Filebeat/Logstash container pair. The validator phase
+   shows stage progress plus host/sensor, log family, and subtype progress
+   while parsed records are checked after the third-party parser has produced
+   output.
 4. Clones SOF-ELK at the pinned commit into an external cache, not into this
    repository.
 5. Stages generated files under temporary SOF-ELK-style trees such as
@@ -74,12 +77,13 @@ At runtime it:
    `/logstash/syslog/<sensor>/cisco_asa.log` or
    `/logstash/httpd/<sensor>/web_access.log`, and
    `/logstash/syslog/<host>/syslog.log`.
-6. Builds a temporary Logstash pipeline:
-   - a small Beats input wrapper
+6. Builds one temporary Logstash pipeline:
+   - SOF-ELK's Beats input
    - unchanged SOF-ELK filter files
    - a JSONL file output wrapper
-   It also builds Filebeat input config from SOF-ELK's unchanged `zeek.yml`
-   plus supplemental EvidenceForge-only Zeek inputs for files SOF-ELK does not
+   It also builds one Filebeat config from SOF-ELK's unchanged source input
+   files, such as `zeek.yml`, `syslog.yml`, and `httpdlog.yml`, plus
+   supplemental EvidenceForge-only Zeek inputs for files SOF-ELK does not
    currently watch.
 7. Runs pinned Logstash and Filebeat containers on an isolated container
    network.
@@ -94,14 +98,12 @@ Two containers per run are expected:
 - `eforge-logstash-<runid>`
 - `eforge-filebeat-<runid>`
 
-Both are removed in a `finally` block. They are labeled with the validator name,
-such as `evidenceforge.external_parser=sof-elk-zeek` or
-`evidenceforge.external_parser=sof-elk-cisco-asa`, so interrupted leftovers are
-easy to find:
+Both are removed in a `finally` block. They are labeled with
+`evidenceforge.external_parser=sof-elk`, so interrupted leftovers are easy to
+find:
 
 ```bash
-docker ps -a --filter label=evidenceforge.external_parser=sof-elk-zeek
-docker ps -a --filter label=evidenceforge.external_parser=sof-elk-cisco-asa
+docker ps -a --filter label=evidenceforge.external_parser=sof-elk
 ```
 
 ## Staging Rules
@@ -210,29 +212,19 @@ If unset, the harness uses `$XDG_CACHE_HOME/evidenceforge/external-parsers` or
 
 ## Outputs And Failure Reports
 
-Given a runner work directory, each validator writes under its own subdirectory
-such as `sof-elk-zeek/` or `sof-elk-cisco-asa/`. Useful SOF-ELK artifacts are:
+Given a runner work directory, the combined SOF-ELK run writes under one
+`sof-elk/` subdirectory. Useful artifacts are:
 
 | Path | Purpose |
 | --- | --- |
-| `sof-elk-zeek/stage/logstash/zeek/...` | Files as SOF-ELK sees them |
-| `sof-elk-zeek/runtime-config/pipeline/` | Temporary Logstash pipeline wrapper plus copied SOF-ELK filters |
-| `sof-elk-zeek/runtime-config/filebeat.yml` | Filebeat config that loads generated input files |
-| `sof-elk-zeek/runtime-config/filebeat-inputs/zeek.yml` | SOF-ELK Zeek Filebeat input copied unchanged |
-| `sof-elk-zeek/runtime-config/filebeat-inputs/evidenceforge-zeek.yml` | Supplemental inputs for EvidenceForge Zeek files SOF-ELK does not watch |
-| `sof-elk-zeek/parsed/zeek_*.jsonl` | Parsed events by Zeek label type |
-| `sof-elk-zeek/parsed/sof_elk_parser_failures.json` | Structured failure report when validation fails |
-| `sof-elk-zeek/pipeline-logs/filebeat.log` | Filebeat container logs |
-| `sof-elk-zeek/pipeline-logs/logstash.log` | Logstash container logs |
-| `sof-elk-cisco-asa/stage/logstash/syslog/...` | ASA files as SOF-ELK sees them |
-| `sof-elk-cisco-asa/parsed/events.jsonl` | Parsed ASA events |
-| `sof-elk-cisco-asa/parsed/sof_elk_parser_failures.json` | Structured ASA failure report when validation fails |
-| `sof-elk-web-access/stage/logstash/httpd/...` | Web access files as SOF-ELK sees them |
-| `sof-elk-web-access/parsed/events.jsonl` | Parsed web access events |
-| `sof-elk-web-access/parsed/sof_elk_parser_failures.json` | Structured web access failure report when validation fails |
-| `sof-elk-syslog/stage/logstash/syslog/...` | Linux syslog files as SOF-ELK sees them |
-| `sof-elk-syslog/parsed/events.jsonl` | Parsed syslog events |
-| `sof-elk-syslog/parsed/sof_elk_parser_failures.json` | Structured syslog failure report when validation fails |
+| `sof-elk/stage/logstash/...` | All staged files as SOF-ELK sees them |
+| `sof-elk/runtime-config/pipeline/` | Temporary Logstash pipeline wrapper plus copied SOF-ELK filters |
+| `sof-elk/runtime-config/filebeat.yml` | Filebeat config that loads generated input files |
+| `sof-elk/runtime-config/filebeat-inputs/` | SOF-ELK Filebeat inputs copied unchanged plus supplemental Zeek inputs |
+| `sof-elk/parsed/*.jsonl` | Parsed events by SOF-ELK label type, such as `zeek_conn`, `syslog`, and `httpdlog` |
+| `sof-elk/parsed/sof_elk_parser_failures.json` | One structured failure report for every supported log family in the run |
+| `sof-elk/pipeline-logs/filebeat.log` | Filebeat container logs |
+| `sof-elk/pipeline-logs/logstash.log` | Logstash container logs |
 
 The failure report includes:
 
@@ -262,7 +254,11 @@ on `zeek_dns`. SOF-ELK emits this when it cannot derive `dns.answers.ip` from
 Other explicitly ignored optional tags include `_grokparsefailure_1100-03` on
 `cisco_asa` and `syslog`, which is SOF-ELK's optional archive path-year lookup,
 and `_grokparsefail_8110-01` on `web_access`, which is optional HTTPD
-page/not-page classification after the access record has already parsed.
+page/not-page classification after the access record has already parsed. In the
+combined SOF-ELK pipeline, `_grokparsefail_6018-01` is also ignored for
+`syslog` because SOF-ELK's Cisco ASA filter opportunistically tries ordinary
+Linux syslog rows that no earlier source-specific syslog filter marked
+`parse_done`; that miss does not mean the Linux syslog framing failed.
 
 ## Current Medium Dataset Result
 
