@@ -348,6 +348,21 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     web/proxy tests, Ruff, format check, and full normal
     `uv run pytest --no-cov -q` (`3097 passed, 37 skipped`). Regeneration and
     blind review follow.
+  - [x] Loop 9 regeneration, HTTP/proxy hard probes, quantitative eval, and
+    blind review completed from commit `46bd9d2`: automated eval passed at
+    `95.96` JSON overall (`96/100` human-readable) across `78,166` records,
+    hard probes confirmed the status-texture gate now passes with proxy `200`
+    ratio `78.3%` and Zeek HTTP `200` ratio `93.0%`, and blind
+    synthetic-confidence scores were Threat Hunter `70`, Detection `66`,
+    Network `68`, Host/EDR `82` (average `71.5`). Top Loop 10 target is
+    rare Windows admin-tool overuse: generated eCAR still contains 21 bare
+    `ntdsutil.exe` launches on DC-01 under `services.exe` and 65
+    `dsquery.exe` process creates across Windows hosts; Linux bash/syslog
+    command-pool repetition remains the next broad target.
+  - [ ] **IN PROGRESS** Loop 10 fix pass: reduce rare Windows admin-tool
+    overuse at the owning config/generation layer while preserving explicit
+    storyline/admin context, then regenerate/evaluate and run the final blind
+    review for the requested up-to-10 batch.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 
