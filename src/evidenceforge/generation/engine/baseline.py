@@ -4011,6 +4011,7 @@ class BaselineMixin:
             pick_domain_and_ip,
             resolve_domain_ip,
         )
+        from evidenceforge.generation.activity.http_content import response_mime_types_for_status
         from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
         domain_tags = get_domain_tags(hostname) if hostname else []
@@ -4121,9 +4122,12 @@ class BaselineMixin:
                 status_msg=_http_status_message(req.status_code),
                 referrer=req.referrer,
                 trans_depth=req.trans_depth,
-                resp_mime_types=[req.content_type]
-                if req.content_type and req.status_code in {200, 206}
-                else [],
+                resp_mime_types=response_mime_types_for_status(
+                    req.status_code,
+                    req.content_type,
+                    req.response_body_len,
+                    method=req.method,
+                ),
                 tags=[],
             )
 
@@ -5859,6 +5863,7 @@ class BaselineMixin:
         from evidenceforge.generation.activity.http_content import (
             is_stable_resource_path,
             normalize_mime_type_for_path,
+            response_mime_types_for_status,
             response_size_for_mime,
             response_size_for_status,
         )
@@ -6067,11 +6072,16 @@ class BaselineMixin:
                             user_agent=chosen_ua,
                             request_body_len=req.request_body_len,
                             response_body_len=req.response_body_len,
-                            status_code=200,
-                            status_msg="OK",
+                            status_code=req.status_code,
+                            status_msg=_status_message(req.status_code),
                             referrer=req.referrer,
                             trans_depth=req.trans_depth,
-                            resp_mime_types=[req.content_type] if req.content_type else [],
+                            resp_mime_types=response_mime_types_for_status(
+                                req.status_code,
+                                req.content_type,
+                                req.response_body_len,
+                                method=req.method,
+                            ),
                             tags=[],
                         ),
                         hostname=http_host,
@@ -6121,7 +6131,12 @@ class BaselineMixin:
                         status_code=status,
                         status_msg=_status_message(status),
                         referrer=referrer,
-                        resp_mime_types=[mime] if status == 200 else [],
+                        resp_mime_types=response_mime_types_for_status(
+                            status,
+                            mime,
+                            resp_bytes,
+                            method=method,
+                        ),
                         tags=[],
                     ),
                     hostname=http_host,

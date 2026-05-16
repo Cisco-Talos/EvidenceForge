@@ -370,24 +370,91 @@ def _http_context_from_process_command(
     if not user_agent:
         return None
 
-    from evidenceforge.generation.activity.http_content import infer_mime_type_from_path
+    from evidenceforge.generation.activity.http_content import (
+        infer_mime_type_from_path,
+        is_stable_resource_path,
+        response_mime_types_for_status,
+        response_size_for_status,
+    )
 
     mime_type = infer_mime_type_from_path(path)
+    method = _http_method_for_process_command(command_line)
+    body_len = 0 if method == "HEAD" else response_body_len
+    if method != "HEAD" and is_stable_resource_path(path):
+        body_len = response_size_for_status(200, host, path)
     context = HttpContext(
-        method=_http_method_for_process_command(command_line),
+        method=method,
         host=host if port in (80, 443) else f"{host}:{port}",
         uri=path,
         version="1.1",
         user_agent=user_agent,
         request_body_len=0,
-        response_body_len=response_body_len,
+        response_body_len=body_len,
         status_code=200,
         status_msg="OK",
         referrer="",
-        resp_mime_types=[mime_type] if mime_type else [],
+        resp_mime_types=response_mime_types_for_status(
+            200,
+            mime_type,
+            body_len,
+            method=method,
+        ),
         tags=[],
     )
     return context, host, port, service
+
+
+def _normalize_http_context_for_source_native_response(http: HttpContext) -> HttpContext:
+    """Keep caller-provided HTTP metadata source-native before cross-source fan-out."""
+    from evidenceforge.generation.activity.http_content import (
+        http_status_message,
+        is_stable_resource_path,
+        response_mime_types_for_status,
+    )
+
+    method = (http.method or "GET").upper()
+    status_code = http.status_code
+    response_body_len = max(0, http.response_body_len)
+    status_msg = http.status_msg
+    bodyless_status = status_code in {204, 304}
+
+    if bodyless_status:
+        response_body_len = 0
+    elif (
+        status_code == 200
+        and response_body_len == 0
+        and method not in {"CONNECT", "HEAD"}
+        and is_stable_resource_path(http.uri)
+    ):
+        status_code = 304
+        status_msg = http_status_message(status_code)
+    elif method != "CONNECT":
+        status_msg = http_status_message(status_code)
+
+    resp_mime_types = list(http.resp_mime_types)
+    if not resp_mime_types or response_body_len <= 0 or method == "HEAD" or bodyless_status:
+        mime_type = resp_mime_types[0] if resp_mime_types else ""
+        resp_mime_types = response_mime_types_for_status(
+            status_code,
+            mime_type,
+            response_body_len,
+            method=method,
+        )
+
+    if (
+        status_code == http.status_code
+        and status_msg == http.status_msg
+        and response_body_len == http.response_body_len
+        and resp_mime_types == list(http.resp_mime_types)
+    ):
+        return http
+    return replace(
+        http,
+        response_body_len=response_body_len,
+        status_code=status_code,
+        status_msg=status_msg,
+        resp_mime_types=resp_mime_types,
+    )
 
 
 def _network_effect_context_for_process(
@@ -5316,6 +5383,8 @@ class ActivityGenerator:
 
         if http is not None and http.trans_depth != 1:
             http = replace(http, trans_depth=1)
+        if http is not None:
+            http = _normalize_http_context_for_source_native_response(http)
 
         caller_provided_duration = duration is not None
         caller_provided_conn_state = conn_state is not None
@@ -6795,11 +6864,20 @@ class ActivityGenerator:
             if http_ua_override:
                 ua = http_ua_override
             status_code, status_msg = _get_http_status(dst_ip, uri)
-            resp_body_len = resp_bytes or rng.randint(200, 50000)
-            if status_code in (301, 302):
-                resp_body_len = rng.randint(100, 300)
-            elif status_code == 304:
+            from evidenceforge.generation.activity.http_content import (
+                is_stable_resource_path,
+                response_mime_types_for_status,
+                response_size_for_mime,
+                response_size_for_status,
+            )
+
+            if status_code in {204, 304}:
                 resp_body_len = 0
+            else:
+                if status_code >= 300 or is_stable_resource_path(uri):
+                    resp_body_len = response_size_for_status(status_code, host, uri)
+                else:
+                    resp_body_len = resp_bytes or response_size_for_mime(rng, mime_type)
             from evidenceforge.generation.activity.referrer import pick_referrer
 
             _http_referer = (
@@ -6818,7 +6896,12 @@ class ActivityGenerator:
                 status_code=status_code,
                 status_msg=status_msg,
                 referrer=_http_referer,
-                resp_mime_types=[mime_type] if status_code == 200 else [],
+                resp_mime_types=response_mime_types_for_status(
+                    status_code,
+                    mime_type,
+                    resp_body_len,
+                    method=http_method,
+                ),
                 tags=[],
             )
             # Probabilistic file transfer for HTTP responses with content

@@ -348,6 +348,79 @@ class TestWebAccessCorrelation:
         assert event.http.uri == "/api/v1/resource/42"
         assert event.http.status_code == 204
 
+    def test_static_zero_body_success_normalizes_to_not_modified(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Static GET responses should not fan out as 200 OK with zero body and MIME."""
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.10.5",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.1,
+            orig_bytes=200,
+            resp_bytes=0,
+            http=HttpContext(
+                method="GET",
+                host="WEB-01",
+                uri="/assets/css/main.063cbaf5.css",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=0,
+                response_body_len=0,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/css"],
+                tags=[],
+            ),
+        )
+
+        event = mock_emitters["zeek_http"].emit.call_args[0][0]
+        assert event.http.status_code == 304
+        assert event.http.status_msg == "Not Modified"
+        assert event.http.response_body_len == 0
+        assert event.http.resp_mime_types == []
+
+    def test_auto_http_static_resource_uses_stable_response_size(
+        self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
+    ):
+        """Auto-generated HTTP contexts should not size static resources from flow bytes."""
+        from evidenceforge.generation.activity import generator as generator_module
+        from evidenceforge.generation.activity import proxy_uri
+        from evidenceforge.generation.activity.http_content import response_size_for_status
+
+        monkeypatch.setattr(
+            proxy_uri,
+            "pick_proxy_uri",
+            lambda *args, **kwargs: ("/favicon.ico", "image/x-icon", "GET", "", "none"),
+        )
+        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.10.5",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.2,
+            orig_bytes=300,
+            resp_bytes=50_000,
+            conn_state="SF",
+            hostname="portal.example.com",
+        )
+
+        event = mock_emitters["zeek_http"].emit.call_args[0][0]
+        assert event.http.uri == "/favicon.ico"
+        assert event.http.response_body_len == response_size_for_status(
+            200,
+            "portal.example.com",
+            "/favicon.ico",
+        )
+        assert event.http.resp_mime_types == ["image/x-icon"]
+
 
 class TestSmbFileTransferCorrelation:
     """SMB data transfers should produce Zeek files.log context when substantial."""
@@ -1373,6 +1446,106 @@ class TestWebAccessExternalVisitors:
         assert len(page_rows) == 2
         assert len(asset_rows) == 1
         assert asset_rows[0]["http"].status_code == 200
+
+    def test_web_server_access_preserves_cache_and_partial_statuses(self, monkeypatch):
+        """Browser cache hits and partial content must not be rewritten as 200 responses."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import browsing_session, web_session_profiles
+        from evidenceforge.generation.activity.browsing_session import BrowsingRequest
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/",
+                    method="GET",
+                    content_type="text/html",
+                    referrer="",
+                    trans_depth=1,
+                    is_page_load=True,
+                    response_body_len=4096,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=100,
+                    hostname=kwargs["hostname"],
+                    path="/assets/css/main.063cbaf5.css",
+                    method="GET",
+                    content_type="text/css",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=2,
+                    is_page_load=False,
+                    response_body_len=0,
+                    request_body_len=0,
+                    status_code=304,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=200,
+                    hostname=kwargs["hostname"],
+                    path="/assets/js/app.bundle.bf9655b3.js",
+                    method="GET",
+                    content_type="application/javascript",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=3,
+                    is_page_load=False,
+                    response_body_len=1152,
+                    request_body_len=0,
+                    status_code=206,
+                ),
+            ],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (1, 1)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.4.20"
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(4),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        by_uri = {kw["http"].uri: kw["http"] for kw in collected}
+        assert by_uri["/assets/css/main.063cbaf5.css"].status_code == 304
+        assert by_uri["/assets/css/main.063cbaf5.css"].response_body_len == 0
+        assert by_uri["/assets/css/main.063cbaf5.css"].resp_mime_types == []
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].status_code == 206
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].response_body_len == 1152
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == [
+            "application/javascript"
+        ]
 
     def test_web_server_access_keeps_scanner_requests_source_native(self, monkeypatch):
         """Scanner visitors should keep configured error paths and blank referrers."""

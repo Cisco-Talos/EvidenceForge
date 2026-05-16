@@ -10,6 +10,7 @@ from evidenceforge.generation.activity.http_content import (
     is_health_endpoint_path,
     is_stable_resource_path,
     normalize_mime_type_for_path,
+    response_mime_types_for_status,
     response_size_for_health_endpoint,
     response_size_for_mime,
     response_size_for_status,
@@ -33,6 +34,30 @@ def test_unknown_extension_keeps_supplied_content_type():
 def test_response_size_for_gif_uses_image_range():
     size = response_size_for_mime(random.Random(42), "image/gif")
     assert 500 <= size <= 50_000
+
+
+def test_empty_body_statuses_have_zero_stable_response_size():
+    assert response_size_for_status(204, "portal.example.com", "/assets/main.css") == 0
+    assert response_size_for_status(304, "portal.example.com", "/assets/main.css") == 0
+
+
+def test_redirect_response_size_is_small_and_stable():
+    first = response_size_for_status(302, "portal.example.com", "/login")
+    second = response_size_for_status(302, "portal.example.com", "/login")
+
+    assert first == second
+    assert 120 <= first <= 480
+
+
+def test_response_mime_types_require_visible_body_and_success_status():
+    assert response_mime_types_for_status(200, "text/css", 4096) == ["text/css"]
+    assert response_mime_types_for_status(206, "application/javascript", 512) == [
+        "application/javascript"
+    ]
+    assert response_mime_types_for_status(304, "text/css", 0) == []
+    assert response_mime_types_for_status(200, "text/css", 0) == []
+    assert response_mime_types_for_status(200, "text/css", 2048, method="HEAD") == []
+    assert response_mime_types_for_status(403, "text/html", 900) == ["text/html"]
 
 
 def test_error_response_size_is_template_stable_by_status_host_and_uri():

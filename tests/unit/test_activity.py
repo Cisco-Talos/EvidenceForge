@@ -45,6 +45,7 @@ from evidenceforge.generation.activity.generator import (
     _jitter_default_connection_duration,
     _network_effect_context_for_process,
 )
+from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
@@ -83,6 +84,28 @@ class TestProcessHttpCommandCorrelation:
         assert http.uri == "/rate_limit?resource=core"
         assert http.user_agent == "curl/7.88.1"
         assert http.response_body_len == 1234
+
+    def test_http_context_from_static_curl_uses_stable_resource_size(self):
+        """Repeated CLI downloads of static resources should keep one object size."""
+        first = _http_context_from_process_command(
+            "/usr/bin/curl",
+            "curl -s https://cdn.example.com/favicon.ico",
+            response_body_len=1234,
+        )
+        second = _http_context_from_process_command(
+            "/usr/bin/curl",
+            "curl -s https://cdn.example.com/favicon.ico",
+            response_body_len=98765,
+        )
+
+        assert first is not None
+        assert second is not None
+        first_http = first[0]
+        second_http = second[0]
+        expected_size = response_size_for_status(200, "cdn.example.com", "/favicon.ico")
+        assert first_http.response_body_len == expected_size
+        assert second_http.response_body_len == expected_size
+        assert first_http.resp_mime_types == ["image/x-icon"]
 
     def test_proxy_context_preserves_cli_http_user_agent(self):
         """Proxy logs should not replace a caller-provided CLI User-Agent."""

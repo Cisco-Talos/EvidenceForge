@@ -65,6 +65,24 @@ _HEALTH_ENDPOINT_PATHS = {
     "/livez",
 }
 
+_HTTP_STATUS_MESSAGES: dict[int, str] = {
+    200: "OK",
+    204: "No Content",
+    206: "Partial Content",
+    301: "Moved Permanently",
+    302: "Found",
+    304: "Not Modified",
+    400: "Bad Request",
+    401: "Unauthorized",
+    403: "Forbidden",
+    404: "Not Found",
+    405: "Method Not Allowed",
+    500: "Internal Server Error",
+    502: "Bad Gateway",
+    503: "Service Unavailable",
+    504: "Gateway Timeout",
+}
+
 
 def infer_mime_type_from_path(path: str, default: str = "text/html") -> str:
     """Infer a response MIME type from a URI path extension.
@@ -85,6 +103,26 @@ def response_size_for_mime(rng: random.Random, content_type: str) -> int:
     """Generate a realistic response size for a MIME type."""
     lo, hi = _RESPONSE_SIZE_RANGES.get(content_type, (500, 50_000))
     return rng.randint(lo, hi)
+
+
+def http_status_message(status_code: int) -> str:
+    """Return a conventional HTTP reason phrase for a status code."""
+    return _HTTP_STATUS_MESSAGES.get(status_code, "OK")
+
+
+def response_mime_types_for_status(
+    status_code: int,
+    mime_type: str,
+    response_body_len: int,
+    *,
+    method: str = "GET",
+) -> list[str]:
+    """Return Zeek-style response MIME metadata only when a body is observable."""
+    if not mime_type or response_body_len <= 0:
+        return []
+    if method.upper() == "HEAD" or status_code in {204, 304}:
+        return []
+    return [mime_type]
 
 
 def is_health_endpoint_path(uri: str) -> bool:
@@ -134,6 +172,11 @@ def is_stable_resource_path(uri: str) -> bool:
 
 def response_size_for_status(status_code: int, host: str, uri: str) -> int:
     """Return a stable source-native web response body size for an HTTP status."""
+    if status_code in {204, 304}:
+        return 0
+    if status_code in {301, 302}:
+        rng = random.Random(_stable_seed(f"web_redirect:{status_code}:{host}:{uri}"))
+        return rng.randint(120, 480)
     if status_code < 400 and is_health_endpoint_path(uri):
         return response_size_for_health_endpoint(status_code, host, uri)
     if status_code < 400:
