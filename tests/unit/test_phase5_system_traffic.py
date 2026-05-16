@@ -29,6 +29,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
@@ -616,6 +617,107 @@ class TestParentPidSelection:
         assert cmd_pid in parent_pids or pids["explorer"] in parent_pids, (
             "Process tree should have depth — shells should sometimes be parents"
         )
+
+
+class TestSystemProcessSessionOwnership:
+    """Test source-native ownership for system-pool Windows process candidates."""
+
+    def test_shell_uwp_processes_use_active_interactive_session(self, state_manager, mock_emitters):
+        """Shell/UWP processes selected by system traffic should not run as SYSTEM/session 0."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        system = System(
+            hostname="WKS-01",
+            ip="10.0.10.1",
+            os="Windows 10",
+            type="workstation",
+            assigned_user="alice",
+        )
+        user = User(username="alice", full_name="Alice", email="alice@example.com")
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+        engine._system_pids = {}
+        pids: dict[str, int] = {}
+        engine._seed_windows_process_tree(system, pids)
+
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        ag._system_pids = {system.hostname: pids}
+        ag._users_by_username = {user.username: user}
+        timestamp = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = ag.generate_logon(user, system, timestamp, logon_type=2)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        pid = ag.generate_system_process(
+            system,
+            timestamp + timedelta(seconds=3),
+            r"C:\Windows\System32\sihost.exe",
+            "sihost.exe",
+            parent_pid=pids["svchost_netsvcs"],
+            username="SYSTEM",
+        )
+
+        assert pid != 0
+        proc = state_manager.get_process(system.hostname, pid)
+        assert proc is not None
+        assert proc.username == user.username
+        assert proc.logon_id == logon_id
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_event = next(
+            event
+            for event in emitted
+            if event.event_type == "process_create" and event.process.pid == pid
+        )
+        assert process_event.auth.username == user.username
+        assert process_event.auth.logon_id == logon_id
+        assert process_event.auth.logon_type == 2
+        assert process_event.process.integrity_level == "Medium"
+        assert all(
+            event.event_type != "system_process_create" or event.process.pid != pid
+            for event in emitted
+        )
+
+    def test_shell_uwp_processes_skip_without_interactive_session(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Desktop-only shell helpers should not appear on hosts without a desktop session."""
+        system = System(hostname="DC-01", ip="10.0.0.10", os="Windows Server 2022", type="server")
+        state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC))
+
+        pid = activity_gen.generate_system_process(
+            system,
+            datetime(2024, 3, 15, 10, 0, 1, tzinfo=UTC),
+            r"C:\Windows\System32\RuntimeBroker.exe",
+            "RuntimeBroker.exe -Embedding",
+            parent_pid=4,
+            username="SYSTEM",
+        )
+
+        assert pid == 0
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert all(
+            "runtimebroker.exe" not in (event.process.image or "").lower()
+            for event in emitted
+            if event.process is not None
+        )
+
+    def test_system_service_pools_exclude_desktop_shell_helpers(self):
+        """System service config should not list user-session shell/UWP processes."""
+        service_pools = load_system_processes()["system_services"]
+        pool_images = {
+            image.rsplit("\\", 1)[-1].lower()
+            for pool_name in ("all", "workstation")
+            for entry in service_pools[pool_name]
+            for image in [entry["image"]]
+        }
+
+        assert "sihost.exe" not in pool_images
+        assert "runtimebroker.exe" not in pool_images
+        assert "backgroundtaskhost.exe" not in pool_images
+        assert "searchhost.exe" not in pool_images
 
 
 class TestInfrastructureTrafficGeneration:

@@ -79,6 +79,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
+from evidenceforge.models.state import ActiveSession
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -662,6 +663,18 @@ _WINDOWS_USER_SESSION_PROCESSES = {
     "shellexperiencehost.exe",
     "applicationframehost.exe",
 }
+_WINDOWS_SHELL_UWP_USER_PROCESS_EXES = frozenset(
+    {
+        "sihost.exe",
+        "searchhost.exe",
+        "runtimebroker.exe",
+        "backgroundtaskhost.exe",
+        "textinputhost.exe",
+        "startmenuexperiencehost.exe",
+        "shellexperiencehost.exe",
+        "applicationframehost.exe",
+    }
+)
 _WINDOWS_ONE_SHOT_CLI_EXES = {
     "dsquery.exe",
     "gpresult.exe",
@@ -2308,6 +2321,51 @@ class ActivityGenerator:
                 command_line = command_line.replace("{ssh_target}", target)
         return _parameterize_command(rng, command_line, username=username)
 
+    def _active_interactive_windows_session(
+        self,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest user-owned interactive Windows session on a host."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.list_active_sessions()
+            if (
+                session.system == system.hostname
+                and session.username not in _SYSTEM_ACCOUNTS
+                and not session.username.endswith("$")
+                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+                and session.session_kind not in {"network", "service"}
+                and _session_started_by(session, time)
+            )
+        ]
+        if not candidates:
+            return None
+
+        assigned_user = getattr(system, "assigned_user", None)
+        if assigned_user:
+            assigned_candidates = [
+                session for session in candidates if session.username == assigned_user
+            ]
+            if assigned_candidates:
+                candidates = assigned_candidates
+        return max(candidates, key=lambda session: session.start_time)
+
+    def _user_model_for_username(self, username: str) -> User:
+        """Resolve a known scenario user, or build a safe fallback user object."""
+        known_users = getattr(self, "_users_by_username", {})
+        known_user = known_users.get(username)
+        if known_user is not None:
+            return known_user
+        return User(
+            username=username,
+            full_name=username,
+            email=f"{username}@{self._valid_fallback_email_domain()}",
+        )
+
     def _resolve_process_identity(
         self,
         *,
@@ -2334,21 +2392,9 @@ class ActivityGenerator:
         ):
             return username, logon_id
 
-        candidates = [
-            session
-            for session in self.state_manager.list_active_sessions()
-            if (
-                session.system == system.hostname
-                and session.username not in _SYSTEM_ACCOUNTS
-                and session.logon_type in (2, 10, 11)
-                and _session_started_by(session, time)
-            )
-        ]
-        if not candidates:
+        session = self._active_interactive_windows_session(system, time)
+        if session is None:
             return username, logon_id
-
-        candidates.sort(key=lambda session: session.start_time, reverse=True)
-        session = candidates[0]
         return session.username, session.logon_id
 
     def _remember_connection_tuple(
@@ -5010,6 +5056,26 @@ class ActivityGenerator:
         else:
             _token_elevation = "%%1938"
             _mandatory_label = "S-1-16-8192"
+
+        if (
+            not from_storyline
+            and _get_os_category(system.os) == "windows"
+            and _exe_lower == "explorer.exe"
+            and process_logon_id not in _SYSTEM_ACCOUNT_LOGON_IDS.values()
+        ):
+            explorer_pid = self._ensure_session_explorer_pid(
+                system,
+                self._user_model_for_username(process_username),
+                time,
+                process_logon_id,
+            )
+            if explorer_pid is not None:
+                self.state_manager.update_process_activity_time(
+                    system.hostname,
+                    explorer_pid,
+                    time,
+                )
+                return explorer_pid
 
         singleton_pid = self._existing_windows_singleton_pid(system, process_name, time)
         if singleton_pid is not None:
@@ -8193,6 +8259,33 @@ class ActivityGenerator:
             )
 
         exe_name = ntpath.basename(process_name).lower()
+        if (
+            _get_os_category(system.os) == "windows"
+            and exe_name in _WINDOWS_SHELL_UWP_USER_PROCESS_EXES
+        ):
+            session = self._active_interactive_windows_session(system, time)
+            if session is None:
+                return 0
+            session_user = self._user_model_for_username(session.username)
+            if self.state_manager.get_process(system.hostname, parent_pid) is None:
+                parent_pid = self._resolve_parent(
+                    system,
+                    session_user,
+                    time,
+                    session.logon_id,
+                    process_name,
+                )
+            return self.generate_process(
+                user=session_user,
+                system=system,
+                time=time,
+                logon_id=session.logon_id,
+                process_name=process_name,
+                command_line=command_line,
+                parent_pid=parent_pid,
+                allow_existing_browser_reuse=False,
+            )
+
         if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:
             for proc in self.state_manager.get_processes_on_system(system.hostname):
                 if ntpath.basename(proc.image).lower() == exe_name:

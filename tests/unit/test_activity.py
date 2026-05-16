@@ -395,6 +395,60 @@ class TestActivityGenerator:
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
 
+    def test_repeated_explorer_creation_reuses_session_shell(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Baseline explorer.exe launches should reuse the interactive session shell."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+        mock_emitters["windows_event_security"].reset_mock()
+
+        first_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            parent_pid=4,
+        )
+        second_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=2),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            parent_pid=4,
+        )
+
+        assert first_pid == session.explorer_pid
+        assert second_pid == session.explorer_pid
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert all(
+            not (
+                event.event_type == "process_create"
+                and event.process is not None
+                and event.process.image.lower().endswith("explorer.exe")
+            )
+            for event in emitted
+        )
+
     def test_repeated_one_shot_cli_processes_get_human_scale_spacing(
         self, activity_gen, test_user, test_system, state_manager
     ):

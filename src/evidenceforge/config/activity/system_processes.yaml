@@ -76,26 +76,10 @@ system_services:
         - "conhost.exe 0x4"
         - "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1"
       parent: csrss_s0
-    - image: "C:\\Windows\\System32\\RuntimeBroker.exe"
-      command_templates:
-        - "RuntimeBroker.exe -Embedding"
-      parent: svchost_dcom
-      loaded_modules:
-        - path: "C:\\Windows\\System32\\combase.dll"
-        - path: "C:\\Windows\\System32\\ole32.dll"
-        - path: "C:\\Windows\\System32\\twinapi.appcore.dll"
     - image: "C:\\Windows\\System32\\spoolsv.exe"
       command_templates:
         - "spoolsv.exe"
       parent: services
-    - image: "C:\\Windows\\System32\\sihost.exe"
-      command_templates:
-        - "sihost.exe"
-      parent: svchost_netsvcs
-    - image: "C:\\Windows\\System32\\backgroundTaskHost.exe"
-      command_templates:
-        - "backgroundTaskHost.exe"
-      parent: svchost_local_system
 
   domain_controller:
     - image: "C:\\Windows\\System32\\dfsr.exe"
@@ -122,10 +106,6 @@ system_services:
       parent: services
 
   workstation:
-    - image: "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe"
-      command_templates:
-        - "SearchHost.exe"
-      parent: svchost_netsvcs
     - image: "C:\\Windows\\System32\\SearchProtocolHost.exe"
       command_templates:
         - "SearchProtocolHost.exe {search_pipe_args}"
