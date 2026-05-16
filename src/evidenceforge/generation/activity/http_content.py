@@ -122,6 +122,8 @@ def response_mime_types_for_status(
         return []
     if method.upper() == "HEAD" or status_code in {204, 304}:
         return []
+    if status_code in {301, 302} or status_code >= 400:
+        return ["text/html"]
     return [mime_type]
 
 

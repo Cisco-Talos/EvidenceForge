@@ -44,6 +44,7 @@ from evidenceforge.generation.activity.generator import (
     _http_context_from_process_command,
     _jitter_default_connection_duration,
     _network_effect_context_for_process,
+    _normalize_http_context_for_source_native_response,
 )
 from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.generation.activity.tls_realism import (
@@ -67,6 +68,22 @@ class TestStateObjectIds:
 
 
 class TestProcessHttpCommandCorrelation:
+    def test_http_normalization_rewrites_error_asset_mime_to_error_body(self):
+        """Caller-provided HTTP errors should not keep MIME from requested asset extension."""
+        http = HttpContext(
+            method="GET",
+            host="portal.example.com",
+            uri="/assets/logo.svg",
+            response_body_len=900,
+            status_code=503,
+            status_msg="Service Unavailable",
+            resp_mime_types=["image/svg+xml"],
+        )
+
+        normalized = _normalize_http_context_for_source_native_response(http)
+
+        assert normalized.resp_mime_types == ["text/html"]
+
     def test_http_context_from_curl_command_preserves_url_and_user_agent(self):
         """CLI HTTP command lines should drive the canonical HTTP flow metadata."""
         result = _http_context_from_process_command(

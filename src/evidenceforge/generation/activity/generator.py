@@ -432,7 +432,14 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
         status_msg = http_status_message(status_code)
 
     resp_mime_types = list(http.resp_mime_types)
-    if not resp_mime_types or response_body_len <= 0 or method == "HEAD" or bodyless_status:
+    if (
+        not resp_mime_types
+        or response_body_len <= 0
+        or method == "HEAD"
+        or bodyless_status
+        or status_code in {301, 302}
+        or status_code >= 400
+    ):
         mime_type = resp_mime_types[0] if resp_mime_types else ""
         resp_mime_types = response_mime_types_for_status(
             status_code,

@@ -58,6 +58,8 @@ def test_response_mime_types_require_visible_body_and_success_status():
     assert response_mime_types_for_status(200, "text/css", 0) == []
     assert response_mime_types_for_status(200, "text/css", 2048, method="HEAD") == []
     assert response_mime_types_for_status(403, "text/html", 900) == ["text/html"]
+    assert response_mime_types_for_status(301, "application/javascript", 220) == ["text/html"]
+    assert response_mime_types_for_status(404, "image/jpeg", 900) == ["text/html"]
 
 
 def test_error_response_size_is_template_stable_by_status_host_and_uri():

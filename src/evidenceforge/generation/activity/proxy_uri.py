@@ -81,6 +81,18 @@ def is_browser_like_proxy_domain(hostname: str) -> bool:
     return domain_class not in _NON_BROWSER_DOMAIN_CLASSES
 
 
+def _entry_matches_source_os(entry: Any, source_os: str | None) -> bool:
+    """Return whether a URI template entry is compatible with the source OS."""
+    if not isinstance(entry, dict):
+        return False
+    entry_os = entry.get("os")
+    if not entry_os or not source_os:
+        return True
+    if isinstance(entry_os, list):
+        return source_os in {str(value) for value in entry_os}
+    return str(entry_os) == source_os
+
+
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
     """Replace template variables in a URI path."""
     while "{guid}" in path:
@@ -130,13 +142,16 @@ def pick_proxy_uri(
     # 1. Exact domain match
     domains = data.get("domains", {})
     entry = domains.get(hostname)
+    if not _entry_matches_source_os(entry, source_os):
+        entry = None
 
     # 2. Tag-based fallback
     if entry is None:
         tags = data.get("tags", {})
         for tag in domain_tags:
-            if tag in tags:
-                entry = tags[tag]
+            candidate = tags.get(tag)
+            if _entry_matches_source_os(candidate, source_os):
+                entry = candidate
                 break
 
     # 3. Generic fallback
