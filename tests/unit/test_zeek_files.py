@@ -385,6 +385,47 @@ class TestFilesUidCorrelation:
 
         assert file_row["ts"] > ssl_row["ts"]
 
+    def test_certificate_file_timestamp_stays_inside_parent_connection(self):
+        """Certificate files should not render after the owning conn.log row ends."""
+        fmt = load_format("zeek_files")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "files.json"
+            emitter = ZeekFilesEmitter(fmt, output)
+            cert = X509Context(
+                fuid="FShortCert12345",
+                fingerprint="e" * 40,
+                certificate_subject="CN=short.example.test",
+                certificate_issuer="CN=Example Issuer",
+            )
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="CShortUID123456",
+                    duration=0.01,
+                ),
+                ssl=SslContext(
+                    server_name="short.example.test",
+                    cert_chain_fuids=[cert.fuid],
+                ),
+                x509=cert,
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            file_row = json.loads(output.read_text().splitlines()[0])
+
+        assert base_ts.timestamp() <= file_row["ts"] <= base_ts.timestamp() + 0.01
+
     def test_certificate_file_timestamps_follow_chain_depth_order(self):
         """Certificate file observations should preserve TLS chain order."""
         fmt = load_format("zeek_files")

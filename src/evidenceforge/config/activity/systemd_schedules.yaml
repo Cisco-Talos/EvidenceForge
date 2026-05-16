@@ -12,6 +12,12 @@
 #   jitter_minutes   - Max jitter offset in minutes (per-host deterministic)
 #   distro           - "all", "debian", or "rhel"
 #   role             - Optional role filter (e.g., "web_server")
+#   roles            - Optional role list filter (any match)
+#   exclude_roles    - Optional role list filter to suppress a schedule
+#   services_any     - Optional service/package signal list (any match)
+#   host_probability - Optional deterministic per-host enable probability
+#   slot_skip_probability - Optional per-slot skip probability for frequent timers
+#   slot_jitter_seconds - Optional per-slot extra runtime jitter in seconds
 #   process_path     - Path to the service binary (for process create events)
 #
 # For systemd_timer type:
@@ -133,7 +139,12 @@ schedules:
     typical_hour: 0
     jitter_minutes: 5
     distro: debian
-    role: web_server
+    roles: [web_server]
+    exclude_roles: [forward_proxy]
+    services_any: [php-fpm]
+    host_probability: 0.98
+    slot_skip_probability: 0.16
+    slot_jitter_seconds: 180
     process_path: "/usr/lib/php/sessionclean"
     start_message: "Starting phpsessionclean.service - Clean PHP session files."
     finish_message: "Finished phpsessionclean.service - Clean PHP session files."

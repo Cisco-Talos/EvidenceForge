@@ -89,12 +89,59 @@ class TestFailedLogonWindows:
         assert event.event_type == "failed_logon"
         assert event.auth.username == "alice.smith"
         assert event.auth.failure_status == "0xc000006d"
-        assert event.auth.failure_substatus in (
-            "0xc000006a",
-            "0xc0000064",
-            "0xc0000234",
-            "0xc0000072",
+        assert event.auth.failure_substatus == "0xc000006a"
+
+    def test_enabled_known_user_failed_logon_never_uses_stateful_substatus(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Enabled known accounts should fail as bad passwords unless state is modeled."""
+        state_manager.set_current_time(timestamp)
+
+        for _ in range(50):
+            activity_gen.generate_failed_logon(test_user, win_system, timestamp)
+
+        events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "failed_logon"
+        ]
+        assert events
+        assert {event.auth.failure_substatus for event in events} == {"0xc000006a"}
+
+    def test_disabled_user_failed_logon_uses_disabled_substatus(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Explicitly disabled accounts should render disabled-account failures."""
+        state_manager.set_current_time(timestamp)
+        disabled_user = User(
+            username="svc_old_backup",
+            full_name="svc_old_backup",
+            email="svc_old_backup@example.com",
+            enabled=False,
         )
+
+        activity_gen.generate_failed_logon(disabled_user, win_system, timestamp, logon_type=4)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.failure_substatus == "0xc0000072"
+        assert event.auth.failure_reason == "%%2307"
+
+    def test_unknown_target_failed_logon_uses_unknown_user_substatus(
+        self, activity_gen, test_user, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Unknown target accounts should not be rendered as locked or disabled users."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_failed_logon(
+            test_user,
+            win_system,
+            timestamp,
+            target_username="not.a.real.user",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.failure_substatus == "0xc0000064"
+        assert event.auth.user_sid == "S-1-0-0"
 
     def test_no_session_created(
         self, activity_gen, test_user, win_system, timestamp, state_manager
@@ -426,7 +473,7 @@ class TestFailedLogonDC:
             if call[0][0].event_type == "failed_logon"
         ]
         assert events
-        assert all(event.auth.failure_substatus != "0xc0000064" for event in events)
+        assert {event.auth.failure_substatus for event in events} == {"0xc000006a"}
 
     def test_interactive_failed_logon_uses_local_windows_shape(
         self, state_manager, mock_emitters, timestamp

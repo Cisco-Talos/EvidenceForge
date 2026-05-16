@@ -926,6 +926,31 @@ class TestWeirdProtocolConstraint:
         assert event.network.history in {"Dd", "D"}
         assert not set(event.network.history) & set("SshAaFfRr")
 
+    def test_unanswered_udp_dns_keeps_request_payload(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """A Zeek dns-service S0 row still needs a visible UDP DNS request payload."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            conn_state="S0",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.protocol == "udp"
+        assert event.network.service == "dns"
+        assert event.network.conn_state == "S0"
+        assert event.network.history == "D"
+        assert event.network.orig_bytes >= 40
+        assert event.network.orig_ip_bytes > event.network.orig_bytes
+        assert event.network.resp_bytes == 0
+
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
@@ -963,6 +988,7 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.conn_state == "S0"
+        assert event.network.orig_bytes >= 40
         assert event.network.resp_bytes == 0
         assert event.network.resp_pkts == 0
         assert event.dns.answers == []

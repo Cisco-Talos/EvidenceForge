@@ -165,7 +165,8 @@ class TestDnsLookupEmission:
         elif qtype_name == "SRV":
             assert dns_ctx.query.startswith("_")
         elif qtype_name == "MX":
-            assert "mail." in dns_ctx.answers[0]
+            assert dns_ctx.answers
+            assert dns_ctx.answers[0].split(maxsplit=1)[0].isdigit()
         net = dns_se.network
         assert net.src_ip == "10.0.10.1"
         assert net.dst_port == 53

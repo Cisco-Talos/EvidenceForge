@@ -154,6 +154,13 @@ _GENERAL_PARAMS = {
         "https://gitlab.corp.local/team/project/-/pipelines",
         "https://grafana.corp.local/d/system-overview",
     ],
+    "external_api_url": [
+        "https://api.github.com/rate_limit",
+        "https://api.gitlab.com/version",
+        "https://api.cloudflare.com/client/v4/user",
+        "https://api.slack.com/methods/api.test",
+        "https://api.snapcraft.io/v2/snaps/refresh",
+    ],
 }
 
 # Parameterized command-line value pools for process_query variety

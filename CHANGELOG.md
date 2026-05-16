@@ -4,6 +4,30 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.7.1 (2026-05-16)
+
+This patch release packages the latest `dev` branch realism work since v0.7.0. The branch contains only `fix:` and `docs:` commits, so the version moves from `0.7.0` to `0.7.1` under the pre-1.0 semver policy.
+
+**Source-native host and process realism**
+
+- Improved observation coherence, TLS realism, baseline web/Kerberos texture, service-logon semantics, Linux telemetry, bash tool affinity, host-service command selection, CLI HTTP/analyzer timing, proxy-flow ownership, and session/web behavior across the early assessment loops (`7caf4b2`, `b476c16`, `7e6c7ea`, `02bd4bd`, `67ac00d`, `caf06a7`, `508501c`, `811b2f1`, `ac30094`).
+- Tightened service and process lifecycle behavior by improving Loop 7 service/CLI realism, closing tracked foreground processes at finalization, correcting service-install start semantics, binding shell helpers to user sessions, repairing source-native host contradictions, preserving web response semantics, aligning command/DNS semantics, enforcing auth/network source semantics, and repairing source-native process and Zeek texture (`3f66d06`, `6374303`, `e768f4c`, `76bc107`, `b7c8a70`, `93463e4`, `7a82449`, `9c9dcef`, `21f3a79`).
+
+**Network, web, DNS, and TLS realism**
+
+- Reduced rare admin-tool noise, diversified web/proxy status outcomes, varied TLS duration floors, repaired network/session source semantics, fixed proxy HTTP response semantics and redirect MIME handling, modeled persistent Zeek HTTP transactions, aligned persistent HTTP parent-flow accounting, varied Zeek multi-sensor timing offsets, diversified public DNS/certificate profiles, loosened DNS tunnel/C2 cadence, and mixed eCAR FLOW principal attribution (`f0f5c3d`, `46bd9d2`, `bc738f2`, `eaf090a`, `dc4616c`, `b4c99b1`, `dd56f08`, `4f92a11`, `91546d7`, `999a20e`, `350b0f5`, `bc3772d`).
+
+**Linux endpoint and blind-loop texture**
+
+- Diversified Linux command texture, reduced Linux endpoint cadence fingerprints, diversified Linux syslog daemon noise, and varied Linux syslog timer texture to remove repeated blind-review fingerprints in bash histories, daemon pools, `phpsessionclean`, `irqbalance`, and related source-native messages (`e9ff69c`, `ecc45ef`, `38e431d`, `e37a5f3`).
+- Recorded blind-review results and next-target decisions for loops 5 through 30, preserving automated eval scores, hard probes, reviewer synthetic-confidence scores, deliberation outcomes, and follow-up priorities in `TODO.md` (`380f38c`, `5702bbf`, `a477484`, `e21a25f`, `454edf0`, `34731ff`, `4993829`, `9ae822c`, `af301b9`, `16740cc`, `024db1a`, `aeb457b`, `4484c50`, `e98f744`, `6b207bd`, `f991a77`, `6b589ec`, `f8c19f0`, `a097f30`, `09076c1`, `ebc2d42`, `c13e429`, `3e78053`, `5994b26`, `73e123e`, `044b097`).
+
+**Validation**
+
+- Each fix loop was validated with focused regression tests, `uv run eforge validate-config`, Ruff checks, normal `uv run pytest --no-cov -q` runs, regenerated iteration-test data, quantitative eval, and blind expert review as recorded in `TODO.md`.
+- Latest Loop 30 validation passed `uv run pytest --no-cov -q` (`3162 passed`, `37 skipped`), quantitative eval at `95.99/100` across `76,333` records, and a hard probe showing `4,579/13,240` eCAR FLOW records now carry mixed principals with zero `pid=-1` principal leaks.
+- Release-prep validation passed `uv run eforge validate-config`, `uv run ruff check .`, `uv run ruff format --check .`, the explicit coverage gate (`3162 passed`, `37 skipped`, `80.58%` coverage), and the slow release lane (`13 passed`, `1 skipped`, `3185 deselected`).
+
 ## v0.7.0 (2026-05-15)
 
 This minor release packages the latest `dev` branch realism, observation, and CI work since v0.6.3. The branch includes `feat:` commits, so the version moves from `0.6.3` to `0.7.0` under the pre-1.0 semver policy.

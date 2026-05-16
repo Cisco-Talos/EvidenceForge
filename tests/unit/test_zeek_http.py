@@ -24,12 +24,13 @@
 
 import json
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HttpContext, NetworkContext
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 
 
@@ -218,6 +219,44 @@ class TestHttpCanHandle:
         )
         assert emitter.can_handle(event) is False
 
+    def test_accepts_application_layer_transactions(self):
+        fmt = load_format("zeek_http")
+        emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                application_layer_only=True,
+            ),
+            http=HttpContext(method="GET", host="example.com", uri="/app.js", trans_depth=2),
+        )
+        assert emitter.can_handle(event) is True
+
+    def test_conn_emitter_rejects_application_layer_transactions(self):
+        fmt = load_format("zeek_conn")
+        emitter = ZeekEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                application_layer_only=True,
+            ),
+            http=HttpContext(method="GET", host="example.com", uri="/app.js", trans_depth=2),
+        )
+        assert emitter.can_handle(event) is False
+
 
 class TestHttpRenderTiming:
     """Verify http.log uses analyzer/request timing, not cloned conn start time."""
@@ -249,3 +288,45 @@ class TestHttpRenderTiming:
         assert data["ts"] > base_ts.timestamp()
         offset_us = round((data["ts"] - base_ts.timestamp()) * 1_000_000)
         assert offset_us % 1000 != 0
+
+    def test_emit_preserves_same_uid_transaction_timestamp_order(self, tmp_path, monkeypatch):
+        """Per-request analyzer jitter must not reorder same-UID transaction depths."""
+        fmt = load_format("zeek_http")
+        output = tmp_path / "http.json"
+        emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        deltas = [timedelta(milliseconds=450), timedelta(milliseconds=1)]
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.zeek_http.sample_packet_timing_delta",
+            lambda *_args, **_kwargs: deltas.pop(0),
+        )
+
+        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
+            return SecurityEvent(
+                timestamp=timestamp,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="ChttpTiming1234",
+                ),
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=uri,
+                    trans_depth=trans_depth,
+                ),
+            )
+
+        emitter.emit(make_event(base_ts, 1, "/"))
+        emitter.emit(make_event(base_ts + timedelta(milliseconds=100), 2, "/app.js"))
+        emitter.close()
+
+        rows = [json.loads(line) for line in output.read_text().splitlines()]
+        assert [row["trans_depth"] for row in rows] == [1, 2]
+        assert rows[1]["ts"] > rows[0]["ts"]

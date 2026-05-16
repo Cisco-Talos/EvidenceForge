@@ -3,6 +3,8 @@
 
 """Regression test: eforge validate-config must ship 100% clean."""
 
+import random
+
 from evidenceforge.cli.validate_config import validate_config
 
 
@@ -66,6 +68,12 @@ class TestValidateConfig:
                         "suppress_system_types": ["server", "domain_controller"],
                         "suppress_roles": ["domain_controller"],
                     }
+                },
+                "ecar_flow_identity": {
+                    "user_process_probability": 0.88,
+                    "service_process_probability": 0.48,
+                    "root_process_probability": 0.42,
+                    "inbound_listener_probability": 0.36,
                 },
             }
 
@@ -200,6 +208,42 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "tls_realism.yaml"
             and "ecdsa issuer profiles cannot use RSA child signature algorithms" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_public_dns_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import public_dns_profiles
+
+        def load_invalid_public_dns_profiles():
+            return {
+                "nameserver_profiles": [
+                    {
+                        "name": "bad",
+                        "weight": -1,
+                        "answer_sets": [["ns1.example.net"]],
+                    }
+                ],
+                "mail_profiles": [],
+            }
+
+        monkeypatch.setattr(
+            public_dns_profiles,
+            "load_public_dns_profiles",
+            load_invalid_public_dns_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "weight must be non-negative" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "mail_profiles must not be empty" in issue.message
             for issue in result.issues
         )
 
@@ -988,6 +1032,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_extra_syslog_system_type(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "packagekitd",
+                    "system_types": ["laptop"],
+                    "messages": ["search-names transaction /12345"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'App "packagekitd" has invalid system_type "laptop"' in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_networkmanager_same_state_transition(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
@@ -1012,6 +1081,166 @@ class TestValidateConfig:
             and issue.file == "extra_syslog_messages.yaml"
             and "NetworkManager state transition must change states" in issue.message
             for issue in result.issues
+        )
+
+    def test_extra_syslog_sudo_templates_render_contextual_services(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        entry = {
+            "app": "sudo",
+            "messages": [
+                "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+            ],
+            "params": {
+                "sudo_user": ["deploy"],
+                "tty": ["pts/1"],
+                "cwd": ["/srv/app"],
+                "service": ["ssh"],
+                "sudo_command": ["/bin/systemctl status {service}"],
+            },
+        }
+
+        message = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["nginx"],
+        )
+
+        assert message == (
+            "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status nginx"
+        )
+
+    def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
+        from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
+
+        programs = [
+            {
+                "app": "packagekitd",
+                "system_types": ["workstation"],
+                "messages": ["search-names transaction /{}"],
+            },
+            {
+                "app": "multipathd",
+                "system_types": ["server"],
+                "roles": ["database"],
+                "messages": ["{device}: add missing path"],
+            },
+            {
+                "app": "accounts-daemon",
+                "exclude_roles": ["database"],
+                "messages": ["user 'admin' has logged in"],
+            },
+        ]
+
+        db_server = filter_syslog_message_entries(
+            programs,
+            is_rhel_like=False,
+            host_roles=["database"],
+            system_type="server",
+        )
+        workstation = filter_syslog_message_entries(
+            programs,
+            is_rhel_like=False,
+            host_roles=[],
+            system_type="workstation",
+        )
+
+        assert [entry["app"] for entry in db_server] == ["multipathd"]
+        assert [entry["app"] for entry in workstation] == ["packagekitd", "accounts-daemon"]
+
+    def test_extra_syslog_high_volume_daemons_avoid_exact_boilerplate(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        high_volume_apps = {
+            "dbus-daemon",
+            "rsyslogd",
+            "unattended-upgr",
+            "systemd-resolved",
+            "irqbalance",
+        }
+        old_exact_messages = {
+            "[system] Activating via systemd: service name='org.freedesktop.hostname1'",
+            "[system] Successfully activated service 'org.freedesktop.resolve1'",
+            "[system] Activating via systemd: service name='org.freedesktop.timedate1'",
+            '[origin software="rsyslogd"] rsyslogd was HUPed',
+            "Allowed origins are: o=Ubuntu,a=jammy",
+            "No packages found that can be upgraded unattended",
+            "dpkg --status-fd: processing triggers for man-db",
+            "Positive Trust Anchors: . IN DS 20326",
+            "Balancing is ineffective IRQs are pinned and balanced",
+        }
+
+        checked_apps = set()
+        for entry in programs:
+            app = entry.get("app")
+            if app not in high_volume_apps:
+                continue
+            checked_apps.add(app)
+            messages = entry.get("messages", [])
+            assert not old_exact_messages.intersection(messages)
+            assert any("{" in message for message in messages)
+            if app == "systemd-resolved":
+                assert "trust_anchor" not in (entry.get("params") or {})
+                assert all("Positive Trust Anchors" not in message for message in messages)
+            if app == "irqbalance":
+                assert all("{}" not in message and "{0}" not in message for message in messages)
+                assert all("from CPU" not in message for message in messages)
+            for message in messages:
+                rendered = render_extra_syslog_message(
+                    {**entry, "messages": [message]},
+                    random.Random(5),
+                    positional_value=123456,
+                    system_services=["sshd", "nginx"],
+                    values={"dns_server": "10.10.2.10"},
+                )
+                assert "{" not in rendered
+                assert "}" not in rendered
+                if app == "systemd-resolved":
+                    assert "UDP+EDNS0 instead of UDP+EDNS0" not in rendered
+
+        assert checked_apps == high_volume_apps
+
+    def test_systemd_schedule_filters_by_role_and_service_state(self):
+        from types import SimpleNamespace
+
+        from evidenceforge.generation.engine.baseline import _schedule_applies_to_system
+
+        sched = {
+            "service": "phpsessionclean",
+            "roles": ["web_server"],
+            "exclude_roles": ["forward_proxy"],
+            "services_any": ["php-fpm"],
+            "host_probability": 1.0,
+        }
+
+        php_web = SimpleNamespace(
+            hostname="WEB-EXT-01",
+            roles=["web_server"],
+            services=["apache2", "php-fpm"],
+        )
+        nginx_only = SimpleNamespace(
+            hostname="APP-INT-01",
+            roles=["web_server"],
+            services=["nginx", "systemd"],
+        )
+        proxy = SimpleNamespace(
+            hostname="PROXY-01",
+            roles=["forward_proxy"],
+            services=["squid", "php-fpm"],
+        )
+
+        assert _schedule_applies_to_system(sched, php_web, has_web_role=True)
+        assert not _schedule_applies_to_system(sched, nginx_only, has_web_role=True)
+        assert not _schedule_applies_to_system(sched, proxy, has_web_role=True)
+        assert not _schedule_applies_to_system(
+            {**sched, "host_probability": 0.0},
+            php_web,
+            has_web_role=True,
         )
 
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):

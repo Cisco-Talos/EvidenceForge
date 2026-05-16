@@ -45,7 +45,7 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
 
-_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs", "TCP FINs", "TCP FINs", "TCP Reset-O", "TCP Reset-I")
+_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs",)
 _TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 
 
@@ -286,7 +286,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
-        return event.event_type in self._supported_types and event.network is not None
+        return (
+            event.event_type in self._supported_types
+            and event.network is not None
+            and not event.network.application_layer_only
+        )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render ASA syslog records from a connection event.

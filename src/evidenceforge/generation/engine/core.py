@@ -101,6 +101,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
 
+        from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
+
+        reset_bash_command_memory()
+
     def _report_progress(self, event_type: str, data: dict) -> None:
         """Report progress to callback if registered.
 
@@ -459,6 +463,9 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         Phase 2.1: Gracefully stops emitter threads before closing.
         """
         logger.info("Finalizing generation")
+
+        if self.activity_generator is not None and self.end_time is not None:
+            self.activity_generator.finalize_foreground_process_lifetimes(self.end_time)
 
         for format_name, emitter in self.emitters.items():
             logger.info(f"Stopping {format_name} emitter thread")

@@ -541,7 +541,7 @@ applications:
       linux:
         image_path: "/usr/bin/curl"
         command_templates:
-          - "curl -s https://api.example.com/status"
+          - "curl -s {external_api_url}"
           - "curl -sS -o /dev/null -w '%{http_code}' {internal_url}"
           - "curl -X GET {internal_url} -H 'Accept: application/json'"
     categories: [user_app]
@@ -802,6 +802,7 @@ applications:
 
   - id: dsquery
     display_name: "Directory Service Query"
+    selection_weight: 2
     platforms:
       windows:
         image_path: "C:\\Windows\\System32\\dsquery.exe"
@@ -820,6 +821,7 @@ applications:
           - 'dsquery.exe group -samid "*admin*" -limit {ad_limit}'
     categories: [query]
     personas: [sysadmin, help_desk]
+    system_types: [domain_controller]
 
   - id: ldapsearch
     display_name: "LDAP Search"
@@ -868,6 +870,7 @@ applications:
 
   - id: ntdsutil
     display_name: "NTDS Utility"
+    selection_weight: 1
     platforms:
       windows:
         image_path: 'C:\Windows\System32\ntdsutil.exe'

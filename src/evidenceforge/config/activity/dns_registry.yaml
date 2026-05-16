@@ -186,7 +186,7 @@ domains:
     tags: [saas, background, outlook, teams, onedrive]
   - domain: packages.microsoft.com
     ips: ["13.107.246.52", "13.107.246.53"]
-    tags: [background, windows, linux]
+    tags: [background, linux]
   - domain: res.cdn.office.net
     ips: ["13.107.6.171", "13.107.9.171"]
     tags: [cdn, outlook, teams, onedrive]

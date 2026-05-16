@@ -119,6 +119,83 @@ class TestPerSensorDirectoryRouting:
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (40 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (40 * row["resp_pkts"])
 
+    def test_sensor_observation_preserves_icmp_echo_accounting(self):
+        """ICMP echo payload and IP-byte accounting should not vary by sensor."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestIcmp1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 8,
+                    "id.resp_h": "10.0.0.2",
+                    "id.resp_p": 0,
+                    "proto": "icmp",
+                    "service": "icmp",
+                    "duration": 0.04,
+                    "orig_bytes": 120,
+                    "resp_bytes": 120,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "orig_ip_bytes": 148,
+                    "resp_ip_bytes": 148,
+                    "conn_state": "SF",
+                    "history": "Dd",
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            for row in (core, dmz):
+                assert row["orig_bytes"] == row["resp_bytes"] == 120
+                assert row["orig_ip_bytes"] == row["resp_ip_bytes"] == 148
+                assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
+                assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+
+    def test_udp_dns_ip_bytes_use_valid_header_accounting(self):
+        """UDP DNS rows should not render impossible IP-header deltas."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "conn.json"
+            emitter = ZeekEmitter(fmt, output_file)
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestDns1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 41710,
+                    "id.resp_h": "10.0.0.53",
+                    "id.resp_p": 53,
+                    "proto": "udp",
+                    "service": "dns",
+                    "duration": 0.02,
+                    "orig_bytes": 80,
+                    "resp_bytes": 177,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "orig_ip_bytes": 113,
+                    "resp_ip_bytes": 211,
+                    "conn_state": "SF",
+                    "history": "Dd",
+                }
+            )
+            emitter.close()
+
+            row = json.loads(output_file.read_text().splitlines()[0])
+            assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
+            assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+
     def test_sensor_timestamp_offsets_vary_by_flow(self):
         """Cross-sensor timestamps should not collapse into one fixed offset band."""
         fmt = load_format("zeek_conn")
@@ -161,6 +238,8 @@ class TestPerSensorDirectoryRouting:
                 for port in sorted(core_by_port)
             ]
 
+            assert any(offset < 0 for offset in offsets)
+            assert any(offset > 0 for offset in offsets)
             assert max(offsets) - min(offsets) > 0.0005
             assert len(set(offsets)) > 30
             assert max(abs(offset) for offset in offsets) <= 0.005

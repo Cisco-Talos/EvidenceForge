@@ -141,6 +141,38 @@ def is_persona_allowed(exe_basename: str, os_category: str, persona: str) -> boo
     return True  # Unknown apps are unrestricted
 
 
+def is_system_type_allowed(
+    exe_basename: str,
+    os_category: str,
+    system_type: str | None,
+) -> bool:
+    """Check if an app can be selected on the given system type.
+
+    Unknown apps remain unrestricted so explicit scenario commands and raw
+    process names are not blocked by catalog absence.
+    """
+    if not system_type:
+        return True
+    data = load_catalog()
+    lower = exe_basename.lower()
+    for app in data["applications"]:
+        platform = app.get("platforms", {}).get(os_category)
+        if not platform:
+            continue
+        path = platform["image_path"]
+        if os_category == "windows":
+            basename = path.rsplit("\\", 1)[-1].lower()
+        else:
+            basename = path.rsplit("/", 1)[-1].lower()
+        if (
+            basename == lower
+            or (lower + ".exe") == basename
+            or basename.replace(".exe", "") == lower
+        ):
+            return system_type in app.get("system_types", _ALL_SYSTEM_TYPES)
+    return True
+
+
 def get_app_categories(exe_basename: str, os_category: str) -> list[str]:
     """Return the catalog categories for an executable, or [] if not found."""
     data = load_catalog()
@@ -392,7 +424,8 @@ def pick_app_and_command(
     if not apps:
         return None
 
-    app = rng.choice(apps)
+    weights = [int(app.get("selection_weight", 10)) for app in apps]
+    app = rng.choices(apps, weights=weights, k=1)[0]
     app = _apply_browser_affinity(rng, apps, app, username)
 
     platform = app["platforms"][os_category]

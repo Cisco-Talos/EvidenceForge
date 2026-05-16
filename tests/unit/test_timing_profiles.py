@@ -71,7 +71,21 @@ def test_timing_profiles_load_default_relationship():
     assert navigation_window.relationship_class == "human_workflow"
     assert navigation_window.min_ms >= 3000
     assert asset_window.relationship_class == "burst_fanout"
-    assert asset_window.max_ms <= 200
+    assert asset_window.min_ms >= 1500
+
+    zeek_conn_window = get_timing_window(
+        "source.zeek_conn_start",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    zeek_http_window = get_timing_window(
+        "source.zeek_http_request",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert asset_window.min_ms > zeek_conn_window.max_ms + zeek_http_window.max_ms
 
     sensor_timing = network_sensor_observation_timing()
     assert sensor_timing.clock_skew_min_us == -1500

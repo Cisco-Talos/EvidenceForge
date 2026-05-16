@@ -27,6 +27,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.tls_realism import certificate_analyzer_delay_ms
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_files import _bounded_in_connection_timestamp
 
 
 class ZeekX509Emitter(SensorMultiplexEmitter):
@@ -76,8 +77,15 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
         targets = sensor_hostnames or self._sensor_hostnames
         new_targets = targets
+        timestamp = self._offset_timestamp(event.timestamp, analyzer_delay_ms)
+        if event.network is not None:
+            timestamp = _bounded_in_connection_timestamp(
+                event.timestamp,
+                event.network.duration,
+                timestamp,
+            )
         event_data: dict[str, Any] = {
-            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
+            "ts": timestamp,
             "id": x509.fuid,
             "fingerprint": x509.fingerprint,
             "certificate.version": x509.certificate_version,

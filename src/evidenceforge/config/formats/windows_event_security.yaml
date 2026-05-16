@@ -1345,7 +1345,7 @@ output:
         <Data Name="ServiceName">{{ ServiceName }}</Data>
         <Data Name="ServiceFileName">{{ ServiceFileName }}</Data>
         <Data Name="ServiceType">{{ ServiceType | default('0x10') }}</Data>
-        <Data Name="ServiceStartType">{{ ServiceStartType | default('2') }}</Data>
+        <Data Name="ServiceStartType">{{ ServiceStartType | default('3') }}</Data>
         <Data Name="ServiceAccount">{{ ServiceAccount | default('LocalSystem') }}</Data>
         {% elif EventID in [4698, 4699, 4700, 4701] %}
         <Data Name="SubjectUserSid">{{ SubjectUserSid }}</Data>

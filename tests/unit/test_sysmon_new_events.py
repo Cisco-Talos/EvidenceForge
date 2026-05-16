@@ -855,6 +855,28 @@ class TestProcessCreateMetadata:
             image, workstation
         ) == SysmonEventEmitter._generate_hashes(image, server)
 
+    def test_tiworker_metadata_uses_servicing_stack_component_version(self):
+        """WinSxS TiWorker metadata should match the rendered component path."""
+        server = HostContext(
+            hostname="SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            domain="corp.local",
+            fqdn="SRV-01.corp.local",
+            netbios_domain="CORP",
+        )
+        image = (
+            r"C:\Windows\WinSxS\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_"
+            r"10.0.20348.2322_none_7c91d6e7c9f7f1f5\TiWorker.exe"
+        )
+
+        metadata = SysmonEventEmitter._get_pe_metadata(image, server)
+
+        assert metadata[0] == "10.0.20348.2322"
+        assert metadata[4] == "TiWorker.exe"
+
     def test_image_load_hashes_follow_rendered_file_identity(self):
         """Same DLL path with different rendered PE metadata must not share hashes."""
         image = r"C:\Program Files\Mozilla Firefox\lgpllibs.dll"

@@ -153,13 +153,32 @@ class TestGetSiteMap:
 
     def test_different_seeds_produce_different_vars(self):
         """Different seeds should produce different template substitutions."""
-        sm1 = get_site_map("outlook.office365.com", [], random.Random(1))
-        sm2 = get_site_map("outlook.office365.com", [], random.Random(999))
-        # The page paths are fixed (/owa/, /owa/#/mail, etc.) but subresource
-        # paths contain {hex16} which should differ
+        sm1 = get_site_map("github.com", [], random.Random(1))
+        sm2 = get_site_map("github.com", [], random.Random(999))
+        # User/content URLs should still vary between sessions.
         subs1 = [s.path for p in sm1.pages for s in p.subresources]
         subs2 = [s.path for p in sm2.pages for s in p.subresources]
         assert subs1 != subs2
+
+    def test_deployment_static_asset_hashes_are_stable_per_host(self):
+        """Cache-busted JS/CSS bundles should look like a deployed app version."""
+        sm1 = get_site_map("portal.example.com", ["web"], random.Random(1))
+        sm2 = get_site_map("portal.example.com", ["web"], random.Random(999))
+
+        def _paths(site_map):
+            return [s.path for p in site_map.pages for s in p.subresources]
+
+        paths1 = _paths(sm1)
+        paths2 = _paths(sm2)
+        app_bundles1 = [path for path in paths1 if "/assets/js/app.bundle." in path]
+        app_bundles2 = [path for path in paths2 if "/assets/js/app.bundle." in path]
+        content_images1 = [path for path in paths1 if "/assets/img/content/" in path]
+        content_images2 = [path for path in paths2 if "/assets/img/content/" in path]
+
+        assert app_bundles1
+        assert app_bundles1 == app_bundles2
+        assert content_images1
+        assert content_images1 != content_images2
 
     def test_favicon_in_curated_domains(self):
         """Curated domains should include favicon.ico in subresources."""
