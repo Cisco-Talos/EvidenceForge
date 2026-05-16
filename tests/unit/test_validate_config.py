@@ -3,6 +3,8 @@
 
 """Regression test: eforge validate-config must ship 100% clean."""
 
+import random
+
 from evidenceforge.cli.validate_config import validate_config
 
 
@@ -1012,6 +1014,34 @@ class TestValidateConfig:
             and issue.file == "extra_syslog_messages.yaml"
             and "NetworkManager state transition must change states" in issue.message
             for issue in result.issues
+        )
+
+    def test_extra_syslog_sudo_templates_render_contextual_services(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        entry = {
+            "app": "sudo",
+            "messages": [
+                "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+            ],
+            "params": {
+                "sudo_user": ["deploy"],
+                "tty": ["pts/1"],
+                "cwd": ["/srv/app"],
+                "service": ["ssh"],
+                "sudo_command": ["/bin/systemctl status {service}"],
+            },
+        }
+
+        message = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["nginx"],
+        )
+
+        assert message == (
+            "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status nginx"
         )
 
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):

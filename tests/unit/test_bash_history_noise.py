@@ -8,6 +8,8 @@ events, and baseline should generate bash history for all Linux users,
 not just the attack user.
 """
 
+import random
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -235,6 +237,29 @@ class TestBaselineLinuxBashHistory:
 
         assert is_typo is False
         assert command
+
+    def test_bash_picker_suppresses_repeated_exact_commands(self, monkeypatch):
+        """Generated bash histories should not overuse one exact command string."""
+        from evidenceforge.generation.activity import bash_commands
+
+        bash_commands.reset_bash_command_memory()
+        monkeypatch.setattr(bash_commands, "_typo_rate", lambda _username, _commands: 0.0)
+
+        rng = random.Random(7)
+        picked = [
+            bash_commands.pick_bash_command_entry(
+                rng,
+                "sysadmin",
+                "WEB-01",
+                ["nginx", "ssh"],
+                username="deploy",
+                session_command_count=80,
+            )[0]
+            for _ in range(80)
+        ]
+
+        counts = Counter(picked)
+        assert max(counts.values()) <= 8
 
 
 class TestBashHistoryChronological:

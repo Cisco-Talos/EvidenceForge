@@ -160,6 +160,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
 
     app: str
     messages: list[str]
+    params: dict[str, list[str]] | None = None
     distro: str | None = None
     roles: list[str] | None = None
     transient: bool | None = None

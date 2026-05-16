@@ -5566,19 +5566,25 @@ class BaselineMixin:
                     # Additional diverse syslog programs — loaded from YAML with
                     # role/distro tags for data-driven filtering.
                     from evidenceforge.generation.activity.extra_syslog import (
-                        filter_syslog_messages,
+                        filter_syslog_message_entries,
                         load_extra_syslog_messages,
+                        render_extra_syslog_message,
                     )
 
                     _all_programs = load_extra_syslog_messages()
-                    filtered = filter_syslog_messages(_all_programs, is_rhel_like, system.roles)
+                    filtered = filter_syslog_message_entries(
+                        _all_programs,
+                        is_rhel_like,
+                        system.roles,
+                    )
                     if not filtered:
                         continue
-                    app, msgs, _entry_weight = rng.choices(
+                    entry = rng.choices(
                         filtered,
-                        weights=[weight for _app, _messages, weight in filtered],
+                        weights=[int(candidate.get("weight", 10)) for candidate in filtered],
                         k=1,
                     )[0]
+                    app = entry["app"]
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         # DHCP syslog must be tied to the canonical lease
@@ -5586,15 +5592,28 @@ class BaselineMixin:
                         continue
                     elif app == "NetworkManager":
                         # NM uses monotonic kernel uptime seconds in [brackets]
-                        msg = rng.choice(msgs).format(uptime)
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=uptime,
+                            system_services=system.services,
+                        )
                     elif app == "systemd-resolved":
                         dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
-                        msg = rng.choice(msgs).format(
-                            rng.randint(100000, 999999),
-                            dns_server=dns_server,
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(100000, 999999),
+                            system_services=system.services,
+                            values={"dns_server": dns_server},
                         )
                     else:
-                        msg = rng.choice(msgs).format(rng.randint(100000, 999999))
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(100000, 999999),
+                            system_services=system.services,
+                        )
                     # Map syslog app names to sys_pids keys for persistent daemons.
                     # Only map to sys_pids entries that are the SAME daemon.
                     _APP_TO_PID_KEY = {

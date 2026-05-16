@@ -377,6 +377,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     future batch is Linux bash/syslog command-pool repetition, followed by
     Zeek HTTP `CONNECT` source-visibility semantics and richer proxy cache
     behavior.
+- [ ] **IN PROGRESS** Current-dev assessment continuation loops 11-20 — continue the iterative EvidenceForge realism loop from Loop 10, starting with Linux bash/syslog command-pool repetition, then Zeek HTTP `CONNECT` source-visibility semantics and richer proxy cache behavior unless fresh blind findings reprioritize the work.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 

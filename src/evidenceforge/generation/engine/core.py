@@ -101,6 +101,10 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         # Hawkes process state per user for cross-hour continuity
         self._hawkes_states: dict = {}
 
+        from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
+
+        reset_bash_command_memory()
+
     def _report_progress(self, event_type: str, data: dict) -> None:
         """Report progress to callback if registered.
 

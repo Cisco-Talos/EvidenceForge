@@ -37,22 +37,79 @@ programs:
   - app: sudo
     transient: true
     weight: 2
+    params:
+      sudo_user:
+        - admin
+        - deploy
+        - ops
+        - ubuntu
+        - svc_app
+        - backup
+      tty:
+        - pts/0
+        - pts/1
+        - pts/2
+        - pts/3
+        - pts/5
+      cwd:
+        - /home/admin
+        - /home/deploy
+        - /home/ops
+        - /srv/app
+        - /etc
+        - /var/log
+        - /tmp
+      service:
+        - ssh
+        - cron
+        - app-agent
+        - nginx
+        - apache2
+        - mysql
+        - postgresql
+      sudo_command:
+        - /bin/systemctl status {service}
+        - /bin/systemctl restart {service}
+        - /usr/bin/journalctl -u {service} -n 50
+        - /usr/bin/journalctl -u {service} --since "30 min ago"
+        - /usr/bin/apt list --upgradable
+        - /usr/bin/apt-cache policy openssl
+        - /usr/bin/tail -n 100 /var/log/auth.log
+        - /usr/bin/tail -n 80 /var/log/syslog
+        - /usr/bin/grep -i error /var/log/syslog
+        - /usr/bin/ss -ltnp
+        - /usr/bin/lsblk
+        - /usr/bin/df -h /var
+        - /usr/bin/du -sh /var/log
+        - /usr/bin/find /var/log -type f -mtime -1
+        - /usr/sbin/service {service} status
     messages:
-      - "admin : TTY=pts/0 ; PWD=/home/admin ; USER=root ; COMMAND=/bin/systemctl status ssh"
-      - "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/systemctl status app-agent"
-      - "ops : TTY=pts/2 ; PWD=/home/ops ; USER=root ; COMMAND=/usr/bin/journalctl -u ssh -n 50"
-      - "ubuntu : TTY=pts/0 ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/apt list --upgradable"
+      - "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
 
   - app: sudo
     transient: true
     roles: [web_server, forward_proxy]
     weight: 1
+    params:
+      web_user:
+        - www-data
+        - nginx
+        - apache
+      denied_command:
+        - /bin/cat /etc/shadow
+        - /usr/bin/head /etc/shadow
+        - /usr/bin/tail /var/log/auth.log
+        - /usr/bin/find /root -maxdepth 1
+        - /usr/bin/id
+        - /usr/bin/curl -s http://169.254.169.254/latest/meta-data/
+        - /bin/ls /root
+        - /usr/bin/grep -R password /etc
+      denied_tty:
+        - unknown
+        - pts/0
+        - pts/2
     messages:
-      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/bin/cat /etc/shadow"
-      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/head /etc/shadow"
-      - "www-data : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/tail /var/log/auth.log"
-      - "nginx : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/find /root -maxdepth 1"
-      - "apache : command not allowed ; TTY=unknown ; USER=root ; COMMAND=/usr/bin/id"
+      - "{web_user} : command not allowed ; TTY={denied_tty} ; USER=root ; COMMAND={denied_command}"
 
   - app: dhclient
     messages:
