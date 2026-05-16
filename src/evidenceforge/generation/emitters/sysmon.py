@@ -504,6 +504,9 @@ class SysmonEventEmitter(LogEmitter):
             return metadata
         if not cls._is_windows_os_binary_path(image_path):
             return metadata
+        component_version = cls._servicing_stack_version_from_path(image_path)
+        if component_version and orig.lower() == "tiworker.exe":
+            return component_version, desc, prod, company, orig
         return cls._host_windows_file_version(host), desc, prod, company, orig
 
     @staticmethod
@@ -514,6 +517,19 @@ class SysmonEventEmitter(LogEmitter):
             or "\\windows\\syswow64\\" in image_lower
             or image_lower.startswith("c:\\windows\\")
         )
+
+    @staticmethod
+    def _servicing_stack_version_from_path(image_path: str) -> str:
+        image_lower = image_path.replace("/", "\\").lower()
+        marker = "microsoft-windows-servicingstack_31bf3856ad364e35_"
+        if marker not in image_lower:
+            return ""
+        tail = image_lower.split(marker, 1)[1]
+        version = tail.split("_", 1)[0]
+        parts = version.split(".")
+        if len(parts) == 4 and all(part.isdigit() for part in parts):
+            return version
+        return ""
 
     @staticmethod
     def _host_windows_file_version(host: Any) -> str:
@@ -535,20 +551,29 @@ class SysmonEventEmitter(LogEmitter):
         cache = getattr(self, "_sysmon_thread_pools", None)
         if cache is None:
             cache = self._sysmon_thread_pools = {}
-        offsets = getattr(self, "_sysmon_thread_pool_offsets", None)
-        if offsets is None:
-            offsets = self._sysmon_thread_pool_offsets = {}
+        counters = getattr(self, "_sysmon_thread_counters", None)
+        if counters is None:
+            counters = self._sysmon_thread_counters = {}
+        last_threads = getattr(self, "_sysmon_last_thread_by_host", None)
+        if last_threads is None:
+            last_threads = self._sysmon_last_thread_by_host = {}
         if hostname not in cache:
             rng = random.Random(_stable_seed(f"sysmon_threads_{hostname}"))
             cache[hostname] = [
                 windows_id_randint(rng, 1000, 5000) for _ in range(rng.randint(3, 5))
             ]
-            offsets[hostname] = _stable_seed(f"sysmon_thread_offset_{hostname}") % len(
-                cache[hostname]
-            )
-        offset = offsets[hostname]
-        offsets[hostname] = (offset + 1) % len(cache[hostname])
-        return cache[hostname][offset]
+            counters[hostname] = 0
+        pool = cache[hostname]
+        counter = counters.get(hostname, 0)
+        counters[hostname] = counter + 1
+        rng = random.Random(_stable_seed(f"sysmon_thread_choice:{hostname}:{counter}"))
+        previous = last_threads.get(hostname)
+        if previous in pool and rng.random() < 0.58:
+            return previous
+        weights = [max(1, len(pool) * 3 - index * 2) for index, _thread_id in enumerate(pool)]
+        thread_id = rng.choices(pool, weights=weights, k=1)[0]
+        last_threads[hostname] = thread_id
+        return thread_id
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.
@@ -657,7 +682,10 @@ class SysmonEventEmitter(LogEmitter):
             self._render_sysmon_process_access(event)
         elif event.event_type == "connection":
             # Connection events can produce Event 3 (NetworkConnect) and/or Event 22 (DNSQuery)
-            if self._passes_event3_filter(event):
+            is_application_layer_only = (
+                event.network is not None and event.network.application_layer_only
+            )
+            if not is_application_layer_only and self._passes_event3_filter(event):
                 self._render_sysmon_network_connect(event)
             if event.dns and self._passes_event22_filter(event):
                 self._render_sysmon_dns_query(event)

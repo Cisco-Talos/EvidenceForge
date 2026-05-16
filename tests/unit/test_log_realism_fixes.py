@@ -554,6 +554,7 @@ class TestDcSystemTypeFiltering:
 
         apps = get_apps_for_persona("sysadmin", "windows", "query", system_type="workstation")
         app_ids = {a["id"] for a in apps}
+        assert "dsquery" not in app_ids, "dsquery should not be generic workstation texture"
         assert "dcdiag" not in app_ids, "dcdiag should not be on workstations"
         assert "repadmin" not in app_ids, "repadmin should not be on workstations"
 

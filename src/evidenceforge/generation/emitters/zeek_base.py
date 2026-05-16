@@ -65,6 +65,29 @@ def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     return [visible_ip if item == original_ip else item for item in value]
 
 
+def _round_zeek_float(value: float) -> float:
+    """Round Zeek interval-like values to source-native microsecond precision."""
+    rounded = round(value, 6)
+    if rounded == 0 and value > 0:
+        return 0.000001
+    if rounded == 0 and value < 0:
+        return -0.000001
+    return rounded
+
+
+def _normalize_zeek_float_precision(value: Any) -> Any:
+    """Normalize floats in rendered Zeek JSON while preserving JSON structure."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return _round_zeek_float(value)
+    if isinstance(value, list):
+        return [_normalize_zeek_float_precision(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_zeek_float_precision(item) for key, item in value.items()}
+    return value
+
+
 def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: float) -> float:
     """Return a deterministic signed per-sensor observation variation."""
     seed = _stable_seed(f"zeek_sensor_observation:{hostname}:{uid}:{field}")
@@ -81,6 +104,28 @@ def _sensor_clock_skew_us(hostname: str) -> int:
     seed = _stable_seed(f"zeek_sensor_clock_skew:{hostname}")
     width = timing.clock_skew_max_us - timing.clock_skew_min_us + 1
     return timing.clock_skew_min_us + (seed % max(1, width))
+
+
+def _sensor_clock_drift_us(hostname: str, ts: Any) -> int:
+    """Return small time-bucketed clock drift for a sensor timestamp."""
+    if isinstance(ts, datetime):
+        epoch_seconds = int(ts.timestamp())
+    elif isinstance(ts, (int, float)):
+        epoch_seconds = int(ts)
+    else:
+        epoch_seconds = 0
+    # Drift moves slowly, not per packet. Fifteen-minute buckets are enough to
+    # avoid a perfectly fixed offset while keeping well-synced sensors close.
+    bucket = epoch_seconds // 900
+    seed = _stable_seed(f"zeek_sensor_clock_drift:{hostname}:{bucket}")
+    return (seed % 401) - 200
+
+
+def _sensor_clock_adjustment_us(hostname: str, ts: Any) -> int:
+    """Return stable skew plus bounded drift within the configured skew window."""
+    timing = network_sensor_observation_timing()
+    skew = _sensor_clock_skew_us(hostname) + _sensor_clock_drift_us(hostname, ts)
+    return max(timing.clock_skew_min_us, min(timing.clock_skew_max_us, skew))
 
 
 def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
@@ -114,6 +159,19 @@ def _jitter_numeric_observation(
     if isinstance(value, int):
         varied = int(round(varied))
     render_data[field] = max(type(value)(minimum), type(value)(varied))
+
+
+def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
+    """Return whether a flow's byte counters should stay identical across sensors."""
+    proto = str(render_data.get("proto") or "").lower()
+    if proto == "icmp":
+        return True
+    if proto != "udp":
+        return False
+    service = str(render_data.get("service") or "").lower()
+    if service == "dns":
+        return True
+    return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
 
 
 def _apply_sensor_observation_variance(
@@ -256,6 +314,9 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
             render_data[f"{side}_ip_bytes"] = 0
             continue
         packet_count = packets if isinstance(packets, int) and packets > 0 else 1
+        if proto == "udp":
+            render_data[f"{side}_ip_bytes"] = payload + (header_bytes * packet_count)
+            continue
         minimum_ip_bytes = payload + (header_bytes * packet_count)
         if ip_bytes < minimum_ip_bytes:
             render_data[f"{side}_ip_bytes"] = minimum_ip_bytes
@@ -551,20 +612,24 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Sensors have stable clock skew plus per-flow capture timing
-                # variance. Keep the offset shared across Zeek log families for
-                # a flow, but avoid a fixed cross-sensor clone delay.
+                # Each sensor has independent clock skew/drift plus per-flow
+                # capture timing. Apply it to every sensor in a multi-sensor
+                # observation so cross-sensor deltas can be positive or
+                # negative instead of always "secondary = primary + delay".
+                ts = render_data.get("ts")
+                if len(targets) > 1 and ts is not None:
+                    sensor_delay_us = _sensor_clock_adjustment_us(
+                        hostname,
+                        ts,
+                    ) + _sensor_path_delay_us(hostname, original_uid)
+                    if isinstance(ts, datetime):
+                        render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
+                    elif isinstance(ts, (int, float)):
+                        render_data["ts"] = ts + sensor_delay_us / 1_000_000
                 if i > 0:
-                    sensor_delay_us = _sensor_clock_skew_us(hostname) + _sensor_path_delay_us(
-                        hostname, original_uid
-                    )
-                    ts = render_data.get("ts")
-                    if ts is not None:
-                        if isinstance(ts, datetime):
-                            render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
-                        elif isinstance(ts, (int, float)):
-                            render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                    if render_data.get("_allow_sensor_observation_variance"):
+                    if render_data.get(
+                        "_allow_sensor_observation_variance"
+                    ) and not _locks_sensor_packet_accounting(render_data):
                         _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)
@@ -638,9 +703,7 @@ class SensorMultiplexEmitter(LogEmitter):
         rendered = self._template.render(**template_context)
         try:
             data = json.loads(rendered)
-            # Round timestamp to 6 decimal places (Zeek standard)
-            if "ts" in data and isinstance(data["ts"], float):
-                data["ts"] = round(data["ts"], 6)
+            data = _normalize_zeek_float_precision(data)
             return json.dumps(data, separators=(",", ":"))
         except json.JSONDecodeError:
             return rendered.strip()

@@ -51,6 +51,7 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _linux_foreground_lifetime,
     _linux_uid_for_user,
+    _ssh_syslog_time,
     _windows_foreground_lifetime,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
@@ -87,6 +88,58 @@ from evidenceforge.models.scenario import Persona, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
+
+
+_HttpGroupKey = tuple[str, int]
+_HttpPlanValue = tuple[_HttpGroupKey, int, bool, int]
+
+
+def _plan_http_request_groups(
+    requests: list[Any],
+    *,
+    request_body_floor: int = 0,
+) -> tuple[dict[int, _HttpPlanValue], dict[_HttpGroupKey, dict[str, int]]]:
+    """Plan source-native HTTP transaction depth and parent flow accounting."""
+    group_counters: dict[str, int] = {}
+    active_group: dict[str, _HttpGroupKey] = {}
+    depths: dict[_HttpGroupKey, int] = {}
+    last_emit_offset: dict[_HttpGroupKey, int] = {}
+    plan: dict[int, _HttpPlanValue] = {}
+    groups: dict[_HttpGroupKey, dict[str, int]] = {}
+
+    for index, req in enumerate(requests):
+        hostname = str(req.hostname)
+        if req.is_page_load or hostname not in active_group:
+            group_counters[hostname] = group_counters.get(hostname, 0) + 1
+            active_group[hostname] = (hostname, group_counters[hostname])
+            depths[active_group[hostname]] = 0
+
+        group_key = active_group[hostname]
+        depths[group_key] += 1
+        trans_depth = depths[group_key]
+        emit_offset_ms = req.time_offset_ms
+        if group_key in last_emit_offset:
+            emit_offset_ms = max(emit_offset_ms, last_emit_offset[group_key] + 600)
+        last_emit_offset[group_key] = emit_offset_ms
+        plan[index] = (group_key, trans_depth, trans_depth == 1, emit_offset_ms)
+
+        group = groups.setdefault(
+            group_key,
+            {
+                "first_offset_ms": emit_offset_ms,
+                "last_offset_ms": emit_offset_ms,
+                "request_body_len": 0,
+                "response_body_len": 0,
+                "request_count": 0,
+            },
+        )
+        group["first_offset_ms"] = min(group["first_offset_ms"], emit_offset_ms)
+        group["last_offset_ms"] = max(group["last_offset_ms"], emit_offset_ms)
+        group["request_body_len"] += max(request_body_floor, req.request_body_len)
+        group["response_body_len"] += req.response_body_len
+        group["request_count"] += 1
+
+    return plan, groups
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -591,6 +644,39 @@ _DAY_NAME_TO_INT = {
     "sunday": 6,
 }
 
+_DC_KERBEROS_MEMBER_SVC_DIST = (
+    ("cifs", 52),
+    ("host", 16),
+    ("http", 12),
+    ("ldap", 8),
+    ("rpcss", 5),
+    ("wsman", 4),
+    ("termsrv", 3),
+)
+_DC_KERBEROS_LOCAL_SVC_DIST = (
+    ("ldap", 42),
+    ("cifs", 22),
+    ("host", 18),
+    ("DNS", 12),
+    ("rpcss", 4),
+    ("http", 2),
+)
+_KERBEROS_MEMBER_SERVICE_MARKERS = {
+    "app-server",
+    "crm",
+    "exchange",
+    "file-server",
+    "iis",
+    "mssql",
+    "print",
+    "sharepoint",
+    "smb",
+    "sql-server",
+    "web",
+    "web-server",
+    "windows-search",
+}
+
 
 def _merge_systemd_schedules(default: dict, overlay: dict) -> dict:
     """Merge overlay systemd schedules into defaults (keyed by service name)."""
@@ -617,6 +703,51 @@ def _load_systemd_schedules() -> list[dict[str, Any]]:
     return _CACHED_SCHEDULES
 
 
+def _deterministic_probability_enabled(key: str, probability: float | None) -> bool:
+    """Return whether a stable per-key probability gate is enabled."""
+    if probability is None:
+        return True
+    clamped = max(0.0, min(1.0, float(probability)))
+    if clamped <= 0.0:
+        return False
+    if clamped >= 1.0:
+        return True
+    return (_stable_seed(key) % 10_000) / 10_000.0 < clamped
+
+
+def _schedule_applies_to_system(sched: dict[str, Any], system: Any, has_web_role: bool) -> bool:
+    """Return whether a Linux schedule matches host role and service/package state."""
+    roles = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
+    services = {str(service).lower() for service in (getattr(system, "services", []) or [])}
+
+    legacy_role = sched.get("role")
+    if legacy_role:
+        role = str(legacy_role).lower()
+        if role == "web_server":
+            if role not in roles and not has_web_role:
+                return False
+        elif role not in roles:
+            return False
+
+    required_roles = {str(role).lower() for role in (sched.get("roles") or [])}
+    if required_roles and not roles.intersection(required_roles):
+        return False
+
+    excluded_roles = {str(role).lower() for role in (sched.get("exclude_roles") or [])}
+    if excluded_roles and roles.intersection(excluded_roles):
+        return False
+
+    required_services = {str(service).lower() for service in (sched.get("services_any") or [])}
+    if required_services and not services.intersection(required_services):
+        return False
+
+    service = sched.get("service", "")
+    return _deterministic_probability_enabled(
+        f"sched_host_enabled:{getattr(system, 'hostname', '')}:{service}",
+        sched.get("host_probability"),
+    )
+
+
 def _machine_account_tgs_gap_ms(rng: random.Random, *, first: bool) -> int:
     """Return a realistic gap before machine-account service-ticket requests."""
     if first:
@@ -641,6 +772,47 @@ def _machine_account_ntlm_offset_seconds(tgt_offset_seconds: float, rng: random.
         direction = -1 if tgt_offset_seconds > 1800 else 1
         candidate = tgt_offset_seconds + direction * rng.uniform(30, 300)
     return max(0.0, min(3599.0, candidate))
+
+
+def _dc_kerberos_cycle_range(multiplier: float) -> tuple[int, int]:
+    """Return per-client DC Kerberos cycle bounds without letting DC roles explode volume."""
+    return scale_count_range(1, 3, min(max(multiplier, 0.25), 2.5))
+
+
+def _dc_kerberos_tgs_range(multiplier: float) -> tuple[int, int]:
+    """Return service-ticket burst bounds for one machine-account Kerberos cycle."""
+    return scale_count_range(1, 2, min(max(multiplier, 0.25), 1.5))
+
+
+def _pick_dc_kerberos_service(rng: random.Random, *, target_is_dc: bool) -> str:
+    """Pick a Kerberos service class with source-native skew instead of uniform buckets."""
+    dist = _DC_KERBEROS_LOCAL_SVC_DIST if target_is_dc else _DC_KERBEROS_MEMBER_SVC_DIST
+    values = [entry[0] for entry in dist]
+    weights = [entry[1] for entry in dist]
+    return rng.choices(values, weights=weights, k=1)[0]
+
+
+def _pick_dc_kerberos_target(
+    rng: random.Random,
+    member_servers: list[str],
+    dc_hostname: str,
+) -> tuple[str, bool]:
+    """Pick a service-ticket target, favoring member services over the DC itself."""
+    if member_servers and rng.random() < 0.82:
+        return rng.choice(member_servers), False
+    return dc_hostname, True
+
+
+def _is_kerberos_member_server(system: Any) -> bool:
+    """Return whether a Windows host should receive routine machine-account TGS traffic."""
+    host_type = str(getattr(system, "type", "")).lower()
+    if host_type not in {"server", "workstation"}:
+        return False
+    services = {str(value).lower().replace("_", "-") for value in getattr(system, "services", [])}
+    roles = {
+        str(value).lower().replace("_", "-") for value in (getattr(system, "roles", None) or [])
+    }
+    return bool((services | roles) & _KERBEROS_MEMBER_SERVICE_MARKERS)
 
 
 class BaselineMixin:
@@ -943,9 +1115,8 @@ class BaselineMixin:
             if distro == "rhel" and not is_rhel_like:
                 continue
 
-            # Filter by role
-            role = sched.get("role")
-            if role == "web_server" and not has_web_role:
+            # Filter by role and service/package signals
+            if not _schedule_applies_to_system(sched, system, has_web_role):
                 continue
 
             service = sched["service"]
@@ -986,7 +1157,18 @@ class BaselineMixin:
             if frequency == "30min":
                 # Generate two events per hour
                 for fm in (fire_minute_1, fire_minute_2):
-                    ts = current_hour + timedelta(minutes=fm, seconds=rng.uniform(0, 30))
+                    slot_key = (
+                        f"sched_slot:{system.hostname}:{service}:{current_hour.isoformat()}:{fm}"
+                    )
+                    skip_probability = sched.get("slot_skip_probability")
+                    if skip_probability is not None and not _deterministic_probability_enabled(
+                        slot_key, 1.0 - float(skip_probability)
+                    ):
+                        continue
+                    jitter_seconds = max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                    ts = current_hour + timedelta(
+                        minutes=fm, seconds=rng.uniform(0, jitter_seconds)
+                    )
                     self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
             else:
                 ts = current_hour + timedelta(minutes=fire_minute, seconds=rng.uniform(0, 59))
@@ -2126,6 +2308,12 @@ class BaselineMixin:
             "tasklist.exe",
             "sc.exe",
             "wevtutil.exe",
+            "curl",
+            "wget",
+            "scp",
+            "kubectl",
+            "mysqldump",
+            "sqlcmd",
         )
 
         # Collect all seeded system PIDs for this system as a safety net
@@ -3931,6 +4119,7 @@ class BaselineMixin:
             pick_domain_and_ip,
             resolve_domain_ip,
         )
+        from evidenceforge.generation.activity.http_content import response_mime_types_for_status
         from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
         domain_tags = get_domain_tags(hostname) if hostname else []
@@ -3975,6 +4164,22 @@ class BaselineMixin:
         if not session_requests:
             return
 
+        def _http_status_message(status: int) -> str:
+            return {
+                200: "OK",
+                204: "No Content",
+                206: "Partial Content",
+                301: "Moved Permanently",
+                302: "Found",
+                304: "Not Modified",
+                400: "Bad Request",
+                401: "Unauthorized",
+                403: "Forbidden",
+                404: "Not Found",
+                500: "Internal Server Error",
+                503: "Service Unavailable",
+            }.get(status, "OK")
+
         # Pick a consistent UA for the entire session
         if os_cat == "linux":
             _session_uas = [
@@ -3989,10 +4194,33 @@ class BaselineMixin:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
             ]
         session_ua = rng.choice(_session_uas)
+        request_plan, request_groups = _plan_http_request_groups(session_requests)
 
-        for req in session_requests:
-            req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+        planned_requests = sorted(
+            enumerate(session_requests),
+            key=lambda item: (request_plan[item[0]][3], item[0]),
+        )
+        for req_index, req in planned_requests:
+            group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
+            req_ts = base_ts + timedelta(milliseconds=emit_offset_ms)
             self.state_manager.set_current_time(req_ts)
+            group = request_groups[group_key]
+            conn_duration = rng.uniform(0.05, 2.0)
+            conn_orig_bytes = req.request_body_len
+            conn_resp_bytes = req.response_body_len
+            if first_in_group:
+                remaining_ms = max(0, group["last_offset_ms"] - emit_offset_ms)
+                conn_duration = (remaining_ms / 1000) + rng.uniform(1.25, 3.0)
+                request_overhead = 120 * group["request_count"]
+                response_overhead = 160 * group["request_count"]
+                conn_orig_bytes = max(
+                    req.request_body_len,
+                    group["request_body_len"] + request_overhead,
+                )
+                conn_resp_bytes = max(
+                    req.response_body_len,
+                    group["response_body_len"] + response_overhead,
+                )
 
             # Resolve destination IP for CDN subresources
             req_dst_ip = dst_ip
@@ -4021,11 +4249,16 @@ class BaselineMixin:
                 user_agent=session_ua,
                 request_body_len=req.request_body_len,
                 response_body_len=req.response_body_len,
-                status_code=200,
-                status_msg="OK",
+                status_code=req.status_code,
+                status_msg=_http_status_message(req.status_code),
                 referrer=req.referrer,
-                trans_depth=req.trans_depth,
-                resp_mime_types=[req.content_type] if req.content_type else [],
+                trans_depth=trans_depth,
+                resp_mime_types=response_mime_types_for_status(
+                    req.status_code,
+                    req.content_type,
+                    req.response_body_len,
+                    method=req.method,
+                ),
                 tags=[],
             )
 
@@ -4036,9 +4269,9 @@ class BaselineMixin:
                 dst_port=conn.get("port", 443),
                 proto=conn.get("proto", "tcp"),
                 service=conn.get("service"),
-                duration=rng.uniform(0.05, 2.0),
-                orig_bytes=req.request_body_len,
-                resp_bytes=req.response_body_len,
+                duration=conn_duration,
+                orig_bytes=conn_orig_bytes,
+                resp_bytes=conn_resp_bytes,
                 emit_dns=req.is_page_load or req_hostname != hostname,
                 source_system=system,
                 hostname=req_hostname,
@@ -4369,7 +4602,11 @@ class BaselineMixin:
                     svc_offset = rng.uniform(0, 3599)
                     svc_ts = current_hour + timedelta(seconds=svc_offset)
                     self.state_manager.set_current_time(svc_ts)
-                    svc_image, svc_cmd, svc_parent_key = _pick_svc(rng, sys_type_str)
+                    svc_image, svc_cmd, svc_parent_key = _pick_svc(
+                        rng,
+                        sys_type_str,
+                        system,
+                    )
                     svc_parent = sys_pids.get(
                         svc_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
@@ -4553,7 +4790,7 @@ class BaselineMixin:
                 ):
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
-                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng)
+                    task_image, task_cmd, task_parent_key = pick_scheduled_task(rng, system)
                     parent_pid = sys_pids.get(
                         task_parent_key, sys_pids.get("services", sys_pids.get("wininit", 4))
                     )
@@ -5032,7 +5269,9 @@ class BaselineMixin:
                     None,
                 )
                 for client in windows_clients:
-                    num_cycles = self._scaled_randint(rng, dc_system, "dc_kerberos", 3, 8)
+                    dc_kerberos_multiplier = self._activity_multiplier(dc_system, "dc_kerberos")
+                    cycle_lo, cycle_hi = _dc_kerberos_cycle_range(dc_kerberos_multiplier)
+                    num_cycles = rng.randint(cycle_lo, cycle_hi)
                     base_interval = 3600 / (num_cycles + 1)
                     for i in range(num_cycles):
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
@@ -5050,43 +5289,27 @@ class BaselineMixin:
                         if rng.random() < 0.22:
                             num_tgs = 0
                         else:
-                            num_tgs = self._scaled_randint(
-                                rng,
-                                dc_system,
-                                "dc_kerberos",
-                                1,
-                                5,
-                            )
+                            tgs_lo, tgs_hi = _dc_kerberos_tgs_range(dc_kerberos_multiplier)
+                            num_tgs = rng.randint(tgs_lo, tgs_hi)
                         member_servers = [
                             s.hostname
                             for s in self.scenario.environment.systems
                             if _get_os_category(s.os) == "windows"
                             and s.ip not in dc_ips
-                            and any(
-                                svc in s.services
-                                for svc in [
-                                    "file-server",
-                                    "sql-server",
-                                    "web",
-                                    "iis",
-                                    "exchange",
-                                    "sharepoint",
-                                    "crm",
-                                    "print",
-                                ]
-                            )
-                        ] or [dc_hostname]
+                            and _is_kerberos_member_server(s)
+                        ]
                         elapsed_ms = 0
                         for tgs_i in range(num_tgs):
                             elapsed_ms += _machine_account_tgs_gap_ms(rng, first=tgs_i == 0)
                             ts2 = ts + timedelta(milliseconds=elapsed_ms)
                             if ts2 >= current_hour + timedelta(hours=1):
                                 continue
-                            svc = rng.choice(["cifs", "ldap", "http", "host"])
-                            if rng.random() < 0.60 and member_servers:
-                                target = rng.choice(member_servers)
-                            else:
-                                target = dc_hostname
+                            target, target_is_dc = _pick_dc_kerberos_target(
+                                rng,
+                                member_servers,
+                                dc_hostname,
+                            )
+                            svc = _pick_dc_kerberos_service(rng, target_is_dc=target_is_dc)
                             self.activity_generator.generate_kerberos_service_ticket(
                                 username=username,
                                 service_name=f"{svc}/{target}",
@@ -5336,10 +5559,27 @@ class BaselineMixin:
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
                     _msg_offset = rng.randint(10, 50)
+                    ssh_syslog_seed = (
+                        system.hostname,
+                        ip,
+                        port,
+                        sshd_pid,
+                        ts.isoformat(),
+                    )
                     login_times: list[datetime] = []
-                    for _ in range(4):
-                        login_times.append(ts + timedelta(milliseconds=_msg_offset))
-                        _msg_offset += rng.randint(1, 50)
+                    for _label in ("connection", "accepted", "pam"):
+                        login_times.append(
+                            _ssh_syslog_time(ts, _label, _msg_offset, *ssh_syslog_seed)
+                        )
+                        _msg_offset += rng.randint(12, 70)
+                    # systemd-logind is observed as a different process from
+                    # sshd, so source-observation delay can be independent.
+                    # Keep enough visible margin that New-session rows cannot
+                    # sort before auth/PAM under the default syslog delay profile.
+                    _msg_offset += rng.randint(420, 760)
+                    login_times.append(
+                        _ssh_syslog_time(ts, "logind", _msg_offset, *ssh_syslog_seed)
+                    )
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
                         system.hostname,
                         rng,
@@ -5386,23 +5626,36 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.39:
+                elif source_roll < 0.36:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
+                    snap_name = rng.choice(
+                        [
+                            "core20",
+                            "core22",
+                            "lxd",
+                            "microk8s",
+                            "snapd-desktop-integration",
+                        ]
+                    )
+                    change_id = 1000 + (_stable_seed(f"snapd_change:{system.hostname}") % 8000)
+                    task_id = rng.randint(1, 9)
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="snapd",
                         message=rng.choice(
                             [
-                                "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
-                                "daemon.go:460: gracefully waiting for running hooks",
-                                "stateengine.go:150: state ensure starting",
+                                f"autorefresh.go:540: auto-refresh for {snap_name}: no updates found",
+                                f"daemon.go:460: gracefully waiting for hook {snap_name}.configure",
+                                f"stateengine.go:150: state ensure starting change {change_id + task_id}",
+                                f"taskrunner.go:271: change {change_id} task {task_id} done for {snap_name}",
+                                f"snapmgr.go:523: refresh candidates checked for {snap_name}",
                             ]
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.47:
+                elif source_roll < 0.45:
                     if not has_ntp_client:
                         continue
                     if is_rhel_like:
@@ -5442,7 +5695,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.59:
+                elif source_roll < 0.50:
                     # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
@@ -5472,19 +5725,26 @@ class BaselineMixin:
                     # Additional diverse syslog programs — loaded from YAML with
                     # role/distro tags for data-driven filtering.
                     from evidenceforge.generation.activity.extra_syslog import (
-                        filter_syslog_messages,
+                        filter_syslog_message_entries,
                         load_extra_syslog_messages,
+                        render_extra_syslog_message,
                     )
 
                     _all_programs = load_extra_syslog_messages()
-                    filtered = filter_syslog_messages(_all_programs, is_rhel_like, system.roles)
+                    filtered = filter_syslog_message_entries(
+                        _all_programs,
+                        is_rhel_like,
+                        system.roles,
+                        sys_type,
+                    )
                     if not filtered:
                         continue
-                    app, msgs, _entry_weight = rng.choices(
+                    entry = rng.choices(
                         filtered,
-                        weights=[weight for _app, _messages, weight in filtered],
+                        weights=[int(candidate.get("weight", 10)) for candidate in filtered],
                         k=1,
                     )[0]
+                    app = entry["app"]
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         # DHCP syslog must be tied to the canonical lease
@@ -5492,15 +5752,28 @@ class BaselineMixin:
                         continue
                     elif app == "NetworkManager":
                         # NM uses monotonic kernel uptime seconds in [brackets]
-                        msg = rng.choice(msgs).format(uptime)
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=uptime,
+                            system_services=system.services,
+                        )
                     elif app == "systemd-resolved":
                         dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
-                        msg = rng.choice(msgs).format(
-                            rng.randint(100000, 999999),
-                            dns_server=dns_server,
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(100000, 999999),
+                            system_services=system.services,
+                            values={"dns_server": dns_server},
                         )
                     else:
-                        msg = rng.choice(msgs).format(rng.randint(100000, 999999))
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(100000, 999999),
+                            system_services=system.services,
+                        )
                     # Map syslog app names to sys_pids keys for persistent daemons.
                     # Only map to sys_pids entries that are the SAME daemon.
                     _APP_TO_PID_KEY = {
@@ -5532,12 +5805,16 @@ class BaselineMixin:
                             16,
                         )
                         pid = 500 + (_h % 59500)  # range 500-59999
+                    facility = 10 if app == "sudo" else 3
+                    severity = 5 if app == "sudo" else 6
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name=app,
                         message=msg,
                         pid=pid,
+                        facility=facility,
+                        severity=severity,
                     )
 
         # ICMP ping between systems on same subnet
@@ -5742,6 +6019,7 @@ class BaselineMixin:
         from evidenceforge.generation.activity.http_content import (
             is_stable_resource_path,
             normalize_mime_type_for_path,
+            response_mime_types_for_status,
             response_size_for_mime,
             response_size_for_status,
         )
@@ -5769,7 +6047,8 @@ class BaselineMixin:
         if top_level_budget <= 0:
             return
 
-        internal_ips = [s.ip for s in systems if s.ip != sys_obj.ip]
+        internal_client_systems = [s for s in systems if s.ip != sys_obj.ip]
+        internal_ips = [s.ip for s in internal_client_systems]
         segment = self._get_segment_for_system(sys_obj)
         exposure = segment.exposure if segment else self._get_system_exposure(sys_obj)
         ext_ratio = (
@@ -5794,6 +6073,32 @@ class BaselineMixin:
                 return rng.choices(internal_ips, weights=int_ip_weights, k=1)[0]
             return "10.0.0.1"
 
+        def _profile_restricted_internal_pool(
+            profile: dict[str, Any],
+        ) -> tuple[list[str], list[float]] | None:
+            raw_types = profile.get("source_type_any")
+            raw_roles = profile.get("source_role_any")
+            type_filter = (
+                {str(value) for value in raw_types} if isinstance(raw_types, list) else set()
+            )
+            role_filter = (
+                {str(value) for value in raw_roles} if isinstance(raw_roles, list) else set()
+            )
+            if not type_filter and not role_filter:
+                return None
+
+            candidates = []
+            for candidate in internal_client_systems:
+                candidate_type = str(getattr(candidate, "type", ""))
+                candidate_roles = {str(role) for role in (getattr(candidate, "roles", None) or [])}
+                if candidate_type in type_filter or candidate_roles & role_filter:
+                    candidates.append(candidate)
+            if not candidates:
+                return [], []
+            ips = [candidate.ip for candidate in candidates]
+            weights = [1.0 / (i + 1) for i in range(len(ips))]
+            return ips, weights
+
         def _effective_dst_ip(is_external_client: bool) -> str:
             dispatcher = getattr(self, "dispatcher", None)
             if is_external_client and dispatcher is not None:
@@ -5807,6 +6112,13 @@ class BaselineMixin:
         def _status_message(status: int) -> str:
             return {
                 200: "OK",
+                204: "No Content",
+                206: "Partial Content",
+                301: "Moved Permanently",
+                302: "Found",
+                304: "Not Modified",
+                400: "Bad Request",
+                401: "Unauthorized",
                 403: "Forbidden",
                 404: "Not Found",
                 405: "Method Not Allowed",
@@ -5833,6 +6145,21 @@ class BaselineMixin:
             attempts += 1
             client_ip = _choose_client_ip()
             is_external_client = not _is_private_ip(client_ip)
+            profile_name, profile = pick_web_visitor_profile(
+                rng,
+                is_external=is_external_client,
+            )
+
+            restricted_pool = None
+            if not is_external_client:
+                restricted_pool = _profile_restricted_internal_pool(profile)
+            if restricted_pool is not None:
+                restricted_ips, restricted_weights = restricted_pool
+                if not restricted_ips:
+                    continue
+                client_ip = rng.choices(restricted_ips, weights=restricted_weights, k=1)[0]
+                is_external_client = False
+
             dst_port = 443 if is_external_client and rng.random() < 0.85 else 80
             dst_service = "ssl" if dst_port == 443 else "http"
             http_host = (
@@ -5842,10 +6169,6 @@ class BaselineMixin:
             )
             client_sys = ip_map.get(client_ip)
             source_os = _get_os_category(client_sys.os) if client_sys is not None else None
-            profile_name, profile = pick_web_visitor_profile(
-                rng,
-                is_external=is_external_client,
-            )
             ua_rng = random.Random(
                 _stable_seed(
                     f"web_client_ua:{client_ip}:{http_host}:{profile_name}:{source_os or 'external'}"
@@ -5866,6 +6189,7 @@ class BaselineMixin:
                     require_browser_like_domain=False,
                 )
                 current_page_allowed = False
+                visible_requests = []
                 for req in session_requests:
                     if req.is_page_load:
                         if top_level_emitted >= top_level_budget:
@@ -5876,7 +6200,32 @@ class BaselineMixin:
                         continue
                     if req.hostname != http_host:
                         continue
-                    req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+                    if is_stable_resource_path(req.path) and not req.is_page_load:
+                        cache_seen = getattr(self, "_web_static_cache_seen", None)
+                        if not isinstance(cache_seen, dict):
+                            cache_seen = self._web_static_cache_seen = {}
+                        cache_key = (client_ip, http_host, req.path)
+                        if cache_key in cache_seen:
+                            cache_seen[cache_key] += 1
+                            continue
+                        cache_seen[cache_key] = 1
+                    visible_requests.append(req)
+
+                request_plan, request_groups = _plan_http_request_groups(
+                    visible_requests,
+                    request_body_floor=200,
+                )
+
+                planned_requests = sorted(
+                    enumerate(visible_requests),
+                    key=lambda item: (request_plan[item[0]][3], item[0]),
+                )
+                for req_index, req in planned_requests:
+                    group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
+                    req_ts = base_ts + timedelta(milliseconds=emit_offset_ms)
+                    group = request_groups[group_key]
+                    request_overhead = 120 * group["request_count"]
+                    response_overhead = 160 * group["request_count"]
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=effective_dst_ip,
@@ -5884,9 +6233,25 @@ class BaselineMixin:
                         dst_port=dst_port,
                         proto="tcp",
                         service=dst_service,
-                        duration=rng.uniform(0.03, 2.0),
-                        orig_bytes=max(200, req.request_body_len),
-                        resp_bytes=req.response_body_len,
+                        duration=(
+                            (max(0, group["last_offset_ms"] - emit_offset_ms) / 1000)
+                            + rng.uniform(1.25, 3.0)
+                            if first_in_group
+                            else rng.uniform(0.03, 2.0)
+                        ),
+                        orig_bytes=(
+                            group["request_body_len"] + request_overhead
+                            if first_in_group
+                            else max(200, req.request_body_len)
+                        ),
+                        resp_bytes=(
+                            max(
+                                req.response_body_len,
+                                group["response_body_len"] + response_overhead,
+                            )
+                            if first_in_group
+                            else req.response_body_len
+                        ),
                         source_system=client_sys,
                         http=HttpContext(
                             method=req.method,
@@ -5896,11 +6261,16 @@ class BaselineMixin:
                             user_agent=chosen_ua,
                             request_body_len=req.request_body_len,
                             response_body_len=req.response_body_len,
-                            status_code=200,
-                            status_msg="OK",
+                            status_code=req.status_code,
+                            status_msg=_status_message(req.status_code),
                             referrer=req.referrer,
-                            trans_depth=req.trans_depth,
-                            resp_mime_types=[req.content_type] if req.content_type else [],
+                            trans_depth=trans_depth,
+                            resp_mime_types=response_mime_types_for_status(
+                                req.status_code,
+                                req.content_type,
+                                req.response_body_len,
+                                method=req.method,
+                            ),
                             tags=[],
                         ),
                         hostname=http_host,
@@ -5950,7 +6320,12 @@ class BaselineMixin:
                         status_code=status,
                         status_msg=_status_message(status),
                         referrer=referrer,
-                        resp_mime_types=[mime] if status == 200 else [],
+                        resp_mime_types=response_mime_types_for_status(
+                            status,
+                            mime,
+                            resp_bytes,
+                            method=method,
+                        ),
                         tags=[],
                     ),
                     hostname=http_host,

@@ -47,3 +47,8 @@ def windows_scheduled_process_config() -> dict[str, Any]:
 def registry_noise_config() -> dict[str, Any]:
     """Return ambient endpoint registry-noise policy."""
     return load_endpoint_noise().get("registry_noise", {})
+
+
+def ecar_flow_identity_config() -> dict[str, Any]:
+    """Return eCAR FLOW process/principal attribution policy."""
+    return load_endpoint_noise().get("ecar_flow_identity", {})

@@ -40,7 +40,7 @@ from threading import Lock
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.contexts import AuthContext, HostContext
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.timing_profiles import (
     sample_timing_delta,
@@ -155,6 +155,26 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     if username.upper() in _NT_AUTHORITY_ACCOUNTS:
         return "NT AUTHORITY"
     return netbios_domain
+
+
+def _logon_workstation_name(auth: AuthContext, host: HostContext, event: SecurityEvent) -> str:
+    """Return native Windows WorkstationName semantics for successful logons."""
+    if auth.workstation_name:
+        return auth.workstation_name
+    if (
+        auth.logon_type == 3
+        and (auth.auth_package or "").lower() == "kerberos"
+        and auth.source_ip not in {"", "-", host.ip}
+    ):
+        seed = _stable_seed(
+            f"kerberos_4624_workstation:{host.hostname}:{auth.logon_id}:"
+            f"{auth.source_ip}:{event.timestamp.isoformat()}"
+        )
+        if seed % 100 < 72:
+            return "-"
+    if auth.logon_type in (3, 10) and event.src_host is not None:
+        return event.src_host.hostname
+    return host.hostname
 
 
 def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
@@ -418,11 +438,8 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        workstation_name = auth.workstation_name or (
-            event.src_host.hostname
-            if auth.logon_type in (3, 10) and event.src_host is not None
-            else host.hostname
-        )
+        workstation_name = _logon_workstation_name(auth, host, event)
+        process_pid, process_name = self._logon_caller_process_identity(host, auth)
 
         event_data = {
             "EventID": 4624,
@@ -442,8 +459,8 @@ class WindowsEventEmitter(LogEmitter):
             "TargetLogonId": auth.logon_id,
             "LogonType": auth.logon_type,
             "WorkstationName": workstation_name,
-            "ProcessId": f"0x{auth.reporting_pid:x}" if auth.reporting_pid else "0x2e0",
-            "ProcessName": r"C:\Windows\System32\lsass.exe",
+            "ProcessId": f"0x{process_pid:x}" if process_pid else "0x0",
+            "ProcessName": process_name,
             "IpAddress": self._ipv6_mapped(auth.source_ip),
             "IpPort": auth.source_port if auth.logon_type in (3, 10) else 0,
             "LogonProcessName": auth.logon_process,
@@ -474,6 +491,27 @@ class WindowsEventEmitter(LogEmitter):
                 "PrivilegeList": privs,
             }
             self.emit_event(priv_data)
+
+    def _logon_caller_process_identity(
+        self,
+        host: HostContext,
+        auth: AuthContext,
+    ) -> tuple[int, str]:
+        """Return EventData ProcessId/ProcessName for source-native 4624 semantics."""
+        caller_by_type = {
+            2: ("winlogon", 0x280, r"C:\Windows\System32\winlogon.exe"),
+            4: ("services", 0x2BC, r"C:\Windows\System32\services.exe"),
+            5: ("services", 0x2BC, r"C:\Windows\System32\services.exe"),
+            7: ("winlogon", 0x280, r"C:\Windows\System32\winlogon.exe"),
+            10: ("winlogon", 0x280, r"C:\Windows\System32\winlogon.exe"),
+            11: ("winlogon", 0x280, r"C:\Windows\System32\winlogon.exe"),
+        }
+        role, default_pid, process_name = caller_by_type.get(
+            auth.logon_type,
+            ("lsass", auth.reporting_pid or 0x2E0, r"C:\Windows\System32\lsass.exe"),
+        )
+        sys_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
+        return int(sys_pids.get(role, default_pid)), process_name
 
     def _render_special_privileges(self, event: SecurityEvent) -> None:
         """Render standalone Windows 4672 (Special Privileges Assigned).

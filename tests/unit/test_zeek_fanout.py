@@ -457,8 +457,8 @@ class TestMultiSensorFanOut:
             assert dmz["orig_ip_bytes"] >= dmz["orig_bytes"] + dmz["orig_pkts"] * 40
             assert dmz["resp_ip_bytes"] >= dmz["resp_bytes"] + dmz["resp_pkts"] * 40
 
-    def test_secondary_sensor_varies_small_locked_observations(self):
-        """Tiny one-packet DNS-like observations should not clone after integer rounding."""
+    def test_secondary_sensor_preserves_dns_packet_accounting(self):
+        """DNS packet sizes should stay identical across sensors observing the same query."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(
@@ -506,7 +506,7 @@ class TestMultiSensorFanOut:
 
             core = json.loads((base / "core" / "conn.json").read_text())
             dmz = json.loads((base / "dmz" / "conn.json").read_text())
-            clone_fields = (
+            locked_fields = (
                 "duration",
                 "orig_bytes",
                 "resp_bytes",
@@ -515,4 +515,8 @@ class TestMultiSensorFanOut:
                 "orig_ip_bytes",
                 "resp_ip_bytes",
             )
-            assert any(core[field] != dmz[field] for field in clone_fields)
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            assert all(core[field] == dmz[field] for field in locked_fields)
+            assert core["orig_ip_bytes"] - core["orig_bytes"] == 28
+            assert core["resp_ip_bytes"] - core["resp_bytes"] == 28

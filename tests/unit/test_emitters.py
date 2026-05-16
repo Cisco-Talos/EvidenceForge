@@ -25,6 +25,7 @@
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
@@ -101,6 +102,70 @@ class TestWindowsEventEmitter:
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
+    @pytest.mark.parametrize(
+        ("logon_type", "expected_role", "expected_process"),
+        [
+            (2, "winlogon", r"C:\Windows\System32\winlogon.exe"),
+            (5, "services", r"C:\Windows\System32\services.exe"),
+            (10, "winlogon", r"C:\Windows\System32\winlogon.exe"),
+            (3, "lsass", r"C:\Windows\System32\lsass.exe"),
+        ],
+    )
+    def test_render_logon_uses_source_native_caller_process(
+        self,
+        format_def,
+        temp_output,
+        logon_type,
+        expected_role,
+        expected_process,
+    ):
+        """4624 ProcessName should reflect the logon type's caller, not always lsass."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        emitter.emit_event = Mock()
+        emitter._system_pids = {
+            "WIN-TEST-01": {
+                "winlogon": 612,
+                "services": 704,
+                "lsass": 736,
+            }
+        }
+        host = HostContext(
+            hostname="WIN-TEST-01",
+            ip="10.0.0.10",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WIN-TEST-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0x12345",
+                logon_type=logon_type,
+                auth_package="Negotiate",
+                source_ip="-" if logon_type in {2, 5} else "10.0.0.50",
+                source_port=0 if logon_type in {2, 5} else 50123,
+                logon_process="User32" if logon_type in {2, 10} else "Kerberos",
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                reporting_pid=736,
+            ),
+        )
+
+        emitter._render_logon(event)
+
+        rendered = emitter.emit_event.call_args.args[0]
+        assert rendered["ProcessName"] == expected_process
+        assert rendered["ProcessId"] == f"0x{emitter._system_pids['WIN-TEST-01'][expected_role]:x}"
+
     def test_emit_event_aligns_provider_execution_ids(self, format_def, temp_output):
         """Security XML provider PID/TID values should look Windows-native."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -175,6 +240,53 @@ class TestWindowsEventEmitter:
         assert '<Data Name="WorkstationName">WS-01</Data>' in content
         assert "<Computer>FS-01.example.com</Computer>" in content
         assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+
+    def test_kerberos_network_logon_can_render_blank_workstation_name(
+        self, format_def, temp_output
+    ):
+        """Native Kerberos type-3 4624 often leaves WorkstationName unset."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 45, tzinfo=UTC),
+            event_type="logon",
+            src_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.1.10",
+                fqdn="WS-01.example.com",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            dst_host=HostContext(
+                hostname="FS-01",
+                ip="10.0.2.20",
+                fqdn="FS-01.example.com",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0xkerb1",
+                logon_type=3,
+                source_ip="10.0.1.10",
+                auth_package="Kerberos",
+                logon_process="Kerberos",
+                lm_package="-",
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                reporting_pid=744,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="WorkstationName">-</Data>' in content
 
     def test_logon_elevated_token_reflects_auth_context(self, format_def, temp_output):
         """4624 ElevatedToken should vary with canonical auth.elevated."""

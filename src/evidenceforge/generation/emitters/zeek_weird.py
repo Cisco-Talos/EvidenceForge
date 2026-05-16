@@ -40,7 +40,11 @@ class ZeekWeirdEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Only handle connection events that carry WeirdContext."""
-        return event.event_type == "connection" and event.weird is not None
+        return (
+            event.event_type == "connection"
+            and event.weird is not None
+            and not (event.network is not None and event.network.application_layer_only)
+        )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render weird.log entry from WeirdContext + NetworkContext."""

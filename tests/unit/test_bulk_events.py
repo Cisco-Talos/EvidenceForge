@@ -13,7 +13,9 @@ from pydantic import ValidationError
 
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
+    _c2_http_response_size,
     _effective_rate_interval,
+    _is_c2_http_request,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
     _observed_web_scan_status,
@@ -30,6 +32,10 @@ from evidenceforge.models.scenario import (
     DnsQueryEventSpec,
     DnsTunnelEventSpec,
     ExplicitCredentialsEventSpec,
+    NetworkConfig,
+    NetworkSegment,
+    NetworkSensor,
+    PortScanEventSpec,
     WebScanEventSpec,
     WorkstationLockEventSpec,
     WorkstationUnlockEventSpec,
@@ -298,6 +304,7 @@ class TestIterPeriodicTicks:
 
         assert len(ticks) < 451
         assert max(intervals) > 8.0
+        assert sum(interval < 3.0 for interval in intervals) < len(intervals) * 0.82
         assert len({round(interval, 1) for interval in intervals}) > 20
 
     def test_duration_shorter_than_interval(self):
@@ -431,6 +438,76 @@ class TestIterPeriodicTicks:
         connection_kwargs = engine.activity_generator.generate_connection.call_args.kwargs
         assert connection_kwargs["pid"] == 4242
         assert connection_kwargs["process_image"] == r"C:\Windows\System32\HealthMonitorSvc.exe"
+
+    def test_v2_status_beacon_gets_c2_http_texture(self, monkeypatch):
+        """Beacon activity should not render /v2/status as stable text/html page traffic."""
+        from unittest.mock import Mock
+
+        from evidenceforge.generation.engine import storyline
+
+        start = datetime(2026, 4, 16, 16, 30, 0, tzinfo=UTC)
+        system = System(hostname="DC-01", ip="10.0.2.10", os="Windows Server 2019", type="server")
+        actor = User(username="SYSTEM", full_name="SYSTEM", email="system@example.com")
+
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[system]))
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine.state_manager = Mock()
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {system.ip: system}
+        engine.activity_generator._proxy_routes = {}
+        engine.activity_generator._proxy_mode = "transparent"
+        monkeypatch.setattr(storyline, "_iter_periodic_ticks", Mock(return_value=iter([start])))
+
+        spec = BeaconEventSpec(
+            dst_ip="45.33.32.30",
+            dst_port=443,
+            hostname="api.example.net",
+            service="http",
+            method="GET",
+            uri="/v2/status",
+            interval="10m",
+            count=1,
+            action="allow",
+            jitter=0.0,
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=start,
+            activity="HTTPS beacon from DC-01",
+            explicit_types={"beacon"},
+        )
+
+        http = engine.activity_generator.generate_connection.call_args.kwargs["http"]
+        assert http.response_body_len != 54_400
+        assert http.resp_mime_types[0] in {
+            "application/json",
+            "text/plain",
+            "application/octet-stream",
+        }
+
+
+class TestC2HttpTexture:
+    def test_v2_paths_are_c2_even_without_spec_description(self):
+        assert _is_c2_http_request(
+            description=None,
+            technique=None,
+            uri="/v2/status",
+            activity=None,
+        )
+
+    def test_c2_status_response_sizes_have_multiple_bands(self):
+        sizes = [
+            _c2_http_response_size(random.Random(seed), method="GET", uri="/v2/status")
+            for seed in range(50)
+        ]
+
+        assert min(sizes) < 2_000
+        assert max(sizes) > 18_000
+        assert len({size // 1000 for size in sizes}) > 10
 
 
 class TestEffectiveRateInterval:
@@ -566,6 +643,80 @@ class TestPortScanConnectionProfile:
 
         assert all(sample[0] for sample in samples)
         assert {sample[1] for sample in samples} >= {"S0", "REJ"}
+
+
+class TestPortScanTargetResolution:
+    def test_external_target_segment_uses_inferred_segment_members(self):
+        """External segment scans should work when segment.systems is omitted."""
+        from unittest.mock import Mock
+
+        start = datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC)
+        web = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        network = NetworkConfig(
+            public_cidrs=["203.14.220.0/28"],
+            segments=[
+                NetworkSegment(name="dmz", cidr="10.10.3.0/24", exposure="both"),
+            ],
+            sensors=[
+                NetworkSensor(
+                    type="firewall",
+                    name="fw-perimeter",
+                    monitoring_segments=["dmz"],
+                    log_formats=["cisco_asa"],
+                )
+            ],
+        )
+
+        class Visibility:
+            _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def get_public_inbound_address(ip: str) -> str | None:
+                return "203.14.220.10" if ip == "10.10.3.10" else None
+
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[web, proxy], network=network)
+        )
+        engine.dispatcher = SimpleNamespace(visibility_engine=Visibility())
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.activity_generator = Mock()
+        engine.activity_generator._ip_to_system = {web.ip: web, proxy.ip: proxy}
+
+        spec = PortScanEventSpec(
+            source_ip="185.70.41.45",
+            target_segment="dmz",
+            target_count=8,
+            ports=[80],
+            scan_rate=10,
+        )
+        event = engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="apache", full_name="Apache", email="apache@example.com"),
+            system=web,
+            time=start,
+            activity="External DMZ scan",
+            explicit_types={"port_scan"},
+        )
+
+        assert event["target_count"] == 1
+        assert event["total_connections"] == 1
+        connection_kwargs = engine.activity_generator.generate_connection.call_args.kwargs
+        assert connection_kwargs["src_ip"] == "185.70.41.45"
+        assert connection_kwargs["dst_ip"] == "203.14.220.10"
 
 
 # ── WebScanEventSpec ──────────────────────────────────────────────────────
@@ -1081,6 +1232,55 @@ class TestDnsTunnelEventSpec:
         assert max(intervals) > 8.0
         assert len(label_lengths) > 1
         assert len(label_depths) > 1
+
+    def test_dns_tunnel_generation_adds_benign_txt_collisions_from_other_hosts(self):
+        engine = object.__new__(StorylineMixin)
+        captured = []
+
+        source = System(hostname="APP-01", ip="10.0.0.10", os="Ubuntu Server", type="server")
+        peers = [
+            System(hostname="WS-01", ip="10.0.0.20", os="Windows 10", type="workstation"),
+            System(hostname="MAIL-01", ip="10.0.0.30", os="Ubuntu Server", type="server"),
+        ]
+
+        def capture_connection(**kwargs):
+            captured.append(kwargs)
+
+        engine.state_manager = SimpleNamespace(set_current_time=lambda _time: None)
+        engine.scenario = SimpleNamespace(environment=SimpleNamespace(systems=[source, *peers]))
+        engine.activity_generator = SimpleNamespace(
+            _dns_server_ips=["10.0.0.53"],
+            generate_connection=capture_connection,
+        )
+        spec = DnsTunnelEventSpec(
+            base_domain="tunnel.example.test",
+            encoding="hex",
+            label_length=30,
+            payload_size=128,
+            interval="2s",
+            duration="1m",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=User(username="attacker", full_name="Attacker", email="a@example.com"),
+            system=source,
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            activity="DNS exfiltration",
+            explicit_types={"dns_tunnel"},
+        )
+
+        benign_txt = [
+            item
+            for item in captured
+            if item["dns"].query_type == "TXT"
+            and not item["dns"].query.endswith("tunnel.example.test")
+        ]
+        benign_sources = {item["src_ip"] for item in benign_txt}
+
+        assert len(benign_txt) >= 12
+        assert benign_sources <= {peer.ip for peer in peers}
+        assert len(benign_sources) > 1
 
     def test_dns_tunnel_generation_skews_ttls_and_expands_answer_vocabulary(self):
         engine = object.__new__(StorylineMixin)

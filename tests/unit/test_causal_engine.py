@@ -513,6 +513,21 @@ class TestSupplementaryAuditEvents:
         assert len(result) == 1
         assert result[0].method == "generate_service_installed"
         assert result[0].kwargs["service_name"] == "EvilSvc"
+        assert result[0].kwargs["service_start_type"] == "3"
+
+    def test_expand_sc_create_auto_start(self):
+        rule = SupplementaryAuditEvents()
+        ctx = _make_ctx(
+            os_category="windows",
+            command_line='sc create EvilSvc binpath= "C:\\temp\\evil.exe" start= auto',
+            actor="attacker",
+            target_system="WS-01",
+        )
+        result = rule.expand("process_create", ctx)
+        assert len(result) == 1
+        assert result[0].method == "generate_service_installed"
+        assert result[0].kwargs["service_name"] == "EvilSvc"
+        assert result[0].kwargs["service_start_type"] == "2"
 
     def test_expand_wevtutil_cl(self):
         rule = SupplementaryAuditEvents()

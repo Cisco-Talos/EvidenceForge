@@ -27,6 +27,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.utils.rng import _stable_seed
 
 _ZEEK_SERVICE_ALIASES: dict[str, str] = {
     "kerberos": "krb",
@@ -36,6 +37,21 @@ _ZEEK_SERVICE_ALIASES: dict[str, str] = {
     "ms-sql": "tds",
     "rpc": "dce_rpc",
 }
+
+
+def _tls_completed_duration_floor(event: SecurityEvent, min_ms: int, max_ms: int) -> float:
+    """Return a deterministic TLS analyzer duration floor with source-native texture."""
+    net = event.network
+    if net is None:
+        return min_ms / 1000
+    span_ms = max(1, max_ms - min_ms)
+    seed = _stable_seed(
+        "zeek_tls_duration_floor:"
+        f"{net.zeek_uid}:{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
+        f"{event.timestamp.isoformat()}"
+    )
+    extra_ms = 1 + (seed % span_ms)
+    return (min_ms + extra_ms) / 1000
 
 
 class ZeekEmitter(SensorMultiplexEmitter):
@@ -51,7 +67,11 @@ class ZeekEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Zeek conn emitter handles connection and session events with network context."""
-        return event.event_type in self._supported_types and event.network is not None
+        return (
+            event.event_type in self._supported_types
+            and event.network is not None
+            and not event.network.application_layer_only
+        )
 
     @staticmethod
     def _normalize_history_for_state(conn_state: str, history: str) -> str:
@@ -108,8 +128,16 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 default_class="same_observation",
             )
             min_duration = tls_min_window.min_ms / 1000
-            if duration is None or duration < min_duration:
-                duration = min_duration
+            if (
+                duration is None
+                or duration < min_duration
+                or abs(duration - min_duration) < 0.000001
+            ):
+                duration = _tls_completed_duration_floor(
+                    event,
+                    tls_min_window.min_ms,
+                    tls_min_window.max_ms,
+                )
         event_data = {
             "ts": event.timestamp,
             "uid": net.zeek_uid,

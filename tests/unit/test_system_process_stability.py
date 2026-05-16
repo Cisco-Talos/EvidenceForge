@@ -207,6 +207,20 @@ class TestSystemProcessProtection:
                 f"Seeded system process '{role}' (PID {pid}) was terminated"
             )
 
+    def test_linux_seeded_systemd_uses_pid_one(self, state_manager, mock_emitters, linux_system):
+        """Linux systemd should anchor source-native process trees at PID 1."""
+        _engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, linux_system)
+
+        systemd = state_manager.get_process(linux_system.hostname, pids["systemd"])
+        journald = state_manager.get_process(linux_system.hostname, pids["journald"])
+
+        assert pids["systemd"] == 1
+        assert systemd is not None
+        assert systemd.parent_pid == 0
+        assert state_manager.get_process_object_id(linux_system.hostname, 1)
+        assert journald is not None
+        assert journald.parent_pid == 1
+
     def test_user_processes_still_terminate(self, state_manager, mock_emitters, win_system):
         """Non-system user processes should still be terminated normally."""
         engine, pids = self._seed_and_get_pids(state_manager, mock_emitters, win_system)

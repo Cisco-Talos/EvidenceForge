@@ -46,7 +46,11 @@ class SnortEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle connection events that carry an IdsContext."""
-        return event.event_type in self._supported_types and event.ids is not None
+        return (
+            event.event_type in self._supported_types
+            and event.ids is not None
+            and not (event.network is not None and event.network.application_layer_only)
+        )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render IdsContext to Snort fast alert format."""

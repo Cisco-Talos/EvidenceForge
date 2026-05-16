@@ -10,6 +10,7 @@ from evidenceforge.generation.activity.application_catalog import (
     _USER_BROWSER_AFFINITY,
     get_apps_for_persona,
     get_pe_metadata,
+    is_system_type_allowed,
     load_catalog,
     pick_app_and_command,
 )
@@ -138,6 +139,11 @@ class TestPersonaFiltering:
         app_ids = {a["id"] for a in apps}
         assert "chrome" in app_ids or "firefox" in app_ids
 
+    def test_dsquery_system_type_restricted_for_generic_selection(self):
+        assert not is_system_type_allowed("dsquery.exe", "windows", "workstation")
+        assert not is_system_type_allowed("dsquery.exe", "windows", "server")
+        assert is_system_type_allowed("dsquery.exe", "windows", "domain_controller")
+
 
 class TestPeMetadataLookup:
     """Tests for PE metadata lookup from catalog."""
@@ -221,6 +227,44 @@ class TestPickAppAndCommand:
         rng = random.Random(42)
         result = pick_app_and_command(rng, "default", "windows", "nonexistent_category")
         assert result is None
+
+    def test_selection_weight_biases_catalog_choice(self, monkeypatch):
+        """Application entries with lower selection_weight should be rarer."""
+        from evidenceforge.generation.activity import application_catalog
+
+        apps = [
+            {
+                "id": "common",
+                "selection_weight": 100,
+                "platforms": {
+                    "windows": {
+                        "image_path": r"C:\Tools\common.exe",
+                        "command_templates": ["common.exe"],
+                    }
+                },
+            },
+            {
+                "id": "rare",
+                "selection_weight": 1,
+                "platforms": {
+                    "windows": {
+                        "image_path": r"C:\Tools\rare.exe",
+                        "command_templates": ["rare.exe"],
+                    }
+                },
+            },
+        ]
+        monkeypatch.setattr(
+            application_catalog, "get_apps_for_persona", lambda *args, **kwargs: apps
+        )
+
+        rng = random.Random(42)
+        choices = Counter(
+            pick_app_and_command(rng, "sysadmin", "windows", "query")[0].rsplit("\\", 1)[-1]
+            for _ in range(400)
+        )
+
+        assert choices["common.exe"] > choices["rare.exe"] * 20
 
     def test_command_templates_are_not_bare_words(self):
         """P1-3: Command templates should have arguments, not just an exe name."""

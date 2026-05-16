@@ -67,6 +67,7 @@ domains:
 
   packages.microsoft.com:
     domain_class: software_update
+    os: linux
     referrer_policy: none
     paths:
       - "/config/ubuntu/22.04/packages-microsoft-prod.deb"

@@ -22,7 +22,7 @@ caches data after first load. Two files (`network_params.yaml`,
 | `kerberos_realism.yaml` | `kerberos_realism.py` | Kerberos 4768 TGT PreAuthType, TicketOptions, encryption, and PKINIT certificate field distributions with overlay support. |
 | `windows_auth_realism.yaml` | `windows_auth_realism.py` | Windows Security authentication realism knobs such as minimum 4800→4801 lock/unlock gap, failed-logon validation paths, companion network evidence, and 4672 privilege profiles. |
 | `auth_noise.yaml` | `auth_noise.py` | Baseline authentication-noise profiles such as stale scheduled-credential account pools and irregular recurrence timing. |
-| `endpoint_noise.yaml` | `endpoint_noise.py` | Endpoint background timing and registry-emission policies for Windows scheduled processes and DHCP interface registry writes. |
+| `endpoint_noise.yaml` | `endpoint_noise.py` | Endpoint background timing, registry-emission, and EDR attribution policies for Windows scheduled processes, DHCP interface registry writes, and eCAR FLOW principal context. |
 | `host_activity_profiles.yaml` | `host_activity_profiles.py` | Coarse host/persona/role rate multipliers for baseline volume, endpoint noise, firewall deny bursts, and data-driven artifact variation. |
 | `observation_profiles.yaml` | `config/observation_profiles.py` | Named source-observation profiles for optional source-level missingness and delays. Scenario `observation_profile` defaults to `complete`; generation records status in `OBSERVATION_MANIFEST.json` for eval. |
 | `proxy_uri_templates.yaml` | `proxy_uri.py` | Per-domain URI path templates for proxy logs (Windows Update, CRL, OCSP, Azure AD, etc.). |
