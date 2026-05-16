@@ -250,7 +250,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Observation-aware automated eval and manifest — generation now writes `OBSERVATION_MANIFEST.json` beside ground truth, `eforge eval` loads it when present, coverage-style causality metrics report raw and observation-adjusted scores for expected non-visible evidence, and correctness/contradiction checks remain strict. Verification passed with config validation, Ruff checks/format checks, focused eval/manifest tests, and full normal `uv run pytest -v` (`3047 passed, 15 skipped`).
 - [x] Post-host-activity score check — synced `dev`, cleaned up stale TODOs, regenerated/evaluated `scenarios/iteration-test` from the current iteration-test prompt with `enterprise_standard` observation, and ran one blind expert-panel review without entering another fix loop. Automated eval passed at `92.39` over `108,858` records; blind synthetic-confidence averaged `82.75`. Highest-leverage follow-ups are Linux SSH/syslog lifecycle ordering, Zeek observation-tree consistency, X.509 metadata coherence, Windows OS-build/local-SID identity, and static web asset manifests.
 - [x] Current-dev calibration pass — regenerated and evaluated `scenarios/iteration-test` from current `dev`, fixed actionable cleanliness issues in OCSP optional-field rendering, observation-manifest accounting for sensor-filtered network evidence, Kerberos/domain-logon causal ordering, storyline event timing, storyline trace matching, temporal trace comparison, and visible Windows logon-before-process ordering. Verification passed with `uv run eforge validate-config`, scenario validation with only expected sensor/observation/pivot-linkability warnings, quantitative eval at `94.64` with all hard gates passing, Ruff checks, focused regressions (`164 passed`), and full normal `uv run pytest -v` (`3075 passed, 15 skipped`).
-- [ ] **IN PROGRESS** Up-to-10 current-dev assessment continuation — run iterative EvidenceForge realism loops from the latest calibrated iteration-test state, fix the highest-leverage verified findings, commit each completed fix pass, regenerate/evaluate, and preserve loop artifacts.
+- [x] Up-to-10 current-dev assessment continuation — completed 10 iterative EvidenceForge realism loops from the latest calibrated iteration-test state, fixed the highest-leverage verified findings, committed each completed fix pass, regenerated/evaluated, and preserved loop artifacts.
   - Loop 1 baseline eval completed at `93.89` across `107,377` records; blind synthetic-confidence scores were Threat Hunter `76`, Detection `82`, Network `82`, Host/EDR `86`.
   - Loop 1 fix pass completed and verified: fixed external CIDR-only segment scan target resolution, coherent SSH syslog and Zeek UID observation decisions, OS-aware TLS destination filtering for Windows update/trust-list domains, and Let's Encrypt RSA/ECDSA chain templates. Verification passed with `uv run eforge validate-config`, focused regressions (`11 passed` plus the adjusted certificate regression), `uv run ruff check .`, `uv run ruff format --check .`, and full normal `uv run pytest --no-cov -v` (`3057 passed, 37 skipped`).
   - Loop 2 regeneration/eval completed at `93.80` JSON overall (`94/100` human-readable) across `116,087` records. Hard probes found zero SSH ordering violations, zero Zeek UID gaps, zero Let's Encrypt R3/X2 mismatches, and zero non-Windows `windowsupdate.com` proxy rows. Blind synthetic-confidence scores were Threat Hunter `76`, Detection `78`, Network `68`, Host/EDR `76` (average `74.5`).
@@ -359,10 +359,24 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     `ntdsutil.exe` launches on DC-01 under `services.exe` and 65
     `dsquery.exe` process creates across Windows hosts; Linux bash/syslog
     command-pool repetition remains the next broad target.
-  - [ ] **IN PROGRESS** Loop 10 fix pass: reduce rare Windows admin-tool
-    overuse at the owning config/generation layer while preserving explicit
-    storyline/admin context, then regenerate/evaluate and run the final blind
-    review for the requested up-to-10 batch.
+  - [x] Loop 10 fix pass completed and verified: removed `ntdsutil.exe` from
+    generic domain-controller service-process texture, added data-driven
+    application selection weights, restricted `dsquery.exe` to DC generic
+    selection, and enforced catalog `system_types` in the WorldPlanner
+    process-owner path so workstation/file-server LDAP-like traffic cannot
+    spawn forbidden admin tools. Verification passed with config validation,
+    focused app/catalog/world-model regressions, Ruff, format check, and full
+    normal `uv run pytest --no-cov -q` (`3100 passed, 37 skipped`).
+    Regeneration and final assessment from commit `f0f5c3d` passed automated
+    eval at `96/100` across `80,616` records; hard probes found zero eCAR
+    process-create rows for `ntdsutil.exe`, `dsquery.exe`, `repadmin.exe`, or
+    `nltest.exe`, preserved proxy status texture (`200` ratio `80.6%`) and
+    Zeek HTTP status texture (`200` ratio `91.6%`), and blind
+    synthetic-confidence scores were Threat Hunter `68`, Detection `62`,
+    Network `66`, Host/EDR `74` (average `67.5`). Best next target for a
+    future batch is Linux bash/syslog command-pool repetition, followed by
+    Zeek HTTP `CONNECT` source-visibility semantics and richer proxy cache
+    behavior.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 
