@@ -28,6 +28,7 @@ import argparse
 import json
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -52,8 +53,10 @@ from evidenceforge.external_parsers.sof_elk import (
     SofElkCombinedResult,
     run_sof_elk_parser,
 )
+from evidenceforge.external_parsers.sof_elk_sources import SOF_ELK_SOURCE_SPECS_BY_VALIDATOR
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
+    SOF_ELK_ZEEK_VALIDATOR,
     SofElkHarnessError,
     SofElkParserError,
 )
@@ -165,12 +168,47 @@ def _print_plan_summary(plan: ExternalParserPlan, validators: tuple[str, ...]) -
     console.print(f"\n[bold]Discovered logs:[/bold] {len(plan.logs)} file(s)")
     if validators:
         console.print(f"[bold]Validators:[/bold] {', '.join(validators)}")
+        _print_validated_log_summary(plan, validators)
 
     unsupported = unsupported_summary(plan.unsupported_logs)
     for logtype, subtypes in unsupported.items():
         console.print(
             f"[yellow]Warning:[/yellow] no external validator for {logtype}: {', '.join(subtypes)}"
         )
+
+
+def _print_validated_log_summary(
+    plan: ExternalParserPlan,
+    validators: tuple[str, ...],
+) -> None:
+    selected = set(validators)
+    counts: Counter[tuple[str, str, str]] = Counter()
+    for log in plan.supported_logs:
+        if log.validator not in selected or log.format_name is None:
+            continue
+        output_label = _validator_output_label(log.validator, log.format_name)
+        counts[(log.format_name, _validator_display_name(log.validator), output_label)] += 1
+
+    if not counts:
+        return
+
+    console.print("\n[bold]Validated log families:[/bold]")
+    for (format_name, display_name, output_label), count in sorted(counts.items()):
+        console.print(f"  {format_name}: {count} file(s) -> {display_name} ({output_label}.jsonl)")
+
+
+def _validator_display_name(validator: str) -> str:
+    if validator == SOF_ELK_ZEEK_VALIDATOR:
+        return "SOF-ELK Zeek"
+    spec = SOF_ELK_SOURCE_SPECS_BY_VALIDATOR.get(validator)
+    return spec.display_name if spec else validator
+
+
+def _validator_output_label(validator: str | None, format_name: str) -> str:
+    if validator is None or validator == SOF_ELK_ZEEK_VALIDATOR:
+        return format_name
+    spec = SOF_ELK_SOURCE_SPECS_BY_VALIDATOR.get(validator)
+    return spec.output_label_type if spec else format_name
 
 
 def _run_validators(
@@ -268,6 +306,7 @@ def _print_success(result: SofElkCombinedResult) -> None:
         f"\n[bold green]PASS:[/bold green] {COMBINED_VALIDATOR_NAME} parsed staged records"
     )
     console.print(f"Expected counts: {result.manifest.expected_counts}")
+    console.print(f"SOF-ELK output labels: {result.manifest.expected_output_counts}")
     console.print(
         "Observed counts: "
         f"{ {log_type: len(events) for log_type, events in result.events_by_type.items() if events} }"
