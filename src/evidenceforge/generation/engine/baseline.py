@@ -5349,7 +5349,7 @@ class BaselineMixin:
                         (
                             "sshd",
                             sshd_pid,
-                            f'Connection from {ip} port {port} on {system.ip} port 22 rdomain ""',
+                            f"Connection from {ip} port {port} on {system.ip} port 22",
                         ),
                         ("sshd", sshd_pid, auth_msg),
                         (

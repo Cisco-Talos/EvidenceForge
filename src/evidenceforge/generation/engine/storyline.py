@@ -3392,7 +3392,7 @@ class StorylineMixin:
             app_name="sshd",
             message=(
                 f"Connection from {source_system.ip} port {source_port} "
-                f'on {target_system.ip} port 22 rdomain ""'
+                f"on {target_system.ip} port 22"
             ),
             pid=sshd_pid,
             facility=10,

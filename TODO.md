@@ -36,6 +36,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier flushes to write year-partitioned syslog files, while preserving final sort/logind normalization at close.
+- [x] Treat SOF-ELK PAM auth-failure remainder misses as optional enrichment only after the PAM envelope has parsed, and polish generated console PAM auth failures to a more canonical `/dev/tty1` shape.
+- [x] Tighten Linux syslog parser compatibility by ignoring only parsed PAM open/close SSHD overlap tags, rendering OpenSSH disconnects in SOF-ELK's preauth-supported shape, and using a more typical console `logname=LOGIN` PAM auth-failure detail.
+- [x] Remove empty OpenSSH `rdomain ""` suffix from generated SSH connection syslog messages so default Linux SSH evidence matches common OpenSSH output and SOF-ELK's SSHD parser.
 - [x] Refresh syslog-family skill docs and skill references so they match RFC3164 rendering and year-partitioned Linux syslog/Cisco ASA output.
 - [x] Add shared RFC3164 syslog-family rendering and year-partitioned generated output for Linux syslog and Cisco ASA, then align SOF-ELK staging/evaluation with the new layout.
 - [x] Add a clearer external-parser CLI summary of validated log families and SOF-ELK output labels so combined runs make web access and other source coverage obvious.

@@ -746,7 +746,7 @@ class TestCanHandleDefault:
         timestamp = datetime(2024, 10, 14, 19, 0, 53, tzinfo=UTC)
         for message in [
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
-            'Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22 rdomain ""',
+            "Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]:
             emitter.emit_raw(

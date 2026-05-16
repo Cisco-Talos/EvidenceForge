@@ -139,6 +139,97 @@ def test_validate_sof_elk_output_writes_one_consolidated_failure_report(
     assert report["sample_failures"][0]["event_original"].startswith("<30>Jun 15")
 
 
+def test_validate_sof_elk_output_ignores_parsed_sshd_pam_session_overlap(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    data_dir = _combined_data_dir(fixtures_dir, tmp_path)
+    manifest = stage_sof_elk_logs(data_dir, tmp_path / "stage", _all_validators())
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    _write_jsonl(
+        parsed_dir / "zeek_conn.jsonl",
+        [_parsed_conn("CYkWjM24bFJsDt1234"), _parsed_conn("DZlXkN35cGKtEu5678")],
+    )
+    _write_jsonl(
+        parsed_dir / "zeek_dns.jsonl",
+        [
+            _parsed_dns("DZlXkN35cGKtEu5678", "www.example.com", with_answers=True),
+            _parsed_dns("DQsVmE1aY4JnZq0002", "missing.example.com"),
+        ],
+    )
+    _write_jsonl(
+        parsed_dir / "syslog.jsonl",
+        [_parsed_cisco_asa_event(), _parsed_syslog_pam_session_event()],
+    )
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+
+    events_by_type = validate_sof_elk_output(manifest, parsed_dir)
+
+    assert events_by_type["syslog"][0]["pam"]["event"] == "opened"
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_sof_elk_output_ignores_parsed_pam_auth_failure_enrichment_miss(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    data_dir = _combined_data_dir(fixtures_dir, tmp_path)
+    manifest = stage_sof_elk_logs(data_dir, tmp_path / "stage", _all_validators())
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    _write_jsonl(
+        parsed_dir / "zeek_conn.jsonl",
+        [_parsed_conn("CYkWjM24bFJsDt1234"), _parsed_conn("DZlXkN35cGKtEu5678")],
+    )
+    _write_jsonl(
+        parsed_dir / "zeek_dns.jsonl",
+        [
+            _parsed_dns("DZlXkN35cGKtEu5678", "www.example.com", with_answers=True),
+            _parsed_dns("DQsVmE1aY4JnZq0002", "missing.example.com"),
+        ],
+    )
+    _write_jsonl(
+        parsed_dir / "syslog.jsonl",
+        [_parsed_cisco_asa_event(), _parsed_syslog_pam_auth_failure_event(parsed=True)],
+    )
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+
+    events_by_type = validate_sof_elk_output(manifest, parsed_dir)
+
+    assert events_by_type["syslog"][0]["pam"]["sessiontype"] == "auth"
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_sof_elk_output_keeps_unparsed_pam_auth_failure_tag_fatal(
+    fixtures_dir: Path,
+    tmp_path: Path,
+) -> None:
+    data_dir = _combined_data_dir(fixtures_dir, tmp_path)
+    manifest = stage_sof_elk_logs(data_dir, tmp_path / "stage", _all_validators())
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    _write_jsonl(
+        parsed_dir / "zeek_conn.jsonl",
+        [_parsed_conn("CYkWjM24bFJsDt1234"), _parsed_conn("DZlXkN35cGKtEu5678")],
+    )
+    _write_jsonl(
+        parsed_dir / "zeek_dns.jsonl",
+        [
+            _parsed_dns("DZlXkN35cGKtEu5678", "www.example.com", with_answers=True),
+            _parsed_dns("DQsVmE1aY4JnZq0002", "missing.example.com"),
+        ],
+    )
+    _write_jsonl(
+        parsed_dir / "syslog.jsonl",
+        [_parsed_cisco_asa_event(), _parsed_syslog_pam_auth_failure_event(parsed=False)],
+    )
+    _write_jsonl(parsed_dir / "httpdlog.jsonl", [_parsed_web_access_event()])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefail_6016-02"):
+        validate_sof_elk_output(manifest, parsed_dir)
+
+
 def _all_validators() -> tuple[str, ...]:
     return (
         SOF_ELK_ZEEK_VALIDATOR,
@@ -306,6 +397,61 @@ def _parsed_syslog_event(*, failed: bool) -> dict[str, object]:
         "message": "Accepted password for alice from 198.51.100.25 port 54321 ssh2",
         "@timestamp": "2026-06-15T14:23:05.000Z",
     }
+
+
+def _parsed_syslog_pam_session_event() -> dict[str, object]:
+    message = "pam_unix(sshd:session): session opened for user alice(uid=1001) by (uid=0)"
+    return {
+        "tags": [
+            "filebeat",
+            "process_archive",
+            "_grokparsefail_6018-01",
+            "_grokparsefailure_6015-01",
+            "got_pam",
+            "parse_done",
+        ],
+        "labels": {"type": "syslog"},
+        "log": {
+            "file": {"path": "/logstash/syslog/2026/linux-01/syslog.log"},
+            "syslog": {"hostname": "linux-01", "appname": "sshd"},
+        },
+        "event": {"original": f"<86>Jun 15 14:23:05 linux-01 sshd[1234]: {message}"},
+        "message": message,
+        "pam": {
+            "module": "pam_unix",
+            "service": "sshd",
+            "sessiontype": "session",
+            "event": "opened",
+        },
+        "@timestamp": "2026-06-15T14:23:05.000Z",
+    }
+
+
+def _parsed_syslog_pam_auth_failure_event(*, parsed: bool) -> dict[str, object]:
+    message = (
+        "pam_unix(login:auth): authentication failure; logname=LOGIN uid=0 euid=0 "
+        "tty=/dev/tty1 ruser= rhost=  user=alice"
+    )
+    tags = ["filebeat", "process_archive", "_grokparsefail_6016-02"]
+    event: dict[str, object] = {
+        "tags": tags,
+        "labels": {"type": "syslog"},
+        "log": {
+            "file": {"path": "/logstash/syslog/2026/linux-01/syslog.log"},
+            "syslog": {"hostname": "linux-01", "appname": "login"},
+        },
+        "event": {"original": f"<84>Jun 15 14:23:05 linux-01 login[1234]: {message}"},
+        "message": message,
+        "@timestamp": "2026-06-15T14:23:05.000Z",
+    }
+    if parsed:
+        tags.extend(("got_pam", "parse_done"))
+        event["pam"] = {
+            "module": "pam_unix",
+            "service": "login",
+            "sessiontype": "auth",
+        }
+    return event
 
 
 def _write_jsonl(path: Path, events: list[dict[str, object]]) -> None:

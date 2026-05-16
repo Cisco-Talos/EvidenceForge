@@ -634,7 +634,7 @@ def _event_failures(
     if not isinstance(tags, list):
         failures.append(f"{prefix}: tags is not a list")
         tags = []
-    failure_tags = _failure_tags(spec, tags)
+    failure_tags = _failure_tags(spec, event, tags)
     if failure_tags:
         failures.append(f"{prefix}: parser failure tags present: {', '.join(failure_tags)}")
 
@@ -714,7 +714,7 @@ def _failure_event_summary(
         "log_type": spec.format_name,
         "event_index": index,
         "failures": failures,
-        "tags": _failure_tags(spec, tags) if isinstance(tags, list) else tags,
+        "tags": _failure_tags(spec, event, tags) if isinstance(tags, list) else tags,
         "log_file_path": _get_path(event, "log.file.path"),
         "event_original": _get_path(event, "event.original"),
         "message": event.get("message"),
@@ -742,16 +742,17 @@ def _failure_tag_counts(
     for event in events:
         tags = event.get("tags", [])
         if isinstance(tags, list):
-            counts.update(_failure_tags(spec, tags))
+            counts.update(_failure_tags(spec, event, tags))
     return dict(sorted(counts.items()))
 
 
-def _failure_tags(spec: SofElkSourceSpec, tags: list[Any]) -> list[str]:
+def _failure_tags(spec: SofElkSourceSpec, event: JsonObject, tags: list[Any]) -> list[str]:
     return list(
         classify_parser_tags(
             validator=spec.validator,
             log_type=spec.format_name,
             tags=tags,
+            event=event,
         ).fatal
     )
 

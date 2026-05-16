@@ -940,7 +940,7 @@ def _event_failures(
     if not isinstance(tags, list):
         failures.append(f"{prefix}: tags is not a list")
         tags = []
-    failure_tags = _failure_tags(log_type, tags)
+    failure_tags = _failure_tags(log_type, event, tags)
     if failure_tags:
         failures.append(f"{prefix}: parser failure tags present: {', '.join(failure_tags)}")
 
@@ -1024,7 +1024,7 @@ def _failure_event_summary(
         "log_type": log_type,
         "event_index": index,
         "failures": failures,
-        "tags": _failure_tags(log_type, tags) if isinstance(tags, list) else tags,
+        "tags": _failure_tags(log_type, event, tags) if isinstance(tags, list) else tags,
         "zeek_session_id": _get_path(event, "zeek.session_id"),
         "source_ip": _get_path(event, "source.ip"),
         "destination_ip": _get_path(event, "destination.ip"),
@@ -1052,7 +1052,7 @@ def _failure_tag_counts(
         for event in events_by_type.get(log_type, []):
             tags = event.get("tags", [])
             if isinstance(tags, list):
-                counts.update(_failure_tags(log_type, tags))
+                counts.update(_failure_tags(log_type, event, tags))
         counts_by_type[log_type] = dict(sorted(counts.items()))
     return counts_by_type
 
@@ -1063,19 +1063,20 @@ def _dns_failure_qtype_counts(
     counts: Counter[str] = Counter()
     for event in events_by_type.get("zeek_dns", []):
         tags = event.get("tags", [])
-        if not isinstance(tags, list) or not _failure_tags("zeek_dns", tags):
+        if not isinstance(tags, list) or not _failure_tags("zeek_dns", event, tags):
             continue
         qtype = _get_path(event, "dns.question.type")
         counts[str(qtype or "unknown")] += 1
     return dict(sorted(counts.items()))
 
 
-def _failure_tags(log_type: LogType, tags: list[Any]) -> list[str]:
+def _failure_tags(log_type: LogType, event: JsonObject, tags: list[Any]) -> list[str]:
     return list(
         classify_parser_tags(
             validator=SOF_ELK_ZEEK_VALIDATOR,
             log_type=log_type,
             tags=tags,
+            event=event,
         ).fatal
     )
 

@@ -3552,7 +3552,8 @@ class ActivityGenerator:
                     severity=4,
                     message=(
                         "pam_unix(login:auth): authentication failure; "
-                        f"logname= uid=0 euid=0 tty=tty1 ruser= rhost= user={effective_username}"
+                        f"logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  "
+                        f"user={effective_username}"
                     ),
                 )
 
@@ -3901,8 +3902,8 @@ class ActivityGenerator:
                 event.syslog = None
             else:
                 message = (
-                    f"Received disconnect from {session.source_ip} port {source_port}:11: "
-                    "disconnected by user"
+                    f"Received disconnect from {session.source_ip} port {source_port}:11:  "
+                    "[preauth]"
                 )
                 event.syslog = SyslogContext(
                     app_name="sshd",
@@ -6919,8 +6920,7 @@ class ActivityGenerator:
                     facility=10,
                     severity=6,
                     message=(
-                        f"Connection from {source_ip} port {src_port}"
-                        f' on {target_system.ip} port 22 rdomain ""'
+                        f"Connection from {source_ip} port {src_port} on {target_system.ip} port 22"
                     ),
                 ),
             )
