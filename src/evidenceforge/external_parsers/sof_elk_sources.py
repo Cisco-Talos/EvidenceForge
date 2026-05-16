@@ -54,6 +54,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
 )
 from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
     classify_parser_tags,
 )
@@ -133,7 +134,36 @@ WEB_ACCESS_SPEC = SofElkSourceSpec(
     required_tags=("parse_done",),
 )
 
-SOF_ELK_SOURCE_SPECS: tuple[SofElkSourceSpec, ...] = (CISCO_ASA_SPEC, WEB_ACCESS_SPEC)
+SYSLOG_SPEC = SofElkSourceSpec(
+    validator=SOF_ELK_SYSLOG_VALIDATOR,
+    display_name="SOF-ELK Syslog",
+    format_name="syslog",
+    logtype="syslog",
+    subtype="linux",
+    source_names=("syslog.log",),
+    staged_directory="syslog",
+    staged_name="syslog.log",
+    filebeat_input="syslog.yml",
+    filter_files=(
+        "1000-preprocess-all.conf",
+        "1100-preprocess-syslog.conf",
+        "6012-dhcpd.conf",
+        "6013-bindquery.conf",
+        "6015-sshd.conf",
+        "6016-pam.conf",
+        "6017-iptables.conf",
+        "8100-postprocess-syslog.conf",
+        "8999-postprocess-all.conf",
+    ),
+    output_label_type="syslog",
+    required_paths=("log.syslog.hostname", "log.syslog.appname"),
+)
+
+SOF_ELK_SOURCE_SPECS: tuple[SofElkSourceSpec, ...] = (
+    CISCO_ASA_SPEC,
+    WEB_ACCESS_SPEC,
+    SYSLOG_SPEC,
+)
 SOF_ELK_SOURCE_SPECS_BY_VALIDATOR: dict[str, SofElkSourceSpec] = {
     spec.validator: spec for spec in SOF_ELK_SOURCE_SPECS
 }

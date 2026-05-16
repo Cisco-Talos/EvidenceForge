@@ -25,11 +25,14 @@ Supported in the V1 harness:
 - Web access logs staged through SOF-ELK's HTTPD archive path with
   `6100-httpd.conf`, `8060-postprocess-useragent.conf`, and
   `8110-postprocess-httpd.conf`
+- Linux syslog staged through SOF-ELK's syslog archive path with
+  `1100-preprocess-syslog.conf` plus the SOF-ELK DHCP, BIND, SSHD, PAM,
+  iptables, and syslog postprocess filters
 
 Not yet covered:
 
 - Windows XML logs
-- IDS, syslog, proxy, eCAR
+- IDS, proxy, eCAR
 - Elasticsearch output behavior
 
 SOF-ELK has dedicated filters for the Zeek types it supports today, such as
@@ -60,7 +63,7 @@ At runtime it:
 2. Warns about generated log families that do not yet have an external parser
    validator.
 3. Runs every matching validator. Today that means SOF-ELK for Zeek, Cisco ASA,
-   and web access files. The
+   web access, and Linux syslog files. The
    validator phase shows stage progress plus host/sensor, log family, and
    subtype progress while parsed records are checked after the third-party
    parser has produced output.
@@ -69,7 +72,8 @@ At runtime it:
 5. Stages generated files under temporary SOF-ELK-style trees such as
    `/logstash/zeek/<sensor>/<zeek-log-name>.log` and
    `/logstash/syslog/<sensor>/cisco_asa.log` or
-   `/logstash/httpd/<sensor>/web_access.log`.
+   `/logstash/httpd/<sensor>/web_access.log`, and
+   `/logstash/syslog/<host>/syslog.log`.
 6. Builds a temporary Logstash pipeline:
    - a small Beats input wrapper
    - unchanged SOF-ELK filter files
@@ -142,6 +146,13 @@ Web access files stage through SOF-ELK's recursive HTTPD file input:
 | --- | --- |
 | `<sensor>/web_access.log` | `/logstash/httpd/<sensor>/web_access.log` |
 | `web_access.log` | `/logstash/httpd/default/web_access.log` |
+
+Linux syslog files stage through SOF-ELK's recursive syslog file input:
+
+| EvidenceForge file | Staged SOF-ELK file |
+| --- | --- |
+| `<host>/syslog.log` | `/logstash/syslog/<host>/syslog.log` |
+| `syslog.log` | `/logstash/syslog/default/syslog.log` |
 
 ## Commands
 
@@ -219,6 +230,9 @@ such as `sof-elk-zeek/` or `sof-elk-cisco-asa/`. Useful SOF-ELK artifacts are:
 | `sof-elk-web-access/stage/logstash/httpd/...` | Web access files as SOF-ELK sees them |
 | `sof-elk-web-access/parsed/events.jsonl` | Parsed web access events |
 | `sof-elk-web-access/parsed/sof_elk_parser_failures.json` | Structured web access failure report when validation fails |
+| `sof-elk-syslog/stage/logstash/syslog/...` | Linux syslog files as SOF-ELK sees them |
+| `sof-elk-syslog/parsed/events.jsonl` | Parsed syslog events |
+| `sof-elk-syslog/parsed/sof_elk_parser_failures.json` | Structured syslog failure report when validation fails |
 
 The failure report includes:
 
@@ -246,9 +260,9 @@ on `zeek_dns`. SOF-ELK emits this when it cannot derive `dns.answers.ip` from
 `SOA` remain valid parsed DNS records.
 
 Other explicitly ignored optional tags include `_grokparsefailure_1100-03` on
-`cisco_asa`, which is SOF-ELK's optional archive path-year lookup, and
-`_grokparsefail_8110-01` on `web_access`, which is optional HTTPD page/not-page
-classification after the access record has already parsed.
+`cisco_asa` and `syslog`, which is SOF-ELK's optional archive path-year lookup,
+and `_grokparsefail_8110-01` on `web_access`, which is optional HTTPD
+page/not-page classification after the access record has already parsed.
 
 ## Current Medium Dataset Result
 
@@ -278,3 +292,19 @@ dedicated filters for those EvidenceForge Zeek types.
 That medium run did not happen to generate `weird`, `packet_filter`, `pe`, or
 `reporter` rows. Those types are still covered by the all-Zeek-type external
 parser smoke test and by the staging/discovery unit tests.
+
+## Current Non-Zeek Smoke Results
+
+Small container smoke tests confirm:
+
+- Cisco ASA: SOF-ELK parsed representative `302013` built and `302014`
+  teardown records staged under `/logstash/syslog/<sensor>/cisco_asa.log`.
+- Web access: SOF-ELK parsed representative Apache/Nginx combined access rows
+  staged under `/logstash/httpd/<host>/web_access.log`.
+- Linux syslog: SOF-ELK parsed EvidenceForge RFC5424 framing enough to recover
+  timestamp, hostname, and appname, but left RFC5424 `procid msgid
+  structured-data` in `message`. That caused the SOF-ELK SSHD filter to tag
+  `_grokparsefailure_6015-01` on an `sshd` accepted-password row. The failure
+  report includes `event.original`, the transformed `message`, appname,
+  hostname, source path, and fatal tag, which is enough to fix either staging or
+  the emitter later if requested.

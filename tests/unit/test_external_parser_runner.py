@@ -28,6 +28,7 @@ from pathlib import Path
 
 from evidenceforge.external_parsers.runner import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
     detect_external_parser_plan,
@@ -65,6 +66,11 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         '200 512 "-" "Mozilla/5.0"\n',
         encoding="utf-8",
     )
+    (data_dir / "linux-01.example.test" / "syslog.log").write_text(
+        "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
+        "Accepted password for alice from 198.51.100.25 port 54321 ssh2\n",
+        encoding="utf-8",
+    )
 
     plan = detect_external_parser_plan(data_dir)
 
@@ -72,9 +78,11 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         SOF_ELK_ZEEK_VALIDATOR,
         SOF_ELK_CISCO_ASA_VALIDATOR,
         SOF_ELK_WEB_ACCESS_VALIDATOR,
+        SOF_ELK_SYSLOG_VALIDATOR,
     )
     assert {(log.logtype, log.subtype) for log in plan.supported_logs} == {
         ("firewall", "cisco_asa"),
+        ("syslog", "linux"),
         ("web", "access"),
         ("zeek", "conn"),
         ("zeek", "http"),

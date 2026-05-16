@@ -32,6 +32,7 @@ import pytest
 from evidenceforge.external_parsers.sof_elk_sources import (
     CISCO_ASA_SPEC,
     EVENTS_OUTPUT_FILENAME,
+    SYSLOG_SPEC,
     WEB_ACCESS_SPEC,
     SofElkSourceManifest,
     SofElkSourceSpec,
@@ -82,6 +83,24 @@ def test_stage_source_logs_preserves_web_access_subdirectories(tmp_path: Path) -
     }
 
 
+def test_stage_source_logs_preserves_syslog_subdirectories(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_dir = source_root / "linux-01.example.test"
+    source_dir.mkdir(parents=True)
+    (source_dir / "syslog.log").write_text(
+        "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
+        "Accepted password for alice from 198.51.100.25 port 54321 ssh2\n",
+        encoding="utf-8",
+    )
+
+    manifest = stage_source_logs(source_root, tmp_path / "stage", SYSLOG_SPEC)
+
+    assert manifest.expected_counts == {"syslog": 1}
+    assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
+        Path("syslog/linux-01.example.test/syslog.log")
+    }
+
+
 def test_build_sof_elk_source_configs_reuses_sof_elk_syslog_input(tmp_path: Path) -> None:
     sof_elk_dir = _fake_sof_elk_dir(tmp_path, CISCO_ASA_SPEC)
 
@@ -100,6 +119,23 @@ def test_build_sof_elk_source_configs_reuses_sof_elk_syslog_input(tmp_path: Path
         pipeline_dir / "9999-output-jsonl.conf"
     ).read_text(encoding="utf-8")
     for filter_file in CISCO_ASA_SPEC.filter_files:
+        assert (pipeline_dir / filter_file).exists()
+
+
+def test_build_sof_elk_source_configs_reuses_sof_elk_syslog_filters(tmp_path: Path) -> None:
+    sof_elk_dir = _fake_sof_elk_dir(tmp_path, SYSLOG_SPEC)
+
+    pipeline_dir, filebeat_config = build_sof_elk_source_configs(
+        sof_elk_dir,
+        tmp_path,
+        SYSLOG_SPEC,
+    )
+
+    assert (filebeat_config.parent / "filebeat-inputs" / "syslog.yml").exists()
+    assert "/logstash/syslog/**" in (
+        filebeat_config.parent / "filebeat-inputs" / "syslog.yml"
+    ).read_text(encoding="utf-8")
+    for filter_file in SYSLOG_SPEC.filter_files:
         assert (pipeline_dir / filter_file).exists()
 
 
@@ -216,6 +252,57 @@ def test_validate_source_parsed_output_reports_web_access_parser_context(
     assert sample["log_file_path"] == "/logstash/httpd/web-01/web_access.log"
 
 
+def test_validate_source_parsed_output_accepts_syslog_parse(tmp_path: Path) -> None:
+    manifest = _manifest(
+        tmp_path,
+        SYSLOG_SPEC,
+        Path("syslog/linux-01/syslog.log"),
+        "syslog.log",
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_syslog_event()
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_grokparsefailure_1100-03")
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    events = validate_source_parsed_output(manifest, parsed_dir)
+
+    assert len(events) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_source_parsed_output_reports_syslog_parser_context(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        SYSLOG_SPEC,
+        Path("syslog/linux-01/syslog.log"),
+        "syslog.log",
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_syslog_event()
+    event["tags"] = ["filebeat", "_grokparsefailure_1100-01"]
+    event["message"] = "1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - Accepted password"
+    log = event["log"]
+    assert isinstance(log, dict)
+    del log["syslog"]
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefailure_1100-01"):
+        validate_source_parsed_output(manifest, parsed_dir)
+
+    report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert report["failure_tag_counts"]["syslog"]["_grokparsefailure_1100-01"] == 1
+    sample = report["sample_failures"][0]
+    assert sample["event_original"].startswith("<30>1 2026")
+    assert sample["message"].startswith("1 2026")
+    assert sample["log_file_path"] == "/logstash/syslog/linux-01/syslog.log"
+
+
 def _fake_sof_elk_dir(tmp_path: Path, spec: SofElkSourceSpec) -> Path:
     sof_elk_dir = tmp_path / f"sof-elk-{spec.format_name}"
     (sof_elk_dir / "lib" / "filebeat_inputs").mkdir(parents=True)
@@ -300,6 +387,30 @@ def _parsed_web_access_event() -> dict[str, object]:
         },
         "url": {"path": "/index.html"},
         "user_agent": {"original": "Mozilla/5.0"},
+    }
+
+
+def _parsed_syslog_event() -> dict[str, object]:
+    return {
+        "tags": ["filebeat", "process_archive"],
+        "labels": {"type": "syslog"},
+        "log": {
+            "file": {"path": "/logstash/syslog/linux-01/syslog.log"},
+            "syslog": {
+                "hostname": "linux-01",
+                "appname": "sshd",
+            },
+        },
+        "event": {
+            "original": (
+                "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
+                "Accepted password for alice from 198.51.100.25 port 54321 ssh2"
+            )
+        },
+        "message": "Accepted password for alice from 198.51.100.25 port 54321 ssh2",
+        "source": {"ip": "198.51.100.25", "port": 54321},
+        "ssh": {"auth_result": "accepted", "login_method": "password"},
+        "user": {"name": "alice"},
     }
 
 

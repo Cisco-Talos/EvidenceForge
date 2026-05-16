@@ -31,6 +31,7 @@ from typing import Any
 SOF_ELK_ZEEK_VALIDATOR = "sof-elk-zeek"
 SOF_ELK_CISCO_ASA_VALIDATOR = "sof-elk-cisco-asa"
 SOF_ELK_WEB_ACCESS_VALIDATOR = "sof-elk-web-access"
+SOF_ELK_SYSLOG_VALIDATOR = "sof-elk-syslog"
 
 _DEFAULT_FATAL_TAGS = frozenset(
     {
@@ -102,6 +103,18 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         reason=(
             "Optional page/not-page URL path classification after the HTTP access "
             "record has already been parsed."
+        ),
+    ),
+    ParserTagRule(
+        validator=SOF_ELK_SYSLOG_VALIDATOR,
+        log_type="syslog",
+        tag="_grokparsefailure_1100-03",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/1100-preprocess-syslog.conf",
+        reason=(
+            "Optional archive path-year extraction after a BSD/RFC3164 syslog timestamp. "
+            "Syslog framing and source-specific parsing can still succeed without a "
+            "year-bearing directory name."
         ),
     ),
 )
