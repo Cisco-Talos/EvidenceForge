@@ -45,7 +45,7 @@ from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
 
-_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs", "TCP FINs", "TCP FINs", "TCP Reset-O", "TCP Reset-I")
+_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs",)
 _TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 
 

@@ -564,7 +564,10 @@ class SensorMultiplexEmitter(LogEmitter):
                             render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                         elif isinstance(ts, (int, float)):
                             render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                    if render_data.get("_allow_sensor_observation_variance"):
+                    if (
+                        render_data.get("_allow_sensor_observation_variance")
+                        and str(render_data.get("proto") or "").lower() != "icmp"
+                    ):
                         _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)

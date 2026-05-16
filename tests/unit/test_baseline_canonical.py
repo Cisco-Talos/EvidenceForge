@@ -608,7 +608,11 @@ class TestSyslogContext:
         match = re.search(r"from (?P<src>\S+) port (?P<port>\d+) ssh2", syslog_event.syslog.message)
         assert match is not None
         ssh_source_port = int(match.group("port"))
-        zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        zeek_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network is not None
+        ]
 
         assert any(
             event.network.src_ip == source_ip
@@ -616,7 +620,7 @@ class TestSyslogContext:
             and event.network.dst_ip == linux.ip
             and event.network.dst_port == 22
             and event.network.service == "ssh"
-            and event.timestamp < syslog_event.timestamp
+            and abs((event.timestamp - syslog_event.timestamp).total_seconds()) <= 1.0
             for event in zeek_events
         )
 

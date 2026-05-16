@@ -4020,32 +4020,26 @@ class ActivityGenerator:
         # Use target_username if provided, otherwise use the actor's username
         effective_username = target_username or user.username
 
-        # Determine failure substatus with correct SID handling
+        # Determine failure substatus with source-native account-state semantics.
+        # Ordinary known/enabled accounts should fail as bad passwords; locked
+        # or disabled states require an explicit account-state model so they do
+        # not contradict later successful logons.
         rng = _get_rng()
-        substatus_roll = rng.random()
         known_account = self._is_known_failed_logon_account(effective_username, user)
         failed_profile = self._failed_logon_profile(logon_type, system, source_ip, rng)
         validation_path = self._failed_logon_validation_path(logon_type, failed_profile, rng)
-        if known_account and substatus_roll < 0.80:
-            substatus = "0xc000006a"  # Wrong password
-            user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2313"
-        elif not known_account and substatus_roll < 0.60:
-            substatus = "0xc0000064"  # User not found: NULL SID
-            user_sid = "S-1-0-0"
-            failure_reason = "%%2313"
-        elif substatus_roll < 0.85:
-            substatus = "0xc000006a"  # Wrong password
-            user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2313"
-        elif substatus_roll < 0.95:
-            substatus = "0xc0000234"  # Account locked out
-            user_sid = self._get_sid(effective_username)
-            failure_reason = "%%2304"
-        else:
+        if self._is_disabled_failed_logon_account(effective_username, user):
             substatus = "0xc0000072"  # Account disabled
             user_sid = self._get_sid(effective_username)
             failure_reason = "%%2307"
+        elif not known_account:
+            substatus = "0xc0000064"  # User not found: NULL SID
+            user_sid = "S-1-0-0"
+            failure_reason = "%%2313"
+        else:
+            substatus = "0xc000006a"  # Wrong password
+            user_sid = self._get_sid(effective_username)
+            failure_reason = "%%2313"
 
         remote_linux_source = (
             _get_os_category(system.os) == "linux"
@@ -4364,6 +4358,16 @@ class ActivityGenerator:
         if username in getattr(self, "sid_registry", {}):
             return True
         return False
+
+    @staticmethod
+    def _is_disabled_failed_logon_account(username: str, actor: User) -> bool:
+        """Return whether this failed-logon target is explicitly disabled."""
+        if actor.enabled:
+            return False
+        normalized = username.split("@", 1)[0].lower()
+        if normalized == actor.username.lower():
+            return True
+        return bool(actor.email and username.lower() == actor.email.lower())
 
     def generate_logoff(
         self,
