@@ -241,6 +241,53 @@ class TestWindowsEventEmitter:
         assert "<Computer>FS-01.example.com</Computer>" in content
         assert '<Data Name="ElevatedToken">%%1843</Data>' in content
 
+    def test_kerberos_network_logon_can_render_blank_workstation_name(
+        self, format_def, temp_output
+    ):
+        """Native Kerberos type-3 4624 often leaves WorkstationName unset."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 45, tzinfo=UTC),
+            event_type="logon",
+            src_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.1.10",
+                fqdn="WS-01.example.com",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            dst_host=HostContext(
+                hostname="FS-01",
+                ip="10.0.2.20",
+                fqdn="FS-01.example.com",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0xkerb1",
+                logon_type=3,
+                source_ip="10.0.1.10",
+                auth_package="Kerberos",
+                logon_process="Kerberos",
+                lm_package="-",
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                reporting_pid=744,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="WorkstationName">-</Data>' in content
+
     def test_logon_elevated_token_reflects_auth_context(self, format_def, temp_output):
         """4624 ElevatedToken should vary with canonical auth.elevated."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)

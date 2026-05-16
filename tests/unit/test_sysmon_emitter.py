@@ -88,6 +88,18 @@ class TestSysmonEventEmitter:
         assert '<Data Name="Hashes">SHA1=ABC123' in content
         assert '<Data Name="ParentImage">C:\\Windows\\explorer.exe</Data>' in content
 
+    def test_sysmon_thread_ids_reuse_pool_without_round_robin_balance(
+        self, format_def, temp_output
+    ):
+        """Sysmon provider threads should be reused in bursts, not perfectly round-robin."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
+
+        thread_ids = [emitter._get_sysmon_thread_id("WS-01") for _ in range(120)]
+        counts = {thread_id: thread_ids.count(thread_id) for thread_id in set(thread_ids)}
+
+        assert 3 <= len(counts) <= 5
+        assert max(counts.values()) - min(counts.values()) >= 10
+
     def test_emit_sysmon_aligns_provider_execution_ids(self, format_def, temp_output):
         """Sysmon XML provider PID/TID values should be 4-byte aligned."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)

@@ -551,20 +551,29 @@ class SysmonEventEmitter(LogEmitter):
         cache = getattr(self, "_sysmon_thread_pools", None)
         if cache is None:
             cache = self._sysmon_thread_pools = {}
-        offsets = getattr(self, "_sysmon_thread_pool_offsets", None)
-        if offsets is None:
-            offsets = self._sysmon_thread_pool_offsets = {}
+        counters = getattr(self, "_sysmon_thread_counters", None)
+        if counters is None:
+            counters = self._sysmon_thread_counters = {}
+        last_threads = getattr(self, "_sysmon_last_thread_by_host", None)
+        if last_threads is None:
+            last_threads = self._sysmon_last_thread_by_host = {}
         if hostname not in cache:
             rng = random.Random(_stable_seed(f"sysmon_threads_{hostname}"))
             cache[hostname] = [
                 windows_id_randint(rng, 1000, 5000) for _ in range(rng.randint(3, 5))
             ]
-            offsets[hostname] = _stable_seed(f"sysmon_thread_offset_{hostname}") % len(
-                cache[hostname]
-            )
-        offset = offsets[hostname]
-        offsets[hostname] = (offset + 1) % len(cache[hostname])
-        return cache[hostname][offset]
+            counters[hostname] = 0
+        pool = cache[hostname]
+        counter = counters.get(hostname, 0)
+        counters[hostname] = counter + 1
+        rng = random.Random(_stable_seed(f"sysmon_thread_choice:{hostname}:{counter}"))
+        previous = last_threads.get(hostname)
+        if previous in pool and rng.random() < 0.58:
+            return previous
+        weights = [max(1, len(pool) * 3 - index * 2) for index, _thread_id in enumerate(pool)]
+        thread_id = rng.choices(pool, weights=weights, k=1)[0]
+        last_threads[hostname] = thread_id
+        return thread_id
 
     def _get_sysmon_pid(self, hostname: str) -> int:
         """Return stable Sysmon service PID for a given host.

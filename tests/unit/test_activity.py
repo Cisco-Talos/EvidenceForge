@@ -1627,6 +1627,87 @@ class TestActivityGenerator:
             f"C:\\Users\\{test_user.username}\\Documents\\"
         )
 
+    def test_generate_process_derives_project_current_directory_for_dev_tools(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Relative developer-tool commands should run from a project directory."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        process_name = r"C:\Program Files\nodejs\node.exe"
+        command_line = "node.exe scripts/build.js"
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0x12345",
+            process_name,
+            command_line,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+            and call[0][0].process
+            and call[0][0].process.image == process_name
+        ]
+        assert process_events
+        current_directory = process_events[0].process.current_directory
+        assert current_directory.startswith(f"C:\\Users\\{test_user.username}\\source\\repos\\")
+        assert current_directory != r"C:\Program Files\nodejs\\"
+
+    def test_ssh_process_network_effect_uses_command_target(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """SSH Sysmon/eCAR flow destinations should agree with the process command line."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, web_server.ip: web_server}
+        activity_gen._all_system_ips = [workstation.ip, web_server.ip]
+        state_manager.set_current_time(timestamp)
+        process_name = r"C:\Windows\System32\OpenSSH\ssh.exe"
+        command_line = "ssh.exe testuser@WEB-EXT-01"
+        pid = activity_gen.generate_process(
+            test_user,
+            workstation,
+            timestamp,
+            "0x12345",
+            process_name,
+            command_line,
+        )
+        mock_emitters["zeek_conn"].reset_mock()
+
+        activity_gen._emit_process_network_correlation(
+            workstation,
+            process_name,
+            command_line,
+            timestamp,
+            pid,
+            random.Random(1),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert network_events
+        assert network_events[-1].network.dst_ip == web_server.ip
+        assert network_events[-1].network.dst_port == 22
+
     def test_process_follow_on_file_event_after_process_create(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

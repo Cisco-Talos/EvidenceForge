@@ -472,6 +472,87 @@ def _network_effect_context_for_process(
     return effect_process_name, effect_command_line
 
 
+def _is_ip_literal(value: str) -> bool:
+    """Return whether a command target is an IP literal."""
+    try:
+        ipaddress.ip_address(value.strip("[]"))
+    except ValueError:
+        return False
+    return True
+
+
+def _normalize_command_host_token(value: str) -> str:
+    """Normalize a host token from command-line arguments."""
+    host = value.strip().strip("'\"")
+    if not host:
+        return ""
+    if "://" in host:
+        parsed = urlsplit(host)
+        host = parsed.hostname or host
+    if "@" in host:
+        host = host.rsplit("@", 1)[1]
+    host = host.strip("[]")
+    if ":" in host and not _is_ip_literal(host):
+        name, maybe_port = host.rsplit(":", 1)
+        if maybe_port.isdigit():
+            host = name
+    return host.rstrip(".")
+
+
+def _command_tokens(command_line: str) -> list[str]:
+    """Split a process command line enough to recover network target arguments."""
+    try:
+        tokens = shlex.split(command_line, posix=False)
+    except ValueError:
+        tokens = command_line.split()
+    return [token.strip().strip("'\"") for token in tokens if token.strip().strip("'\"")]
+
+
+def _extract_network_command_target(command_line: str, service: str) -> str | None:
+    """Extract a user-visible network target from common client command lines."""
+    normalized_service = service.lower()
+    if normalized_service == "ssh":
+        tokens = _command_tokens(command_line)
+        if not tokens:
+            return None
+        option_args = {
+            "-b",
+            "-c",
+            "-e",
+            "-f",
+            "-i",
+            "-j",
+            "-l",
+            "-m",
+            "-o",
+            "-p",
+            "-s",
+            "-w",
+        }
+        skip_next = False
+        for token in tokens[1:]:
+            lower = token.lower()
+            if skip_next:
+                skip_next = False
+                continue
+            if lower in option_args:
+                skip_next = True
+                continue
+            if lower.startswith("-"):
+                continue
+            target = _normalize_command_host_token(token)
+            if target:
+                return target
+        return None
+    if normalized_service == "rdp":
+        match = re.search(r"(?:^|\s)/v:([^\s]+)", command_line, re.IGNORECASE)
+        return _normalize_command_host_token(match.group(1)) if match else None
+    if normalized_service == "ldap":
+        match = re.search(r"ldap://([^\s/\"']+)", command_line, re.IGNORECASE)
+        return _normalize_command_host_token(match.group(1)) if match else None
+    return None
+
+
 def _parse_port_tokens(tokens: list[str]) -> list[int]:
     """Parse nmap port tokens until the next option or target token."""
     ports: list[int] = []
@@ -2045,6 +2126,137 @@ class ActivityGenerator:
             if wanted in {system_host, system_fqdn}:
                 return system
         return None
+
+    def _unique_environment_systems(self) -> list[Any]:
+        """Return scenario systems once, preserving environment order where possible."""
+        systems: list[Any] = []
+        seen_hosts: set[str] = set()
+        for system in getattr(self, "_ip_to_system", {}).values():
+            hostname = str(getattr(system, "hostname", "") or "")
+            if hostname in seen_hosts:
+                continue
+            seen_hosts.add(hostname)
+            systems.append(system)
+        return systems
+
+    def _system_for_command_alias(self, hostname: str, service: str) -> Any | None:
+        """Resolve common generic command aliases to environment systems."""
+        wanted = hostname.lower().rstrip(".")
+        if not wanted:
+            return None
+        systems = self._unique_environment_systems()
+        if not systems:
+            return None
+
+        def system_matches(system: Any, markers: tuple[str, ...]) -> bool:
+            haystack = " ".join(
+                [
+                    str(getattr(system, "hostname", "") or ""),
+                    str(getattr(system, "type", "") or ""),
+                    " ".join(getattr(system, "roles", []) or []),
+                    " ".join(getattr(system, "services", []) or []),
+                ]
+            ).lower()
+            return any(marker in haystack for marker in markers)
+
+        if service == "ssh":
+            if wanted.startswith("web") or "web" in wanted:
+                markers = ("web", "apache", "nginx", "http")
+            elif wanted.startswith("db") or "db" in wanted:
+                markers = ("db", "database", "mysql", "postgres", "mssql")
+            elif wanted.startswith("app") or "app" in wanted:
+                markers = ("app", "api")
+            elif "bastion" in wanted or "jump" in wanted:
+                markers = ("bastion", "proxy", "jump")
+            else:
+                markers = ()
+            if markers:
+                candidates = [
+                    system
+                    for system in systems
+                    if _get_os_category(getattr(system, "os", "")) == "linux"
+                    and system_matches(system, markers)
+                ]
+                if candidates:
+                    return candidates[0]
+        return None
+
+    def _resolve_command_network_target(
+        self,
+        target: str,
+        service: str,
+    ) -> tuple[str, str | None] | None:
+        """Resolve a command-line network target to a destination IP and hostname hint."""
+        normalized = _normalize_command_host_token(target)
+        if not normalized:
+            return None
+        if _is_ip_literal(normalized):
+            return normalized, None
+        target_system = self._system_for_hostname(normalized) or self._system_for_command_alias(
+            normalized, service
+        )
+        if target_system is None:
+            return None
+        return target_system.ip, normalized
+
+    def _pick_command_target_placeholder(
+        self,
+        rng: random.Random,
+        command_line: str,
+        source_system: System,
+    ) -> str | None:
+        """Choose an environment-valid replacement for command `{ssh_target}` placeholders."""
+        systems = [
+            system for system in self._unique_environment_systems() if system.ip != source_system.ip
+        ]
+        if not systems:
+            return None
+        command_lower = command_line.lower()
+        if "ldap://" in command_lower:
+            candidates = [
+                system
+                for system in systems
+                if getattr(system, "type", "") == "domain_controller"
+                or "domain_controller" in (getattr(system, "roles", []) or [])
+            ]
+        elif "mstsc" in command_lower:
+            candidates = [
+                system
+                for system in systems
+                if _get_os_category(getattr(system, "os", "")) == "windows"
+                and getattr(system, "type", "") in {"server", "domain_controller"}
+            ]
+        else:
+            candidates = [
+                system
+                for system in systems
+                if _get_os_category(getattr(system, "os", "")) == "linux"
+            ]
+        if not candidates:
+            candidates = systems
+        target = rng.choice(candidates)
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").strip(".")
+        style = rng.random()
+        if style < 0.18:
+            return target.ip
+        if style < 0.32 and ad_domain:
+            return f"{target.hostname}.{ad_domain}"
+        return str(target.hostname)
+
+    def _parameterize_command_for_system(
+        self,
+        rng: random.Random,
+        command_line: str,
+        *,
+        username: str,
+        system: System,
+    ) -> str:
+        """Parameterize command templates with environment-aware network targets."""
+        if "{ssh_target}" in command_line:
+            target = self._pick_command_target_placeholder(rng, command_line, system)
+            if target:
+                command_line = command_line.replace("{ssh_target}", target)
+        return _parameterize_command(rng, command_line, username=username)
 
     def _resolve_process_identity(
         self,
@@ -4323,6 +4535,34 @@ class ActivityGenerator:
         if exe in {"onedrive.exe", "teams.exe", "outlook.exe"}:
             return profile_dir + "\\"
 
+        if exe in {
+            "cargo.exe",
+            "docker.exe",
+            "git.exe",
+            "kubectl.exe",
+            "node.exe",
+            "npm.cmd",
+            "npm.exe",
+            "ssh.exe",
+        }:
+            if exe == "ssh.exe":
+                return profile_dir + "\\"
+            repo_names = (
+                "clinical-portal",
+                "integration-api",
+                "ops-automation",
+                "platform-services",
+                "security-tools",
+            )
+            repo = repo_names[
+                _stable_seed(
+                    f"windows_project_cwd:{system.hostname}:{username}:{process_name}:"
+                    f"{command_line}"
+                )
+                % len(repo_names)
+            ]
+            return profile_dir + f"\\source\\repos\\{repo}\\"
+
         if exe in {"chrome.exe", "msedge.exe", "firefox.exe"}:
             install_dir = image.rsplit("\\", 1)[0] if "\\" in image else ""
             if parent_dir and parent_dir == install_dir.lower():
@@ -6002,7 +6242,7 @@ class ActivityGenerator:
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             query_len = len(dns.query) if dns is not None and dns.query else 12
             query_type = (dns.query_type if dns is not None else "").upper()
-            min_query_payload = query_len + 16
+            min_query_payload = max(40, query_len + 16)
             if query_type in {"TXT", "NULL"}:
                 min_query_payload += 18
             elif query_type == "SRV":
@@ -6180,7 +6420,10 @@ class ActivityGenerator:
             if conn_state in ("S0", "REJ"):
                 duration = None
                 resp_bytes = 0
-                orig_bytes = 0
+                if service == "dns" and proto == "udp" and dst_port == 53:
+                    orig_bytes = max(orig_bytes or 0, 40)
+                else:
+                    orig_bytes = 0
             elif conn_state in ("S2", "S3"):
                 if duration is not None:
                     duration = duration * rng.uniform(0.3, 0.8)
@@ -8577,7 +8820,25 @@ class ActivityGenerator:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])
             all_ips = getattr(self, "_all_system_ips", [])
-            if service in ("mssql", "mysql", "postgresql") and db_servers:
+            command_target = _extract_network_command_target(command_line, service)
+            resolved_command_target = (
+                self._resolve_command_network_target(command_target, service)
+                if command_target
+                else None
+            )
+            if resolved_command_target is not None:
+                dst_ip, command_hostname = resolved_command_target
+                if command_hostname:
+                    ext_hostname = command_hostname
+                    emit_dns = True
+            elif command_target:
+                logger.debug(
+                    "Skipping %s process network effect with unresolved command target %s",
+                    service,
+                    command_target,
+                )
+                return
+            elif service in ("mssql", "mysql", "postgresql") and db_servers:
                 # Filter to DB servers that match the requested service
                 svc = service
                 compatible = [
@@ -8607,7 +8868,7 @@ class ActivityGenerator:
             emit_dns=emit_dns,
             pid=pid,
             http=http_context,
-            hostname=ext_hostname if conn_info["external"] else None,
+            hostname=ext_hostname,
         )
 
     def execute_baseline_activity(
@@ -8794,7 +9055,12 @@ class ActivityGenerator:
                 )
                 if result:
                     process_name, command_line = result
-                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = self._parameterize_command_for_system(
+                        rng,
+                        command_line,
+                        username=user.username,
+                        system=system,
+                    )
                     process_time = time
                     if os_category == "linux":
                         process_time = self._schedule_bash_history_time(

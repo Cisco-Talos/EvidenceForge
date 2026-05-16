@@ -157,6 +157,26 @@ def _subject_domain(username: str, netbios_domain: str) -> str:
     return netbios_domain
 
 
+def _logon_workstation_name(auth: AuthContext, host: HostContext, event: SecurityEvent) -> str:
+    """Return native Windows WorkstationName semantics for successful logons."""
+    if auth.workstation_name:
+        return auth.workstation_name
+    if (
+        auth.logon_type == 3
+        and (auth.auth_package or "").lower() == "kerberos"
+        and auth.source_ip not in {"", "-", host.ip}
+    ):
+        seed = _stable_seed(
+            f"kerberos_4624_workstation:{host.hostname}:{auth.logon_id}:"
+            f"{auth.source_ip}:{event.timestamp.isoformat()}"
+        )
+        if seed % 100 < 72:
+            return "-"
+    if auth.logon_type in (3, 10) and event.src_host is not None:
+        return event.src_host.hostname
+    return host.hostname
+
+
 def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     """Normalize SubjectDomainName for well-known Windows subject identities."""
     subject_name = getattr(auth, "subject_username", "") or getattr(auth, "username", "")
@@ -418,11 +438,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        workstation_name = auth.workstation_name or (
-            event.src_host.hostname
-            if auth.logon_type in (3, 10) and event.src_host is not None
-            else host.hostname
-        )
+        workstation_name = _logon_workstation_name(auth, host, event)
         process_pid, process_name = self._logon_caller_process_identity(host, auth)
 
         event_data = {
