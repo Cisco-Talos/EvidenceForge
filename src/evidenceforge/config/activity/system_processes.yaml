@@ -106,10 +106,6 @@ system_services:
       command_templates:
         - "dns.exe"
       parent: services
-    - image: "C:\\Windows\\System32\\ntdsutil.exe"
-      command_templates:
-        - "ntdsutil.exe"
-      parent: services
     - image: "C:\\Windows\\System32\\ismserv.exe"
       command_templates:
         - "ismserv.exe"

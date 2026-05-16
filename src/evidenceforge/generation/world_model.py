@@ -858,6 +858,7 @@ class WorldPlanner:
             get_app_categories,
             has_catalog_entry,
             is_persona_allowed,
+            is_system_type_allowed,
             load_catalog,
             resolve_image_path,
         )
@@ -876,6 +877,9 @@ class WorldPlanner:
 
         def _is_allowed(exe: str) -> bool:
             if not has_catalog_entry(exe, os_cat):
+                return False
+            system_type = getattr(system, "type", None)
+            if not is_system_type_allowed(exe, os_cat, system_type):
                 return False
             allowed = is_persona_allowed(exe, os_cat, persona)
             # Server-admin sessions also grant sysadmin-level tool access

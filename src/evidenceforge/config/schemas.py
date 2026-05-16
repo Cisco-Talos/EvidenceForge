@@ -107,6 +107,7 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     categories: list[str]
     personas: list[str]
     system_types: list[str] | None = None
+    selection_weight: int = Field(default=10, gt=0)
 
 
 # --- Persona ---

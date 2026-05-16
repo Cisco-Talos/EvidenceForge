@@ -22,6 +22,7 @@
 
 """Unit tests for Phase 5.1.4: Expanded process template pools."""
 
+import random
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -36,6 +37,7 @@ from evidenceforge.generation.activity import (
 from evidenceforge.generation.activity.system_processes import (
     _resolve_host_placeholders,
     load_system_processes,
+    pick_system_service_process,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
@@ -130,6 +132,20 @@ class TestProcessPoolSize:
 
         assert "10.0.19041.3636" in _resolve_host_placeholders(template, workstation)
         assert "10.0.20348.2322" in _resolve_host_placeholders(template, server)
+
+    def test_ntdsutil_not_generic_domain_controller_service_texture(self):
+        """NTDS utility should appear via explicit admin context, not service noise."""
+        data = load_system_processes()
+        dc_services = data["system_services"]["domain_controller"]
+
+        assert all("ntdsutil.exe" not in entry["image"].lower() for entry in dc_services)
+
+        host = SimpleNamespace(os="Windows Server 2022", type="domain_controller")
+        picks = [
+            pick_system_service_process(random.Random(seed), "domain_controller", host)[0].lower()
+            for seed in range(100)
+        ]
+        assert all("ntdsutil.exe" not in image for image in picks)
 
 
 class TestBaselinePatterns:
