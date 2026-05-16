@@ -4055,6 +4055,22 @@ class BaselineMixin:
         if not session_requests:
             return
 
+        def _http_status_message(status: int) -> str:
+            return {
+                200: "OK",
+                204: "No Content",
+                206: "Partial Content",
+                301: "Moved Permanently",
+                302: "Found",
+                304: "Not Modified",
+                400: "Bad Request",
+                401: "Unauthorized",
+                403: "Forbidden",
+                404: "Not Found",
+                500: "Internal Server Error",
+                503: "Service Unavailable",
+            }.get(status, "OK")
+
         # Pick a consistent UA for the entire session
         if os_cat == "linux":
             _session_uas = [
@@ -4101,11 +4117,13 @@ class BaselineMixin:
                 user_agent=session_ua,
                 request_body_len=req.request_body_len,
                 response_body_len=req.response_body_len,
-                status_code=200,
-                status_msg="OK",
+                status_code=req.status_code,
+                status_msg=_http_status_message(req.status_code),
                 referrer=req.referrer,
                 trans_depth=req.trans_depth,
-                resp_mime_types=[req.content_type] if req.content_type else [],
+                resp_mime_types=[req.content_type]
+                if req.content_type and req.status_code in {200, 206}
+                else [],
                 tags=[],
             )
 
@@ -5914,7 +5932,13 @@ class BaselineMixin:
         def _status_message(status: int) -> str:
             return {
                 200: "OK",
+                204: "No Content",
+                206: "Partial Content",
+                301: "Moved Permanently",
+                302: "Found",
                 304: "Not Modified",
+                400: "Bad Request",
+                401: "Unauthorized",
                 403: "Forbidden",
                 404: "Not Found",
                 405: "Method Not Allowed",

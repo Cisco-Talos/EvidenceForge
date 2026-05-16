@@ -45,6 +45,7 @@ class BrowsingRequest:
     is_page_load: bool  # True for the page itself, False for subresources
     response_body_len: int  # Estimated response size in bytes
     request_body_len: int  # Estimated request size in bytes
+    status_code: int = 200  # HTTP response status
 
 
 _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
@@ -78,6 +79,49 @@ def _request_size(rng: random.Random, method: str) -> int:
     if method == "POST":
         return rng.randint(100, 10_000)
     return 0
+
+
+def _sample_status_code(
+    rng: random.Random,
+    *,
+    is_page_load: bool,
+    method: str,
+    content_type: str,
+) -> int:
+    """Sample realistic browser HTTP outcomes for page and asset requests."""
+    if method == "POST":
+        statuses = [200, 204, 302, 400, 401, 403, 404, 500, 503]
+        weights = [70, 4, 4, 4, 3, 4, 3, 5, 3]
+    elif not is_page_load:
+        statuses = [200, 206, 304, 403, 404, 500, 503]
+        if content_type.startswith(("image/", "video/", "font/")):
+            weights = [70, 8, 12, 2, 4, 2, 2]
+        else:
+            weights = [74, 2, 12, 3, 4, 3, 2]
+    else:
+        statuses = [200, 301, 302, 401, 403, 404, 500, 503]
+        weights = [80, 2, 4, 2, 3, 5, 2, 2]
+    return rng.choices(statuses, weights=weights, k=1)[0]
+
+
+def _response_size_for_status_code(
+    rng: random.Random,
+    hostname: str,
+    path: str,
+    content_type: str,
+    status_code: int,
+) -> int:
+    """Generate a response body size consistent with the HTTP status."""
+    if status_code in {204, 304}:
+        return 0
+    if status_code in {301, 302}:
+        return rng.randint(120, 480)
+    if status_code == 206:
+        full_size = _response_size(rng, hostname, path, content_type)
+        return max(128, int(full_size * rng.uniform(0.15, 0.65)))
+    if status_code >= 400:
+        return response_size_for_status(status_code, hostname, path)
+    return _response_size(rng, hostname, path, content_type)
 
 
 def _sample_profile_timing_ms(
@@ -270,6 +314,12 @@ def generate_browsing_session(
 
         page = site_map.pages[current_page_idx]
         page_content_type = normalize_mime_type_for_path(page.path, page.content_type)
+        page_status = _sample_status_code(
+            rng,
+            is_page_load=True,
+            method="GET",
+            content_type=page_content_type,
+        )
         visited_indices.append(current_page_idx)
         page_url = _make_referrer(hostname, page.path, port)
 
@@ -284,8 +334,15 @@ def generate_browsing_session(
                 referrer=previous_page_url,
                 trans_depth=1,
                 is_page_load=True,
-                response_body_len=_response_size(rng, hostname, page.path, page_content_type),
+                response_body_len=_response_size_for_status_code(
+                    rng,
+                    hostname,
+                    page.path,
+                    page_content_type,
+                    page_status,
+                ),
                 request_body_len=_request_size(rng, "GET"),
+                status_code=page_status,
             )
         )
 
@@ -297,6 +354,12 @@ def generate_browsing_session(
         for sub_idx, sub in enumerate(subresources):
             sub_hostname = sub.host or hostname
             sub_content_type = normalize_mime_type_for_path(sub.path, sub.content_type)
+            sub_status = _sample_status_code(
+                rng,
+                is_page_load=False,
+                method=sub.method,
+                content_type=sub_content_type,
+            )
 
             delay = _subresource_delay_ms(rng, sub_content_type)
 
@@ -310,13 +373,15 @@ def generate_browsing_session(
                     referrer=page_url,
                     trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
                     is_page_load=False,
-                    response_body_len=_response_size(
+                    response_body_len=_response_size_for_status_code(
                         rng,
                         sub_hostname,
                         sub.path,
                         sub_content_type,
+                        sub_status,
                     ),
                     request_body_len=_request_size(rng, sub.method),
+                    status_code=sub_status,
                 )
             )
 

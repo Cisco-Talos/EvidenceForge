@@ -272,22 +272,42 @@ class TestResponseSizes:
                 assert 500 <= request.response_body_len <= 5_000
 
     def test_stable_static_asset_size_for_same_host_and_path(self):
-        first = generate_browsing_session(
-            random.Random(42),
-            "portal.customer.example",
-            [],
-            require_browser_like_domain=False,
-        )
-        second = generate_browsing_session(
-            random.Random(43),
-            "portal.customer.example",
-            [],
-            require_browser_like_domain=False,
-        )
-        first_favicon = next(r for r in first if r.path == "/favicon.ico")
-        second_favicon = next(r for r in second if r.path == "/favicon.ico")
+        successful_favicons = []
+        for seed in range(60):
+            requests = generate_browsing_session(
+                random.Random(seed),
+                "portal.customer.example",
+                [],
+                require_browser_like_domain=False,
+            )
+            favicon = next(r for r in requests if r.path == "/favicon.ico")
+            if favicon.status_code == 200:
+                successful_favicons.append(favicon)
+            if len(successful_favicons) >= 2:
+                break
 
-        assert first_favicon.response_body_len == second_favicon.response_body_len
+        assert len(successful_favicons) >= 2
+        assert {r.response_body_len for r in successful_favicons} == {
+            successful_favicons[0].response_body_len
+        }
+
+    def test_sessions_include_non_success_http_outcomes(self):
+        statuses = []
+        for seed in range(40):
+            requests = generate_browsing_session(random.Random(seed), "github.com", [])
+            statuses.extend(request.status_code for request in requests)
+
+        assert 200 in statuses
+        assert any(status != 200 for status in statuses)
+
+    def test_empty_body_statuses_have_zero_response_body(self):
+        requests = []
+        for seed in range(80):
+            requests.extend(generate_browsing_session(random.Random(seed), "github.com", []))
+
+        empty_body = [request for request in requests if request.status_code in {204, 304}]
+        assert empty_body
+        assert all(request.response_body_len == 0 for request in empty_body)
 
     def test_subresource_timing_uses_timing_profile_overlay(self, tmp_path, monkeypatch):
         overlay = tmp_path / ".eforge" / "config" / "activity"
@@ -331,3 +351,5 @@ class TestDeterminism:
             assert a.hostname == b.hostname
             assert a.path == b.path
             assert a.referrer == b.referrer
+            assert a.status_code == b.status_code
+            assert a.response_body_len == b.response_body_len

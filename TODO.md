@@ -339,9 +339,15 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     Hunter `72`, Detection `64`, Network `78`, Host/EDR `80` (average `73.5`).
     Top Loop 9 targets are HTTP/proxy status-outcome cleanliness, Linux
     bash/syslog command-pool repetition, and rare Windows admin-tool overuse.
-  - [ ] **IN PROGRESS** Loop 9 fix pass: add realistic HTTP/proxy
-    status-outcome texture first, targeting the dataset-wide `200` success-rate
-    fingerprint in Zeek HTTP and proxy access logs.
+  - [x] Loop 9 fix pass: added realistic HTTP/proxy status-outcome texture by
+    carrying sampled browser request statuses through `BrowsingRequest` into
+    generated `HttpContext`, setting status-aware response sizes/MIME fan-out,
+    and raising proxy CONNECT terminal-failure variance. Isolated browsing
+    sessions now sample roughly 75% `200` with `304`, `206`, `404`, `403`, and
+    5xx outcomes in the tail. Verified with config validation, focused
+    web/proxy tests, Ruff, format check, and full normal
+    `uv run pytest --no-cov -q` (`3097 passed, 37 skipped`). Regeneration and
+    blind review follow.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 

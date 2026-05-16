@@ -2292,11 +2292,11 @@ class ActivityGenerator:
             else:
                 cache_result = "MISS"
         elif explicit_mode and proxy_method == "CONNECT":
-            if cache_roll < 0.975:
+            if cache_roll < 0.88:
                 cache_result = "NONE"
-            elif cache_roll < 0.988:
+            elif cache_roll < 0.925:
                 cache_result = "DENIED"
-            elif cache_roll < 0.995:
+            elif cache_roll < 0.965:
                 cache_result = "AUTH_REQUIRED"
             else:
                 cache_result = "GATEWAY_ERROR"
@@ -6673,10 +6673,14 @@ class ActivityGenerator:
                         cache_result = "MISS"
                 elif proxy_cacheable and cache_roll < 0.30:
                     cache_result = "HIT"
-                elif cache_roll < 0.95:
+                elif cache_roll < 0.91:
                     cache_result = "MISS"
-                else:
+                elif cache_roll < 0.945:
                     cache_result = "DENIED"
+                elif cache_roll < 0.975:
+                    cache_result = "AUTH_REQUIRED"
+                else:
+                    cache_result = "GATEWAY_ERROR"
                 # W3C sc-bytes/cs-bytes are proxy-side accounting fields:
                 # payload plus HTTP/proxy headers for allowed responses,
                 # or proxy-generated error pages for failures.
@@ -6686,22 +6690,29 @@ class ActivityGenerator:
                 )
                 if cache_result == "DENIED":
                     _sc = rng.randint(500, 2000)  # proxy error page
+                elif cache_result == "AUTH_REQUIRED":
+                    _sc = rng.randint(300, 1200)
+                elif cache_result == "GATEWAY_ERROR":
+                    _sc = rng.randint(250, 1800)
                 elif cache_result == "HIT":
                     _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
                 else:
                     _sc = _response_bytes + rng.randint(*_PROXY_SC_OVERHEAD)
+                proxy_status_code = (
+                    event.http.status_code
+                    if event.http is not None
+                    else {
+                        "DENIED": 403,
+                        "AUTH_REQUIRED": 407,
+                        "GATEWAY_ERROR": rng.choice([502, 503, 504]),
+                    }.get(cache_result, 200)
+                )
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
                     method=proxy_method,
                     url=url,
                     host=proxy_hostname,
-                    status_code=(
-                        event.http.status_code
-                        if event.http is not None
-                        else 200
-                        if cache_result != "DENIED"
-                        else 403
-                    ),
+                    status_code=proxy_status_code,
                     sc_bytes=_sc,
                     cs_bytes=_cs,
                     time_taken=int((duration or 0) * 1000),
