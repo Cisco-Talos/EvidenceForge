@@ -41,6 +41,62 @@ class DnsEntry(BaseModel, extra="forbid"):
         return v
 
 
+class PublicDnsAnswerProfile(BaseModel, extra="forbid"):
+    """A public DNS provider-style answer profile."""
+
+    name: str
+    weight: int
+    match_suffixes: list[str] = Field(default_factory=list)
+    answer_sets: list[list[str]]
+    soa_rnames: list[str] = Field(default_factory=list)
+
+    @field_validator("weight")
+    @classmethod
+    def weight_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("weight must be non-negative")
+        return v
+
+    @field_validator("match_suffixes", "soa_rnames")
+    @classmethod
+    def optional_strings_non_empty(cls, v: list[str], info) -> list[str]:
+        if any(not item for item in v):
+            raise ValueError(f"{info.field_name} entries must be non-empty")
+        return v
+
+    @field_validator("answer_sets")
+    @classmethod
+    def answer_sets_non_empty(cls, v: list[list[str]]) -> list[list[str]]:
+        if not v:
+            raise ValueError("answer_sets must not be empty")
+        for answer_set in v:
+            if not answer_set:
+                raise ValueError("answer_sets entries must not be empty")
+            if any(not answer for answer in answer_set):
+                raise ValueError("answer strings must be non-empty")
+        return v
+
+
+class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for public_dns_profiles.yaml."""
+
+    nameserver_profiles: list[PublicDnsAnswerProfile]
+    mail_profiles: list[PublicDnsAnswerProfile]
+
+    @field_validator("nameserver_profiles", "mail_profiles")
+    @classmethod
+    def profiles_non_empty(
+        cls,
+        v: list[PublicDnsAnswerProfile],
+        info,
+    ) -> list[PublicDnsAnswerProfile]:
+        if not v:
+            raise ValueError(f"{info.field_name} must not be empty")
+        if sum(profile.weight for profile in v) <= 0:
+            raise ValueError(f"{info.field_name} must include at least one positive weight")
+        return v
+
+
 # --- Application Catalog ---
 
 
@@ -204,6 +260,28 @@ class TlsSanConfig(BaseModel, extra="forbid"):
     """SAN generation settings in tls_realism.yaml."""
 
     multi_label_public_suffixes: list[str]
+    profile_weights: dict[str, int] = Field(default_factory=dict)
+    _VALID_PROFILE_KEYS: ClassVar[set[str]] = {
+        "apex_exact",
+        "apex_www",
+        "apex_wildcard",
+        "subdomain_exact",
+        "subdomain_parent",
+        "subdomain_wildcard",
+        "subdomain_sibling",
+    }
+
+    @field_validator("profile_weights")
+    @classmethod
+    def profile_weights_valid(cls, v: dict[str, int]) -> dict[str, int]:
+        unknown = set(v) - cls._VALID_PROFILE_KEYS
+        if unknown:
+            raise ValueError(f"unknown SAN profile weights: {sorted(unknown)}")
+        if any(weight < 0 for weight in v.values()):
+            raise ValueError("SAN profile weights must be non-negative")
+        if v and sum(v.values()) <= 0:
+            raise ValueError("SAN profile weights must have a positive total")
+        return v
 
 
 class TlsSerialLength(BaseModel, extra="forbid"):

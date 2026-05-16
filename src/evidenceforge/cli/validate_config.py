@@ -197,6 +197,9 @@ def validate_config() -> ValidationResult:
         "activity/tls_realism.yaml": {
             "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
         },
+        "activity/public_dns_profiles.yaml": {
+            "list_fields": {"nameserver_profiles": "name", "mail_profiles": "name"},
+        },
         "activity/smb_file_transfers.yaml": {
             "list_fields": {"mime_types": None, "analyzer_sets": None},
         },
@@ -470,6 +473,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.process_network import load_process_network_map
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
@@ -480,6 +484,7 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
+    public_dns_profiles_data = load_public_dns_profiles()
     ids_data = load_ids_signatures()
     catalog_data = load_catalog()
     traffic_data = load_traffic_profiles()
@@ -1719,6 +1724,7 @@ def validate_config() -> ValidationResult:
         ProcessAccessPatternEntry,
         ProcessNetworkEntry,
         ProxyUserAgentOverrideEntry,
+        PublicDnsProfilesConfig,
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
@@ -1891,6 +1897,12 @@ def validate_config() -> ValidationResult:
     tls_realism_data = load_tls_realism()
     if tls_realism_data:
         _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
+
+    # public_dns_profiles.yaml
+    if public_dns_profiles_data:
+        _SCHEMA_CHECKS.append(
+            ([public_dns_profiles_data], PublicDnsProfilesConfig, "public_dns_profiles.yaml")
+        )
 
     # kerberos_realism.yaml
     from evidenceforge.generation.activity.kerberos_realism import load_kerberos_realism

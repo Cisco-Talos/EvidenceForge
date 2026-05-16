@@ -157,15 +157,26 @@ class TestTlsIssuers:
             assert observed == {"rsa"}, issuer["name"]
 
     def test_san_dns_never_wildcards_public_suffix(self):
-        """Generated SAN lists should not contain impossible public-suffix wildcards."""
-        assert _tls_san_dns_names("stackoverflow.com") == [
-            "stackoverflow.com",
-            "*.stackoverflow.com",
-        ]
-        assert _tls_san_dns_names("gcr.io") == ["gcr.io", "*.gcr.io"]
-        assert _tls_san_dns_names("www.gstatic.com") == ["www.gstatic.com", "*.gstatic.com"]
-        assert _tls_san_dns_names("example.co.uk") == ["example.co.uk", "*.example.co.uk"]
+        """Generated SAN lists should vary while avoiding public-suffix wildcards."""
+        assert _tls_san_dns_names("stackoverflow.com")[0] == "stackoverflow.com"
+        assert _tls_san_dns_names("gcr.io")[0] == "gcr.io"
+        assert _tls_san_dns_names("www.gstatic.com")[0] == "www.gstatic.com"
+        assert _tls_san_dns_names("example.co.uk")[0] == "example.co.uk"
         assert _tls_san_dns_names("203.0.113.45") == []
+        all_names = {
+            name
+            for domain in [
+                "stackoverflow.com",
+                "gcr.io",
+                "www.gstatic.com",
+                "example.co.uk",
+                "files.pythonhosted.org",
+            ]
+            for name in _tls_san_dns_names(domain)
+        }
+        assert "*.co.uk" not in all_names
+        assert "*.io" not in all_names
+        assert any(not name.startswith("*.") for name in all_names)
 
     def test_ocsp_status_is_stable_by_certificate_but_not_globally_flat(self):
         """OCSP status should be stable per cert while still varying across certs."""

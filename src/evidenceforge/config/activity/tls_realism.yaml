@@ -19,6 +19,14 @@ san:
     - net.au
     - org.au
     - org.uk
+  profile_weights:
+    apex_exact: 34
+    apex_www: 26
+    apex_wildcard: 14
+    subdomain_exact: 34
+    subdomain_parent: 18
+    subdomain_wildcard: 16
+    subdomain_sibling: 12
 
 serial_numbers:
   byte_lengths:

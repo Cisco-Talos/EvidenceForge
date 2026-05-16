@@ -1454,10 +1454,80 @@ def _jitter_default_connection_duration(
 
 def _dns_registrable_domain(hostname: str) -> str:
     """Return a practical DNS owner name for mail/TXT companion lookups."""
-    parts = [part for part in hostname.rstrip(".").split(".") if part]
+    from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
+
+    parts = [part.lower() for part in hostname.rstrip(".").split(".") if part]
     if len(parts) <= 2:
-        return hostname.rstrip(".")
+        return ".".join(parts)
+    lowered = ".".join(parts)
+    for suffix in multi_label_public_suffixes():
+        suffix_parts = suffix.split(".")
+        if lowered.endswith(f".{suffix}") and len(parts) > len(suffix_parts):
+            return ".".join(parts[-(len(suffix_parts) + 1) :])
     return ".".join(parts[-2:])
+
+
+def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
+    """Return a stable provider-style public DNS profile for a domain."""
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
+
+    profiles = load_public_dns_profiles().get(kind, [])
+    lowered = domain.lower().rstrip(".")
+    for profile in profiles:
+        suffixes = [str(suffix).lower().rstrip(".") for suffix in profile.get("match_suffixes", [])]
+        if any(lowered == suffix or lowered.endswith(f".{suffix}") for suffix in suffixes):
+            return profile
+
+    weighted = [profile for profile in profiles if int(profile.get("weight", 0)) > 0]
+    if not weighted:
+        return {}
+    rng = random.Random(_stable_seed(f"public_dns_profile:{kind}:{lowered}"))
+    weights = [int(profile.get("weight", 0)) for profile in weighted]
+    return rng.choices(weighted, weights=weights, k=1)[0]
+
+
+def _render_public_dns_answer(template: str, domain: str) -> str:
+    """Render a public DNS answer template using source-owned domain tokens."""
+    return template.format(
+        domain=domain,
+        domain_hyphen=domain.replace(".", "-"),
+    )
+
+
+def _public_dns_answer_set(kind: str, domain: str) -> list[str]:
+    """Return stable provider-style answers for a public DNS record family."""
+    profile = _public_dns_profile(kind, domain)
+    answer_sets = profile.get("answer_sets", [])
+    if not answer_sets:
+        return []
+    rng = random.Random(_stable_seed(f"public_dns_answers:{kind}:{domain}:{profile.get('name')}"))
+    answers = rng.choice(answer_sets)
+    return [_render_public_dns_answer(str(answer), domain) for answer in answers]
+
+
+def _public_dns_ns_answers(domain: str) -> list[str]:
+    """Return realistic public NS answers for a domain."""
+    answers = _public_dns_answer_set("nameserver_profiles", domain)
+    return answers or [f"ns1.{domain}", f"ns2.{domain}"]
+
+
+def _public_dns_mx_answers(domain: str) -> list[str]:
+    """Return realistic public MX answers for a domain."""
+    answers = _public_dns_answer_set("mail_profiles", domain)
+    return answers or [f"10 mail.{domain}"]
+
+
+def _public_dns_soa_answers(domain: str) -> list[str]:
+    """Return a realistic public SOA answer for a domain."""
+    profile = _public_dns_profile("nameserver_profiles", domain)
+    nameservers = _public_dns_ns_answers(domain)
+    rnames = profile.get("soa_rnames", []) if profile else []
+    if rnames:
+        rng = random.Random(_stable_seed(f"public_dns_soa_rname:{domain}:{profile.get('name')}"))
+        rname = _render_public_dns_answer(str(rng.choice(rnames)), domain)
+    else:
+        rname = f"dns-admin.{domain}"
+    return [f"{nameservers[0]} {rname}"]
 
 
 def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str]:
@@ -1749,8 +1819,8 @@ _APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<po
 
 
 def _tls_san_dns_names(cert_name: str) -> list[str]:
-    """Build DNS SANs without wildcarding public suffixes."""
-    from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
+    """Build deterministic but varied DNS SANs without public-suffix wildcards."""
+    from evidenceforge.generation.activity.tls_realism import load_tls_realism
 
     try:
         import ipaddress as _ipa
@@ -1760,15 +1830,48 @@ def _tls_san_dns_names(cert_name: str) -> list[str]:
     except ValueError:
         pass
 
-    labels = [part for part in cert_name.rstrip(".").split(".") if part]
+    normalized = cert_name.rstrip(".").lower()
+    labels = [part for part in normalized.split(".") if part]
     if len(labels) < 2:
-        return [cert_name]
-    parent = ".".join(labels[1:])
-    if len(labels) == 2 or parent in multi_label_public_suffixes():
-        wildcard_base = cert_name
-    else:
-        wildcard_base = parent
-    return [cert_name, f"*.{wildcard_base}"]
+        return [normalized]
+
+    base_domain = _dns_registrable_domain(normalized)
+    is_apex = normalized == base_domain
+    default_weights = {
+        "apex_exact": 34,
+        "apex_www": 26,
+        "apex_wildcard": 14,
+        "subdomain_exact": 34,
+        "subdomain_parent": 18,
+        "subdomain_wildcard": 16,
+        "subdomain_sibling": 12,
+    }
+    config_weights = load_tls_realism().get("san", {}).get("profile_weights", {})
+    weights_by_name = {**default_weights, **config_weights}
+    profile_names = (
+        ("apex_exact", "apex_www", "apex_wildcard")
+        if is_apex
+        else ("subdomain_exact", "subdomain_parent", "subdomain_wildcard", "subdomain_sibling")
+    )
+    weights = [max(0, int(weights_by_name.get(name, 0))) for name in profile_names]
+    if sum(weights) <= 0:
+        weights = [1] * len(profile_names)
+    rng = random.Random(_stable_seed(f"tls_san_profile:{normalized}"))
+    profile = rng.choices(profile_names, weights=weights, k=1)[0]
+
+    names = [normalized]
+    if profile == "apex_www":
+        names.append(f"www.{base_domain}")
+    elif profile == "apex_wildcard":
+        names.append(f"*.{base_domain}")
+    elif profile == "subdomain_parent":
+        names.append(base_domain)
+    elif profile == "subdomain_wildcard":
+        names.append(f"*.{base_domain}")
+    elif profile == "subdomain_sibling":
+        sibling = rng.choice(("api", "assets", "cdn", "static", "www"))
+        names.append(f"{sibling}.{base_domain}")
+    return list(dict.fromkeys(names))
 
 
 def _is_ip_literal(value: str) -> bool:
@@ -8914,7 +9017,10 @@ class ActivityGenerator:
             if _dns_hostname_allows_mx(hostname):
                 qtype, qtype_name = 15, "MX"
                 query = _dns_registrable_domain(hostname)
-                answers = [f"10 mail.{query}"]
+                if _dns_is_internal_name(query, ad_domain):
+                    answers = [f"10 mail.{query}"]
+                else:
+                    answers = _public_dns_mx_answers(query)
             else:
                 qtype, qtype_name = 16, "TXT"
                 query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
@@ -9004,16 +9110,25 @@ class ActivityGenerator:
             elif companion_kind == "NS":
                 companion_qtype = 2
                 companion_query = _dns_registrable_domain(hostname)
-                companion_answers = [f"ns1.{companion_query}", f"ns2.{companion_query}"]
+                if _dns_is_internal_name(companion_query, ad_domain):
+                    companion_answers = [f"ns1.{companion_query}", f"ns2.{companion_query}"]
+                else:
+                    companion_answers = _public_dns_ns_answers(companion_query)
             elif companion_kind == "MX" and _dns_hostname_allows_mx(hostname):
                 companion_qtype = 15
                 companion_query = _dns_registrable_domain(hostname)
-                companion_answers = [f"10 mail.{companion_query}"]
+                if _dns_is_internal_name(companion_query, ad_domain):
+                    companion_answers = [f"10 mail.{companion_query}"]
+                else:
+                    companion_answers = _public_dns_mx_answers(companion_query)
             else:
                 companion_kind = "SOA"
                 companion_qtype = 6
                 companion_query = _dns_registrable_domain(hostname)
-                companion_answers = [f"ns1.{companion_query} hostmaster.{companion_query}"]
+                if _dns_is_internal_name(companion_query, ad_domain):
+                    companion_answers = [f"ns1.{companion_query} hostmaster.{companion_query}"]
+                else:
+                    companion_answers = _public_dns_soa_answers(companion_query)
             companion_ctx = DnsContext(
                 query=companion_query,
                 trans_id=rng.randint(1, 65535),
