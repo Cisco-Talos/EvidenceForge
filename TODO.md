@@ -312,6 +312,18 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
     with focused lifetime/storyline/proxy regressions, config validation, Ruff,
     format check, and full normal `uv run pytest --no-cov -q`
     (`3094 passed, 37 skipped`). Regeneration and blind review follow.
+  - Loop 7 final regeneration and assessment completed from commit `6374303`:
+    regenerated `scenarios/iteration-test/scenario.yaml`, quantitative eval passed
+    at `96/100` across `76,838` records, and hard probes found zero PsExec service
+    semantic violations, zero one-shot CLI lifetimes over 120 seconds, zero
+    unexplained one-shot terminate gaps after accounting for `enterprise_standard`
+    eCAR observation drops, zero duplicate or regressing `systemd-logind` removals,
+    zero web asset-before-referrer inversions, and zero repeated full static 200s.
+    Blind synthetic-confidence scores were Threat Hunter `72`, Detection `68`,
+    Network `74`, Host/EDR `76` (average `72.5`). Top Loop 8 targets are
+    PsExec/security service-install source-native fields (`ServiceStartType`),
+    HTTP/proxy status-outcome texture, Linux bash/sudo command-pool realism, DNS
+    tunnel response grammar/TTL diversity, and attack-phase pivot continuity.
 - [x] Full slow-suite regression cleanup after loop-65 merge — explicit-proxy storyline beacons now preserve authored hostname+destination IP pairs only when the storyline marks that pair as intentional, normal proxy-origin DNS resolution remains intact, and the parallel-generation LogonID assertion treats Type 7 unlock reuse as valid slice-of-time Windows behavior. Verified with targeted proxy/parallel tests, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run pytest -v --include-slow` (`2875 passed, 23 skipped`).
   Detection Engineer blind review completed for the regenerated Loop 61 dataset at `scenarios/iteration-test/data`; reviewer verdict: Synthetic, 63/100 confidence. Main findings: one PROXY-01 sshd accepted-login lifecycle gap/self-source artifact and Windows 4648 explicit-credential caller PID/image provenance ambiguity around `WS-MCHEN-01`.
 
