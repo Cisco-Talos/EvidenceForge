@@ -7210,15 +7210,21 @@ class ActivityGenerator:
                 tags=[],
             )
             # Probabilistic file transfer for HTTP responses with content
-            if resp_body_len > 100 and rng.random() < 0.3:
+            if (
+                200 <= status_code < 300
+                and resp_body_len > 100
+                and event.http.resp_mime_types
+                and rng.random() < 0.3
+            ):
                 from evidenceforge.events.contexts import FileTransferContext
                 from evidenceforge.utils.ids import generate_zeek_uid
 
                 fuid = generate_zeek_uid("F")
+                file_mime_type = event.http.resp_mime_types[0]
                 file_hashes = _file_transfer_hashes(
                     f"http:{host}:{uri}:{resp_body_len}:{fuid}",
                     ["SHA1"]
-                    if mime_type in {"application/x-dosexec", "application/octet-stream"}
+                    if file_mime_type in {"application/x-dosexec", "application/octet-stream"}
                     else [],
                 )
                 event.file_transfer = FileTransferContext(
@@ -7226,7 +7232,7 @@ class ActivityGenerator:
                     source="HTTP",
                     depth=0,
                     analyzers=[],
-                    mime_type=mime_type,
+                    mime_type=file_mime_type,
                     duration=rng.uniform(0.0, 0.01),
                     local_orig=_is_private_ip(dst_ip),
                     is_orig=False,
@@ -7242,7 +7248,7 @@ class ActivityGenerator:
 
                 # PE analysis for Windows executables in file transfers
                 if (
-                    mime_type in ("application/x-dosexec", "application/octet-stream")
+                    file_mime_type in ("application/x-dosexec", "application/octet-stream")
                     and rng.random() < 0.1
                 ):
                     from evidenceforge.events.contexts import PeContext

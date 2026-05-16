@@ -1271,6 +1271,56 @@ class TestHttpContextPopulation:
 class TestFileTransferContext:
     """Verify FileTransferContext populated probabilistically for HTTP."""
 
+    def test_redirect_asset_response_does_not_attach_asset_file_transfer(
+        self, activity_gen, monkeypatch
+    ):
+        """Redirect bodies keep text/html MIME instead of asset extension MIME."""
+        gen, events = activity_gen
+
+        class LowRandom(random.Random):
+            def random(self) -> float:
+                return 0.05
+
+        import evidenceforge.generation.activity.generator as generator_module
+        import evidenceforge.generation.activity.proxy_uri as proxy_uri_module
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: LowRandom(7))
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda _dst_ip, _uri: (301, "Moved Permanently"),
+        )
+        monkeypatch.setattr(
+            proxy_uri_module,
+            "pick_proxy_uri",
+            lambda *_args, **_kwargs: (
+                "/assets/app.js",
+                "application/javascript",
+                "GET",
+                "",
+                "none",
+            ),
+        )
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=200,
+            resp_bytes=5000,
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.http is not None
+        assert event.http.status_code == 301
+        assert event.http.resp_mime_types == ["text/html"]
+        assert event.file_transfer is None
+
     def test_file_transfer_sometimes_populated(self, activity_gen):
         """Over many HTTP connections, some should have FileTransferContext."""
         gen, events = activity_gen
