@@ -5571,23 +5571,36 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.39:
+                elif source_roll < 0.36:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
+                    snap_name = rng.choice(
+                        [
+                            "core20",
+                            "core22",
+                            "lxd",
+                            "microk8s",
+                            "snapd-desktop-integration",
+                        ]
+                    )
+                    change_id = 1000 + (_stable_seed(f"snapd_change:{system.hostname}") % 8000)
+                    task_id = rng.randint(1, 9)
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="snapd",
                         message=rng.choice(
                             [
-                                "autorefresh.go:540: auto-refresh: all snaps are up-to-date",
-                                "daemon.go:460: gracefully waiting for running hooks",
-                                "stateengine.go:150: state ensure starting",
+                                f"autorefresh.go:540: auto-refresh for {snap_name}: no updates found",
+                                f"daemon.go:460: gracefully waiting for hook {snap_name}.configure",
+                                f"stateengine.go:150: state ensure starting change {change_id + task_id}",
+                                f"taskrunner.go:271: change {change_id} task {task_id} done for {snap_name}",
+                                f"snapmgr.go:523: refresh candidates checked for {snap_name}",
                             ]
                         ),
                         pid=sys_pids.get("snapd", rng.randint(500, 2000)),
                     )
-                elif source_roll < 0.47:
+                elif source_roll < 0.45:
                     if not has_ntp_client:
                         continue
                     if is_rhel_like:
@@ -5627,7 +5640,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.51:
+                elif source_roll < 0.50:
                     # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))

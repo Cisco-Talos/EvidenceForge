@@ -1143,6 +1143,54 @@ class TestValidateConfig:
         assert [entry["app"] for entry in db_server] == ["multipathd"]
         assert [entry["app"] for entry in workstation] == ["packagekitd", "accounts-daemon"]
 
+    def test_extra_syslog_high_volume_daemons_avoid_exact_boilerplate(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        high_volume_apps = {
+            "dbus-daemon",
+            "rsyslogd",
+            "unattended-upgr",
+            "systemd-resolved",
+            "irqbalance",
+        }
+        old_exact_messages = {
+            "[system] Activating via systemd: service name='org.freedesktop.hostname1'",
+            "[system] Successfully activated service 'org.freedesktop.resolve1'",
+            "[system] Activating via systemd: service name='org.freedesktop.timedate1'",
+            '[origin software="rsyslogd"] rsyslogd was HUPed',
+            "Allowed origins are: o=Ubuntu,a=jammy",
+            "No packages found that can be upgraded unattended",
+            "dpkg --status-fd: processing triggers for man-db",
+            "Positive Trust Anchors: . IN DS 20326",
+            "Balancing is ineffective IRQs are pinned and balanced",
+        }
+
+        checked_apps = set()
+        for entry in programs:
+            app = entry.get("app")
+            if app not in high_volume_apps:
+                continue
+            checked_apps.add(app)
+            messages = entry.get("messages", [])
+            assert not old_exact_messages.intersection(messages)
+            assert any("{" in message for message in messages)
+            for message in messages:
+                rendered = render_extra_syslog_message(
+                    {**entry, "messages": [message]},
+                    random.Random(5),
+                    positional_value=123456,
+                    system_services=["sshd", "nginx"],
+                    values={"dns_server": "10.10.2.10"},
+                )
+                assert "{" not in rendered
+                assert "}" not in rendered
+
+        assert checked_apps == high_volume_apps
+
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism
 

@@ -29,15 +29,18 @@ programs:
   - app: dbus-daemon
     weight: 2
     messages:
-      - "[system] Activating via systemd: service name='org.freedesktop.hostname1'"
-      - "[system] Successfully activated service 'org.freedesktop.resolve1'"
-      - "[system] Activating via systemd: service name='org.freedesktop.timedate1'"
+      - "[system] Activating via systemd: service name='org.freedesktop.hostname1' unit='dbus-org.freedesktop.hostname1.service' requested by ':1.{}'"
+      - "[system] Successfully activated service 'org.freedesktop.resolve1' for ':1.{}'"
+      - "[system] Activating via systemd: service name='org.freedesktop.timedate1' unit='dbus-org.freedesktop.timedate1.service' requested by ':1.{}'"
+      - "[system] Successfully activated service 'org.freedesktop.locale1' for ':1.{}'"
+      - "[system] Activating via systemd: service name='org.freedesktop.login1' unit='dbus-org.freedesktop.login1.service' requested by ':1.{}'"
 
   - app: rsyslogd
     weight: 1
     messages:
-      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog'"
-      - '[origin software="rsyslogd"] rsyslogd was HUPed'
+      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {}"
+      - '[origin software="rsyslogd"] rsyslogd was HUPed after config reload id {}'
+      - "omfwd: remote syslog target stayed connected, action queue watermark {}"
 
   - app: sudo
     transient: true
@@ -130,8 +133,8 @@ programs:
         - unix-session
         - system-bus-name
     messages:
-      - "Registered Authentication Agent for {auth_subject}"
-      - "Unregistered Authentication Agent for {auth_subject}"
+      - "Registered Authentication Agent for {auth_subject}:{0} (system bus name :1.{0})"
+      - "Unregistered Authentication Agent for {auth_subject}:{0} (system bus name :1.{0})"
       - "Operator of unix-process:{} successfully authenticated as 'root'"
 
   - app: multipathd
@@ -173,19 +176,43 @@ programs:
   - app: unattended-upgr
     distro: ubuntu
     system_types: [server]
-    weight: 2
+    weight: 1
+    params:
+      origin_set:
+        - "o=Ubuntu,a=jammy-security"
+        - "o=Ubuntu,a=jammy-updates"
+        - "o=Ubuntu,a=jammy; o=Ubuntu,a=jammy-security"
+      package_name:
+        - openssl
+        - ca-certificates
+        - base-files
+        - libc6
+        - python3-apt
+        - tzdata
     messages:
-      - "Allowed origins are: o=Ubuntu,a=jammy"
-      - "No packages found that can be upgraded unattended"
-      - "dpkg --status-fd: processing triggers for man-db"
+      - "Allowed origins are: {origin_set}"
+      - "Checking for unattended upgrades from {origin_set}"
+      - "No packages found that can be upgraded unattended (run {})"
+      - "Package {package_name} kept back for phased update percentage {}"
+      - "dpkg --status-fd: processing triggers for man-db ({package_name})"
 
   - app: systemd-resolved
     distro: ubuntu
-    weight: 2
+    weight: 1
+    params:
+      feature_set:
+        - UDP
+        - TCP
+        - UDP+EDNS0
+      trust_anchor:
+        - "20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d"
+        - "38696 8 2 683d2d0acb8c9b712a1948b27f741219298d0a450d612c483af444a4c0fb2b16"
+        - "20326 8 1 2f6d2c6bdab2a2d15eb06fcddcb0b195"
     messages:
-      - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server {dns_server}."
-      - "Grace period over, resuming full feature set for DNS server {dns_server}."
-      - "Positive Trust Anchors: . IN DS 20326"
+      - "Using degraded feature set {feature_set} instead of UDP+EDNS0 for DNS server {dns_server} after transaction {0}."
+      - "Grace period over, resuming full feature set {feature_set} for DNS server {dns_server} after probe {0}."
+      - "Positive Trust Anchors: . IN DS {trust_anchor}"
+      - "Cache miss for transaction {}, retrying DNS server {dns_server} with {feature_set}."
 
   - app: thermald
     system_types: [workstation]
@@ -204,5 +231,16 @@ programs:
 
   - app: irqbalance
     weight: 1
+    params:
+      cpu:
+        - "0"
+        - "1"
+        - "2"
+        - "3"
+      numa_node:
+        - "0"
+        - "1"
     messages:
-      - "Balancing is ineffective IRQs are pinned and balanced"
+      - "Balancing is ineffective: IRQs are pinned by affinity policy on CPU {cpu} during sample {0}"
+      - "IRQ {} affinity hint keeps vector on CPU {cpu}"
+      - "NUMA node {numa_node}: no movable IRQs found during rebalance pass {0}"
