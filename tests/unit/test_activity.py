@@ -1601,6 +1601,38 @@ class TestActivityGenerator:
         assert event.process.image == process_name
         assert event.process.command_line == command_line
 
+    def test_generate_process_hosts_windows_batch_scripts_under_cmd(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Windows batch scripts should not become the process image."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = "0x12345"
+
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Program Files\nodejs\npm.cmd",
+            "cmd.exe /c npm run dev",
+        )
+
+        proc = state_manager.get_process(test_system.hostname, pid)
+        assert proc is not None
+        assert proc.image == r"C:\Windows\System32\cmd.exe"
+        assert proc.command_line == "cmd.exe /c npm run dev"
+
+        process_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+            and call[0][0].process
+            and call[0][0].process.pid == pid
+        )
+        assert process_event.process.image == r"C:\Windows\System32\cmd.exe"
+        assert process_event.process.command_line == "cmd.exe /c npm run dev"
+
     def test_generate_process_derives_user_current_directory(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

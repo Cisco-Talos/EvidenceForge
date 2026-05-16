@@ -65,6 +65,29 @@ def _swap_host_list_value(value: Any, original_ip: Any, visible_ip: Any) -> Any:
     return [visible_ip if item == original_ip else item for item in value]
 
 
+def _round_zeek_float(value: float) -> float:
+    """Round Zeek interval-like values to source-native microsecond precision."""
+    rounded = round(value, 6)
+    if rounded == 0 and value > 0:
+        return 0.000001
+    if rounded == 0 and value < 0:
+        return -0.000001
+    return rounded
+
+
+def _normalize_zeek_float_precision(value: Any) -> Any:
+    """Normalize floats in rendered Zeek JSON while preserving JSON structure."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        return _round_zeek_float(value)
+    if isinstance(value, list):
+        return [_normalize_zeek_float_precision(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize_zeek_float_precision(item) for key, item in value.items()}
+    return value
+
+
 def _sensor_variation_fraction(hostname: str, uid: Any, field: str, magnitude: float) -> float:
     """Return a deterministic signed per-sensor observation variation."""
     seed = _stable_seed(f"zeek_sensor_observation:{hostname}:{uid}:{field}")
@@ -641,9 +664,7 @@ class SensorMultiplexEmitter(LogEmitter):
         rendered = self._template.render(**template_context)
         try:
             data = json.loads(rendered)
-            # Round timestamp to 6 decimal places (Zeek standard)
-            if "ts" in data and isinstance(data["ts"], float):
-                data["ts"] = round(data["ts"], 6)
+            data = _normalize_zeek_float_precision(data)
             return json.dumps(data, separators=(",", ":"))
         except json.JSONDecodeError:
             return rendered.strip()

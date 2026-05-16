@@ -716,6 +716,25 @@ def _extract_image_from_command(command_line: str) -> str:
     return cleaned.split()[0]
 
 
+def _windows_script_host_process(
+    process_name: str,
+    command_line: str,
+) -> tuple[str, str]:
+    """Return the real Windows process image for batch-script execution."""
+    basename = ntpath.basename(process_name).lower()
+    if not basename.endswith((".cmd", ".bat")):
+        return process_name, command_line
+
+    host_image = r"C:\Windows\System32\cmd.exe"
+    stripped = command_line.strip()
+    command_lower = stripped.lower()
+    if command_lower.startswith(("cmd.exe ", r"c:\windows\system32\cmd.exe ")):
+        return host_image, command_line
+    if command_lower.startswith("cmd "):
+        return host_image, f"cmd.exe {stripped[4:]}"
+    return host_image, f"cmd.exe /c {stripped or ntpath.basename(process_name)}"
+
+
 def _windows_token_profile(username: str, integrity_level: str) -> tuple[str, str, str]:
     """Return source-native Windows token fields for a process owner."""
     normalized = username.upper().split("\\")[-1]
@@ -4824,6 +4843,11 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ProcessContext
 
         self.state_manager.set_current_time(time)
+        if _get_os_category(system.os) == "windows":
+            process_name, command_line = _windows_script_host_process(
+                process_name,
+                command_line,
+            )
 
         # Determine integrity level per UAC model:
         # - SYSTEM processes: "System" (handled in generate_system_process)
@@ -8102,6 +8126,12 @@ class ActivityGenerator:
             PID of the new process
         """
         from evidenceforge.events.contexts import ProcessContext
+
+        if _get_os_category(system.os) == "windows":
+            process_name, command_line = _windows_script_host_process(
+                process_name,
+                command_line,
+            )
 
         exe_name = ntpath.basename(process_name).lower()
         if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:

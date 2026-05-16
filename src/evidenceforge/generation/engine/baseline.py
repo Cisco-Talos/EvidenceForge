@@ -5540,7 +5540,7 @@ class BaselineMixin:
                         message=msg,
                         pid=sys_pids.get("timesyncd", rng.randint(400, 800)),
                     )
-                elif source_roll < 0.59:
+                elif source_roll < 0.51:
                     # Journald runtime statistics (max_size and type stable per host)
                     machine_id = self._machine_ids.get(system.hostname, "0" * 32)
                     _j_rng = random.Random(_stable_seed(f"journald:{system.hostname}"))
