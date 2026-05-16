@@ -65,7 +65,7 @@ At runtime it:
 8. Mounts staged input at `/logstash`.
 9. Mounts the SOF-ELK checkout at `/usr/local/sof-elk`.
 10. Writes parsed output to temp JSONL files.
-11. Fails on count mismatches, parser failure tags, missing required fields, or
+11. Fails on count mismatches, fatal parser tags, missing required fields, or
    missing DNS answers/TTLs when the raw input had them.
 
 Two containers per run are expected:
@@ -181,7 +181,7 @@ The failure report includes:
 - expected and observed counts
 - staged source paths
 - parsed output paths
-- failure tag counts by log type
+- fatal failure tag counts by log type
 - DNS failure counts by question type
 - whether each staged log type had a dedicated SOF-ELK filter
 - sample failed events with `event.original`
@@ -189,17 +189,30 @@ The failure report includes:
 This report is the main artifact to keep when triaging generated-data parser
 failures.
 
+## Parser Tag Policy
+
+External parser tags are fatal only when they indicate that the record was not
+parsed or required normalized fields are missing. Known optional enrichment
+misses are ignored in normal validation output; the parsed JSONL still preserves
+the raw parser-emitted tags for deep debugging.
+
+The first ignored optional enrichment tag is SOF-ELK `_grokparsefail_6200-01`
+on `zeek_dns`. SOF-ELK emits this when it cannot derive `dns.answers.ip` from
+`dns.answers.data`; non-address DNS answer types such as `NS`, `PTR`, `MX`, and
+`SOA` remain valid parsed DNS records.
+
 ## Current Medium Dataset Result
 
 The medium dataset can now be generated and ingested through the harness. In the
 current implementation, the pipeline discovers and emits JSONL for every staged
-EvidenceForge Zeek file present in the dataset, but validation fails because
-SOF-ELK tags some DNS records with `_grokparsefail_6200-01`.
+EvidenceForge Zeek file present in the dataset and validation passes when all
+required normalized fields are present.
 
 Observed in one run:
 
 - `zeek_conn`: 10,790 input lines, 10,790 parsed events, no parser failure tags
-- `zeek_dns`: 4,227 input lines, 4,227 parsed events, 341 parser failure tags
+- `zeek_dns`: 4,227 input lines, 4,227 parsed events; SOF-ELK emitted 341
+  `_grokparsefail_6200-01` optional enrichment tags on non-address answers
 - `zeek_http`: 593 input lines, 593 parsed events, no parser failure tags
 - `zeek_files`: 582 input lines, 582 parsed events, no parser failure tags
 - `zeek_ssl`: 1,128 input lines, 1,128 parsed events, no parser failure tags
@@ -207,12 +220,8 @@ Observed in one run:
 - `zeek_dhcp`: 28 input lines, 28 JSON-ingested events, no parser failure tags
 - `zeek_ntp`: 152 input lines, 152 JSON-ingested events, no parser failure tags
 - `zeek_ocsp`: 39 input lines, 39 JSON-ingested events, no parser failure tags
-- DNS failures by question type: `PTR` 194, `NS` 59, `MX` 55, `SOA` 33
 
-This is exactly the kind of generated-data finding the external-parser lane is
-intended to expose. Do not patch SOF-ELK filters to make this pass. Later work
-should decide whether EvidenceForge is emitting valid Zeek DNS records that
-SOF-ELK models too narrowly, or whether the emitter should change to match real
-Zeek output more closely. The `dhcp`, `ntp`, and `ocsp` counts above are
+The ignored Zeek DNS enrichment tags were observed on `PTR` 194, `NS` 59,
+`MX` 55, and `SOA` 33. The `dhcp`, `ntp`, and `ocsp` counts above are
 JSON-ingestion checks because the pinned SOF-ELK config does not include
 dedicated filters for those EvidenceForge Zeek types.

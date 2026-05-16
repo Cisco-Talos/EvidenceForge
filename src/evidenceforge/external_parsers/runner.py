@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from evidenceforge.external_parsers.sof_elk_zeek import ZEEK_LOG_SPECS
+from evidenceforge.external_parsers.tag_policy import SOF_ELK_ZEEK_VALIDATOR
 
-SOF_ELK_ZEEK_VALIDATOR = "sof-elk-zeek"
 VALIDATOR_ORDER = (SOF_ELK_ZEEK_VALIDATOR,)
 
 _LOG_FILE_SUFFIXES = {".alert", ".bash_history", ".history", ".json", ".log", ".xml"}

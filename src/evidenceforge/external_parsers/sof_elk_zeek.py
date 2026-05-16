@@ -36,6 +36,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.external_parsers.tag_policy import (
+    SOF_ELK_ZEEK_VALIDATOR,
+    classify_parser_tags,
+)
+
 SOF_ELK_REPO_URL = "https://github.com/philhagen/sof-elk.git"
 SOF_ELK_COMMIT = "517af9445574cc084cd5f4b80539fc244dab82b0"
 FILEBEAT_IMAGE = "docker.elastic.co/beats/filebeat:8.19.0"
@@ -58,13 +63,6 @@ SOF_ELK_FILTER_FILES = (
     "6276-zeek_weird.conf",
     "8000-postprocess-zeek.conf",
 )
-
-FAILURE_TAGS = {
-    "_dateparsefailure",
-    "_jsonparsefailure",
-    "_grokparsefailure",
-    "_rubyexception",
-}
 
 JsonObject = dict[str, Any]
 LogType = str
@@ -942,7 +940,7 @@ def _event_failures(
     if not isinstance(tags, list):
         failures.append(f"{prefix}: tags is not a list")
         tags = []
-    failure_tags = _failure_tags(tags)
+    failure_tags = _failure_tags(log_type, tags)
     if failure_tags:
         failures.append(f"{prefix}: parser failure tags present: {', '.join(failure_tags)}")
 
@@ -1021,11 +1019,12 @@ def _failure_event_summary(
     event: JsonObject,
     failures: list[str],
 ) -> JsonObject:
+    tags = event.get("tags", [])
     summary: JsonObject = {
         "log_type": log_type,
         "event_index": index,
         "failures": failures,
-        "tags": event.get("tags", []),
+        "tags": _failure_tags(log_type, tags) if isinstance(tags, list) else tags,
         "zeek_session_id": _get_path(event, "zeek.session_id"),
         "source_ip": _get_path(event, "source.ip"),
         "destination_ip": _get_path(event, "destination.ip"),
@@ -1053,7 +1052,7 @@ def _failure_tag_counts(
         for event in events_by_type.get(log_type, []):
             tags = event.get("tags", [])
             if isinstance(tags, list):
-                counts.update(_failure_tags(tags))
+                counts.update(_failure_tags(log_type, tags))
         counts_by_type[log_type] = dict(sorted(counts.items()))
     return counts_by_type
 
@@ -1064,18 +1063,20 @@ def _dns_failure_qtype_counts(
     counts: Counter[str] = Counter()
     for event in events_by_type.get("zeek_dns", []):
         tags = event.get("tags", [])
-        if not isinstance(tags, list) or not _failure_tags(tags):
+        if not isinstance(tags, list) or not _failure_tags("zeek_dns", tags):
             continue
         qtype = _get_path(event, "dns.question.type")
         counts[str(qtype or "unknown")] += 1
     return dict(sorted(counts.items()))
 
 
-def _failure_tags(tags: list[Any]) -> list[str]:
-    return sorted(
-        str(tag)
-        for tag in tags
-        if str(tag) in FAILURE_TAGS or str(tag).startswith("_grokparsefail")
+def _failure_tags(log_type: LogType, tags: list[Any]) -> list[str]:
+    return list(
+        classify_parser_tags(
+            validator=SOF_ELK_ZEEK_VALIDATOR,
+            log_type=log_type,
+            tags=tags,
+        ).fatal
     )
 
 

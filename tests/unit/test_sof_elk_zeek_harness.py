@@ -239,7 +239,14 @@ def test_validate_parsed_output_accepts_expected_sof_elk_fields(
     assert len(events_by_type["zeek_dns"]) == 2
 
 
-def test_validate_parsed_output_reports_parser_failure_tags(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "tag",
+    ["_jsonparsefailure", "_dateparsefailure", "_rubyexception"],
+)
+def test_validate_parsed_output_reports_fatal_parser_tags(
+    tmp_path: Path,
+    tag: str,
+) -> None:
     manifest = ZeekStageManifest(
         logstash_root=tmp_path / "logstash",
         logs=(
@@ -254,18 +261,91 @@ def test_validate_parsed_output_reports_parser_failure_tags(tmp_path: Path) -> N
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
     failed_event = _parsed_conn("BROKEN")
-    failed_event["tags"] = ["zeek", "_jsonparsefailure"]
+    failed_event["tags"] = ["zeek", tag]
     _write_jsonl(parsed_dir / "zeek_conn.jsonl", [failed_event])
 
-    with pytest.raises(SofElkParserError, match="_jsonparsefailure") as excinfo:
+    with pytest.raises(SofElkParserError, match=tag) as excinfo:
         validate_parsed_output(manifest, parsed_dir)
 
     report_path = parsed_dir / FAILURE_REPORT_FILENAME
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert str(report_path) in str(excinfo.value)
     assert "failure_messages" not in report
-    assert report["failure_tag_counts"]["zeek_conn"]["_jsonparsefailure"] == 1
+    assert report["failure_tag_counts"]["zeek_conn"][tag] == 1
     assert report["sample_failures"][0]["zeek_session_id"] == "BROKEN"
+
+
+def test_validate_parsed_output_ignores_optional_dns_answer_ip_extraction_tag(
+    tmp_path: Path,
+) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "dns.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "dns.log",
+                log_type="zeek_dns",
+                record_count=1,
+            ),
+        ),
+        dns_expectations={
+            ("DNS1", "licdn.com"): DnsExpectation(answers=True, ttls=True),
+        },
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_dns("DNS1", "licdn.com", with_answers=True)
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_grokparsefail_6200-01")
+    dns = event["dns"]
+    assert isinstance(dns, dict)
+    question = dns["question"]
+    answers = dns["answers"]
+    assert isinstance(question, dict)
+    assert isinstance(answers, dict)
+    question["type"] = "NS"
+    answers["data"] = ["ns1.licdn.com", "ns2.licdn.com"]
+    answers["ttl"] = [60.0, 60.0]
+    _write_jsonl(parsed_dir / "zeek_dns.jsonl", [event])
+
+    events_by_type = validate_parsed_output(manifest, parsed_dir)
+
+    assert len(events_by_type["zeek_dns"]) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_parsed_output_reports_unclassified_grokparsefail_tags(
+    tmp_path: Path,
+) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "dns.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "dns.log",
+                log_type="zeek_dns",
+                record_count=1,
+            ),
+        ),
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    failed_event = _parsed_dns("DNS1", "www.example.com", with_answers=True)
+    tags = failed_event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_grokparsefail_6200-01")
+    tags.append("_grokparsefail_6200-99")
+    _write_jsonl(parsed_dir / "zeek_dns.jsonl", [failed_event])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefail_6200-99"):
+        validate_parsed_output(manifest, parsed_dir)
+
+    report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert "_grokparsefail_6200-01" not in report["failure_tag_counts"]["zeek_dns"]
+    assert report["failure_tag_counts"]["zeek_dns"]["_grokparsefail_6200-99"] == 1
+    assert report["sample_failures"][0]["tags"] == ["_grokparsefail_6200-99"]
+    assert report["dns_failure_qtype_counts"]["A"] == 1
 
 
 def test_validate_parsed_output_reports_dns_answer_loss(tmp_path: Path) -> None:
