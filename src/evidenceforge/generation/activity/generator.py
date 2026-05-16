@@ -9214,9 +9214,18 @@ class ActivityGenerator:
             and target_username.split("\\")[-1].split("@", 1)[0].lower() in _LINUX_LOCAL_ACCOUNTS
         ):
             return
+        subject_user = self._coerce_windows_explicit_credentials_subject(
+            user,
+            system,
+            target_username,
+        )
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
-        subject_logon_id = self._ensure_explicit_credentials_subject_logon(user, system, time)
-        subject = self._account_subject_fields(user.username, system, subject_logon_id)
+        subject_logon_id = self._ensure_explicit_credentials_subject_logon(
+            subject_user,
+            system,
+            time,
+        )
+        subject = self._account_subject_fields(subject_user.username, system, subject_logon_id)
         process_pid = process_pid or 0
         if process_pid > 0 and process_name:
             running_process = self.state_manager.get_process(system.hostname, process_pid)
@@ -9232,7 +9241,7 @@ class ActivityGenerator:
             if scenario_start is not None and ensure_utc(process_time) < ensure_utc(scenario_start):
                 process_time = time - timedelta(milliseconds=500)
             process_pid = self.generate_process(
-                user,
+                subject_user,
                 system,
                 process_time,
                 subject_logon_id,
@@ -9267,6 +9276,45 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+    def _coerce_windows_explicit_credentials_subject(
+        self,
+        user: User,
+        system: System,
+        target_username: str,
+    ) -> User:
+        """Return a Windows-native subject for 4648 when the narrative actor is Unix-local."""
+        if _get_os_category(system.os) != "windows":
+            return user
+        if user.username.lower() not in _LINUX_LOCAL_ACCOUNTS:
+            return user
+
+        candidate = target_username.split("\\")[-1].split("@", 1)[0]
+        known_users = getattr(self, "_users_by_username", {})
+        if candidate and candidate.lower() not in _LINUX_LOCAL_ACCOUNTS:
+            if candidate in known_users:
+                return known_users[candidate]
+            return User(
+                username=candidate,
+                full_name=candidate,
+                email=f"{candidate}@{self._valid_fallback_email_domain()}",
+            )
+
+        assigned_user = getattr(system, "assigned_user", "")
+        if assigned_user:
+            assigned = known_users.get(assigned_user)
+            if assigned is not None:
+                return assigned
+            return User(
+                username=assigned_user,
+                full_name=assigned_user,
+                email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
+            )
+        return User(
+            username="Administrator",
+            full_name="Administrator",
+            email=f"administrator@{self._valid_fallback_email_domain()}",
+        )
 
     def _explicit_credentials_source_ip(self, system: System, target_server: str) -> str:
         """Return source network metadata for remote explicit-credential use."""
@@ -10899,7 +10947,7 @@ class ActivityGenerator:
             for idx, message in enumerate(messages):
                 self.generate_syslog_event(
                     system=system,
-                    time=time + timedelta(milliseconds=idx * 120),
+                    time=time + timedelta(milliseconds=idx * 1500),
                     app_name="dhclient",
                     message=message,
                     pid=dhclient_pid,

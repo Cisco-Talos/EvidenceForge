@@ -721,18 +721,24 @@ class TestDhcpLease:
             msg_types=["REQUEST", "ACK"],
         )
 
-        syslog_messages = [
-            call[0][0].syslog.message
+        syslog_events = [
+            call[0][0]
             for call in mock_emitters["syslog"].emit.call_args_list
             if call[0][0].event_type == "syslog"
             and call[0][0].syslog is not None
             and call[0][0].syslog.app_name == "dhclient"
         ]
+        syslog_messages = [event.syslog.message for event in syslog_events]
         assert syslog_messages == [
             "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
             "bound to 10.0.10.2 -- renewal in 3600 seconds.",
         ]
+        gaps = [
+            syslog_events[idx].timestamp - syslog_events[idx - 1].timestamp
+            for idx in range(1, len(syslog_events))
+        ]
+        assert min(gaps) >= timedelta(milliseconds=1500)
 
 
 class TestAnonymousLogon:

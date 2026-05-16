@@ -764,12 +764,24 @@ class EmitterSetupMixin:
             _advance_boot_clock()
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
-        pids["systemd"] = _c(
-            0,
-            "/usr/lib/systemd/systemd",
-            "/usr/lib/systemd/systemd --system --deserialize 26",
-            "root",
+        import uuid
+
+        from evidenceforge.models.state import RunningProcess
+
+        systemd_object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"linux-systemd:{hn}"))
+        sm.state.running_processes[(hn, 1)] = RunningProcess(
+            pid=1,
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system --deserialize 26",
+            username="root",
+            system=hn,
+            start_time=sm.state.current_time,
+            integrity_level="System",
+            ecar_object_id=systemd_object_id,
         )
+        sm._process_object_ids[(hn, 1)] = systemd_object_id
+        pids["systemd"] = 1
 
         journal_path = "/usr/lib/systemd/systemd-journald"
         pids["journald"] = _c(pids["systemd"], journal_path, journal_path, "root")

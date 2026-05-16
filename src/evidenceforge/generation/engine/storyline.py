@@ -3408,14 +3408,33 @@ class StorylineMixin:
         Detects common output file patterns in PowerShell, cmd, and Linux commands.
         Returns the file path if found, None otherwise.
         """
+        try:
+            parts = shlex.split(command_line, posix=os_category != "windows")
+        except ValueError:
+            parts = command_line.split()
+        command_name = parts[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() if parts else ""
+
         patterns = [
             r'Export-Csv\s+[\'"]?([^\s\'">;]+)',  # PowerShell Export-Csv
             r'-OutFile\s+[\'"]?([^\s\'">;]+)',  # PowerShell -OutFile
             r'Out-File\s+[\'"]?([^\s\'">;]+)',  # PowerShell Out-File
             r'>\s*[\'"]?([^\s\'">;]+)',  # Shell redirect >
-            r'-o\s+[\'"]?([^\s\'">;]+)',  # Common -o flag
             r'--output[= ]\s*[\'"]?([^\s\'">;]+)',  # --output flag
         ]
+        short_o_output_tools = {
+            "curl",
+            "wget",
+            "nmap",
+            "tar",
+            "zip",
+            "7z",
+            "mysql",
+            "mysqldump",
+            "psql",
+            "sqlcmd",
+        }
+        if command_name in short_o_output_tools:
+            patterns.append(r'-o\s+[\'"]?([^\s\'">;]+)')  # Tool-specific output flag
         for pattern in patterns:
             match = re.search(pattern, command_line, re.IGNORECASE)
             if match:

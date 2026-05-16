@@ -3233,6 +3233,43 @@ class TestActivityGenerator:
         ]
         assert all(event.event_type != "explicit_credentials" for event in emitted)
 
+    def test_generate_explicit_credentials_coerces_linux_subject_on_windows(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """A Unix-local narrative actor should not bootstrap a Windows root logon."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        windows_user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+            enabled=True,
+        )
+        activity_gen._users_by_username = {windows_user.username: windows_user}
+
+        activity_gen.generate_explicit_credentials(
+            user=root_user,
+            system=test_system,
+            time=timestamp,
+            target_username=windows_user.username,
+            target_server="DC-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+            source_ip="10.10.3.10",
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        logon = next(event for event in emitted if event.event_type == "logon")
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert logon.auth.username == windows_user.username
+        assert process.auth.username == windows_user.username
+        assert explicit.auth.subject_username == windows_user.username
+        assert all(getattr(event.auth, "username", "") != "root" for event in emitted)
+
     def test_generate_process_with_parent_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
