@@ -1,7 +1,7 @@
 # External Parser Validation
 
 EvidenceForge has an optional external-parser lane for checking generated logs
-against third-party parsers. The first harness covers SOF-ELK Zeek ingestion.
+against third-party parsers. The first harness covers SOF-ELK ingestion.
 
 The goal is not to prove that our JSON is valid JSON. The goal is to stage
 generated files the way SOF-ELK expects to collect them, run SOF-ELK's own
@@ -20,11 +20,13 @@ Supported in the V1 harness:
   currently watch: `ntp`, `ocsp`, `packet_filter`, `pe`, and `reporter`
 - SOF-ELK Logstash filter files copied unchanged from a pinned checkout
 - JSONL output instead of Elasticsearch
+- Cisco ASA firewall logs staged through SOF-ELK's syslog archive path with
+  `1100-preprocess-syslog.conf` and `6018-cisco_asa.conf`
 
 Not yet covered:
 
 - Windows XML logs
-- ASA, IDS, syslog, proxy, web, eCAR
+- IDS, syslog, proxy, web, eCAR
 - Elasticsearch output behavior
 
 SOF-ELK has dedicated filters for the Zeek types it supports today, such as
@@ -43,7 +45,9 @@ and sends all of them through the containerized SOF-ELK path.
 
 ## How It Works
 
-The harness lives in `src/evidenceforge/external_parsers/sof_elk_zeek.py`.
+The Zeek harness lives in `src/evidenceforge/external_parsers/sof_elk_zeek.py`.
+Non-Zeek SOF-ELK source harnesses live in
+`src/evidenceforge/external_parsers/sof_elk_sources.py`.
 The dataset runner lives in `scripts/external_parser.py` and auto-detects which
 validators apply to the generated files under a `data/` directory.
 
@@ -52,14 +56,16 @@ At runtime it:
 1. Scans the generated `data/` directory to determine which validators apply.
 2. Warns about generated log families that do not yet have an external parser
    validator.
-3. Runs every matching validator. Today that means SOF-ELK for Zeek files. The
+3. Runs every matching validator. Today that means SOF-ELK for Zeek and Cisco
+   ASA files. The
    validator phase shows stage progress plus host/sensor, log family, and
    subtype progress while parsed records are checked after the third-party
    parser has produced output.
 4. Clones SOF-ELK at the pinned commit into an external cache, not into this
    repository.
-5. Stages generated Zeek files under a temporary SOF-ELK-style tree:
-   `/logstash/zeek/<sensor>/<zeek-log-name>.log`.
+5. Stages generated files under temporary SOF-ELK-style trees such as
+   `/logstash/zeek/<sensor>/<zeek-log-name>.log` and
+   `/logstash/syslog/<sensor>/cisco_asa.log`.
 6. Builds a temporary Logstash pipeline:
    - a small Beats input wrapper
    - unchanged SOF-ELK filter files
@@ -80,12 +86,14 @@ Two containers per run are expected:
 - `eforge-logstash-<runid>`
 - `eforge-filebeat-<runid>`
 
-Both are removed in a `finally` block. They are labeled with
-`evidenceforge.external_parser=sof-elk-zeek` so interrupted leftovers are easy
-to find:
+Both are removed in a `finally` block. They are labeled with the validator name,
+such as `evidenceforge.external_parser=sof-elk-zeek` or
+`evidenceforge.external_parser=sof-elk-cisco-asa`, so interrupted leftovers are
+easy to find:
 
 ```bash
 docker ps -a --filter label=evidenceforge.external_parser=sof-elk-zeek
+docker ps -a --filter label=evidenceforge.external_parser=sof-elk-cisco-asa
 ```
 
 ## Staging Rules
@@ -116,6 +124,13 @@ directory; flat generated files are adapted into a synthetic `default` sensor.
 
 The same basename mapping applies inside real sensor directories, for example
 `zeek-core/http.json` stages to `/logstash/zeek/zeek-core/http.log`.
+
+Cisco ASA files stage through SOF-ELK's recursive syslog file input:
+
+| EvidenceForge file | Staged SOF-ELK file |
+| --- | --- |
+| `<sensor>/cisco_asa.log` | `/logstash/syslog/<sensor>/cisco_asa.log` |
+| `cisco_asa.log` | `/logstash/syslog/default/cisco_asa.log` |
 
 ## Commands
 
@@ -174,7 +189,7 @@ If unset, the harness uses `$XDG_CACHE_HOME/evidenceforge/external-parsers` or
 ## Outputs And Failure Reports
 
 Given a runner work directory, each validator writes under its own subdirectory
-such as `sof-elk-zeek/`. Useful SOF-ELK Zeek artifacts are:
+such as `sof-elk-zeek/` or `sof-elk-cisco-asa/`. Useful SOF-ELK artifacts are:
 
 | Path | Purpose |
 | --- | --- |
@@ -187,6 +202,9 @@ such as `sof-elk-zeek/`. Useful SOF-ELK Zeek artifacts are:
 | `sof-elk-zeek/parsed/sof_elk_parser_failures.json` | Structured failure report when validation fails |
 | `sof-elk-zeek/pipeline-logs/filebeat.log` | Filebeat container logs |
 | `sof-elk-zeek/pipeline-logs/logstash.log` | Logstash container logs |
+| `sof-elk-cisco-asa/stage/logstash/syslog/...` | ASA files as SOF-ELK sees them |
+| `sof-elk-cisco-asa/parsed/events.jsonl` | Parsed ASA events |
+| `sof-elk-cisco-asa/parsed/sof_elk_parser_failures.json` | Structured ASA failure report when validation fails |
 
 The failure report includes:
 

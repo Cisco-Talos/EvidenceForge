@@ -48,6 +48,11 @@ from evidenceforge.external_parsers.runner import (
     detect_external_parser_plan,
     unsupported_summary,
 )
+from evidenceforge.external_parsers.sof_elk_sources import (
+    SOF_ELK_SOURCE_SPECS_BY_VALIDATOR,
+    SofElkSourceResult,
+    run_sof_elk_source_parser,
+)
 from evidenceforge.external_parsers.sof_elk_zeek import (
     FAILURE_REPORT_FILENAME,
     SofElkHarnessError,
@@ -188,7 +193,8 @@ def _run_validator(
     timeout: int,
     runtime: str | None,
 ) -> int:
-    if validator != SOF_ELK_ZEEK_VALIDATOR:
+    display_name = _validator_display_name(validator)
+    if validator != SOF_ELK_ZEEK_VALIDATOR and validator not in SOF_ELK_SOURCE_SPECS_BY_VALIDATOR:
         console.print(f"[yellow]Warning:[/yellow] unsupported validator skipped: {validator}")
         return 0
 
@@ -201,7 +207,7 @@ def _run_validator(
         console=console,
         transient=False,
     ) as progress:
-        stage_task = progress.add_task("Validator SOF-ELK Zeek", total=VALIDATOR_STEP_TOTAL)
+        stage_task = progress.add_task(f"Validator {display_name}", total=VALIDATOR_STEP_TOTAL)
         host_task = progress.add_task("Host pending", total=1)
         logtype_task = progress.add_task("Logtype pending", total=1)
         subtype_task = progress.add_task("Subtype pending", total=1)
@@ -212,7 +218,7 @@ def _run_validator(
                 progress.update(
                     stage_task,
                     advance=0 if description == "Checking parsed output" else 1,
-                    description=f"Validator SOF-ELK Zeek: {description}",
+                    description=f"Validator {display_name}: {description}",
                 )
             elif event_type == "validator_scope_progress":
                 host = str(data["host"])
@@ -244,14 +250,25 @@ def _run_validator(
                 )
 
         try:
-            result = run_sof_elk_zeek_parser(
-                data_dir,
-                work_dir,
-                cache_dir=cache_dir,
-                timeout_seconds=timeout,
-                runtime=runtime,
-                progress_callback=progress_callback,
-            )
+            if validator == SOF_ELK_ZEEK_VALIDATOR:
+                result: SofElkZeekResult | SofElkSourceResult = run_sof_elk_zeek_parser(
+                    data_dir,
+                    work_dir,
+                    cache_dir=cache_dir,
+                    timeout_seconds=timeout,
+                    runtime=runtime,
+                    progress_callback=progress_callback,
+                )
+            else:
+                result = run_sof_elk_source_parser(
+                    data_dir,
+                    work_dir,
+                    SOF_ELK_SOURCE_SPECS_BY_VALIDATOR[validator],
+                    cache_dir=cache_dir,
+                    timeout_seconds=timeout,
+                    runtime=runtime,
+                    progress_callback=progress_callback,
+                )
         except SofElkParserError as exc:
             progress.stop()
             error_console.print(f"\n[bold red]FAIL:[/bold red] {exc}")
@@ -264,13 +281,20 @@ def _run_validator(
             _print_artifact_paths(work_dir)
             return 1
 
-    _print_success(result)
+    _print_success(result, display_name)
     _print_artifact_paths(work_dir)
     return 0
 
 
-def _print_success(result: SofElkZeekResult) -> None:
-    console.print("\n[bold green]PASS:[/bold green] SOF-ELK parsed staged Zeek records")
+def _validator_display_name(validator: str) -> str:
+    if validator == SOF_ELK_ZEEK_VALIDATOR:
+        return "SOF-ELK Zeek"
+    spec = SOF_ELK_SOURCE_SPECS_BY_VALIDATOR.get(validator)
+    return spec.display_name if spec else validator
+
+
+def _print_success(result: SofElkZeekResult | SofElkSourceResult, display_name: str) -> None:
+    console.print(f"\n[bold green]PASS:[/bold green] {display_name} parsed staged records")
     console.print(f"Expected counts: {result.manifest.expected_counts}")
     console.print(
         "Observed counts: "
@@ -299,7 +323,7 @@ def _print_failure_report(report_path: Path) -> None:
 
 def _print_artifact_paths(work_dir: Path) -> None:
     console.print("\n[bold]Artifacts:[/bold]")
-    console.print(f"  Staged input: {work_dir / 'stage' / 'logstash' / 'zeek'}")
+    console.print(f"  Staged input: {work_dir / 'stage' / 'logstash'}")
     console.print(f"  Parsed JSONL: {work_dir / 'parsed'}")
     console.print(f"  Pipeline logs: {work_dir / 'pipeline-logs'}")
     console.print(f"  Runtime config: {work_dir / 'runtime-config'}")

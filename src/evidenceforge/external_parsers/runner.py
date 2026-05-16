@@ -28,10 +28,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from evidenceforge.external_parsers.sof_elk_sources import SOF_ELK_SOURCE_SPECS_BY_VALIDATOR
 from evidenceforge.external_parsers.sof_elk_zeek import ZEEK_LOG_SPECS
-from evidenceforge.external_parsers.tag_policy import SOF_ELK_ZEEK_VALIDATOR
+from evidenceforge.external_parsers.tag_policy import (
+    SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_ZEEK_VALIDATOR,
+)
 
-VALIDATOR_ORDER = (SOF_ELK_ZEEK_VALIDATOR,)
+VALIDATOR_ORDER = (SOF_ELK_ZEEK_VALIDATOR, SOF_ELK_CISCO_ASA_VALIDATOR)
 
 _LOG_FILE_SUFFIXES = {".alert", ".bash_history", ".history", ".json", ".log", ".xml"}
 _UNSUPPORTED_FILE_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
@@ -39,7 +43,6 @@ _UNSUPPORTED_FILE_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("windows_event_sysmon.xml", "windows events", "sysmon", "windows_event_sysmon"),
     ("syslog.log", "syslog", "linux", "syslog"),
     ("snort_alert.log", "ids", "snort", "snort_alert"),
-    ("cisco_asa.log", "firewall", "cisco_asa", "cisco_asa"),
     ("proxy_access.log", "proxy", "access", "proxy_access"),
     ("web_access.log", "web", "access", "web_access"),
     ("ecar.json", "ecar", "ecar", "ecar"),
@@ -109,6 +112,19 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
                     subtype=subtype,
                     format_name=spec.log_type,
                     validator=SOF_ELK_ZEEK_VALIDATOR,
+                )
+
+    for spec in SOF_ELK_SOURCE_SPECS_BY_VALIDATOR.values():
+        for source_name in spec.source_names:
+            for path in sorted(data_dir.rglob(source_name)):
+                _add_detected_log(
+                    logs_by_path,
+                    data_dir=data_dir,
+                    path=path,
+                    logtype=spec.logtype,
+                    subtype=spec.subtype,
+                    format_name=spec.format_name,
+                    validator=spec.validator,
                 )
 
     for filename, logtype, subtype, format_name in _UNSUPPORTED_FILE_PATTERNS:

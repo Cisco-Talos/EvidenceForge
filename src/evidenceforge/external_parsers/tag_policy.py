@@ -29,6 +29,7 @@ from enum import StrEnum
 from typing import Any
 
 SOF_ELK_ZEEK_VALIDATOR = "sof-elk-zeek"
+SOF_ELK_CISCO_ASA_VALIDATOR = "sof-elk-cisco-asa"
 
 _DEFAULT_FATAL_TAGS = frozenset(
     {
@@ -78,6 +79,17 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         reason=(
             "Optional dns.answers.ip extraction from dns.answers.data. Non-address DNS "
             "answer types such as NS, PTR, MX, and SOA remain valid parsed records."
+        ),
+    ),
+    ParserTagRule(
+        validator=SOF_ELK_CISCO_ASA_VALIDATOR,
+        log_type="cisco_asa",
+        tag="_grokparsefailure_1100-03",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/1100-preprocess-syslog.conf",
+        reason=(
+            "Optional archive path-year extraction after a BSD/RFC3164 syslog timestamp. "
+            "Cisco ASA parsing can still succeed without a year-bearing directory name."
         ),
     ),
 )

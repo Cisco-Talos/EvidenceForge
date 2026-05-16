@@ -27,6 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from evidenceforge.external_parsers.runner import (
+    SOF_ELK_CISCO_ASA_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
     detect_external_parser_plan,
     group_logs_for_progress,
@@ -51,11 +52,18 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         "whoami\n",
         encoding="utf-8",
     )
+    (data_dir / "fw-01.example.test").mkdir()
+    (data_dir / "fw-01.example.test" / "cisco_asa.log").write_text(
+        "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 7 "
+        "for inside:10.0.10.5/54321 to outside:198.51.100.10/443\n",
+        encoding="utf-8",
+    )
 
     plan = detect_external_parser_plan(data_dir)
 
-    assert plan.validators == (SOF_ELK_ZEEK_VALIDATOR,)
+    assert plan.validators == (SOF_ELK_ZEEK_VALIDATOR, SOF_ELK_CISCO_ASA_VALIDATOR)
     assert {(log.logtype, log.subtype) for log in plan.supported_logs} == {
+        ("firewall", "cisco_asa"),
         ("zeek", "conn"),
         ("zeek", "http"),
     }

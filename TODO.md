@@ -36,6 +36,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [ ] **IN PROGRESS** Add SOF-ELK external parser support for Cisco ASA logs, web access logs, and Linux syslog in priority order, committing each source after the harness can surface parse issues with actionable record context.
+  - [x] Cisco ASA — staged `cisco_asa.log` through SOF-ELK's syslog archive Filebeat input plus `1100-preprocess-syslog.conf` and `6018-cisco_asa.conf`; captured `event.original`; ignored non-fatal `_grokparsefailure_1100-03` path-year diagnostics; unit checks and a two-record container smoke test passed.
+  - [ ] Web access
+  - [ ] Linux syslog
 - [x] Strengthen SOF-ELK Zeek parser coverage — added an all-Zeek-type external-parser smoke test that sends every current EvidenceForge Zeek output type through SOF-ELK, plus a unit guard tying harness specs to the Zeek emitter registry and docs clarifying scenario subset vs coverage contract.
 - [x] Add external-parser tag policy — treat known optional enrichment tags like SOF-ELK `_grokparsefail_6200-01` as ignored diagnostics while keeping true parser failures fatal.
 - [x] Remove redundant SOF-ELK parser report failure message list — keep aggregate counts and detailed sample failures, while preserving the short CLI exception preview.
