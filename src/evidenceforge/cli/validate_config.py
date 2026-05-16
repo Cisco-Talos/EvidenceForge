@@ -234,7 +234,11 @@ def validate_config() -> ValidationResult:
             },
         },
         "activity/endpoint_noise.yaml": {
-            "dict_fields": {"windows_scheduled_processes", "registry_noise"},
+            "dict_fields": {
+                "windows_scheduled_processes",
+                "registry_noise",
+                "ecar_flow_identity",
+            },
         },
         "activity/host_activity_profiles.yaml": {
             "dict_fields": {

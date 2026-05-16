@@ -69,6 +69,12 @@ class TestValidateConfig:
                         "suppress_roles": ["domain_controller"],
                     }
                 },
+                "ecar_flow_identity": {
+                    "user_process_probability": 0.88,
+                    "service_process_probability": 0.48,
+                    "root_process_probability": 0.42,
+                    "inbound_listener_probability": 0.36,
+                },
             }
 
         monkeypatch.setattr(endpoint_noise, "load_endpoint_noise", load_invalid_endpoint_noise)

@@ -29,6 +29,7 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
@@ -74,6 +75,23 @@ _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
     "%%2313": "bad_password",
 }
 
+_SERVICE_PRINCIPAL_NAMES = {
+    "system",
+    "local service",
+    "network service",
+    "nt authority\\system",
+    "nt authority\\local service",
+    "nt authority\\network service",
+    "apache",
+    "mysql",
+    "nginx",
+    "postgres",
+    "postfix",
+    "squid",
+    "sshd",
+    "www-data",
+}
+
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     """Extract timestamp_ms for chronological per-host eCAR output sorting."""
@@ -94,6 +112,29 @@ def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
         return _ECAR_FAILURE_REASON_BY_SUBSTATUS[substatus]
     reason = str(getattr(auth, "failure_reason", "") or "")
     return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
+
+
+def _ecar_probability_enabled(key: str, probability: float) -> bool:
+    """Return whether a stable per-record probability gate is enabled."""
+    clamped = max(0.0, min(1.0, float(probability)))
+    if clamped <= 0.0:
+        return False
+    if clamped >= 1.0:
+        return True
+    return (_stable_seed(key) % 10_000) / 10_000.0 < clamped
+
+
+def _flow_principal_probability(username: str, direction: str) -> float:
+    """Return the configured probability for FLOW principal attribution."""
+    cfg = ecar_flow_identity_config()
+    normalized = username.strip().lower()
+    if direction == "INBOUND":
+        return float(cfg.get("inbound_listener_probability", 0.36))
+    if normalized == "root":
+        return float(cfg.get("root_process_probability", 0.42))
+    if normalized in _SERVICE_PRINCIPAL_NAMES:
+        return float(cfg.get("service_process_probability", 0.48))
+    return float(cfg.get("user_process_probability", 0.88))
 
 
 class EcarEmitter(HostMultiplexEmitter):
@@ -495,6 +536,14 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.src_host),
             }
+            principal = self._flow_principal_for_process(
+                event,
+                event.src_host,
+                source_proc,
+                "OUTBOUND",
+            )
+            if principal:
+                event_data["principal"] = principal
             self._apply_edr_context(event_data, event)
             self.emit_event(event_data)
 
@@ -536,8 +585,41 @@ class EcarEmitter(HostMultiplexEmitter):
             if not listener_observed:
                 event_data["outcome"] = "failure"
                 event_data["connection_state"] = net.conn_state
+            else:
+                inbound_proc = self._lookup_running_process(event.dst_host, inbound_pid)
+                principal = self._flow_principal_for_process(
+                    event,
+                    event.dst_host,
+                    inbound_proc,
+                    "INBOUND",
+                )
+                if principal:
+                    event_data["principal"] = principal
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    def _flow_principal_for_process(
+        self,
+        event: SecurityEvent,
+        host: HostContext | None,
+        process: Any | None,
+        direction: str,
+    ) -> str:
+        """Return a source-native mixed FLOW principal attribution value."""
+        if host is None or process is None:
+            return ""
+        username = str(getattr(process, "username", "") or "").strip()
+        if not username or username == "-":
+            return ""
+        pid = int(getattr(process, "pid", -1) or -1)
+        net = event.network
+        probability = _flow_principal_probability(username, direction)
+        key = (
+            f"ecar_flow_principal:{direction}:{host.hostname}:{pid}:"
+            f"{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
+            f"{int(event.timestamp.timestamp() * 1000)}"
+        )
+        return username if _ecar_probability_enabled(key, probability) else ""
 
     def _lookup_running_process(self, host: HostContext, pid: int) -> Any | None:
         """Read a process from attached state when a connection only carries a PID."""

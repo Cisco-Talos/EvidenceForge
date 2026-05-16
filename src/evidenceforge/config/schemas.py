@@ -1259,11 +1259,21 @@ class RegistryNoiseConfig(BaseModel, extra="forbid"):
     dhcp_interface_values: DhcpInterfaceRegistryNoiseConfig
 
 
+class EcarFlowIdentityConfig(BaseModel, extra="forbid"):
+    """eCAR FLOW principal-attribution probability policy."""
+
+    user_process_probability: float = Field(ge=0.0, le=1.0)
+    service_process_probability: float = Field(ge=0.0, le=1.0)
+    root_process_probability: float = Field(ge=0.0, le=1.0)
+    inbound_listener_probability: float = Field(ge=0.0, le=1.0)
+
+
 class EndpointNoiseConfig(BaseModel, extra="forbid"):
     """Root schema for endpoint_noise.yaml."""
 
     windows_scheduled_processes: WindowsScheduledProcessNoiseConfig
     registry_noise: RegistryNoiseConfig
+    ecar_flow_identity: EcarFlowIdentityConfig
 
 
 # --- Observation Profiles ---

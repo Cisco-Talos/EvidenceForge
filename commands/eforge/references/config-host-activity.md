@@ -330,7 +330,7 @@ scheduled_stale_credentials:
 
 ## Endpoint Noise (`endpoint_noise.yaml`)
 
-Controls endpoint background timing and registry-emission policies that are too source-specific for scenario YAML. Use it to tune routine Windows scheduled-process spacing and whether DHCP interface registry values appear as ambient Sysmon/EDR noise.
+Controls endpoint background timing, registry-emission, and EDR attribution policies that are too source-specific for scenario YAML. Use it to tune routine Windows scheduled-process spacing, whether DHCP interface registry values appear as ambient Sysmon/EDR noise, and how often eCAR FLOW rows expose process/user principal context.
 
 ```yaml
 windows_scheduled_processes:
@@ -351,11 +351,19 @@ registry_noise:
     emit_on_lease_events: true
     suppress_system_types: [server, domain_controller]
     suppress_roles: [domain_controller, dns_server, file_server, web_server]
+
+ecar_flow_identity:
+  user_process_probability: 0.88
+  service_process_probability: 0.48
+  root_process_probability: 0.42
+  inbound_listener_probability: 0.36
 ```
 
 `windows_scheduled_processes` replaces hour-end clamping with profile-driven trigger windows, per-host phase offsets, jitter, and skips. Keep `trigger_window_end_seconds` comfortably below 3599 to avoid synthetic `xx:59:59` clusters.
 
-`registry_noise.dhcp_interface_values` reserves DHCP interface registry writes for actual DHCP lease/reconfigure activity. Static infrastructure roles should stay in `suppress_system_types` or `suppress_roles` so they do not repeatedly rewrite DHCP values as ambient registry noise. Run `eforge validate-config` after overlay changes; it rejects inverted ranges, empty value-name lists, and invalid probabilities.
+`registry_noise.dhcp_interface_values` reserves DHCP interface registry writes for actual DHCP lease/reconfigure activity. Static infrastructure roles should stay in `suppress_system_types` or `suppress_roles` so they do not repeatedly rewrite DHCP values as ambient registry noise.
+
+`ecar_flow_identity` controls mixed FLOW principal attribution. User-owned process flows usually carry `principal`, service/root flows carry it less often, inbound listener flows carry it occasionally, and unknown or rejected flows remain unattributed. Run `eforge validate-config` after overlay changes; it rejects inverted ranges, empty value-name lists, and invalid probabilities.
 
 ---
 

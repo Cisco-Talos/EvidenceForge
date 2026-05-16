@@ -636,6 +636,100 @@ class TestChronologicalOutput:
 
         assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
 
+    def test_outbound_flow_can_render_user_principal(self, emitter, monkeypatch, ts):
+        """User-owned FLOW records should be able to carry mixed principal attribution."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 1.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 0.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=777,
+                image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                command_line="firefox.exe",
+                username="alice",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=1234,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["object"] == "FLOW"
+        assert emitted[0]["direction"] == "OUTBOUND"
+        assert emitted[0]["principal"] == "alice"
+
+    def test_service_flow_can_omit_principal(self, emitter, monkeypatch, ts):
+        """Service-owned FLOW records should still model vendor attribution gaps."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 1.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 0.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="dc01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc01.example.org",
+            ),
+            process=ProcessContext(
+                pid=444,
+                parent_pid=4,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe -k netsvcs",
+                username="SYSTEM",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49153,
+                dst_ip="10.0.0.20",
+                dst_port=88,
+                protocol="tcp",
+                initiating_pid=444,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert "principal" not in emitted[0]
+
     def test_inbound_flow_uses_destination_listener_pid(self, emitter, monkeypatch, ts):
         """Inbound host observations should use the local listener PID when known."""
         emitted: list[dict] = []
@@ -667,6 +761,58 @@ class TestChronologicalOutput:
 
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
+
+    def test_inbound_listener_flow_can_render_principal(self, emitter, monkeypatch, ts):
+        """Observed listener-side FLOW rows can carry local service principal context."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 0.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 1.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts)
+        pid = state.create_process(
+            "WEB-EXT-01",
+            0,
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"WEB-EXT-01": {"apache2": pid}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="WEB-EXT-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="web-ext-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="198.51.100.7",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == pid
+        assert emitted[0]["principal"] == "www-data"
 
     def test_rejected_inbound_flow_does_not_claim_listener_pid(self, emitter, monkeypatch, ts):
         """Rejected inbound attempts should not be attributed to a server process."""
