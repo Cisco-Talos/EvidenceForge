@@ -28,21 +28,34 @@ just formats the context fields into the syslog template.
 """
 
 import re
-from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.generation.emitters.syslog_family import (
+    bounded_syslog_int,
+    coerce_syslog_datetime,
+    make_syslog_family_route_key,
+    render_rfc3164_syslog,
+    rfc3164_sort_key,
+    sanitize_syslog_family_route_key,
+    syslog_family_writer_path,
+    syslog_priority,
+    syslog_route_source,
+    syslog_route_year,
+)
 from evidenceforge.utils.rng import _stable_seed
 
-_RFC5424_TS_RE = re.compile(r"^<\d{1,3}>1\s+(?P<timestamp>\S+)")
 _LOGIND_NEW_SESSION_RE = re.compile(
-    r"(?P<prefix>\bsystemd-logind\s+(?P<pid>\d+)\s+\S+\s+\S+\s+New session )"
+    r"(?P<prefix>\bsystemd-logind(?:\[(?P<pid_bracket>\d+)\]:|"
+    r"\s+(?P<pid_token>\d+)\s+\S+\s+\S+)\s+New session )"
     r"(?P<session>\d+)(?P<suffix> of user .*)"
 )
 _LOGIND_REMOVED_SESSION_RE = re.compile(
-    r"(?P<prefix>\bsystemd-logind\s+(?P<pid>\d+)\s+\S+\s+\S+\s+Removed session )"
+    r"(?P<prefix>\bsystemd-logind(?:\[(?P<pid_bracket>\d+)\]:|"
+    r"\s+(?P<pid_token>\d+)\s+\S+\s+\S+)\s+Removed session )"
     r"(?P<session>\d+)(?P<suffix>\.)"
 )
 
@@ -92,37 +105,26 @@ def _dhclient_lifecycle_priority(line: str) -> int:
     return 60
 
 
-def _parse_rfc5424_timestamp(value: str) -> datetime:
-    """Parse an RFC 5424 timestamp into UTC, returning datetime.max on failure."""
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return datetime.max.replace(tzinfo=UTC)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC)
+def _logind_pid(match: re.Match[str]) -> str:
+    """Return a logind PID from either RFC3164 or legacy RFC5424-ish rendering."""
+    return match.group("pid_bracket") or match.group("pid_token")
 
 
-def _syslog_sort_key(line: str) -> tuple[datetime, int, str]:
-    """Sort RFC 5424 syslog lines by timestamp plus same-time lifecycle order."""
-    match = _RFC5424_TS_RE.match(line)
-    if match is None:
-        return (datetime.max.replace(tzinfo=UTC), 99, line)
-    return (
-        _parse_rfc5424_timestamp(match.group("timestamp")),
-        min(
-            _ssh_lifecycle_priority(line),
-            _systemd_lifecycle_priority(line),
-            _dhclient_lifecycle_priority(line),
-        ),
-        line,
+def _syslog_sort_key(line: str) -> tuple[int, int, int, int, int, int, str]:
+    """Sort RFC3164 syslog lines by timestamp plus same-time lifecycle order."""
+    lifecycle_priority = min(
+        _ssh_lifecycle_priority(line),
+        _systemd_lifecycle_priority(line),
+        _dhclient_lifecycle_priority(line),
     )
+    return rfc3164_sort_key(line, lifecycle_priority)
 
 
 class SyslogEmitter(HostMultiplexEmitter):
     """Emitter for Linux syslog format.
 
-    Per-host FQDN directory routing: each Linux host gets its own syslog.log.
+    Per-host/year directory routing: each Linux host gets syslog.log files
+    partitioned by event year.
     Renders any SecurityEvent that carries a SyslogContext on a Linux host.
     """
 
@@ -134,6 +136,18 @@ class SyslogEmitter(HostMultiplexEmitter):
 
     # Context-driven: handles any event type that carries SyslogContext
     _supported_types: set[str] = set()
+
+    def _safe_writer_key(self, host_fqdn: str) -> str:
+        return sanitize_syslog_family_route_key(host_fqdn)
+
+    def _writer_path_for_key(self, safe_writer_key: str) -> Path:
+        return syslog_family_writer_path(
+            base_dir=self._base_dir,
+            safe_route_key=safe_writer_key,
+            log_filename=self._log_filename,
+            direct_file_path=self._direct_file_path,
+            flat_filename=self._flat_filename,
+        )
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Syslog emitter handles any event with SyslogContext on a Linux host."""
@@ -179,57 +193,28 @@ class SyslogEmitter(HostMultiplexEmitter):
         """Route syslog event to per-host file."""
         rendered = self._render_event(event_data)
         host_fqdn = event_data.pop("_host_fqdn", "")
-        self.emit_to_host(rendered, host_fqdn)
+        route_key = make_syslog_family_route_key(
+            host_fqdn,
+            event_data["timestamp"],
+            direct_file_mode=self._direct_file_mode,
+        )
+        self.emit_to_host(rendered, route_key)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         ts = event_data.get("timestamp")
-        if isinstance(ts, str):
-            from evidenceforge.utils.time import parse_iso8601
+        ts = coerce_syslog_datetime(ts)
 
-            ts = parse_iso8601(ts)
-        if not isinstance(ts, datetime):
-            raise ValueError("Syslog events require a datetime timestamp")
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
-        ts = ts.astimezone(UTC)
-
-        facility = self._bounded_int(event_data.get("facility"), default=3, minimum=0, maximum=23)
-        severity = self._bounded_int(event_data.get("severity"), default=6, minimum=0, maximum=7)
+        facility = bounded_syslog_int(event_data.get("facility"), default=3, minimum=0, maximum=23)
+        severity = bounded_syslog_int(event_data.get("severity"), default=6, minimum=0, maximum=7)
         pid = event_data.get("pid")
-        context = {
-            "pri": facility * 8 + severity,
-            "timestamp": ts.strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "hostname": event_data.get("hostname") or "",
-            "facility": event_data.get("facility"),
-            "severity": event_data.get("severity"),
-            "app_name": self._rfc5424_token(event_data.get("app_name"), default="-"),
-            "pid": pid,
-            "procid": str(pid) if pid not in (None, "") else "-",
-            "msgid": self._rfc5424_token(event_data.get("msgid"), default="-"),
-            "structured_data": event_data.get("structured_data") or "-",
-            "message": event_data.get("message"),
-        }
-        rendered = self._template.render(**context)
-        return rendered.strip()
-
-    @staticmethod
-    def _bounded_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
-        """Return value as an int clamped to the RFC-supported range."""
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return max(minimum, min(maximum, parsed))
-
-    @staticmethod
-    def _rfc5424_token(value: Any, *, default: str) -> str:
-        """Render an RFC 5424 header token, replacing whitespace with underscores."""
-        if value is None:
-            return default
-        token = str(value).strip()
-        if not token:
-            return default
-        return re.sub(r"\s+", "_", token)
+        return render_rfc3164_syslog(
+            pri=syslog_priority(facility, severity),
+            timestamp=ts,
+            hostname=event_data.get("hostname") or "",
+            app_name=event_data.get("app_name") or "-",
+            pid=pid,
+            message=event_data.get("message") or "",
+        )
 
     def close(self) -> None:
         """Close emitter after normalizing source-native logind session order."""
@@ -249,15 +234,29 @@ class SyslogEmitter(HostMultiplexEmitter):
         visible in the collection window.
         """
         with self._writers_lock:
-            for host_key, writer in self._writers.items():
-                with writer._lock:
-                    if not writer.buffer:
-                        continue
-                    lines = sorted(writer.buffer, key=_syslog_sort_key)
-                    writer.buffer = self._normalize_logind_session_ids_for_lines(
-                        lines,
-                        host_key,
-                    )
+            grouped: dict[str, list[tuple[str, Any]]] = {}
+            for route_key, writer in self._writers.items():
+                grouped.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
+            for host_key, route_writers in grouped.items():
+                rows: list[tuple[int, tuple[int, int, int, int, int, int, str], str, str]] = []
+                for route_key, writer in route_writers:
+                    year = int(syslog_route_year(route_key) or 0)
+                    with writer._lock:
+                        for line in writer.buffer:
+                            rows.append((year, _syslog_sort_key(line), route_key, line))
+                if not rows:
+                    continue
+                rows.sort(key=lambda row: (row[0], row[1]))
+                normalized = self._normalize_logind_session_ids_for_lines(
+                    [line for _year, _sort_key, _route_key, line in rows],
+                    host_key,
+                )
+                buffers_by_route: dict[str, list[str]] = {}
+                for row, line in zip(rows, normalized, strict=True):
+                    buffers_by_route.setdefault(row[2], []).append(line)
+                for route_key, writer in route_writers:
+                    with writer._lock:
+                        writer.buffer = buffers_by_route.get(route_key, [])
 
     @staticmethod
     def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:
@@ -267,7 +266,7 @@ class SyslogEmitter(HostMultiplexEmitter):
             match = _LOGIND_NEW_SESSION_RE.search(line)
             if match is None:
                 continue
-            pid = match.group("pid")
+            pid = _logind_pid(match)
             session = int(match.group("session"))
             first_by_pid[pid] = min(session, first_by_pid.get(pid, session))
 
@@ -282,7 +281,7 @@ class SyslogEmitter(HostMultiplexEmitter):
         for index, line in enumerate(lines):
             new_match = _LOGIND_NEW_SESSION_RE.search(line)
             if new_match is not None:
-                pid = new_match.group("pid")
+                pid = _logind_pid(new_match)
                 original_session = new_match.group("session")
                 step_seed = _stable_seed(
                     f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
@@ -300,10 +299,10 @@ class SyslogEmitter(HostMultiplexEmitter):
 
             removed_match = _LOGIND_REMOVED_SESSION_RE.search(line)
             if removed_match is not None:
-                key = (removed_match.group("pid"), removed_match.group("session"))
+                key = (_logind_pid(removed_match), removed_match.group("session"))
                 rewritten = rewritten_by_original.get(key)
                 if rewritten is None:
-                    pid = removed_match.group("pid")
+                    pid = _logind_pid(removed_match)
                     session = int(removed_match.group("session"))
                     first_visible = max(2, first_by_pid.get(pid, session + 1))
                     if session >= first_visible:

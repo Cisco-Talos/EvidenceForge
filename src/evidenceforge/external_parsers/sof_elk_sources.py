@@ -25,12 +25,14 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +178,7 @@ class StagedSourceLog:
     source: Path
     staged: Path
     record_count: int
+    source_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -227,8 +230,12 @@ def stage_source_logs(
     logs: list[StagedSourceLog] = []
     for source_name in spec.source_names:
         for source in sorted(source_root.rglob(source_name)):
-            sensor = _sensor_name(source_root, source.parent)
-            destination = source_stage_root / sensor / spec.staged_name
+            sensor = _source_name(source_root, source)
+            source_year = _source_year(source) if spec.staged_directory == "syslog" else None
+            if spec.staged_directory == "syslog" and source_year is not None:
+                destination = source_stage_root / str(source_year) / sensor / spec.staged_name
+            else:
+                destination = source_stage_root / sensor / spec.staged_name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
             logs.append(
@@ -236,6 +243,7 @@ def stage_source_logs(
                     source=source,
                     staged=destination,
                     record_count=_count_jsonl_lines(destination),
+                    source_year=source_year,
                 )
             )
 
@@ -421,7 +429,8 @@ def validate_source_parsed_output(
             completed_by_subtype=completed_by_subtype,
             progress_callback=progress_callback,
         )
-        event_failures = _event_failures(spec, index, event)
+        expected_year = _source_year_for_event(manifest, event)
+        event_failures = _event_failures(spec, index, event, expected_year)
         failures.extend(event_failures)
         if event_failures:
             failure_events.append(_failure_event_summary(spec, index, event, event_failures))
@@ -616,6 +625,7 @@ def _event_failures(
     spec: SofElkSourceSpec,
     index: int,
     event: JsonObject,
+    expected_year: int | None = None,
 ) -> list[str]:
     failures: list[str] = []
     prefix = f"{spec.format_name} event {index}"
@@ -636,6 +646,15 @@ def _event_failures(
     for path in spec.required_paths:
         if _get_path(event, path) in (None, ""):
             failures.append(f"{prefix}: missing required field {path}")
+
+    if expected_year is not None:
+        timestamp = event.get("@timestamp")
+        parsed_year = _event_timestamp_year(timestamp)
+        if parsed_year != expected_year:
+            failures.append(
+                f"{prefix}: parsed @timestamp year {parsed_year} does not match "
+                f"source year {expected_year}"
+            )
 
     return failures
 
@@ -667,6 +686,7 @@ def _write_failure_report(
                 "staged": str(log.staged),
                 "log_type": spec.format_name,
                 "record_count": log.record_count,
+                "source_year": log.source_year,
             }
             for log in manifest.logs
         ],
@@ -698,6 +718,7 @@ def _failure_event_summary(
         "log_file_path": _get_path(event, "log.file.path"),
         "event_original": _get_path(event, "event.original"),
         "message": event.get("message"),
+        "timestamp": event.get("@timestamp"),
         "syslog_hostname": _get_path(event, "log.syslog.hostname"),
         "syslog_appname": _get_path(event, "log.syslog.appname"),
         "source_ip": _get_path(event, "source.ip"),
@@ -754,6 +775,21 @@ def _scope_by_container_path(manifest: SofElkSourceManifest) -> dict[str, ScopeK
     }
 
 
+def _source_year_by_container_path(manifest: SofElkSourceManifest) -> dict[str, int]:
+    return {
+        _container_log_path(manifest, log): log.source_year
+        for log in manifest.logs
+        if log.source_year is not None
+    }
+
+
+def _source_year_for_event(manifest: SofElkSourceManifest, event: JsonObject) -> int | None:
+    log_file_path = _get_path(event, "log.file.path")
+    if not isinstance(log_file_path, str):
+        return None
+    return _source_year_by_container_path(manifest).get(log_file_path)
+
+
 def _scope_expected_counts(
     manifest: SofElkSourceManifest,
 ) -> tuple[Counter[str], Counter[tuple[str, str]], Counter[ScopeKey]]:
@@ -774,16 +810,33 @@ def _scope_for_staged_log(
 ) -> ScopeKey:
     relative = log.staged.relative_to(manifest.logstash_root)
     parts = relative.parts
-    host = (
-        parts[1]
-        if len(parts) >= 3 and parts[0] == manifest.spec.staged_directory
-        else str(relative.parent)
-    )
+    if (
+        manifest.spec.staged_directory == "syslog"
+        and len(parts) >= 4
+        and parts[0] == "syslog"
+        and _is_year_component(parts[1])
+    ):
+        host = parts[2]
+    else:
+        host = (
+            parts[1]
+            if len(parts) >= 3 and parts[0] == manifest.spec.staged_directory
+            else str(relative.parent)
+        )
     return host, manifest.spec.logtype, manifest.spec.subtype
 
 
 def _container_log_path(manifest: SofElkSourceManifest, log: StagedSourceLog) -> str:
     return f"/logstash/{log.staged.relative_to(manifest.logstash_root).as_posix()}"
+
+
+def _event_timestamp_year(value: Any) -> int | None:
+    if not isinstance(value, str) or len(value) < 4:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC).year
+    except ValueError:
+        return None
 
 
 def _event_scope(
@@ -837,8 +890,36 @@ def _container_label_args(validator: str, run_id: str) -> list[str]:
     ]
 
 
-def _sensor_name(source_root: Path, source_parent: Path) -> str:
+def _source_name(source_root: Path, source: Path) -> str:
+    source_parent = source.parent
+    if _is_year_component(source_parent.name) and source_parent.parent != source_parent:
+        source_parent = source_parent.parent
     relative = source_parent.relative_to(source_root)
     if relative == Path("."):
         return "default"
     return "__".join(relative.parts)
+
+
+def _source_year(source: Path) -> int | None:
+    if _is_year_component(source.parent.name):
+        return int(source.parent.name)
+    return _infer_year_from_first_record(source)
+
+
+def _infer_year_from_first_record(source: Path) -> int | None:
+    try:
+        with source.open(encoding="utf-8") as handle:
+            first = next((line.strip() for line in handle if line.strip()), "")
+    except OSError:
+        return None
+    match = re.search(r"\b(?P<year>20\d{2})-\d{2}-\d{2}T", first)
+    if match:
+        return int(match.group("year"))
+    try:
+        return datetime.fromtimestamp(source.stat().st_mtime, tz=UTC).year
+    except OSError:
+        return None
+
+
+def _is_year_component(value: str) -> bool:
+    return re.fullmatch(r"\d{4}", value) is not None

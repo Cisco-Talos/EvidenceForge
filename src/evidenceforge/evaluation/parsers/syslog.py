@@ -20,7 +20,7 @@
 #
 # SPDX-License-Identifier: MIT
 
-"""Parser for generated RFC 5424 syslog plus legacy BSD eval input."""
+"""Parser for generated RFC3164 syslog plus legacy syslog eval input."""
 
 import re
 from collections.abc import Iterator
@@ -40,10 +40,10 @@ RFC5424_PATTERN = re.compile(
     r"(?:\s(?P<message>.*))?$"
 )
 
-# Legacy BSD/RFC3164 syslog format: "Mon DD HH:MM:SS hostname app[pid]: message".
-# Kept only so `eforge eval` can ingest older generated datasets.
-LEGACY_BSD_SYSLOG_PATTERN = re.compile(
-    r"^(\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+"  # timestamp (BSD)
+# BSD/RFC3164 syslog format: "Mon DD HH:MM:SS hostname app[pid]: message".
+RFC3164_SYSLOG_PATTERN = re.compile(
+    r"^(?:<(?P<pri>\d{1,3})>)?"
+    r"(?P<timestamp>\w{3}\s+\d+\s+\d{2}:\d{2}:\d{2})\s+"  # timestamp (BSD)
     r"(\S+)\s+"  # hostname
     r"(\S+?)(?:\[([^\]]*)\])?:\s+"  # app_name[pid]: or app_name:
     r"(.*)$"  # message
@@ -62,14 +62,24 @@ LEGACY_ISO_SYSLOG_PATTERN = re.compile(
 _WRAP_THRESHOLD_SECONDS = 180 * 24 * 3600  # ~6 months
 
 
+def _path_year(path: Path) -> int | None:
+    """Return the immediate parent year from a year-partitioned syslog path."""
+    if re.fullmatch(r"\d{4}", path.parent.name):
+        return int(path.parent.name)
+    return None
+
+
 def _infer_seed_year(path: Path, scenario: object | None = None) -> int:
     """Return the best-guess year for BSD syslog records in *path*.
 
     Preference order:
-    1. scenario.time_window.start year — the canonical date the scenario targets.
-    2. File modification time — fallback for use outside the evaluation engine.
-    3. Current year — last resort.
+    1. Parent YYYY directory — generated syslog-family layout.
+    2. scenario.time_window.start year — fallback for old flat datasets.
+    3. File modification time — fallback for use outside the evaluation engine.
+    4. Current year — last resort.
     """
+    if (year := _path_year(path)) is not None:
+        return year
     if scenario is not None:
         try:
             tw = getattr(scenario, "time_window", None)
@@ -123,6 +133,7 @@ class SyslogParser(LogParser):
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         seed_year = _infer_seed_year(path, getattr(self, "scenario", None))
+        generated_rfc3164 = _path_year(path) is not None
         last_ts: datetime | None = None
 
         with path.open(encoding="utf-8") as f:
@@ -130,7 +141,13 @@ class SyslogParser(LogParser):
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                record = self._parse_line(line, line_num, seed_year=seed_year, last_ts=last_ts)
+                record = self._parse_line(
+                    line,
+                    line_num,
+                    seed_year=seed_year,
+                    last_ts=last_ts,
+                    generated_rfc3164=generated_rfc3164,
+                )
                 if record.timestamp is not None:
                     last_ts = record.timestamp
                 yield record
@@ -141,6 +158,7 @@ class SyslogParser(LogParser):
         line_num: int,
         seed_year: int | None = None,
         last_ts: datetime | None = None,
+        generated_rfc3164: bool = False,
     ) -> ParsedRecord:
         fields: dict = {}
         errors: list[str] = []
@@ -168,7 +186,7 @@ class SyslogParser(LogParser):
             fields["message"] = groups["message"] or ""
             fields["facility"] = pri // 8
             fields["severity"] = pri % 8
-            fields["syslog_protocol"] = "rfc5424"
+            fields["syslog_protocol"] = "rfc5424_legacy"
             pid_str = groups["procid"]
         else:
             match = LEGACY_ISO_SYSLOG_PATTERN.match(raw)
@@ -183,16 +201,23 @@ class SyslogParser(LogParser):
                 fields["message"] = message
                 fields["syslog_protocol"] = "iso_legacy"
             else:
-                match = LEGACY_BSD_SYSLOG_PATTERN.match(raw)
+                match = RFC3164_SYSLOG_PATTERN.match(raw)
                 if match:
-                    ts_str, hostname, app_name, pid_str, message = match.groups()
+                    groups = match.groupdict()
+                    ts_str = groups["timestamp"]
+                    hostname, app_name, pid_str, message = match.groups()[2:]
                     timestamp = _resolve_bsd_year(ts_str, seed_year, last_ts)
                     if timestamp is None:
                         errors.append(f"Invalid legacy BSD timestamp: {ts_str}")
+                    if groups.get("pri"):
+                        pri = int(groups["pri"])
+                        fields["pri"] = pri
+                        fields["facility"] = pri // 8
+                        fields["severity"] = pri % 8
                     fields["hostname"] = hostname
                     fields["app_name"] = app_name
                     fields["message"] = message
-                    fields["syslog_protocol"] = "rfc3164_legacy"
+                    fields["syslog_protocol"] = "rfc3164" if generated_rfc3164 else "rfc3164_legacy"
                 else:
                     errors.append("Line does not match RFC 5424 or legacy syslog format")
                     return ParsedRecord(

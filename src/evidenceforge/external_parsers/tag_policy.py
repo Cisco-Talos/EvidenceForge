@@ -84,17 +84,6 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         ),
     ),
     ParserTagRule(
-        validator=SOF_ELK_CISCO_ASA_VALIDATOR,
-        log_type="cisco_asa",
-        tag="_grokparsefailure_1100-03",
-        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
-        source="SOF-ELK configfiles/1100-preprocess-syslog.conf",
-        reason=(
-            "Optional archive path-year extraction after a BSD/RFC3164 syslog timestamp. "
-            "Cisco ASA parsing can still succeed without a year-bearing directory name."
-        ),
-    ),
-    ParserTagRule(
         validator=SOF_ELK_WEB_ACCESS_VALIDATOR,
         log_type="web_access",
         tag="_grokparsefail_8110-01",
@@ -103,18 +92,6 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         reason=(
             "Optional page/not-page URL path classification after the HTTP access "
             "record has already been parsed."
-        ),
-    ),
-    ParserTagRule(
-        validator=SOF_ELK_SYSLOG_VALIDATOR,
-        log_type="syslog",
-        tag="_grokparsefailure_1100-03",
-        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
-        source="SOF-ELK configfiles/1100-preprocess-syslog.conf",
-        reason=(
-            "Optional archive path-year extraction after a BSD/RFC3164 syslog timestamp. "
-            "Syslog framing and source-specific parsing can still succeed without a "
-            "year-bearing directory name."
         ),
     ),
     ParserTagRule(

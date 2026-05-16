@@ -65,9 +65,9 @@ def test_stage_sof_elk_logs_combines_all_supported_families(
     }
     staged = {log.staged.relative_to(manifest.logstash_root) for log in manifest.staged_logs}
     assert Path("zeek/sensor-a/conn.log") in staged
-    assert Path("syslog/fw-01/cisco_asa.log") in staged
+    assert Path("syslog/2026/fw-01/cisco_asa.log") in staged
     assert Path("httpd/web-01/web_access.log") in staged
-    assert Path("syslog/linux-01/syslog.log") in staged
+    assert Path("syslog/2026/linux-01/syslog.log") in staged
 
 
 def test_build_sof_elk_configs_uses_one_pipeline_and_all_inputs(
@@ -136,7 +136,7 @@ def test_validate_sof_elk_output_writes_one_consolidated_failure_report(
     assert "web_access" in report["log_support"]
     assert "zeek_conn" in report["parsed_outputs"]
     assert "syslog" in report["parsed_outputs"]
-    assert report["sample_failures"][0]["event_original"].startswith("<30>1 2026")
+    assert report["sample_failures"][0]["event_original"].startswith("<30>Jun 15")
 
 
 def _all_validators() -> tuple[str, ...]:
@@ -156,8 +156,8 @@ def _combined_data_dir(fixtures_dir: Path, tmp_path: Path) -> Path:
     for name in ("conn.json", "dns.json"):
         (zeek_dir / name).write_text((source_zeek / name).read_text(encoding="utf-8"))
 
-    (data_dir / "fw-01").mkdir()
-    (data_dir / "fw-01" / "cisco_asa.log").write_text(
+    (data_dir / "fw-01" / "2026").mkdir(parents=True)
+    (data_dir / "fw-01" / "2026" / "cisco_asa.log").write_text(
         "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 7 "
         "for inside:10.0.10.5/54321 to outside:198.51.100.10/443\n",
         encoding="utf-8",
@@ -168,10 +168,10 @@ def _combined_data_dir(fixtures_dir: Path, tmp_path: Path) -> Path:
         '200 512 "-" "Mozilla/5.0"\n',
         encoding="utf-8",
     )
-    (data_dir / "linux-01").mkdir()
-    (data_dir / "linux-01" / "syslog.log").write_text(
-        "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
-        "Accepted password for alice from 198.51.100.25 port 54321 ssh2\n",
+    (data_dir / "linux-01" / "2026").mkdir(parents=True)
+    (data_dir / "linux-01" / "2026" / "syslog.log").write_text(
+        "<30>Jun 15 14:23:05 linux-01 sshd[1234]: Accepted password for alice "
+        "from 198.51.100.25 port 54321 ssh2\n",
         encoding="utf-8",
     )
     return data_dir
@@ -249,11 +249,10 @@ def _parsed_cisco_asa_event() -> dict[str, object]:
             "process_archive",
             "got_cisco",
             "parse_done",
-            "_grokparsefailure_1100-03",
         ],
         "labels": {"type": "syslog"},
         "log": {
-            "file": {"path": "/logstash/syslog/fw-01/cisco_asa.log"},
+            "file": {"path": "/logstash/syslog/2026/fw-01/cisco_asa.log"},
             "syslog": {"hostname": "fw01", "appname": "%asa-6-302013"},
         },
         "event": {
@@ -266,6 +265,7 @@ def _parsed_cisco_asa_event() -> dict[str, object]:
         "source": {"ip": "10.0.10.5", "port": 54321},
         "destination": {"ip": "198.51.100.10", "port": 443},
         "network": {"transport": "tcp"},
+        "@timestamp": "2026-06-15T14:23:05.000Z",
     }
 
 
@@ -294,16 +294,17 @@ def _parsed_syslog_event(*, failed: bool) -> dict[str, object]:
         "tags": tags,
         "labels": {"type": "syslog"},
         "log": {
-            "file": {"path": "/logstash/syslog/linux-01/syslog.log"},
+            "file": {"path": "/logstash/syslog/2026/linux-01/syslog.log"},
             "syslog": {"hostname": "linux-01", "appname": "sshd"},
         },
         "event": {
             "original": (
-                "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
-                "Accepted password for alice from 198.51.100.25 port 54321 ssh2"
+                "<30>Jun 15 14:23:05 linux-01 sshd[1234]: Accepted password for alice "
+                "from 198.51.100.25 port 54321 ssh2"
             )
         },
-        "message": "1234 - - Accepted password for alice from 198.51.100.25 port 54321 ssh2",
+        "message": "Accepted password for alice from 198.51.100.25 port 54321 ssh2",
+        "@timestamp": "2026-06-15T14:23:05.000Z",
     }
 
 

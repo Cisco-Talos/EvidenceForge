@@ -39,6 +39,7 @@ from evidenceforge.external_parsers.sof_elk_sources import (
     SOF_ELK_SOURCE_SPECS_BY_VALIDATOR,
     SofElkSourceManifest,
     StagedSourceLog,
+    _source_year_for_event,
     stage_source_logs,
 )
 from evidenceforge.external_parsers.sof_elk_sources import (
@@ -381,7 +382,8 @@ def validate_sof_elk_output(
             )
         for index, event in enumerate(source_events, start=1):
             progress_state.update(event, spec.format_name, progress_callback)
-            event_failures = _source_event_failures(spec, index, event)
+            expected_year = _source_year_for_event(source_manifest, event)
+            event_failures = _source_event_failures(spec, index, event, expected_year)
             failures.extend(event_failures)
             if event_failures:
                 failure_events.append(
@@ -793,11 +795,20 @@ def _zeek_scope(manifest: ZeekStageManifest, log: StagedLog) -> ScopeKey:
 def _source_scope(manifest: SofElkSourceManifest, log: StagedSourceLog) -> ScopeKey:
     relative = log.staged.relative_to(manifest.logstash_root)
     parts = relative.parts
-    host = (
-        parts[1]
-        if len(parts) >= 3 and parts[0] == manifest.spec.staged_directory
-        else str(relative.parent)
-    )
+    if (
+        manifest.spec.staged_directory == "syslog"
+        and len(parts) >= 4
+        and parts[0] == "syslog"
+        and parts[1].isdigit()
+        and len(parts[1]) == 4
+    ):
+        host = parts[2]
+    else:
+        host = (
+            parts[1]
+            if len(parts) >= 3 and parts[0] == manifest.spec.staged_directory
+            else str(relative.parent)
+        )
     return host, manifest.spec.logtype, manifest.spec.subtype
 
 
@@ -868,6 +879,7 @@ def _staged_log_report(manifest: SofElkCombinedManifest) -> list[JsonObject]:
                 "staged": str(log.staged),
                 "log_type": source_manifest.spec.format_name,
                 "record_count": log.record_count,
+                "source_year": log.source_year,
             }
             for log in source_manifest.logs
         )

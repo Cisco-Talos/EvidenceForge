@@ -251,7 +251,7 @@ LogEmitter (ABC)
 │   ├── ZeekSslEmitter               # ssl.log
 │   └── ... (10 more Zeek types)
 ├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EdrContext)
-├── SyslogEmitter                    # Linux syslog (RFC 5424)
+├── SyslogEmitter                    # Linux syslog (RFC3164, per-host/year)
 ├── BashHistoryEmitter               # Per-user bash history
 ├── SnortEmitter                     # Snort IDS alerts
 ├── CiscoAsaEmitter                  # Cisco ASA firewall syslog (Built/Teardown/Deny)
@@ -259,7 +259,7 @@ LogEmitter (ABC)
 └── ProxyEmitter                     # HTTP forward proxy access logs (W3C Extended)
 ```
 
-**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors, each writing to `<sensor_hostname>/<log_file>`. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
+**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/<year>/cisco_asa.log`. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
 
 **Proxy path modeling:** `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions.
 

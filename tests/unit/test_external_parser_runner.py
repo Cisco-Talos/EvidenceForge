@@ -50,12 +50,13 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         encoding="utf-8",
     )
     (data_dir / "linux-01.example.test" / "bash_history").mkdir(parents=True)
+    (data_dir / "linux-01.example.test" / "2026").mkdir(parents=True)
     (data_dir / "linux-01.example.test" / "bash_history" / "alice.bash_history").write_text(
         "whoami\n",
         encoding="utf-8",
     )
-    (data_dir / "fw-01.example.test").mkdir()
-    (data_dir / "fw-01.example.test" / "cisco_asa.log").write_text(
+    (data_dir / "fw-01.example.test" / "2026").mkdir(parents=True)
+    (data_dir / "fw-01.example.test" / "2026" / "cisco_asa.log").write_text(
         "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 7 "
         "for inside:10.0.10.5/54321 to outside:198.51.100.10/443\n",
         encoding="utf-8",
@@ -66,9 +67,9 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         '200 512 "-" "Mozilla/5.0"\n',
         encoding="utf-8",
     )
-    (data_dir / "linux-01.example.test" / "syslog.log").write_text(
-        "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
-        "Accepted password for alice from 198.51.100.25 port 54321 ssh2\n",
+    (data_dir / "linux-01.example.test" / "2026" / "syslog.log").write_text(
+        "<30>Jun 15 14:23:05 linux-01 sshd[1234]: Accepted password for alice "
+        "from 198.51.100.25 port 54321 ssh2\n",
         encoding="utf-8",
     )
 

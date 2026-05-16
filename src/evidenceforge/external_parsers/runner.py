@@ -240,4 +240,6 @@ def _host_for_path(data_dir: Path, path: Path) -> str:
         return "default"
     if len(relative.parts) >= 3 and relative.parts[-2] == "bash_history":
         return relative.parts[0]
+    if len(relative.parts) >= 3 and relative.parts[-2].isdigit() and len(relative.parts[-2]) == 4:
+        return str(Path(*relative.parts[:-2]))
     return str(relative.parent)

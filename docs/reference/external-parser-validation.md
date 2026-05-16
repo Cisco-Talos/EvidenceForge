@@ -74,9 +74,9 @@ At runtime it:
    repository.
 5. Stages generated files under temporary SOF-ELK-style trees such as
    `/logstash/zeek/<sensor>/<zeek-log-name>.log` and
-   `/logstash/syslog/<sensor>/cisco_asa.log` or
+   `/logstash/syslog/<year>/<sensor>/cisco_asa.log` or
    `/logstash/httpd/<sensor>/web_access.log`, and
-   `/logstash/syslog/<host>/syslog.log`.
+   `/logstash/syslog/<year>/<host>/syslog.log`.
 6. Builds one temporary Logstash pipeline:
    - SOF-ELK's Beats input
    - unchanged SOF-ELK filter files
@@ -139,8 +139,8 @@ Cisco ASA files stage through SOF-ELK's recursive syslog file input:
 
 | EvidenceForge file | Staged SOF-ELK file |
 | --- | --- |
-| `<sensor>/cisco_asa.log` | `/logstash/syslog/<sensor>/cisco_asa.log` |
-| `cisco_asa.log` | `/logstash/syslog/default/cisco_asa.log` |
+| `<sensor>/<year>/cisco_asa.log` | `/logstash/syslog/<year>/<sensor>/cisco_asa.log` |
+| `<sensor>/cisco_asa.log` | `/logstash/syslog/<inferred-year>/<sensor>/cisco_asa.log` |
 
 Web access files stage through SOF-ELK's recursive HTTPD file input:
 
@@ -153,8 +153,8 @@ Linux syslog files stage through SOF-ELK's recursive syslog file input:
 
 | EvidenceForge file | Staged SOF-ELK file |
 | --- | --- |
-| `<host>/syslog.log` | `/logstash/syslog/<host>/syslog.log` |
-| `syslog.log` | `/logstash/syslog/default/syslog.log` |
+| `<host>/<year>/syslog.log` | `/logstash/syslog/<year>/<host>/syslog.log` |
+| `<host>/syslog.log` | `/logstash/syslog/<inferred-year>/<host>/syslog.log` |
 
 ## Commands
 
@@ -251,11 +251,13 @@ on `zeek_dns`. SOF-ELK emits this when it cannot derive `dns.answers.ip` from
 `dns.answers.data`; non-address DNS answer types such as `NS`, `PTR`, `MX`, and
 `SOA` remain valid parsed DNS records.
 
-Other explicitly ignored optional tags include `_grokparsefailure_1100-03` on
-`cisco_asa` and `syslog`, which is SOF-ELK's optional archive path-year lookup,
-and `_grokparsefail_8110-01` on `web_access`, which is optional HTTPD
-page/not-page classification after the access record has already parsed. In the
-combined SOF-ELK pipeline, `_grokparsefail_6018-01` is also ignored for
+Other explicitly ignored optional tags include `_grokparsefail_8110-01` on
+`web_access`, which is optional HTTPD page/not-page classification after the
+access record has already parsed. `_grokparsefailure_1100-03` is not ignored for
+syslog-family sources because generated RFC3164 logs must be staged under a
+year-bearing SOF-ELK archive path; otherwise Logstash can silently assign the
+wrong year. In the combined SOF-ELK pipeline, `_grokparsefail_6018-01` is
+ignored for
 `syslog` because SOF-ELK's Cisco ASA filter opportunistically tries ordinary
 Linux syslog rows that no earlier source-specific syslog filter marked
 `parse_done`; that miss does not mean the Linux syslog framing failed.
@@ -294,13 +296,9 @@ parser smoke test and by the staging/discovery unit tests.
 Small container smoke tests confirm:
 
 - Cisco ASA: SOF-ELK parsed representative `302013` built and `302014`
-  teardown records staged under `/logstash/syslog/<sensor>/cisco_asa.log`.
+  teardown records staged under `/logstash/syslog/<year>/<sensor>/cisco_asa.log`.
 - Web access: SOF-ELK parsed representative Apache/Nginx combined access rows
   staged under `/logstash/httpd/<host>/web_access.log`.
-- Linux syslog: SOF-ELK parsed EvidenceForge RFC5424 framing enough to recover
-  timestamp, hostname, and appname, but left RFC5424 `procid msgid
-  structured-data` in `message`. That caused the SOF-ELK SSHD filter to tag
-  `_grokparsefailure_6015-01` on an `sshd` accepted-password row. The failure
-  report includes `event.original`, the transformed `message`, appname,
-  hostname, source path, and fatal tag, which is enough to fix either staging or
-  the emitter later if requested.
+- Linux syslog: generated RFC3164 rows stage under
+  `/logstash/syslog/<year>/<host>/syslog.log`, allowing SOF-ELK to recover the
+  correct year while parsing the source-specific sshd/PAM message body.

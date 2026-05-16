@@ -49,7 +49,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
 
 def test_stage_source_logs_preserves_sensor_subdirectories(tmp_path: Path) -> None:
     source_root = tmp_path / "generated"
-    source_dir = source_root / "fw-01.example.test"
+    source_dir = source_root / "fw-01.example.test" / "2026"
     source_dir.mkdir(parents=True)
     (source_dir / "cisco_asa.log").write_text(
         "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 7 "
@@ -61,7 +61,7 @@ def test_stage_source_logs_preserves_sensor_subdirectories(tmp_path: Path) -> No
 
     assert manifest.expected_counts == {"cisco_asa": 1}
     assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
-        Path("syslog/fw-01.example.test/cisco_asa.log")
+        Path("syslog/2026/fw-01.example.test/cisco_asa.log")
     }
 
 
@@ -85,11 +85,11 @@ def test_stage_source_logs_preserves_web_access_subdirectories(tmp_path: Path) -
 
 def test_stage_source_logs_preserves_syslog_subdirectories(tmp_path: Path) -> None:
     source_root = tmp_path / "generated"
-    source_dir = source_root / "linux-01.example.test"
+    source_dir = source_root / "linux-01.example.test" / "2026"
     source_dir.mkdir(parents=True)
     (source_dir / "syslog.log").write_text(
-        "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
-        "Accepted password for alice from 198.51.100.25 port 54321 ssh2\n",
+        "<30>Jun 15 14:23:05 linux-01 sshd[1234]: Accepted password for alice "
+        "from 198.51.100.25 port 54321 ssh2\n",
         encoding="utf-8",
     )
 
@@ -97,7 +97,7 @@ def test_stage_source_logs_preserves_syslog_subdirectories(tmp_path: Path) -> No
 
     assert manifest.expected_counts == {"syslog": 1}
     assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
-        Path("syslog/linux-01.example.test/syslog.log")
+        Path("syslog/2026/linux-01.example.test/syslog.log")
     }
 
 
@@ -160,15 +160,13 @@ def test_validate_source_parsed_output_accepts_cisco_asa_parse(tmp_path: Path) -
     manifest = _manifest(
         tmp_path,
         CISCO_ASA_SPEC,
-        Path("syslog/fw-01/cisco_asa.log"),
+        Path("syslog/2026/fw-01/cisco_asa.log"),
         "cisco_asa.log",
+        source_year=2026,
     )
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
     event = _parsed_cisco_asa_event()
-    tags = event["tags"]
-    assert isinstance(tags, list)
-    tags.append("_grokparsefailure_1100-03")
     _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
 
     events = validate_source_parsed_output(manifest, parsed_dir)
@@ -183,8 +181,9 @@ def test_validate_source_parsed_output_reports_cisco_asa_parser_context(
     manifest = _manifest(
         tmp_path,
         CISCO_ASA_SPEC,
-        Path("syslog/fw-01/cisco_asa.log"),
+        Path("syslog/2026/fw-01/cisco_asa.log"),
         "cisco_asa.log",
+        source_year=2026,
     )
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
@@ -201,7 +200,7 @@ def test_validate_source_parsed_output_reports_cisco_asa_parser_context(
     sample = report["sample_failures"][0]
     assert sample["event_original"].startswith("<166>Jun 15")
     assert sample["message"] == "not a real ASA message"
-    assert sample["log_file_path"] == "/logstash/syslog/fw-01/cisco_asa.log"
+    assert sample["log_file_path"] == "/logstash/syslog/2026/fw-01/cisco_asa.log"
 
 
 def test_validate_source_parsed_output_accepts_web_access_parse(tmp_path: Path) -> None:
@@ -256,15 +255,15 @@ def test_validate_source_parsed_output_accepts_syslog_parse(tmp_path: Path) -> N
     manifest = _manifest(
         tmp_path,
         SYSLOG_SPEC,
-        Path("syslog/linux-01/syslog.log"),
+        Path("syslog/2026/linux-01/syslog.log"),
         "syslog.log",
+        source_year=2026,
     )
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
     event = _parsed_syslog_event()
     tags = event["tags"]
     assert isinstance(tags, list)
-    tags.append("_grokparsefailure_1100-03")
     tags.append("_grokparsefail_6018-01")
     _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
 
@@ -280,14 +279,15 @@ def test_validate_source_parsed_output_reports_syslog_parser_context(
     manifest = _manifest(
         tmp_path,
         SYSLOG_SPEC,
-        Path("syslog/linux-01/syslog.log"),
+        Path("syslog/2026/linux-01/syslog.log"),
         "syslog.log",
+        source_year=2026,
     )
     parsed_dir = tmp_path / "parsed"
     parsed_dir.mkdir()
     event = _parsed_syslog_event()
     event["tags"] = ["filebeat", "_grokparsefailure_1100-01"]
-    event["message"] = "1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - Accepted password"
+    event["message"] = "not a parsed syslog row"
     log = event["log"]
     assert isinstance(log, dict)
     del log["syslog"]
@@ -299,9 +299,9 @@ def test_validate_source_parsed_output_reports_syslog_parser_context(
     report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
     assert report["failure_tag_counts"]["syslog"]["_grokparsefailure_1100-01"] == 1
     sample = report["sample_failures"][0]
-    assert sample["event_original"].startswith("<30>1 2026")
-    assert sample["message"].startswith("1 2026")
-    assert sample["log_file_path"] == "/logstash/syslog/linux-01/syslog.log"
+    assert sample["event_original"].startswith("<30>Jun 15")
+    assert sample["message"] == "not a parsed syslog row"
+    assert sample["log_file_path"] == "/logstash/syslog/2026/linux-01/syslog.log"
 
 
 def _fake_sof_elk_dir(tmp_path: Path, spec: SofElkSourceSpec) -> Path:
@@ -329,6 +329,7 @@ def _manifest(
     spec: SofElkSourceSpec,
     staged_relative: Path,
     source_name: str,
+    source_year: int | None = None,
 ) -> SofElkSourceManifest:
     staged = tmp_path / "logstash" / staged_relative
     staged.parent.mkdir(parents=True)
@@ -341,6 +342,7 @@ def _manifest(
                 source=tmp_path / source_name,
                 staged=staged,
                 record_count=1,
+                source_year=source_year,
             ),
         ),
     )
@@ -351,7 +353,7 @@ def _parsed_cisco_asa_event() -> dict[str, object]:
         "tags": ["filebeat", "process_archive", "got_cisco", "parse_done"],
         "labels": {"type": "syslog"},
         "log": {
-            "file": {"path": "/logstash/syslog/fw-01/cisco_asa.log"},
+            "file": {"path": "/logstash/syslog/2026/fw-01/cisco_asa.log"},
             "syslog": {
                 "hostname": "fw01",
                 "appname": "%asa-6-302013",
@@ -367,6 +369,7 @@ def _parsed_cisco_asa_event() -> dict[str, object]:
         "source": {"ip": "10.0.10.5", "port": 54321},
         "destination": {"ip": "198.51.100.10", "port": 443},
         "network": {"transport": "tcp"},
+        "@timestamp": "2026-06-15T14:23:05.000Z",
     }
 
 
@@ -396,7 +399,7 @@ def _parsed_syslog_event() -> dict[str, object]:
         "tags": ["filebeat", "process_archive"],
         "labels": {"type": "syslog"},
         "log": {
-            "file": {"path": "/logstash/syslog/linux-01/syslog.log"},
+            "file": {"path": "/logstash/syslog/2026/linux-01/syslog.log"},
             "syslog": {
                 "hostname": "linux-01",
                 "appname": "sshd",
@@ -404,14 +407,15 @@ def _parsed_syslog_event() -> dict[str, object]:
         },
         "event": {
             "original": (
-                "<30>1 2026-06-15T14:23:05.000000Z linux-01 sshd 1234 - - "
-                "Accepted password for alice from 198.51.100.25 port 54321 ssh2"
+                "<30>Jun 15 14:23:05 linux-01 sshd[1234]: Accepted password for alice "
+                "from 198.51.100.25 port 54321 ssh2"
             )
         },
         "message": "Accepted password for alice from 198.51.100.25 port 54321 ssh2",
         "source": {"ip": "198.51.100.25", "port": 54321},
         "ssh": {"auth_result": "accepted", "login_method": "password"},
         "user": {"name": "alice"},
+        "@timestamp": "2026-06-15T14:23:05.000Z",
     }
 
 

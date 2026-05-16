@@ -192,7 +192,7 @@ class TestConnectionIdCounter:
         asa_emitter.emit(early_event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         built_lines = [
             line for line in output.splitlines() if "Built outbound TCP connection" in line
         ]
@@ -248,7 +248,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         lines = [line for line in output.strip().split("\n") if line]
         assert len(lines) == 2
 
@@ -267,6 +267,24 @@ class TestPermitRecords:
         assert int(byte_match.group(1)) > 5120
         assert "SYN Timeout" not in lines[1]
 
+    def test_connection_crossing_year_boundary_keeps_id_pairing(self, asa_emitter, tmp_path):
+        """Built and teardown rows split by year should keep the same connection ID."""
+        event = _make_connection_event(
+            timestamp=datetime(2024, 12, 31, 23, 59, 30, tzinfo=UTC),
+            duration=90,
+        )
+        asa_emitter.emit(event)
+        asa_emitter.close()
+
+        built = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text(encoding="utf-8")
+        teardown = (tmp_path / "fw01" / "2025" / "cisco_asa.log").read_text(encoding="utf-8")
+        built_id = re.search(r"connection (\d+) for", built)
+        teardown_id = re.search(r"connection (\d+) for", teardown)
+
+        assert built_id is not None
+        assert teardown_id is not None
+        assert built_id.group(1) == teardown_id.group(1)
+
     def test_teardown_after_collection_end_is_suppressed(self, asa_emitter, tmp_path):
         """A slice ending before connection close should show a dangling Built record."""
         asa_emitter._output_end_time = T0 + timedelta(seconds=10)
@@ -275,7 +293,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         lines = [line for line in output.strip().split("\n") if line]
         assert len(lines) == 1
         assert "%ASA-6-302013:" in lines[0]
@@ -299,7 +317,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "%ASA-6-302013:" in output
         assert "%ASA-6-305011:" in output
         assert "%ASA-6-302014:" not in output
@@ -312,7 +330,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         teardown = next(line for line in output.splitlines() if "%ASA-6-302014:" in line)
         byte_match = re.search(r"bytes (\d+)", teardown)
         assert byte_match is not None
@@ -330,7 +348,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
+        assert not (tmp_path / "fw01" / "2024" / "cisco_asa.log").exists()
 
     def test_same_interface_deny_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
         """ASA should not mirror same-interface internal denies by default."""
@@ -352,7 +370,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
+        assert not (tmp_path / "fw01" / "2024" / "cisco_asa.log").exists()
 
     def test_syn_timeout_requires_handshake_only_connection(self, asa_emitter, tmp_path):
         """SYN Timeout should not be used for connections with payload bytes."""
@@ -366,7 +384,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         teardown = [line for line in output.splitlines() if "%ASA-6-302014:" in line][0]
         assert "SYN Timeout" in teardown
         assert "bytes 0" in teardown
@@ -377,7 +395,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         lines = [line for line in output.strip().split("\n") if line]
         assert len(lines) == 2
         assert "%ASA-6-302015:" in lines[0]
@@ -390,7 +408,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         lines = [line for line in output.strip().split("\n") if line]
         assert len(lines) == 2
         assert "%ASA-6-302020:" in lines[0]
@@ -412,7 +430,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         built_line = next(line for line in output.splitlines() if "%ASA-6-302020:" in line)
         assert "Built inbound ICMP connection" in built_line
         assert "faddr 203.0.113.50/8" in built_line
@@ -430,7 +448,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "Built inbound TCP connection" in output
 
     def test_permit_uses_firewall_context_connection_id_and_interfaces(self, asa_emitter, tmp_path):
@@ -447,7 +465,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "TCP connection 424242" in output
         assert "vpn:10.0.10.50/54321" in output
         assert "egress:203.0.113.50/443" in output
@@ -474,7 +492,7 @@ class TestDenyRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         lines = [line for line in output.strip().split("\n") if line]
         assert len(lines) == 1
         assert "%ASA-4-106023:" in lines[0]
@@ -502,7 +520,7 @@ class TestDenyRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "(type 8, code 0)" in output
         assert "Deny icmp" in output
 
@@ -525,7 +543,7 @@ class TestDenyRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        assert not (tmp_path / "fw01" / "cisco_asa.log").exists()
+        assert not (tmp_path / "fw01" / "2024" / "cisco_asa.log").exists()
 
     def test_deny_uses_firewall_context_message_id_and_interfaces(self, asa_emitter, tmp_path):
         """Deny records keep canonical firewall context metadata when provided."""
@@ -545,7 +563,7 @@ class TestDenyRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         assert "%ASA-4-106100:" in output
         assert "Deny tcp src inside:10.0.10.50/54321" in output
         assert "dst internet:203.0.113.53/53" in output
@@ -559,7 +577,7 @@ class TestSyslogFormat:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         first_line = output.strip().split("\n")[0]
         # Priority for severity 6: 20*8+6 = 166
         assert first_line.startswith("<166>")
@@ -579,7 +597,7 @@ class TestSyslogFormat:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         # Priority for severity 4: 20*8+4 = 164
         assert "<164>" in output
         assert "%ASA-4-106023:" in output
@@ -622,7 +640,7 @@ class TestThreatDetection:
         )
 
     def _get_output_lines(self, tmp_path):
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         return [line for line in output.strip().split("\n") if line]
 
     def test_threat_detection_fires_on_burst(self, asa_emitter, tmp_path):
@@ -809,7 +827,7 @@ class TestNatRecords:
         return _make_connection_event(protocol=protocol, firewall=fw, nat=nat)
 
     def _get_output_lines(self, tmp_path):
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         return [line for line in output.strip().split("\n") if line]
 
     def test_built_with_nat_shows_mapped_ips_in_parens(self, asa_emitter, tmp_path):
@@ -818,7 +836,7 @@ class TestNatRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         # The Built line should show mapped source in parens
         assert "(198.51.100.1/12345)" in output
         # Should NOT show the real pre-NAT source in parens
@@ -830,7 +848,7 @@ class TestNatRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         # Parens should reflect the real IPs since there is no NAT
         assert "(10.0.10.50/54321)" in output
         assert "(203.0.113.50/443)" in output
@@ -909,7 +927,7 @@ class TestNatRecords:
             emitter.emit(event)
             emitter.flush()
 
-            output = (sub_dir / "fw01" / "cisco_asa.log").read_text()
+            output = (sub_dir / "fw01" / "2024" / "cisco_asa.log").read_text()
             nat_built_lines = [line for line in output.strip().split("\n") if "305011" in line]
             assert len(nat_built_lines) >= 1, f"No 305011 line for {proto}"
             assert f"Built dynamic {proto.upper()} translation" in nat_built_lines[0]

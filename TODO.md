@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-05-15
+**Last Updated:** 2026-05-16
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -36,13 +36,15 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Refresh syslog-family skill docs and skill references so they match RFC3164 rendering and year-partitioned Linux syslog/Cisco ASA output.
+- [x] Add shared RFC3164 syslog-family rendering and year-partitioned generated output for Linux syslog and Cisco ASA, then align SOF-ELK staging/evaluation with the new layout.
 - [x] Add a clearer external-parser CLI summary of validated log families and SOF-ELK output labels so combined runs make web access and other source coverage obvious.
 - [x] Fix Cisco ASA ICMP connection rendering so `%ASA-6-302020` and `%ASA-6-302021` rows match SOF-ELK's Cisco ASA parser; verified a focused four-row sample and a full 269,999-row ASA corpus through the external-parser harness.
 - [x] Consolidate SOF-ELK external parser execution so one Filebeat/Logstash container pair processes every supported log family in a run, and the CLI prints/writes one combined result report instead of separate validator sections.
 - [x] Add SOF-ELK external parser support for Cisco ASA logs, web access logs, and Linux syslog in priority order, committing each source after the harness can surface parse issues with actionable record context.
-  - [x] Cisco ASA — staged `cisco_asa.log` through SOF-ELK's syslog archive Filebeat input plus `1100-preprocess-syslog.conf` and `6018-cisco_asa.conf`; captured `event.original`; ignored non-fatal `_grokparsefailure_1100-03` path-year diagnostics; unit checks and a two-record container smoke test passed.
+  - [x] Cisco ASA — staged `<sensor>/<year>/cisco_asa.log` through SOF-ELK's syslog archive Filebeat input plus `1100-preprocess-syslog.conf` and `6018-cisco_asa.conf`; captured `event.original`; year-partitioned staging now treats `_grokparsefailure_1100-03` as fatal instead of ignoring it; unit checks and a two-record container smoke test passed.
   - [x] Web access — staged `web_access.log` through SOF-ELK's HTTPD Filebeat input plus `6100-httpd.conf`, `8060-postprocess-useragent.conf`, and `8110-postprocess-httpd.conf`; captured `event.original`; ignored optional `_grokparsefail_8110-01` page-classification diagnostics; unit checks and a two-record container smoke test passed.
-  - [x] Linux syslog — staged `syslog.log` through SOF-ELK's syslog archive Filebeat input plus `1100-preprocess-syslog.conf` and Linux-family filters for DHCP, BIND, SSHD, PAM, and iptables; captured `event.original`; unit checks passed. A two-record EF-style RFC5424 container smoke test produced a useful failure report showing SOF-ELK leaves RFC5424 `procid msgid structured-data` in `message`, causing the SSHD filter to tag `_grokparsefailure_6015-01` on an otherwise framed record.
+  - [x] Linux syslog — staged `<host>/<year>/syslog.log` through SOF-ELK's syslog archive Filebeat input plus `1100-preprocess-syslog.conf` and Linux-family filters for DHCP, BIND, SSHD, PAM, and iptables; captured `event.original`; unit checks passed. Generated Linux syslog now uses RFC3164/BSD framing so SOF-ELK can recover the timestamp year from the staged archive path.
 - [x] Strengthen SOF-ELK Zeek parser coverage — added an all-Zeek-type external-parser smoke test that sends every current EvidenceForge Zeek output type through SOF-ELK, plus a unit guard tying harness specs to the Zeek emitter registry and docs clarifying scenario subset vs coverage contract.
 - [x] Add external-parser tag policy — treat known optional enrichment tags like SOF-ELK `_grokparsefail_6200-01` as ignored diagnostics while keeping true parser failures fatal.
 - [x] Remove redundant SOF-ELK parser report failure message list — keep aggregate counts and detailed sample failures, while preserving the short CLI exception preview.

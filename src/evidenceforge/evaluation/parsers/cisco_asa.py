@@ -24,7 +24,7 @@
 
 import re
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import LogParser, ParsedRecord, register_parser
@@ -109,14 +109,15 @@ class CiscoAsaParser(LogParser):
         return path.name == "cisco_asa.log"
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        seed_year = _infer_seed_year(path, self.scenario)
         with path.open(encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.rstrip("\n")
                 if not line:
                     continue
-                yield self._parse_line(line, line_num)
+                yield self._parse_line(line, line_num, seed_year)
 
-    def _parse_line(self, raw: str, line_num: int) -> ParsedRecord:
+    def _parse_line(self, raw: str, line_num: int, seed_year: int) -> ParsedRecord:
         fields: dict = {}
         errors: list[str] = []
         timestamp = None
@@ -135,9 +136,9 @@ class CiscoAsaParser(LogParser):
 
         pri_str, ts_str, hostname, severity_str, msg_id_str, message = header.groups()
 
-        # Parse timestamp (no year — use current year, same as syslog/snort)
+        # Parse timestamp (no year — generated output stores the year in the parent dir).
         try:
-            ts_with_year = f"{datetime.now().year} {ts_str}"
+            ts_with_year = f"{seed_year} {ts_str}"
             timestamp = datetime.strptime(ts_with_year, "%Y %b %d %H:%M:%S")
         except ValueError:
             errors.append(f"Invalid timestamp: {ts_str}")
@@ -254,3 +255,24 @@ class CiscoAsaParser(LogParser):
                 fields["avg_rate"] = int(match.group(5))
                 fields["avg_max"] = int(match.group(6))
                 fields["cumulative_count"] = int(match.group(7))
+
+
+def _infer_seed_year(path: Path, scenario: object | None) -> int:
+    parent_year = _path_year(path)
+    if parent_year is not None:
+        return parent_year
+    time_window = getattr(scenario, "time_window", None)
+    start = getattr(time_window, "start", None)
+    if isinstance(start, datetime):
+        return start.year
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).year
+    except OSError:
+        return datetime.now(UTC).year
+
+
+def _path_year(path: Path) -> int | None:
+    parent = path.parent.name
+    if len(parent) == 4 and parent.isdigit():
+        return int(parent)
+    return None
