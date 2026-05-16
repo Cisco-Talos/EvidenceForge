@@ -3,10 +3,12 @@
 
 """Tests for network evidence inferred from storyline commands."""
 
-from datetime import UTC, datetime
+import random
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.models.scenario import System, User
 
@@ -115,6 +117,7 @@ class _FakeActivityGenerator:
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
         self.dhcp_leases: list[dict] = []
+        self.syslog_events: list[dict] = []
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -124,6 +127,17 @@ class _FakeActivityGenerator:
 
     def _get_system_pid(self, *args: Any, **kwargs: Any) -> int:
         return 500
+
+    def _build_host_context(self, system: System) -> HostContext:
+        return HostContext(
+            hostname=system.hostname,
+            ip=system.ip,
+            os=system.os,
+            os_category="linux"
+            if "linux" in system.os.lower() or "ubuntu" in system.os.lower()
+            else "windows",
+            system_type=system.type,
+        )
 
     def generate_process(self, *args: Any, **kwargs: Any) -> int:
         self.processes.append(kwargs)
@@ -149,16 +163,28 @@ class _FakeActivityGenerator:
     def generate_dhcp_lease(self, **kwargs: Any) -> None:
         self.dhcp_leases.append(kwargs)
 
+    def generate_syslog_event(self, **kwargs: Any) -> None:
+        self.syslog_events.append(kwargs)
+
     def _expand_and_emit(self, *args: Any, **kwargs: Any) -> None:
         return None
 
 
 class _FakeStateManager:
+    def set_current_time(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
     def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
         return [SimpleNamespace(system="SRC", logon_id="0xabc")]
 
     def get_processes_on_system(self, hostname: str) -> list[SimpleNamespace]:
         return []
+
+    def create_process(self, *args: Any, **kwargs: Any) -> int:
+        return 6505
+
+    def get_process_object_id(self, hostname: str, pid: int) -> str:
+        return f"{hostname}:{pid}"
 
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
@@ -214,6 +240,64 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.reserved_ports == [45678]
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
+
+    def test_scp_receiver_ssh_syslog_uses_distinct_submillisecond_suffixes(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="DST",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(dispatch=lambda event: None)
+        transfer_time = datetime(2024, 3, 18, 17, 15, 2, 638000, tzinfo=UTC)
+
+        engine._emit_scp_receiver_artifacts(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            target_user="root",
+            target_path="/var/tmp/archive.tar.gz",
+            transfer_time=transfer_time,
+            source_port=40117,
+            rng=random.Random(7),
+        )
+
+        syslog_times = [event["time"] for event in engine.activity_generator.syslog_events]
+        assert len(syslog_times) == 3
+        assert syslog_times[0] < syslog_times[1] < syslog_times[2]
+        assert (
+            timedelta(milliseconds=80)
+            < syslog_times[0] - transfer_time
+            < timedelta(milliseconds=81)
+        )
+        assert (
+            timedelta(milliseconds=350)
+            < syslog_times[1] - transfer_time
+            < timedelta(milliseconds=351)
+        )
+        assert (
+            timedelta(milliseconds=900)
+            < syslog_times[2] - transfer_time
+            < timedelta(milliseconds=901)
+        )
+        assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(

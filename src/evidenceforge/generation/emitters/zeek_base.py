@@ -139,6 +139,19 @@ def _jitter_numeric_observation(
     render_data[field] = max(type(value)(minimum), type(value)(varied))
 
 
+def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
+    """Return whether a flow's byte counters should stay identical across sensors."""
+    proto = str(render_data.get("proto") or "").lower()
+    if proto == "icmp":
+        return True
+    if proto != "udp":
+        return False
+    service = str(render_data.get("service") or "").lower()
+    if service == "dns":
+        return True
+    return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
+
+
 def _apply_sensor_observation_variance(
     render_data: dict[str, Any],
     hostname: str,
@@ -279,6 +292,9 @@ def _enforce_ip_byte_invariants(render_data: dict[str, Any]) -> None:
             render_data[f"{side}_ip_bytes"] = 0
             continue
         packet_count = packets if isinstance(packets, int) and packets > 0 else 1
+        if proto == "udp":
+            render_data[f"{side}_ip_bytes"] = payload + (header_bytes * packet_count)
+            continue
         minimum_ip_bytes = payload + (header_bytes * packet_count)
         if ip_bytes < minimum_ip_bytes:
             render_data[f"{side}_ip_bytes"] = minimum_ip_bytes
@@ -587,10 +603,9 @@ class SensorMultiplexEmitter(LogEmitter):
                             render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                         elif isinstance(ts, (int, float)):
                             render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                    if (
-                        render_data.get("_allow_sensor_observation_variance")
-                        and str(render_data.get("proto") or "").lower() != "icmp"
-                    ):
+                    if render_data.get(
+                        "_allow_sensor_observation_variance"
+                    ) and not _locks_sensor_packet_accounting(render_data):
                         _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)

@@ -162,6 +162,40 @@ class TestPerSensorDirectoryRouting:
                 assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
                 assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
 
+    def test_udp_dns_ip_bytes_use_valid_header_accounting(self):
+        """UDP DNS rows should not render impossible IP-header deltas."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "conn.json"
+            emitter = ZeekEmitter(fmt, output_file)
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestDns1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 41710,
+                    "id.resp_h": "10.0.0.53",
+                    "id.resp_p": 53,
+                    "proto": "udp",
+                    "service": "dns",
+                    "duration": 0.02,
+                    "orig_bytes": 80,
+                    "resp_bytes": 177,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "orig_ip_bytes": 113,
+                    "resp_ip_bytes": 211,
+                    "conn_state": "SF",
+                    "history": "Dd",
+                }
+            )
+            emitter.close()
+
+            row = json.loads(output_file.read_text().splitlines()[0])
+            assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
+            assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+
     def test_sensor_timestamp_offsets_vary_by_flow(self):
         """Cross-sensor timestamps should not collapse into one fixed offset band."""
         fmt = load_format("zeek_conn")

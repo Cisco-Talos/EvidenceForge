@@ -2381,6 +2381,45 @@ class TestActivityGenerator:
         assert "workstation_unlocked" not in emitted_types
         assert "logon" not in emitted_types
 
+    def test_workstation_lock_unlock_reject_network_session_luid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4800/4801 and Type 7 unlock should never reuse a Type 3 network LUID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        network_logon_id = "0xabc123"
+        state_manager.register_session(
+            logon_id=network_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip="10.0.0.55",
+            start_time=timestamp - timedelta(minutes=5),
+        )
+
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            timestamp,
+            network_logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            network_logon_id,
+        )
+
+        emitted_types = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "workstation_locked" not in emitted_types
+        assert "workstation_unlocked" not in emitted_types
+        assert not any(
+            call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 7
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        )
+
     def test_credential_dump_command_uses_high_integrity_token(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

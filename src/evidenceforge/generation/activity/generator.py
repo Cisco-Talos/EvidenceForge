@@ -682,6 +682,30 @@ _WINDOWS_ELECTRON_CHILD_MARKERS = (
     "--type=",
     "--utility-sub-type=",
 )
+_WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = frozenset({2, 10, 11})
+_SSH_SYSLOG_MICRO_JITTER_BANDS = {
+    "connection": 101,
+    "accepted": 301,
+    "pam": 501,
+    "logind": 701,
+    "closed": 901,
+}
+
+
+def _ssh_syslog_time(
+    base_time: datetime,
+    label: str,
+    milliseconds: int,
+    *seed_parts: Any,
+    before: bool = False,
+) -> datetime:
+    """Return an SSH syslog lifecycle timestamp with non-repeating sub-ms texture."""
+    band_start = _SSH_SYSLOG_MICRO_JITTER_BANDS.get(label, 101)
+    seed = _stable_seed(
+        "ssh_syslog_micro_jitter:" + label + ":" + ":".join(str(part) for part in seed_parts)
+    )
+    delta = timedelta(milliseconds=milliseconds, microseconds=band_start + (seed % 89))
+    return base_time - delta if before else base_time + delta
 
 
 def _session_started_by(session: Any, time: datetime) -> bool:
@@ -7684,10 +7708,23 @@ class ActivityGenerator:
             conn_delay_ms = rng.randint(70, 160)
             pam_delay_ms = conn_delay_ms + rng.randint(45, 110)
             logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
+            ssh_syslog_seed = (
+                target_system.hostname,
+                source_ip,
+                src_port,
+                sshd_pid,
+                time.isoformat(),
+            )
 
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
-                timestamp=time - timedelta(milliseconds=conn_delay_ms),
+                timestamp=_ssh_syslog_time(
+                    time,
+                    "connection",
+                    conn_delay_ms,
+                    *ssh_syslog_seed,
+                    before=True,
+                ),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -7703,27 +7740,33 @@ class ActivityGenerator:
             )
             self.dispatcher.dispatch(conn_msg_event)
 
-            # Primary event: sshd Accepted password
-            event.syslog = SyslogContext(
-                app_name="sshd",
-                pid=sshd_pid,
-                facility=10,
-                severity=6,
-                message=(
-                    f"Accepted password for {user.username} from {source_ip} port {src_port} ssh2"
-                ),
-            )
-
         self.dispatcher.dispatch(event)
 
         # Emit follow-up syslog entries (pam_unix + systemd-logind)
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
+            accepted_event = SecurityEvent(
+                timestamp=_ssh_syslog_time(time, "accepted", 0, *ssh_syslog_seed),
+                event_type="syslog",
+                src_host=event.dst_host,
+                syslog=SyslogContext(
+                    app_name="sshd",
+                    pid=sshd_pid,
+                    facility=10,
+                    severity=6,
+                    message=(
+                        f"Accepted password for {user.username} "
+                        f"from {source_ip} port {src_port} ssh2"
+                    ),
+                ),
+            )
+            self.dispatcher.dispatch(accepted_event)
+
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             hostname = target_system.hostname
             pam_event = SecurityEvent(
-                timestamp=time + timedelta(milliseconds=pam_delay_ms),
+                timestamp=_ssh_syslog_time(time, "pam", pam_delay_ms, *ssh_syslog_seed),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -7740,7 +7783,7 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
-            logind_time = time + timedelta(milliseconds=logind_delay_ms)
+            logind_time = _ssh_syslog_time(time, "logind", logind_delay_ms, *ssh_syslog_seed)
             # Session ID: monotonic + unique per host. StateManager owns this
             # sequence because baseline syslog noise and explicit SSH sessions
             # both produce systemd-logind messages for the same host.
@@ -9783,7 +9826,12 @@ class ActivityGenerator:
     ) -> None:
         """Generate workstation lock event (4800)."""
         session = self.state_manager.get_session(logon_id)
-        if session is None or session.system != system.hostname or session.start_time > time:
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.start_time > time
+            or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+        ):
             return
         if not hasattr(self, "_last_workstation_lock_time"):
             self._last_workstation_lock_time = {}
@@ -9815,7 +9863,12 @@ class ActivityGenerator:
     ) -> None:
         """Generate workstation unlock event (4801 + 4624 type 7)."""
         session = self.state_manager.get_session(logon_id)
-        if session is None or session.system != system.hostname or session.start_time > time:
+        if (
+            session is None
+            or session.system != system.hostname
+            or session.start_time > time
+            or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+        ):
             return
         lock_key = (system.hostname, user.username, logon_id)
         lock_time = getattr(self, "_last_workstation_lock_time", {}).get(lock_key)

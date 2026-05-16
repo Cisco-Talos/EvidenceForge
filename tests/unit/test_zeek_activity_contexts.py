@@ -481,6 +481,7 @@ class TestSslContextPopulation:
         assert timedelta(milliseconds=70) <= base_time - times[0] <= timedelta(milliseconds=160)
         assert timedelta(milliseconds=115) <= times[2] - base_time <= timedelta(milliseconds=270)
         assert times[2] - times[0] != timedelta(seconds=1)
+        assert len({timestamp.microsecond % 1000 for timestamp in times}) == len(times)
 
         logind_events = [
             event
@@ -489,6 +490,9 @@ class TestSslContextPopulation:
         ]
         assert len(logind_events) == 1
         assert logind_events[0].timestamp - times[2] >= timedelta(milliseconds=420)
+        assert logind_events[0].timestamp.microsecond % 1000 not in {
+            timestamp.microsecond % 1000 for timestamp in times
+        }
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen

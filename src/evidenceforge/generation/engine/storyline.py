@@ -43,6 +43,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
+from evidenceforge.generation.activity.generator import _ssh_syslog_time
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     is_stable_resource_path,
@@ -3339,7 +3340,17 @@ class StorylineMixin:
 
         elif spec.type == "workstation_lock":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
-            session = next((s for s in sessions if s.system == system.hostname), None)
+            session = max(
+                (
+                    s
+                    for s in sessions
+                    if s.system == system.hostname
+                    and s.logon_type in (2, 10, 11)
+                    and s.start_time <= time
+                ),
+                key=lambda s: s.start_time,
+                default=None,
+            )
             logon_id = session.logon_id if session else "0x0"
             self.activity_generator.generate_workstation_lock(
                 user=actor,
@@ -3350,7 +3361,17 @@ class StorylineMixin:
 
         elif spec.type == "workstation_unlock":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
-            session = next((s for s in sessions if s.system == system.hostname), None)
+            session = max(
+                (
+                    s
+                    for s in sessions
+                    if s.system == system.hostname
+                    and s.logon_type in (2, 10, 11)
+                    and s.start_time <= time
+                ),
+                key=lambda s: s.start_time,
+                default=None,
+            )
             logon_id = session.logon_id if session else "0x0"
             self.activity_generator.generate_workstation_unlock(
                 user=actor,
@@ -3521,9 +3542,16 @@ class StorylineMixin:
             integrity_level="High" if target_user == "root" else "Medium",
         )
         sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
+        ssh_syslog_seed = (
+            target_system.hostname,
+            source_system.ip,
+            source_port,
+            sshd_pid,
+            transfer_time.isoformat(),
+        )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=80),
+            time=_ssh_syslog_time(transfer_time, "connection", 80, *ssh_syslog_seed),
             app_name="sshd",
             message=(
                 f"Connection from {source_system.ip} port {source_port} "
@@ -3534,7 +3562,7 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=350),
+            time=_ssh_syslog_time(transfer_time, "accepted", 350, *ssh_syslog_seed),
             app_name="sshd",
             message=f"Accepted publickey for {target_user} from {source_system.ip} port {source_port} ssh2",
             pid=sshd_pid,
@@ -3542,7 +3570,7 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=900),
+            time=_ssh_syslog_time(transfer_time, "pam", 900, *ssh_syslog_seed),
             app_name="sshd",
             message=(
                 f"pam_unix(sshd:session): session opened for user "
