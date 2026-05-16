@@ -1,10 +1,15 @@
 # SOF-ELK Harness
 
 This harness validates generated EvidenceForge logs by running SOF-ELK's
-Filebeat and Logstash path without Elasticsearch. It downloads a pinned SOF-ELK
-checkout outside the repository, stages generated logs under SOF-ELK's watched
-paths, runs containerized Filebeat and Logstash, and writes parsed events to
-JSONL.
+Filebeat and Logstash path without Elasticsearch. It requires Docker Compose v2
+or Podman Compose. A short-lived prep service downloads the pinned SOF-ELK repo
+inside Compose-managed volumes, copies selected SOF-ELK configs into an
+ephemeral runtime-config volume, and removes those volumes during cleanup.
+
+EvidenceForge does not vendor SOF-ELK and does not copy SOF-ELK GPL configs
+into the repository or host work directory. The host work directory contains
+only EvidenceForge-owned wrapper config, staged generated logs, parsed JSONL,
+pipeline logs, reports, `compose.yaml`, and the prep script.
 
 ## Runtime Flow
 
@@ -13,13 +18,15 @@ flowchart TD
     A["Generated EvidenceForge data/"] --> B["scripts/external_parser.py"]
     B --> C["Detect supported and unsupported logs"]
     C --> D["Stage files under work-dir/sof-elk/stage/logstash"]
-    D --> E["Build temporary Filebeat and Logstash configs"]
-    E --> F["Run Logstash container"]
-    E --> G["Run Filebeat container"]
-    G --> F
-    F --> H["work-dir/sof-elk/parsed/*.jsonl"]
-    H --> I["Validate counts, tags, fields, timestamps"]
-    I --> J["PASS or sof_elk_parser_failures.json"]
+    D --> E["Write EvidenceForge wrapper configs and compose.yaml"]
+    E --> F["Compose prep service clones pinned SOF-ELK into volumes"]
+    F --> G["Compose logstash-test validates config"]
+    G --> H["Compose logstash service"]
+    H --> I["Compose filebeat service"]
+    I --> H
+    H --> J["work-dir/sof-elk/parsed/*.jsonl"]
+    J --> K["Validate counts, tags, fields, timestamps"]
+    K --> L["PASS or sof_elk_parser_failures.json"]
 ```
 
 The full-dataset command is:
@@ -33,75 +40,92 @@ uv run python scripts/external_parser.py <data-dir> \
 If `--work-dir` is omitted, the runner creates a temporary directory with an
 `eforge-external-parsers-` prefix.
 
+## Compose Runtime
+
+The runner detects `docker compose` first, then `podman compose`. To force a
+runtime:
+
+```bash
+uv run python scripts/external_parser.py <data-dir> --runtime podman
+```
+
+The generated Compose project name is unique per run:
+
+```text
+eforge-sof-elk-<runid>
+```
+
+Services:
+
+| Service | Purpose |
+| --- | --- |
+| `prep` | Clone and pin SOF-ELK, verify required files, copy selected configs into the runtime volume |
+| `logstash-test` | Run Logstash `--config.test_and_exit` |
+| `logstash` | Parse Filebeat-delivered events |
+| `filebeat` | Read staged `/logstash/...` files and send events to Logstash |
+
+The Python orchestrator still owns discovery, staging, progress reporting,
+output polling, report validation, log capture, and cleanup.
+
 ## SOF-ELK Assets
 
-The SOF-ELK checkout is downloaded by the host-side harness, not inside the
-containers. It is not vendored into this repository.
-
-Defaults:
+The prep service uses:
 
 | Item | Source |
 | --- | --- |
+| Prep image | `alpine/git:2.49.1` |
 | SOF-ELK repository | `https://github.com/philhagen/sof-elk.git` |
 | SOF-ELK commit | `SOF_ELK_COMMIT` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
 | Filebeat image | `FILEBEAT_IMAGE` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
 | Logstash image | `LOGSTASH_IMAGE` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
 
-Set `EFORGE_EXTERNAL_CACHE_DIR` to control where SOF-ELK is cached. If unset,
-the harness uses `$XDG_CACHE_HOME/evidenceforge/external-parsers` or
-`~/.cache/evidenceforge/external-parsers`.
+The prep service clones SOF-ELK into a Compose-managed `sof_elk_checkout`
+volume, verifies `git rev-parse HEAD`, and checks every required filter/input
+file before copying selected files into a Compose-managed `runtime_config`
+volume. Logstash and Filebeat mount those volumes read-only.
 
-The checkout is mounted read-only into containers at:
+There is no `EFORGE_EXTERNAL_CACHE_DIR` path and no host-side SOF-ELK checkout
+in normal operation.
 
-```text
-/usr/local/sof-elk
+## Cleanup
+
+The harness calls:
+
+```bash
+docker compose -f <work-dir>/sof-elk/compose.yaml -p eforge-sof-elk-<runid> down -v --remove-orphans
 ```
 
-## Containers
+or the equivalent `podman compose` command. The `-v` flag removes the
+Compose-managed SOF-ELK checkout/config volumes.
 
-One combined SOF-ELK run starts one Logstash container and one Filebeat
-container for all supported log families in that dataset.
-
-Expected container names:
-
-```text
-eforge-logstash-<runid>
-eforge-filebeat-<runid>
-```
-
-Both containers run on an isolated container network and are removed in a
-`finally` block. Interrupted runs can still leave containers behind. Find them
-with:
+Interrupted runs can still leave containers, networks, or volumes behind. Look
+for the generated project name or labels:
 
 ```bash
 docker ps -a --filter label=evidenceforge.external_parser=sof-elk
+docker volume ls --filter label=com.docker.compose.project=eforge-sof-elk-<runid>
 ```
 
-The same label is used for cleanup visibility:
+## Host-Side Configs
+
+For each run, EvidenceForge writes host-side config inputs under:
 
 ```text
-evidenceforge.external_parser=sof-elk
-```
-
-## Temporary Configs
-
-For each run, the harness writes temporary runtime configuration under:
-
-```text
-<work-dir>/sof-elk/runtime-config/
+<work-dir>/sof-elk/runtime-config-src/
 ```
 
 Important paths:
 
 | Path | Purpose |
 | --- | --- |
-| `pipeline/` | Logstash wrapper plus copied SOF-ELK filters |
-| `filebeat.yml` | Filebeat config loading `inputs.d/*.yml` |
-| `filebeat-inputs/` | Copied SOF-ELK Filebeat inputs plus supplemental EvidenceForge Zeek inputs |
+| `pipeline/0000-input-beats.conf` | EvidenceForge-owned Beats input wrapper; preserves SOF-ELK's `process_archive` and `filebeat` tags |
+| `pipeline/0001-capture-original.conf` | EvidenceForge-owned `event.original` capture wrapper |
+| `pipeline/9999-output-jsonl.conf` | EvidenceForge-owned JSONL output wrapper |
+| `filebeat.yml` | EvidenceForge-owned Filebeat config pointing at `/runtime-config/filebeat-inputs/*.yml` |
+| `filebeat-inputs/evidenceforge-zeek.yml` | Supplemental EvidenceForge Zeek inputs for logs SOF-ELK does not watch |
 
-The Logstash pipeline uses SOF-ELK filter files unchanged, adds a small
-`event.original` capture wrapper, and replaces Elasticsearch output with JSONL
-file output.
+SOF-ELK filter files and SOF-ELK Filebeat inputs are not written here. They are
+copied by the prep service into the ephemeral `runtime_config` volume.
 
 ## Staging Layout
 
@@ -139,10 +163,10 @@ Given `--work-dir <work-dir>`, useful artifacts are:
 
 | Path | Purpose |
 | --- | --- |
+| `<work-dir>/sof-elk/compose.yaml` | Generated Compose topology |
+| `<work-dir>/sof-elk/prep-sof-elk.sh` | Prep service script |
+| `<work-dir>/sof-elk/runtime-config-src/` | EvidenceForge-owned wrapper/supplemental configs |
 | `<work-dir>/sof-elk/stage/logstash/...` | All staged files as SOF-ELK sees them |
-| `<work-dir>/sof-elk/runtime-config/pipeline/` | Temporary Logstash pipeline wrapper plus copied SOF-ELK filters |
-| `<work-dir>/sof-elk/runtime-config/filebeat.yml` | Filebeat config for generated inputs |
-| `<work-dir>/sof-elk/runtime-config/filebeat-inputs/` | Copied Filebeat inputs and supplemental Zeek inputs |
 | `<work-dir>/sof-elk/parsed/*.jsonl` | Parsed events by SOF-ELK label type |
 | `<work-dir>/sof-elk/parsed/sof_elk_parser_failures.json` | Structured failure report |
 | `<work-dir>/sof-elk/pipeline-logs/filebeat.log` | Filebeat log |
@@ -156,6 +180,8 @@ output paths, fatal tag counts, and representative samples with
 
 The harness fails when:
 
+- Compose is unavailable.
+- Prep service clone, checkout, or required-file verification fails.
 - Logstash config validation fails.
 - Filebeat or Logstash exits unexpectedly.
 - Output count does not match staged input count.

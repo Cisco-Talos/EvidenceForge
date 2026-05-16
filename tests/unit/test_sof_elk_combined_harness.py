@@ -76,21 +76,23 @@ def test_build_sof_elk_configs_uses_one_pipeline_and_all_inputs(
 ) -> None:
     data_dir = _combined_data_dir(fixtures_dir, tmp_path)
     manifest = stage_sof_elk_logs(data_dir, tmp_path / "stage", _all_validators())
-    sof_elk_dir = _fake_sof_elk_dir(tmp_path)
+    config = build_sof_elk_configs(tmp_path, manifest)
 
-    pipeline_dir, filebeat_config = build_sof_elk_configs(sof_elk_dir, tmp_path, manifest)
-
-    input_dir = filebeat_config.parent / "filebeat-inputs"
-    assert (input_dir / "zeek.yml").exists()
+    input_dir = config.filebeat_inputs_dir
+    assert config.sof_elk_filebeat_inputs == ("zeek.yml", "syslog.yml", "httpdlog.yml")
+    assert not (input_dir / "zeek.yml").exists()
     assert (input_dir / "evidenceforge-zeek.yml").exists()
-    assert (input_dir / "syslog.yml").exists()
-    assert (input_dir / "httpdlog.yml").exists()
+    assert not (input_dir / "syslog.yml").exists()
+    assert not (input_dir / "httpdlog.yml").exists()
     assert 'path => "/parsed-output/%{[labels][type]}.jsonl"' in (
-        pipeline_dir / "9999-output-jsonl.conf"
+        config.pipeline_dir / "9999-output-jsonl.conf"
     ).read_text(encoding="utf-8")
-    assert (pipeline_dir / "6018-cisco_asa.conf").exists()
-    assert (pipeline_dir / "6100-httpd.conf").exists()
-    assert (pipeline_dir / "6015-sshd.conf").exists()
+    assert "6018-cisco_asa.conf" in config.sof_elk_filter_files
+    assert "6100-httpd.conf" in config.sof_elk_filter_files
+    assert "6015-sshd.conf" in config.sof_elk_filter_files
+    assert not (config.pipeline_dir / "6018-cisco_asa.conf").exists()
+    assert not (config.pipeline_dir / "6100-httpd.conf").exists()
+    assert not (config.pipeline_dir / "6015-sshd.conf").exists()
 
 
 def test_validate_sof_elk_output_writes_one_consolidated_failure_report(

@@ -97,14 +97,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Seconds to wait for parser output before failing",
     )
     parser.add_argument(
-        "--cache-dir",
-        type=Path,
-        help="External cache directory for downloaded parser assets",
-    )
-    parser.add_argument(
         "--runtime",
         choices=("docker", "podman"),
-        help="Container runtime to use; default auto-detects Docker then Podman",
+        help="Compose-backed container runtime to use; default auto-detects Docker then Podman",
     )
     parser.add_argument(
         "--validator",
@@ -148,7 +143,6 @@ def _run(args: argparse.Namespace) -> int:
         validators,
         data_dir=data_dir,
         work_dir=work_dir / "sof-elk",
-        cache_dir=args.cache_dir,
         timeout=args.timeout,
         runtime=args.runtime,
     )
@@ -216,7 +210,6 @@ def _run_validators(
     *,
     data_dir: Path,
     work_dir: Path,
-    cache_dir: Path | None,
     timeout: int,
     runtime: str | None,
 ) -> int:
@@ -279,7 +272,6 @@ def _run_validators(
                 data_dir,
                 work_dir,
                 validators=validators,
-                cache_dir=cache_dir,
                 timeout_seconds=timeout,
                 runtime=runtime,
                 progress_callback=progress_callback,
@@ -337,7 +329,8 @@ def _print_artifact_paths(work_dir: Path) -> None:
     console.print(f"  Staged input: {work_dir / 'stage' / 'logstash'}")
     console.print(f"  Parsed JSONL: {work_dir / 'parsed'}")
     console.print(f"  Pipeline logs: {work_dir / 'pipeline-logs'}")
-    console.print(f"  Runtime config: {work_dir / 'runtime-config'}")
+    console.print(f"  Compose file: {work_dir / 'compose.yaml'}")
+    console.print(f"  EvidenceForge runtime config: {work_dir / 'runtime-config-src'}")
 
 
 if __name__ == "__main__":

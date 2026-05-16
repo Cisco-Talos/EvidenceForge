@@ -101,59 +101,43 @@ def test_stage_source_logs_preserves_syslog_subdirectories(tmp_path: Path) -> No
     }
 
 
-def test_build_sof_elk_source_configs_reuses_sof_elk_syslog_input(tmp_path: Path) -> None:
-    sof_elk_dir = _fake_sof_elk_dir(tmp_path, CISCO_ASA_SPEC)
+def test_build_sof_elk_source_configs_requests_sof_elk_syslog_input(tmp_path: Path) -> None:
+    config = build_sof_elk_source_configs(tmp_path, CISCO_ASA_SPEC)
 
-    pipeline_dir, filebeat_config = build_sof_elk_source_configs(
-        sof_elk_dir,
-        tmp_path,
-        CISCO_ASA_SPEC,
+    assert "/runtime-config/filebeat-inputs/*.yml" in config.filebeat_config.read_text(
+        encoding="utf-8"
     )
-
-    assert "/usr/share/filebeat/inputs.d/*.yml" in filebeat_config.read_text(encoding="utf-8")
-    assert (filebeat_config.parent / "filebeat-inputs" / "syslog.yml").exists()
+    assert config.sof_elk_filebeat_inputs == ("syslog.yml",)
+    assert not (config.filebeat_inputs_dir / "syslog.yml").exists()
     assert 'copy => { "message" => "[event][original]" }' in (
-        pipeline_dir / "0001-capture-original.conf"
+        config.pipeline_dir / "0001-capture-original.conf"
     ).read_text(encoding="utf-8")
     assert f"/parsed-output/{EVENTS_OUTPUT_FILENAME}" in (
-        pipeline_dir / "9999-output-jsonl.conf"
+        config.pipeline_dir / "9999-output-jsonl.conf"
     ).read_text(encoding="utf-8")
+    assert config.sof_elk_filter_files == CISCO_ASA_SPEC.filter_files
     for filter_file in CISCO_ASA_SPEC.filter_files:
-        assert (pipeline_dir / filter_file).exists()
+        assert not (config.pipeline_dir / filter_file).exists()
 
 
-def test_build_sof_elk_source_configs_reuses_sof_elk_syslog_filters(tmp_path: Path) -> None:
-    sof_elk_dir = _fake_sof_elk_dir(tmp_path, SYSLOG_SPEC)
+def test_build_sof_elk_source_configs_requests_sof_elk_syslog_filters(tmp_path: Path) -> None:
+    config = build_sof_elk_source_configs(tmp_path, SYSLOG_SPEC)
 
-    pipeline_dir, filebeat_config = build_sof_elk_source_configs(
-        sof_elk_dir,
-        tmp_path,
-        SYSLOG_SPEC,
-    )
-
-    assert (filebeat_config.parent / "filebeat-inputs" / "syslog.yml").exists()
-    assert "/logstash/syslog/**" in (
-        filebeat_config.parent / "filebeat-inputs" / "syslog.yml"
-    ).read_text(encoding="utf-8")
+    assert config.sof_elk_filebeat_inputs == ("syslog.yml",)
+    assert config.sof_elk_filter_files == SYSLOG_SPEC.filter_files
+    assert not (config.filebeat_inputs_dir / "syslog.yml").exists()
     for filter_file in SYSLOG_SPEC.filter_files:
-        assert (pipeline_dir / filter_file).exists()
+        assert not (config.pipeline_dir / filter_file).exists()
 
 
-def test_build_sof_elk_source_configs_reuses_sof_elk_httpdlog_input(tmp_path: Path) -> None:
-    sof_elk_dir = _fake_sof_elk_dir(tmp_path, WEB_ACCESS_SPEC)
+def test_build_sof_elk_source_configs_requests_sof_elk_httpdlog_input(tmp_path: Path) -> None:
+    config = build_sof_elk_source_configs(tmp_path, WEB_ACCESS_SPEC)
 
-    pipeline_dir, filebeat_config = build_sof_elk_source_configs(
-        sof_elk_dir,
-        tmp_path,
-        WEB_ACCESS_SPEC,
-    )
-
-    assert (filebeat_config.parent / "filebeat-inputs" / "httpdlog.yml").exists()
-    assert "/logstash/httpd/**" in (
-        filebeat_config.parent / "filebeat-inputs" / "httpdlog.yml"
-    ).read_text(encoding="utf-8")
+    assert config.sof_elk_filebeat_inputs == ("httpdlog.yml",)
+    assert not (config.filebeat_inputs_dir / "httpdlog.yml").exists()
+    assert config.sof_elk_filter_files == WEB_ACCESS_SPEC.filter_files
     for filter_file in WEB_ACCESS_SPEC.filter_files:
-        assert (pipeline_dir / filter_file).exists()
+        assert not (config.pipeline_dir / filter_file).exists()
 
 
 def test_validate_source_parsed_output_accepts_cisco_asa_parse(tmp_path: Path) -> None:

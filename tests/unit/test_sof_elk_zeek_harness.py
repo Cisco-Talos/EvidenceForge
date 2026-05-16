@@ -187,38 +187,25 @@ def test_stage_zeek_logs_keeps_corrupt_dns_for_external_parser(tmp_path: Path) -
     assert (manifest.logstash_root / "zeek" / "sensor-a" / "dns.log").exists()
 
 
-def test_build_sof_elk_zeek_configs_reuses_sof_elk_filebeat_input(tmp_path: Path) -> None:
-    sof_elk_dir = tmp_path / "sof-elk"
-    (sof_elk_dir / "lib" / "filebeat_inputs").mkdir(parents=True)
-    (sof_elk_dir / "configfiles").mkdir()
-    (sof_elk_dir / "lib" / "filebeat_inputs" / "zeek.yml").write_text(
-        "- type: filestream\n  paths:\n    - /logstash/zeek/**/conn.*\n",
-        encoding="utf-8",
-    )
-    for filter_file in SOF_ELK_FILTER_FILES:
-        (sof_elk_dir / "configfiles" / filter_file).write_text(
-            "filter { }\n",
-            encoding="utf-8",
-        )
+def test_build_sof_elk_zeek_configs_requests_sof_elk_filebeat_input(tmp_path: Path) -> None:
+    config = build_sof_elk_zeek_configs(tmp_path)
 
-    pipeline_dir, filebeat_config = build_sof_elk_zeek_configs(sof_elk_dir, tmp_path)
-
-    assert "/usr/share/filebeat/inputs.d/*.yml" in filebeat_config.read_text(encoding="utf-8")
-    assert (
-        (filebeat_config.parent / "filebeat-inputs" / "zeek.yml")
-        .read_text(encoding="utf-8")
-        .startswith("- type: filestream")
+    assert "/runtime-config/filebeat-inputs/*.yml" in config.filebeat_config.read_text(
+        encoding="utf-8"
     )
-    supplemental_inputs = (
-        filebeat_config.parent / "filebeat-inputs" / "evidenceforge-zeek.yml"
-    ).read_text(encoding="utf-8")
+    assert config.sof_elk_filebeat_inputs == ("zeek.yml",)
+    assert not (config.filebeat_inputs_dir / "zeek.yml").exists()
+    supplemental_inputs = (config.filebeat_inputs_dir / "evidenceforge-zeek.yml").read_text(
+        encoding="utf-8"
+    )
     assert "type: zeek_ntp" in supplemental_inputs
     assert "/logstash/zeek/**/reporter.*" in supplemental_inputs
     assert 'path => "/parsed-output/%{[labels][type]}.jsonl"' in (
-        pipeline_dir / "9999-output-jsonl.conf"
+        config.pipeline_dir / "9999-output-jsonl.conf"
     ).read_text(encoding="utf-8")
+    assert config.sof_elk_filter_files == SOF_ELK_FILTER_FILES
     for filter_file in SOF_ELK_FILTER_FILES:
-        assert (pipeline_dir / filter_file).exists()
+        assert not (config.pipeline_dir / filter_file).exists()
 
 
 def test_validate_parsed_output_accepts_expected_sof_elk_fields(

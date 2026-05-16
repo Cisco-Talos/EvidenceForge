@@ -63,7 +63,8 @@ uv run pytest --include-slow -m slow --no-cov --durations=20
 ```
 
 Run optional third-party parser validation when touching emitted log formats
-covered by an external parser harness:
+covered by an external parser harness. This lane requires Docker Compose v2 or
+Podman Compose:
 
 ```bash
 uv run pytest --include-external-parsers -m external_parser --no-cov

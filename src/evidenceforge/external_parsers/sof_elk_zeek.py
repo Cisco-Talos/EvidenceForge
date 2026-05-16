@@ -25,17 +25,21 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import subprocess
-import time
-import uuid
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from evidenceforge.external_parsers.compose_runtime import (
+    SofElkGeneratedConfig,
+    build_generated_config,
+    create_compose_run,
+    find_compose_runtime,
+    run_sof_elk_compose,
+)
+from evidenceforge.external_parsers.errors import SofElkHarnessError, SofElkParserError
 from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_ZEEK_VALIDATOR,
     classify_parser_tags,
@@ -46,7 +50,6 @@ SOF_ELK_COMMIT = "517af9445574cc084cd5f4b80539fc244dab82b0"
 FILEBEAT_IMAGE = "docker.elastic.co/beats/filebeat:8.19.0"
 LOGSTASH_IMAGE = "docker.elastic.co/logstash/logstash:8.19.0"
 HARNESS_CONTAINER_LABEL = "evidenceforge.external_parser=sof-elk-zeek"
-HARNESS_RUN_ID_LABEL = "evidenceforge.external_parser.run_id"
 FAILURE_REPORT_FILENAME = "sof_elk_parser_failures.json"
 FAILURE_DETAIL_LIMIT = 25
 
@@ -233,14 +236,6 @@ SUPPLEMENTAL_FILEBEAT_SPECS = tuple(
 )
 
 
-class SofElkHarnessError(RuntimeError):
-    """Raised when the external SOF-ELK harness cannot run."""
-
-
-class SofElkParserError(AssertionError):
-    """Raised when SOF-ELK parses fewer events or produces invalid events."""
-
-
 @dataclass(frozen=True)
 class DnsExpectation:
     """Raw DNS fields that SOF-ELK should preserve when present."""
@@ -287,75 +282,9 @@ class SofElkZeekResult:
     logstash_config_tested: bool
 
 
-def default_external_cache_dir() -> Path:
-    """Return the cache directory used for runtime-downloaded parser assets."""
-    configured_cache = os.environ.get("EFORGE_EXTERNAL_CACHE_DIR")
-    if configured_cache:
-        return Path(configured_cache).expanduser()
-
-    xdg_cache = os.environ.get("XDG_CACHE_HOME")
-    if xdg_cache:
-        return Path(xdg_cache).expanduser() / "evidenceforge" / "external-parsers"
-
-    return Path.home() / ".cache" / "evidenceforge" / "external-parsers"
-
-
-def ensure_sof_elk_checkout(
-    cache_dir: Path | None = None,
-    *,
-    repo_url: str = SOF_ELK_REPO_URL,
-    commit: str = SOF_ELK_COMMIT,
-) -> Path:
-    """Clone and pin SOF-ELK outside the repository if it is not cached.
-
-    Args:
-        cache_dir: Optional external cache root.
-        repo_url: Git repository URL to clone.
-        commit: Exact SOF-ELK commit to check out.
-
-    Returns:
-        Path to the pinned SOF-ELK checkout.
-    """
-    root = (cache_dir or default_external_cache_dir()).expanduser()
-    checkout = root / f"sof-elk-{commit[:12]}"
-
-    if checkout.exists():
-        existing = _run(
-            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
-            description="check cached SOF-ELK revision",
-        ).stdout.strip()
-        if existing != commit:
-            message = (
-                f"cached SOF-ELK checkout at {checkout} is {existing}, expected {commit}; "
-                "remove it or set EFORGE_EXTERNAL_CACHE_DIR to a clean cache"
-            )
-            raise SofElkHarnessError(message)
-        _assert_sof_elk_files_exist(checkout)
-        return checkout
-
-    root.mkdir(parents=True, exist_ok=True)
-    _run(
-        ["git", "clone", "--filter=blob:none", "--no-checkout", repo_url, str(checkout)],
-        description="clone SOF-ELK",
-        timeout=180,
-    )
-    _run(
-        ["git", "-C", str(checkout), "checkout", commit],
-        description="checkout pinned SOF-ELK revision",
-        timeout=120,
-    )
-    _assert_sof_elk_files_exist(checkout)
-    return checkout
-
-
 def find_container_runtime() -> str:
-    """Return the available container runtime command, preferring Docker."""
-    for runtime in ("docker", "podman"):
-        if shutil.which(runtime) and _container_runtime_available(runtime):
-            return runtime
-    raise SofElkHarnessError(
-        "Docker or Podman with an accessible daemon is required for external parser tests"
-    )
+    """Return the available Compose-backed runtime, preferring Docker."""
+    return find_compose_runtime().runtime
 
 
 def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
@@ -411,75 +340,14 @@ def stage_zeek_logs(source_root: Path, staging_root: Path) -> ZeekStageManifest:
     )
 
 
-def build_sof_elk_zeek_configs(sof_elk_dir: Path, work_dir: Path) -> tuple[Path, Path]:
-    """Create temporary Filebeat and Logstash configs that reuse SOF-ELK assets.
-
-    Args:
-        sof_elk_dir: Pinned SOF-ELK checkout.
-        work_dir: Temporary directory for generated config files.
-
-    Returns:
-        Tuple of `(pipeline_dir, filebeat_config_path)`.
-    """
-    _assert_sof_elk_files_exist(sof_elk_dir)
-    config_root = work_dir.resolve() / "runtime-config"
-    pipeline_dir = config_root / "pipeline"
-    filebeat_inputs_dir = config_root / "filebeat-inputs"
-    pipeline_dir.mkdir(parents=True, exist_ok=True)
-    filebeat_inputs_dir.mkdir(parents=True, exist_ok=True)
-
-    (pipeline_dir / "0000-input-beats.conf").write_text(
-        """input {
-  beats {
-    port => 5044
-    tags => [ "filebeat" ]
-  }
-}
-""",
-        encoding="utf-8",
+def build_sof_elk_zeek_configs(work_dir: Path) -> SofElkGeneratedConfig:
+    """Create EvidenceForge-owned configs consumed by the SOF-ELK prep service."""
+    return build_generated_config(
+        work_dir,
+        sof_elk_filter_files=SOF_ELK_FILTER_FILES,
+        sof_elk_filebeat_inputs=("zeek.yml",),
+        supplemental_filebeat_inputs=_supplemental_filebeat_inputs(),
     )
-    for filter_file in SOF_ELK_FILTER_FILES:
-        shutil.copyfile(
-            sof_elk_dir / "configfiles" / filter_file,
-            pipeline_dir / filter_file,
-        )
-    shutil.copyfile(
-        sof_elk_dir / "lib" / "filebeat_inputs" / "zeek.yml",
-        filebeat_inputs_dir / "zeek.yml",
-    )
-    supplemental_inputs = _supplemental_filebeat_inputs()
-    if supplemental_inputs:
-        (filebeat_inputs_dir / "evidenceforge-zeek.yml").write_text(
-            supplemental_inputs,
-            encoding="utf-8",
-        )
-    (pipeline_dir / "9999-output-jsonl.conf").write_text(
-        """output {
-  file {
-    path => "/parsed-output/%{[labels][type]}.jsonl"
-    codec => json_lines
-  }
-}
-""",
-        encoding="utf-8",
-    )
-
-    filebeat_config = config_root / "filebeat.yml"
-    filebeat_config.write_text(
-        """filebeat.config.inputs:
-  enabled: true
-  path: /usr/share/filebeat/inputs.d/*.yml
-  reload.enabled: false
-
-output.logstash:
-  hosts: ["logstash:5044"]
-
-logging.level: info
-path.data: /usr/share/filebeat/data
-""",
-        encoding="utf-8",
-    )
-    return pipeline_dir, filebeat_config
 
 
 def _supplemental_filebeat_inputs() -> str:
@@ -510,7 +378,6 @@ def run_sof_elk_zeek_parser(
     source_root: Path,
     work_dir: Path,
     *,
-    cache_dir: Path | None = None,
     timeout_seconds: int = 120,
     runtime: str | None = None,
     progress_callback: ProgressCallback = _noop_progress,
@@ -520,9 +387,8 @@ def run_sof_elk_zeek_parser(
     Args:
         source_root: Root containing generated EvidenceForge Zeek logs.
         work_dir: Temporary work/output root.
-        cache_dir: Optional runtime cache for SOF-ELK.
         timeout_seconds: Polling timeout for containerized parser output.
-        runtime: Optional container runtime command, mainly for tests.
+        runtime: Optional Compose-backed container runtime, mainly for tests.
         progress_callback: Optional callback for high-level parser stages.
 
     Returns:
@@ -545,26 +411,29 @@ def run_sof_elk_zeek_parser(
 
     progress_callback("validator_step", {"description": "Staging Zeek files"})
     manifest = stage_zeek_logs(source_root, staging_dir)
-    progress_callback("validator_step", {"description": "Preparing SOF-ELK checkout"})
-    sof_elk_dir = ensure_sof_elk_checkout(cache_dir)
     progress_callback("validator_step", {"description": "Building runtime config"})
-    pipeline_dir, filebeat_config = build_sof_elk_zeek_configs(sof_elk_dir, work_dir)
-    container_runtime = runtime or find_container_runtime()
-
-    progress_callback("validator_step", {"description": "Validating Logstash config"})
-    _validate_logstash_config(container_runtime, pipeline_dir, sof_elk_dir, parsed_dir)
-    progress_callback("validator_step", {"description": "Running Filebeat and Logstash"})
-    _run_containers(
-        container_runtime,
-        manifest=manifest,
-        sof_elk_dir=sof_elk_dir,
-        pipeline_dir=pipeline_dir,
-        filebeat_config=filebeat_config,
+    generated_config = build_sof_elk_zeek_configs(work_dir)
+    compose_run = create_compose_run(
+        work_dir=work_dir,
+        generated_config=generated_config,
+        logstash_root=manifest.logstash_root,
         parsed_dir=parsed_dir,
         filebeat_data_dir=filebeat_data_dir,
         logstash_data_dir=logstash_data_dir,
+        repo_url=SOF_ELK_REPO_URL,
+        commit=SOF_ELK_COMMIT,
+        filebeat_image=FILEBEAT_IMAGE,
+        logstash_image=LOGSTASH_IMAGE,
+        runtime=runtime,
+        container_label=HARNESS_CONTAINER_LABEL,
+    )
+    run_sof_elk_compose(
+        compose_run,
+        expected_output_counts=manifest.expected_counts,
+        parsed_dir=parsed_dir,
         pipeline_log_dir=pipeline_log_dir,
         timeout_seconds=timeout_seconds,
+        progress_callback=progress_callback,
     )
     progress_callback("validator_step", {"description": "Checking parsed output"})
     try:
@@ -749,184 +618,6 @@ def _update_scope_progress(
     )
 
 
-def _run_containers(
-    runtime: str,
-    *,
-    manifest: ZeekStageManifest,
-    sof_elk_dir: Path,
-    pipeline_dir: Path,
-    filebeat_config: Path,
-    parsed_dir: Path,
-    filebeat_data_dir: Path,
-    logstash_data_dir: Path,
-    pipeline_log_dir: Path,
-    timeout_seconds: int,
-) -> None:
-    run_id = uuid.uuid4().hex[:12]
-    network = f"eforge-sof-elk-{run_id}"
-    logstash_name = f"eforge-logstash-{run_id}"
-    filebeat_name = f"eforge-filebeat-{run_id}"
-    created_network = False
-    logstash_started = False
-    filebeat_started = False
-
-    try:
-        _run([runtime, "network", "create", network], description="create parser network")
-        created_network = True
-        _run(
-            [
-                runtime,
-                "run",
-                "-d",
-                "--name",
-                logstash_name,
-                *_container_label_args(run_id),
-                "--network",
-                network,
-                "--network-alias",
-                "logstash",
-                "-e",
-                "LS_JAVA_OPTS=-Xms512m -Xmx512m",
-                "-v",
-                f"{pipeline_dir}:/usr/share/logstash/pipeline:ro",
-                "-v",
-                f"{sof_elk_dir}:/usr/local/sof-elk:ro",
-                "-v",
-                f"{parsed_dir}:/parsed-output",
-                "-v",
-                f"{logstash_data_dir}:/usr/share/logstash/data",
-                "-e",
-                "XPACK_MONITORING_ENABLED=false",
-                LOGSTASH_IMAGE,
-                "-f",
-                "/usr/share/logstash/pipeline",
-            ],
-            description="start Logstash parser",
-        )
-        logstash_started = True
-        _wait_for_logstash(runtime, logstash_name, timeout_seconds)
-        _run(
-            [
-                runtime,
-                "run",
-                "-d",
-                "--name",
-                filebeat_name,
-                *_container_label_args(run_id),
-                "--network",
-                network,
-                "--user",
-                "root",
-                "-v",
-                f"{manifest.logstash_root}:/logstash:ro",
-                "-v",
-                f"{sof_elk_dir}:/usr/local/sof-elk:ro",
-                "-v",
-                f"{filebeat_config}:/usr/share/filebeat/filebeat.yml:ro",
-                "-v",
-                f"{filebeat_config.parent / 'filebeat-inputs'}:/usr/share/filebeat/inputs.d:ro",
-                "-v",
-                f"{filebeat_data_dir}:/usr/share/filebeat/data",
-                FILEBEAT_IMAGE,
-                "-e",
-                "--strict.perms=false",
-            ],
-            description="start Filebeat parser feeder",
-        )
-        filebeat_started = True
-        _wait_for_expected_output(manifest, parsed_dir, timeout_seconds)
-    finally:
-        if filebeat_started:
-            (pipeline_log_dir / "filebeat.log").write_text(
-                _container_logs(runtime, filebeat_name),
-                encoding="utf-8",
-            )
-        if logstash_started:
-            (pipeline_log_dir / "logstash.log").write_text(
-                _container_logs(runtime, logstash_name),
-                encoding="utf-8",
-            )
-        _container_rm_force(runtime, filebeat_name)
-        _container_rm_force(runtime, logstash_name)
-        if created_network:
-            _network_rm(runtime, network)
-
-
-def _validate_logstash_config(
-    runtime: str,
-    pipeline_dir: Path,
-    sof_elk_dir: Path,
-    parsed_dir: Path,
-) -> None:
-    _run(
-        [
-            runtime,
-            "run",
-            "--rm",
-            "-e",
-            "LS_JAVA_OPTS=-Xms512m -Xmx512m",
-            "-v",
-            f"{pipeline_dir}:/usr/share/logstash/pipeline:ro",
-            "-v",
-            f"{sof_elk_dir}:/usr/local/sof-elk:ro",
-            "-v",
-            f"{parsed_dir}:/parsed-output",
-            "-e",
-            "XPACK_MONITORING_ENABLED=false",
-            LOGSTASH_IMAGE,
-            "-f",
-            "/usr/share/logstash/pipeline",
-            "--config.test_and_exit",
-        ],
-        description="validate Logstash parser config",
-        timeout=600,
-    )
-
-
-def _wait_for_logstash(runtime: str, container_name: str, timeout_seconds: int) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    ready_markers = (
-        "Starting server on port: 5044",
-        "Beats inputs: Starting input listener",
-        "Pipeline started",
-    )
-    last_logs = ""
-    while time.monotonic() < deadline:
-        last_logs = _container_logs(runtime, container_name)
-        if any(marker in last_logs for marker in ready_markers):
-            return
-        time.sleep(1)
-    raise SofElkHarnessError(
-        "Logstash did not start its Beats listener before timeout. "
-        f"Recent logs:\n{last_logs[-4000:]}"
-    )
-
-
-def _wait_for_expected_output(
-    manifest: ZeekStageManifest,
-    parsed_dir: Path,
-    timeout_seconds: int,
-) -> None:
-    expected = manifest.expected_counts
-    deadline = time.monotonic() + timeout_seconds
-
-    while time.monotonic() < deadline:
-        if all(
-            _count_jsonl_lines(parsed_dir / f"{log_type}.jsonl") >= count
-            for log_type, count in expected.items()
-        ):
-            return
-        time.sleep(1)
-
-    observed = {
-        log_type: _count_jsonl_lines(parsed_dir / f"{log_type}.jsonl") for log_type in LOG_TYPES
-    }
-    raise SofElkParserError(
-        f"SOF-ELK output timed out after {timeout_seconds}s; expected {expected}, "
-        f"observed {observed}"
-    )
-
-
 def _event_failures(
     log_type: LogType,
     index: int,
@@ -1078,105 +769,6 @@ def _failure_tags(log_type: LogType, event: JsonObject, tags: list[Any]) -> list
             tags=tags,
             event=event,
         ).fatal
-    )
-
-
-def _assert_sof_elk_files_exist(sof_elk_dir: Path) -> None:
-    required_paths = [
-        sof_elk_dir / "lib" / "filebeat_inputs" / "zeek.yml",
-        *(sof_elk_dir / "configfiles" / filename for filename in SOF_ELK_FILTER_FILES),
-    ]
-    missing = [path for path in required_paths if not path.exists()]
-    if missing:
-        formatted = ", ".join(str(path) for path in missing)
-        raise SofElkHarnessError(f"SOF-ELK checkout is missing required files: {formatted}")
-
-
-def _run(
-    cmd: list[str],
-    *,
-    description: str,
-    timeout: int | None = None,
-) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        output = _timeout_output(exc)
-        detail = f"\nPartial output:\n{output}" if output else ""
-        raise SofElkHarnessError(f"{description} timed out after {timeout}s{detail}") from exc
-    except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.strip()
-        stdout = exc.stdout.strip()
-        output = stderr or stdout or f"exit code {exc.returncode}"
-        raise SofElkHarnessError(f"failed to {description}: {output}") from exc
-
-
-def _container_runtime_available(runtime: str) -> bool:
-    try:
-        completed = subprocess.run(
-            [runtime, "info"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except subprocess.TimeoutExpired:
-        return False
-    return completed.returncode == 0
-
-
-def _timeout_output(exc: subprocess.TimeoutExpired) -> str:
-    parts: list[str] = []
-    for value in (exc.stdout, exc.stderr):
-        if not value:
-            continue
-        if isinstance(value, bytes):
-            parts.append(value.decode("utf-8", errors="replace").strip())
-        else:
-            parts.append(value.strip())
-    return "\n".join(part for part in parts if part)
-
-
-def _container_logs(runtime: str, container_name: str) -> str:
-    completed = subprocess.run(
-        [runtime, "logs", container_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    return completed.stdout + completed.stderr
-
-
-def _container_label_args(run_id: str) -> list[str]:
-    return [
-        "--label",
-        HARNESS_CONTAINER_LABEL,
-        "--label",
-        f"{HARNESS_RUN_ID_LABEL}={run_id}",
-    ]
-
-
-def _container_rm_force(runtime: str, container_name: str) -> None:
-    subprocess.run(
-        [runtime, "rm", "-f", container_name],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-
-def _network_rm(runtime: str, network: str) -> None:
-    subprocess.run(
-        [runtime, "network", "rm", network],
-        check=False,
-        capture_output=True,
-        text=True,
     )
 
 

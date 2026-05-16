@@ -4,10 +4,11 @@ External Parser Validation checks generated EvidenceForge logs with third-party
 parsers. The goal is format and parseability validation, not blind realism
 review and not the deterministic `eforge eval` scoring model.
 
-The current implementation uses SOF-ELK's Filebeat and Logstash parsing path.
-Generated files are staged in the directory layout SOF-ELK expects, parsed by
-unchanged SOF-ELK configs from a pinned checkout, and written to temporary
-JSONL artifacts instead of Elasticsearch.
+The current implementation uses SOF-ELK's Filebeat and Logstash parsing path
+through Docker Compose or Podman Compose. Generated files are staged in the
+directory layout SOF-ELK expects, a short-lived prep service downloads the
+pinned SOF-ELK checkout into Compose-managed volumes, and parsed events are
+written to temporary JSONL artifacts instead of Elasticsearch.
 
 ## Quickstart
 
@@ -30,6 +31,10 @@ uv run python scripts/external_parser.py \
 The runner auto-detects supported logs. Do not pass validator names for normal
 use. Unsupported logs are reported as warnings so new formats are visible
 without blocking supported parser checks.
+
+Docker Compose v2 or Podman Compose is required. The default runtime is Docker
+Compose when available, then Podman Compose. Use `--runtime podman` to force
+Podman Compose.
 
 Run the contributor smoke lane when changing emitted formats covered by this
 pipeline:
@@ -68,6 +73,8 @@ On failure, the most useful files are under the run work directory:
 | `sof-elk/stage/logstash/...` | The exact files as staged for SOF-ELK |
 | `sof-elk/pipeline-logs/filebeat.log` | Filebeat container log |
 | `sof-elk/pipeline-logs/logstash.log` | Logstash container log |
+| `sof-elk/compose.yaml` | Generated Compose topology |
+| `sof-elk/runtime-config-src/` | EvidenceForge-owned wrapper configs consumed by the prep service |
 
 Fatal failures are things that mean a record did not parse or required
 normalized fields are missing. Optional enrichment misses are ignored only when

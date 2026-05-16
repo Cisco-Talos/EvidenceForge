@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Move SOF-ELK external parser execution to a Compose-only runtime with an ephemeral prep container so GPL parser configs stay out of the repo and host work directory.
 - [x] Consolidate external parser validation docs, contributor guidance, ignored-tag documentation, and local skill instructions under the new developer-facing workflow.
 - [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier flushes to write year-partitioned syslog files, while preserving final sort/logind normalization at close.
 - [x] Treat SOF-ELK PAM auth-failure remainder misses as optional enrichment only after the PAM envelope has parsed, and polish generated console PAM auth failures to a more canonical `/dev/tty1` shape.

@@ -247,7 +247,8 @@ uv run pytest --no-cov
 # Run slow comprehensive workload tests without coverage instrumentation
 uv run pytest --include-slow -m slow --no-cov --durations=20
 
-# Run optional third-party parser validation tests
+# Run optional third-party parser validation tests.
+# Requires Docker Compose v2 or Podman Compose.
 uv run pytest --include-external-parsers -m external_parser --no-cov
 
 # Run the release coverage gate before a dev -> main PR

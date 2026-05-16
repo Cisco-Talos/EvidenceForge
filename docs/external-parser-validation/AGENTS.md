@@ -9,7 +9,7 @@ Start here:
 1. Read `README.md` for the purpose and quickstart.
 2. Read `coverage-matrix.md` before adding or changing parser coverage.
 3. Read `ignored-parser-tags.md` before touching tag policy.
-4. Read `sof-elk-harness.md` before changing Docker, Podman, staging, or
+4. Read `sof-elk-harness.md` before changing Compose runtime, staging, or
    SOF-ELK config handling.
 
 Primary full-dataset command:
