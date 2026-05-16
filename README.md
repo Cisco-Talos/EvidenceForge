@@ -261,9 +261,9 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-See [External Parser Validation](docs/reference/external-parser-validation.md)
-for the SOF-ELK Zeek harness architecture, full-dataset runner command, and
-failure report details.
+See [External Parser Validation](docs/external-parser-validation/README.md)
+for the third-party parser validation quickstart, SOF-ELK harness architecture,
+full-dataset runner command, and failure report details.
 
 ### Tech Stack
 

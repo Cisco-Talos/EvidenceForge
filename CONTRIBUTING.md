@@ -69,9 +69,17 @@ covered by an external parser harness:
 uv run pytest --include-external-parsers -m external_parser --no-cov
 ```
 
-See [External Parser Validation](docs/reference/external-parser-validation.md)
-for the SOF-ELK Zeek harness architecture, full-dataset runner command, and
-failure report details.
+See [External Parser Validation](docs/external-parser-validation/README.md)
+for the full-dataset runner command, SOF-ELK harness architecture, coverage
+matrix, ignored-tag policy, and failure report details.
+
+If you add or change a log format that already has external parser support,
+update the external-parser smoke lane for that format and run it. If you add a
+new supported parser family, include discovery, staging, representative smoke
+fixtures, validation checks, docs coverage, and any explicit tag-policy rules.
+If there is no applicable third-party parser yet, update the coverage matrix
+and keep discovery warnings/tests in place so the unsupported format is not
+silently skipped.
 
 Coverage is reserved for final readiness checks before opening a `dev` → `main`
 release PR:
