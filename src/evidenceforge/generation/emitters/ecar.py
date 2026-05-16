@@ -141,6 +141,12 @@ class EcarEmitter(HostMultiplexEmitter):
         """
         if event.firewall is not None and event.firewall.action == "deny":
             return False
+        if (
+            event.event_type == "connection"
+            and event.network is not None
+            and event.network.application_layer_only
+        ):
+            return False
         return event.event_type in self._supported_types
 
     def emit(self, event: SecurityEvent) -> None:

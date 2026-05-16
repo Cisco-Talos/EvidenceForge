@@ -30,6 +30,7 @@ from pathlib import Path
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HttpContext, NetworkContext
 from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 
 
@@ -215,6 +216,44 @@ class TestHttpCanHandle:
             network=NetworkContext(
                 src_ip="10.0.0.1", src_port=50000, dst_ip="8.8.8.8", dst_port=80, protocol="tcp"
             ),
+        )
+        assert emitter.can_handle(event) is False
+
+    def test_accepts_application_layer_transactions(self):
+        fmt = load_format("zeek_http")
+        emitter = ZeekHttpEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                application_layer_only=True,
+            ),
+            http=HttpContext(method="GET", host="example.com", uri="/app.js", trans_depth=2),
+        )
+        assert emitter.can_handle(event) is True
+
+    def test_conn_emitter_rejects_application_layer_transactions(self):
+        fmt = load_format("zeek_conn")
+        emitter = ZeekEmitter(fmt, Path("/tmp/test.json"))
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="8.8.8.8",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                application_layer_only=True,
+            ),
+            http=HttpContext(method="GET", host="example.com", uri="/app.js", trans_depth=2),
         )
         assert emitter.can_handle(event) is False
 

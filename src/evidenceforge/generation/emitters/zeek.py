@@ -67,7 +67,11 @@ class ZeekEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Zeek conn emitter handles connection and session events with network context."""
-        return event.event_type in self._supported_types and event.network is not None
+        return (
+            event.event_type in self._supported_types
+            and event.network is not None
+            and not event.network.application_layer_only
+        )
 
     @staticmethod
     def _normalize_history_for_state(conn_state: str, history: str) -> str:

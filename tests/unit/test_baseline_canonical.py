@@ -1550,6 +1550,12 @@ class TestWebAccessExternalVisitors:
         assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == [
             "application/javascript"
         ]
+        root_row = next(kw for kw in collected if kw["http"].uri == "/")
+        assert root_row["http"].trans_depth == 1
+        assert root_row["duration"] >= 0.2
+        assert root_row["resp_bytes"] >= 4096 + 1152
+        assert by_uri["/assets/css/main.063cbaf5.css"].trans_depth == 2
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].trans_depth == 3
 
     def test_web_server_access_keeps_scanner_requests_source_native(self, monkeypatch):
         """Scanner visitors should keep configured error paths and blank referrers."""

@@ -4087,10 +4087,37 @@ class BaselineMixin:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
             ]
         session_ua = rng.choice(_session_uas)
+        request_groups: dict[str, dict[str, int]] = {}
+        for req in session_requests:
+            group = request_groups.setdefault(
+                req.hostname,
+                {
+                    "last_offset_ms": req.time_offset_ms,
+                    "request_body_len": 0,
+                    "response_body_len": 0,
+                },
+            )
+            group["last_offset_ms"] = max(group["last_offset_ms"], req.time_offset_ms)
+            group["request_body_len"] += req.request_body_len
+            group["response_body_len"] += req.response_body_len
+        seen_request_groups: set[str] = set()
 
         for req in session_requests:
             req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
             self.state_manager.set_current_time(req_ts)
+            group = request_groups[req.hostname]
+            first_in_group = req.hostname not in seen_request_groups
+            seen_request_groups.add(req.hostname)
+            conn_duration = rng.uniform(0.05, 2.0)
+            conn_orig_bytes = req.request_body_len
+            conn_resp_bytes = req.response_body_len
+            trans_depth = req.trans_depth
+            if first_in_group:
+                trans_depth = 1
+                remaining_ms = max(0, group["last_offset_ms"] - req.time_offset_ms)
+                conn_duration = (remaining_ms / 1000) + rng.uniform(0.25, 1.75)
+                conn_orig_bytes = max(req.request_body_len, group["request_body_len"])
+                conn_resp_bytes = max(req.response_body_len, group["response_body_len"])
 
             # Resolve destination IP for CDN subresources
             req_dst_ip = dst_ip
@@ -4122,7 +4149,7 @@ class BaselineMixin:
                 status_code=req.status_code,
                 status_msg=_http_status_message(req.status_code),
                 referrer=req.referrer,
-                trans_depth=req.trans_depth,
+                trans_depth=trans_depth,
                 resp_mime_types=response_mime_types_for_status(
                     req.status_code,
                     req.content_type,
@@ -4139,9 +4166,9 @@ class BaselineMixin:
                 dst_port=conn.get("port", 443),
                 proto=conn.get("proto", "tcp"),
                 service=conn.get("service"),
-                duration=rng.uniform(0.05, 2.0),
-                orig_bytes=req.request_body_len,
-                resp_bytes=req.response_body_len,
+                duration=conn_duration,
+                orig_bytes=conn_orig_bytes,
+                resp_bytes=conn_resp_bytes,
                 emit_dns=req.is_page_load or req_hostname != hostname,
                 source_system=system,
                 hostname=req_hostname,
@@ -6046,6 +6073,7 @@ class BaselineMixin:
                     require_browser_like_domain=False,
                 )
                 current_page_allowed = False
+                visible_requests = []
                 for req in session_requests:
                     if req.is_page_load:
                         if top_level_emitted >= top_level_budget:
@@ -6056,7 +6084,6 @@ class BaselineMixin:
                         continue
                     if req.hostname != http_host:
                         continue
-                    req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
                     if is_stable_resource_path(req.path) and not req.is_page_load:
                         cache_seen = getattr(self, "_web_static_cache_seen", None)
                         if not isinstance(cache_seen, dict):
@@ -6066,6 +6093,28 @@ class BaselineMixin:
                             cache_seen[cache_key] += 1
                             continue
                         cache_seen[cache_key] = 1
+                    visible_requests.append(req)
+
+                request_groups: dict[str, dict[str, int]] = {}
+                for req in visible_requests:
+                    group = request_groups.setdefault(
+                        req.hostname,
+                        {
+                            "last_offset_ms": req.time_offset_ms,
+                            "request_body_len": 0,
+                            "response_body_len": 0,
+                        },
+                    )
+                    group["last_offset_ms"] = max(group["last_offset_ms"], req.time_offset_ms)
+                    group["request_body_len"] += max(200, req.request_body_len)
+                    group["response_body_len"] += req.response_body_len
+                seen_request_groups: set[str] = set()
+
+                for req in visible_requests:
+                    req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+                    group = request_groups[req.hostname]
+                    first_in_group = req.hostname not in seen_request_groups
+                    seen_request_groups.add(req.hostname)
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=effective_dst_ip,
@@ -6073,9 +6122,22 @@ class BaselineMixin:
                         dst_port=dst_port,
                         proto="tcp",
                         service=dst_service,
-                        duration=rng.uniform(0.03, 2.0),
-                        orig_bytes=max(200, req.request_body_len),
-                        resp_bytes=req.response_body_len,
+                        duration=(
+                            (max(0, group["last_offset_ms"] - req.time_offset_ms) / 1000)
+                            + rng.uniform(0.25, 1.75)
+                            if first_in_group
+                            else rng.uniform(0.03, 2.0)
+                        ),
+                        orig_bytes=(
+                            group["request_body_len"]
+                            if first_in_group
+                            else max(200, req.request_body_len)
+                        ),
+                        resp_bytes=(
+                            max(req.response_body_len, group["response_body_len"])
+                            if first_in_group
+                            else req.response_body_len
+                        ),
                         source_system=client_sys,
                         http=HttpContext(
                             method=req.method,
@@ -6088,7 +6150,7 @@ class BaselineMixin:
                             status_code=req.status_code,
                             status_msg=_status_message(req.status_code),
                             referrer=req.referrer,
-                            trans_depth=req.trans_depth,
+                            trans_depth=1 if first_in_group else req.trans_depth,
                             resp_mime_types=response_mime_types_for_status(
                                 req.status_code,
                                 req.content_type,

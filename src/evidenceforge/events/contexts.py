@@ -164,6 +164,7 @@ class NetworkContext:
     missed_bytes: int = 0
     initiating_pid: int = -1  # PID of process that opened this connection (-1 = unknown)
     link_local: bool = False  # True for same-broadcast-domain traffic such as DHCP
+    application_layer_only: bool = False  # Additional protocol transaction on an existing flow
 
 
 @dataclass(slots=True)

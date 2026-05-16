@@ -1377,6 +1377,7 @@ _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 _AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 240
+_HTTP_PERSISTENT_CONNECTION_TIMEOUT_S = 45.0
 
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
@@ -2115,6 +2116,9 @@ class ActivityGenerator:
         self._proxy_listener_port = 8080
         self._explicit_proxy_tunnels: dict[
             tuple[str, str, str, str, int], tuple[datetime, str]
+        ] = {}
+        self._http_persistent_connections: dict[
+            tuple[str, str, int, str, str], tuple[datetime, str, int]
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
@@ -6090,8 +6094,6 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import NetworkContext
 
-        if http is not None and http.trans_depth != 1:
-            http = replace(http, trans_depth=1)
         if http is not None:
             http = _normalize_http_context_for_source_native_response(http)
 
@@ -6688,6 +6690,36 @@ class ActivityGenerator:
         ):
             resolved_source_system = self._ip_to_system[src_ip]
 
+        http_application_layer_only = False
+        reused_http_uid = ""
+        http_persistent_key: tuple[str, str, int, str, str] | None = None
+        if http is not None and proto == "tcp" and service == "http" and dst_port > 0:
+            http_host_key = (http.host or hostname or dst_ip).lower().rstrip(".")
+            http_user_agent_key = (http.user_agent or "").lower()
+            http_persistent_key = (
+                src_ip,
+                dst_ip,
+                dst_port,
+                http_host_key,
+                http_user_agent_key,
+            )
+            if http.trans_depth > 1:
+                cached = self._http_persistent_connections.get(http_persistent_key)
+                if cached is not None:
+                    last_activity, cached_uid, cached_src_port = cached
+                    elapsed = (time - last_activity).total_seconds()
+                    if 0 <= elapsed <= _HTTP_PERSISTENT_CONNECTION_TIMEOUT_S:
+                        src_port = cached_src_port
+                        reused_http_uid = cached_uid
+                        http_application_layer_only = True
+                        self._http_persistent_connections[http_persistent_key] = (
+                            time,
+                            cached_uid,
+                            cached_src_port,
+                        )
+                if not http_application_layer_only:
+                    http = replace(http, trans_depth=1)
+
         if proto == "icmp":
             src_port = 0
             dst_port = 0
@@ -6823,6 +6855,8 @@ class ActivityGenerator:
             close_time=close_time,
         )
         uid = self.state_manager.get_zeek_uid(conn_id)
+        if reused_http_uid:
+            uid = reused_http_uid
         if orig_bytes is not None and resp_bytes is not None:
             self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
 
@@ -7217,6 +7251,7 @@ class ActivityGenerator:
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
+                application_layer_only=http_application_layer_only,
             ),
             edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=conn_actor_id),
         )
@@ -7906,6 +7941,18 @@ class ActivityGenerator:
         if not _AUTO_WEIRD_ENABLED:
             rng.random()
 
+        if (
+            http_persistent_key is not None
+            and event.http is not None
+            and event.network.conn_state == "SF"
+            and not event.network.application_layer_only
+        ):
+            self._http_persistent_connections[http_persistent_key] = (
+                time,
+                uid,
+                src_port,
+            )
+
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
@@ -7919,6 +7966,7 @@ class ActivityGenerator:
             wfp_system
             and _get_os_category(wfp_system.os) == "windows"
             and (pid > 0 or wfp_application is not None)
+            and not event.network.application_layer_only
         ):
             self.generate_wfp_connection(
                 system=wfp_system,

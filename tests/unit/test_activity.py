@@ -3676,6 +3676,103 @@ class TestActivityGenerator:
         assert event.http.trans_depth == 1
         assert http.trans_depth == 4
 
+    def test_generate_connection_reuses_http_uid_for_persistent_transactions(self, state_manager):
+        """Later HTTP transactions on a warm connection should reuse one Zeek UID."""
+
+        class CollectorEmitter:
+            def __init__(self, predicate):
+                self._predicate = predicate
+                self.events = []
+
+            def can_handle(self, event):
+                return self._predicate(event)
+
+            def emit(self, event):
+                self.events.append(event)
+
+        conn_emitter = CollectorEmitter(
+            lambda event: (
+                event.event_type == "connection"
+                and event.network is not None
+                and not event.network.application_layer_only
+            )
+        )
+        http_emitter = CollectorEmitter(
+            lambda event: event.event_type == "connection" and event.http is not None
+        )
+        edr_emitter = CollectorEmitter(
+            lambda event: (
+                event.event_type == "connection"
+                and event.network is not None
+                and not event.network.application_layer_only
+            )
+        )
+        emitters = {
+            "zeek_conn": conn_emitter,
+            "zeek_http": http_emitter,
+            "ecar": edr_emitter,
+        }
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        generator = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        first_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.5,
+            orig_bytes=450,
+            resp_bytes=4096,
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=4096,
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+        second_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp + timedelta(milliseconds=700),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.2,
+            orig_bytes=320,
+            resp_bytes=8192,
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/assets/app.js",
+                user_agent="Mozilla/5.0",
+                response_body_len=8192,
+                trans_depth=2,
+            ),
+            emit_dns=False,
+        )
+
+        assert first_uid
+        assert second_uid == first_uid
+        assert len(conn_emitter.events) == 1
+        assert len(edr_emitter.events) == 1
+        assert len(http_emitter.events) == 2
+
+        first_event, second_event = http_emitter.events
+        assert first_event.network.zeek_uid == first_uid
+        assert first_event.network.application_layer_only is False
+        assert first_event.http.trans_depth == 1
+        assert second_event.network.zeek_uid == first_uid
+        assert second_event.network.src_port == first_event.network.src_port
+        assert second_event.network.application_layer_only is True
+        assert second_event.http.trans_depth == 2
+
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should include byte counts in NetworkContext."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

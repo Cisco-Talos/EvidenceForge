@@ -286,7 +286,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
-        return event.event_type in self._supported_types and event.network is not None
+        return (
+            event.event_type in self._supported_types
+            and event.network is not None
+            and not event.network.application_layer_only
+        )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render ASA syslog records from a connection event.

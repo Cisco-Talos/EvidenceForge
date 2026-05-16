@@ -682,7 +682,10 @@ class SysmonEventEmitter(LogEmitter):
             self._render_sysmon_process_access(event)
         elif event.event_type == "connection":
             # Connection events can produce Event 3 (NetworkConnect) and/or Event 22 (DNSQuery)
-            if self._passes_event3_filter(event):
+            is_application_layer_only = (
+                event.network is not None and event.network.application_layer_only
+            )
+            if not is_application_layer_only and self._passes_event3_filter(event):
                 self._render_sysmon_network_connect(event)
             if event.dns and self._passes_event22_filter(event):
                 self._render_sysmon_dns_query(event)
