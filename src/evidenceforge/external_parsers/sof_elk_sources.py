@@ -320,7 +320,7 @@ def run_sof_elk_source_parser(
         timeout_seconds=timeout_seconds,
         progress_callback=progress_callback,
     )
-    progress_callback("validator_step", {"description": "Checking parsed output"})
+    progress_callback("validator_step", {"description": "Validating parsed JSONL"})
     try:
         events = validate_source_parsed_output(
             manifest,

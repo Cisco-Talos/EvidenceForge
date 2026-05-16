@@ -61,7 +61,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
     SofElkParserError,
 )
 
-VALIDATOR_STEP_TOTAL = 6
+INGEST_STEP_TOTAL = 5
 console = Console()
 error_console = Console(stderr=True)
 
@@ -222,22 +222,52 @@ def _run_validators(
         console=console,
         transient=False,
     ) as progress:
-        stage_task = progress.add_task(
-            f"Validator {COMBINED_VALIDATOR_NAME}",
-            total=VALIDATOR_STEP_TOTAL,
+        ingest_task = progress.add_task(
+            "Ingesting logs with SOF-ELK",
+            total=INGEST_STEP_TOTAL,
         )
-        host_task = progress.add_task("Host pending", total=1)
-        logtype_task = progress.add_task("Logtype pending", total=1)
-        subtype_task = progress.add_task("Subtype pending", total=1)
+        validation_task = progress.add_task(
+            "Validating parsed JSONL: pending",
+            total=1,
+            visible=False,
+        )
+        host_task = progress.add_task(
+            "Validating parsed JSONL: host pending",
+            total=1,
+            visible=False,
+        )
+        logtype_task = progress.add_task(
+            "Validating parsed JSONL: logtype pending",
+            total=1,
+            visible=False,
+        )
+        subtype_task = progress.add_task(
+            "Validating parsed JSONL: subtype pending",
+            total=1,
+            visible=False,
+        )
 
         def progress_callback(event_type: str, data: dict[str, Any]) -> None:
             if event_type == "validator_step":
                 description = str(data["description"])
-                progress.update(
-                    stage_task,
-                    advance=0 if description == "Checking parsed output" else 1,
-                    description=f"Validator {COMBINED_VALIDATOR_NAME}: {description}",
-                )
+                if description in {"Validating parsed JSONL", "Checking parsed output"}:
+                    progress.update(
+                        ingest_task,
+                        completed=INGEST_STEP_TOTAL,
+                        description="Ingesting logs with SOF-ELK: complete",
+                    )
+                    progress.update(
+                        validation_task,
+                        completed=0,
+                        description="Validating parsed JSONL",
+                        visible=True,
+                    )
+                else:
+                    progress.update(
+                        ingest_task,
+                        advance=1,
+                        description=f"Ingesting logs with SOF-ELK: {description}",
+                    )
             elif event_type == "validator_scope_progress":
                 host = str(data["host"])
                 logtype = str(data["logtype"])
@@ -246,25 +276,40 @@ def _run_validators(
                     host_task,
                     completed=int(data["host_completed"]),
                     total=max(1, int(data["host_total"])),
-                    description=f"Host {host}",
+                    description=f"Validating parsed JSONL: host {host}",
+                    visible=True,
                 )
                 progress.update(
                     logtype_task,
                     completed=int(data["logtype_completed"]),
                     total=max(1, int(data["logtype_total"])),
-                    description=f"Logtype {logtype}",
+                    description=f"Validating parsed JSONL: logtype {logtype}",
+                    visible=True,
                 )
                 progress.update(
                     subtype_task,
                     completed=int(data["subtype_completed"]),
                     total=max(1, int(data["subtype_total"])),
-                    description=f"Subtype {subtype}",
+                    description=f"Validating parsed JSONL: subtype {subtype}",
+                    visible=True,
                 )
             elif event_type == "validator_done":
+                description = str(data["description"])
+                failed = "failed" in description.lower()
                 progress.update(
-                    stage_task,
-                    completed=VALIDATOR_STEP_TOTAL,
-                    description=f"Validator {data['description']}",
+                    ingest_task,
+                    completed=INGEST_STEP_TOTAL,
+                    description="Ingesting logs with SOF-ELK: complete",
+                )
+                progress.update(
+                    validation_task,
+                    completed=1,
+                    description=(
+                        "Validating parsed JSONL: failed"
+                        if failed
+                        else "Validating parsed JSONL: complete"
+                    ),
+                    visible=True,
                 )
 
         try:

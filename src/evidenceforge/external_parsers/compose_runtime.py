@@ -248,7 +248,7 @@ def run_sof_elk_compose(
             description="validate Logstash parser config",
             timeout=600,
         )
-        progress_callback("validator_step", {"description": "Running Filebeat and Logstash"})
+        progress_callback("validator_step", {"description": "Ingesting staged logs"})
         _compose_run(compose_run, ["up", "-d", "logstash"], description="start Logstash parser")
         _wait_for_logstash(compose_run, timeout_seconds)
         _compose_run(compose_run, ["up", "-d", "filebeat"], description="start Filebeat parser")
