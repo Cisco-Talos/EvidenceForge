@@ -42,6 +42,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
     stage_zeek_logs,
     validate_parsed_output,
 )
+from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
 
 
 def test_zeek_log_specs_cover_all_format_definitions() -> None:
@@ -49,6 +50,15 @@ def test_zeek_log_specs_cover_all_format_definitions() -> None:
     harness_formats = {spec.log_type for spec in ZEEK_LOG_SPECS}
 
     assert harness_formats == zeek_formats
+
+
+def test_zeek_log_specs_cover_all_emittable_zeek_formats() -> None:
+    zeek_emitters = {
+        format_name for format_name in _build_emitter_classes() if format_name.startswith("zeek_")
+    }
+    harness_formats = {spec.log_type for spec in ZEEK_LOG_SPECS}
+
+    assert harness_formats == zeek_emitters
 
 
 def test_stage_zeek_logs_preserves_sensor_subdirectories(

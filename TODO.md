@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Strengthen SOF-ELK Zeek parser coverage — added an all-Zeek-type external-parser smoke test that sends every current EvidenceForge Zeek output type through SOF-ELK, plus a unit guard tying harness specs to the Zeek emitter registry and docs clarifying scenario subset vs coverage contract.
 - [x] Add external-parser tag policy — treat known optional enrichment tags like SOF-ELK `_grokparsefail_6200-01` as ignored diagnostics while keeping true parser failures fatal.
 - [x] Remove redundant SOF-ELK parser report failure message list — keep aggregate counts and detailed sample failures, while preserving the short CLI exception preview.
 - [x] Correct external-parser scope progress semantics — host/logtype/subtype bars now advance while parsed records are checked, not while files are staged or containers are still running, and the validator bar completes with a failed status when parsed-output validation fails.

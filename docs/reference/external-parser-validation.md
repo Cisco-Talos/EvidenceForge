@@ -34,6 +34,13 @@ still stages and ingests the file, validates JSON ingestion/counts, captures the
 raw parsed event, and records in reports that the type did not use a dedicated
 SOF-ELK filter.
 
+The coverage contract is "every Zeek type EvidenceForge can emit," not just the
+Zeek files produced by the current medium sample. Unit tests assert that the
+harness mapping matches both the `zeek_*.yaml` format definitions and the Zeek
+emitter registry. The external-parser smoke test renders one representative
+file for each current EvidenceForge Zeek type through the EvidenceForge emitters
+and sends all of them through the containerized SOF-ELK path.
+
 ## How It Works
 
 The harness lives in `src/evidenceforge/external_parsers/sof_elk_zeek.py`.
@@ -117,6 +124,11 @@ Run the normal external parser smoke tests:
 ```bash
 uv run pytest --include-external-parsers -m external_parser --no-cov
 ```
+
+That smoke lane includes an emitter-rendered all-Zeek-type fixture to verify
+the parser pipeline can discover, stage, ingest, and validate every current
+EvidenceForge Zeek output type. Full dataset runs still evaluate whatever files
+the scenario actually generated.
 
 Generate the medium dataset's Zeek logs and run the harness:
 
@@ -225,3 +237,7 @@ The ignored Zeek DNS enrichment tags were observed on `PTR` 194, `NS` 59,
 `MX` 55, and `SOA` 33. The `dhcp`, `ntp`, and `ocsp` counts above are
 JSON-ingestion checks because the pinned SOF-ELK config does not include
 dedicated filters for those EvidenceForge Zeek types.
+
+That medium run did not happen to generate `weird`, `packet_filter`, `pe`, or
+`reporter` rows. Those types are still covered by the all-Zeek-type external
+parser smoke test and by the staging/discovery unit tests.
