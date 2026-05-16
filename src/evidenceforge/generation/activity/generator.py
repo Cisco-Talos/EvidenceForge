@@ -2753,16 +2753,64 @@ class ActivityGenerator:
         proxy_sys: System,
     ) -> tuple[str, str] | None:
         """Map user-owned proxy User-Agents to the process that owns the socket."""
+        browser_hint = self._browser_http_client_process_hint(
+            user_agent=user_agent,
+            hostname=hostname,
+            dst_port=dst_port,
+        )
+        if browser_hint is not None:
+            return browser_hint
+
         ua = (user_agent or "").lower()
         if not ua:
             return None
 
-        scheme = "https" if dst_port == 443 else "http"
-        target_url = f"{scheme}://{hostname}/" if hostname else f"{scheme}://"
+        target_url = self._http_target_url(hostname=hostname, uri="/", dst_port=dst_port)
         proxy_url = (
             f"http://{self._proxy_fqdn(proxy_sys)}:{getattr(self, '_proxy_listener_port', 8080)}"
         )
 
+        if ua.startswith("curl/") or " curl/" in ua:
+            image = r"C:\Windows\System32\curl.exe"
+            return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
+        if "powershell" in ua or "invoke-webrequest" in ua:
+            image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+            return image, (
+                f'powershell.exe -NoProfile -Command "Invoke-WebRequest '
+                f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
+            )
+        return None
+
+    @staticmethod
+    def _http_target_url(*, hostname: str, uri: str, dst_port: int) -> str:
+        """Build the URL used in source-native client process command lines."""
+        path = uri or "/"
+        if path.startswith(("http://", "https://")):
+            return path
+        if not path.startswith("/"):
+            path = f"/{path}"
+        scheme = "https" if dst_port == 443 else "http"
+        if not hostname:
+            return f"{scheme}://"
+        host = hostname
+        if dst_port not in (80, 443) and ":" not in host:
+            host = f"{host}:{dst_port}"
+        return f"{scheme}://{host}{path}"
+
+    def _browser_http_client_process_hint(
+        self,
+        *,
+        user_agent: str,
+        hostname: str,
+        dst_port: int,
+        uri: str = "/",
+    ) -> tuple[str, str] | None:
+        """Map browser-like Windows HTTP User-Agents to their owning process."""
+        ua = (user_agent or "").lower()
+        if not ua:
+            return None
+
+        target_url = self._http_target_url(hostname=hostname, uri=uri, dst_port=dst_port)
         if "firefox/" in ua:
             image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
             return image, f'"{image}" -osint -url {target_url}'
@@ -2775,15 +2823,6 @@ class ActivityGenerator:
         if "trident/" in ua or "msie " in ua:
             image = r"C:\Program Files\Internet Explorer\iexplore.exe"
             return image, f'"{image}" {target_url}'
-        if ua.startswith("curl/") or " curl/" in ua:
-            image = r"C:\Windows\System32\curl.exe"
-            return image, f'curl.exe --proxy {proxy_url} "{target_url}"'
-        if "powershell" in ua or "invoke-webrequest" in ua:
-            image = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-            return image, (
-                f'powershell.exe -NoProfile -Command "Invoke-WebRequest '
-                f"-Proxy '{proxy_url}' -Uri '{target_url}' -UseBasicParsing\""
-            )
         return None
 
     def _select_explicit_proxy_client_session(
@@ -2902,6 +2941,206 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
         self.state_manager.set_current_time(time)
         return pid, image
+
+    def _ensure_browser_http_client_process(
+        self,
+        *,
+        source_system: System | None,
+        time: datetime,
+        http: HttpContext,
+        dst_port: int,
+    ) -> tuple[int, str | None]:
+        """Create or reuse the browser process that owns a Windows HTTP socket."""
+        if source_system is None or _get_os_category(source_system.os) != "windows":
+            return -1, None
+
+        hint = self._browser_http_client_process_hint(
+            user_agent=http.user_agent,
+            hostname=http.host,
+            dst_port=dst_port,
+            uri=http.uri,
+        )
+        if hint is None:
+            return -1, None
+
+        image, command_line = hint
+        session = self._active_interactive_windows_session(source_system, time)
+        if session is None:
+            return -1, None
+        user = self._user_model_for_username(session.username)
+
+        image_lower = image.lower()
+        running_candidates = [
+            proc
+            for proc in self.state_manager.get_processes_on_system(source_system.hostname)
+            if proc.username == user.username
+            and proc.logon_id == session.logon_id
+            and proc.image.lower() == image_lower
+            and proc.start_time is not None
+            and proc.start_time <= time
+            and not self._foreground_process_expired_for_attribution(source_system, proc, time)
+        ]
+        if running_candidates:
+            proc = max(running_candidates, key=lambda candidate: candidate.start_time)
+            self.state_manager.update_process_activity_time(
+                source_system.hostname,
+                proc.pid,
+                time,
+            )
+            return proc.pid, proc.image
+
+        process_rng = random.Random(
+            _stable_seed(
+                "browser_http_client_process:"
+                f"{source_system.hostname}:{user.username}:{image}:{http.host}:{http.uri}"
+            )
+        )
+        lead_seconds = process_rng.uniform(0.4, 8.0)
+        process_time = time - timedelta(seconds=lead_seconds)
+        min_process_time = session.start_time + timedelta(milliseconds=500)
+        if process_time < min_process_time:
+            process_time = min_process_time
+        if process_time >= time:
+            process_time = time - timedelta(milliseconds=100)
+
+        parent_pid = self._select_parent_pid(
+            source_system,
+            user,
+            image,
+            time=process_time,
+            logon_id=session.logon_id,
+        )
+        pid = self.generate_process(
+            user=user,
+            system=source_system,
+            time=process_time,
+            logon_id=session.logon_id,
+            process_name=image,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+            allow_existing_browser_reuse=False,
+        )
+        self._record_user_process(source_system, user, pid, image)
+        self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
+        self.state_manager.set_current_time(time)
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        if running is not None:
+            return pid, running.image
+        return pid, image
+
+    def _set_connection_process_context(
+        self,
+        event: SecurityEvent,
+        *,
+        source_system: System,
+        pid: int,
+        image: str | None = None,
+    ) -> None:
+        """Update canonical connection process ownership from StateManager."""
+        running = self.state_manager.get_process(source_system.hostname, pid)
+        if running is not None:
+            event.process = ProcessContext(
+                pid=pid,
+                parent_pid=running.parent_pid,
+                image=running.image,
+                command_line=running.command_line,
+                username=running.username,
+                logon_id=running.logon_id,
+                start_time=running.start_time,
+                parent_start_time=self._lookup_parent_start_time(
+                    source_system.hostname,
+                    running.parent_pid,
+                ),
+            )
+        elif image:
+            event.process = ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=image,
+                command_line="",
+                username="",
+            )
+        else:
+            event.process = None
+        event.network.initiating_pid = pid
+        if event.edr is not None:
+            event.edr.actor_id = (
+                self.state_manager.get_process_object_id(source_system.hostname, pid)
+                if pid > 0
+                else ""
+            )
+
+    def _repair_browser_http_process_attribution(
+        self,
+        event: SecurityEvent,
+        *,
+        source_system: System | None,
+        time: datetime,
+    ) -> None:
+        """Prevent browser-like HTTP rows from inheriting service-process ownership."""
+        if (
+            source_system is None
+            or event.http is None
+            or event.network is None
+            or _get_os_category(source_system.os) != "windows"
+        ):
+            return
+
+        hint = self._browser_http_client_process_hint(
+            user_agent=event.http.user_agent,
+            hostname=event.http.host,
+            dst_port=event.network.dst_port,
+            uri=event.http.uri,
+        )
+        if hint is None:
+            return
+
+        expected_image = hint[0].lower()
+        current_pid = event.network.initiating_pid
+        if current_pid > 0:
+            current = self.state_manager.get_process(source_system.hostname, current_pid)
+            if (
+                current is not None
+                and current.image.lower() == expected_image
+                and not self._foreground_process_expired_for_attribution(
+                    source_system,
+                    current,
+                    time,
+                )
+            ):
+                self._set_connection_process_context(
+                    event,
+                    source_system=source_system,
+                    pid=current_pid,
+                )
+                self.state_manager.update_process_activity_time(
+                    source_system.hostname,
+                    current_pid,
+                    time,
+                )
+                return
+
+        client_pid, client_image = self._ensure_browser_http_client_process(
+            source_system=source_system,
+            time=time,
+            http=event.http,
+            dst_port=event.network.dst_port,
+        )
+        if client_pid > 0:
+            self._set_connection_process_context(
+                event,
+                source_system=source_system,
+                pid=client_pid,
+                image=client_image,
+            )
+            return
+
+        self._set_connection_process_context(
+            event,
+            source_system=source_system,
+            pid=-1,
+        )
 
     def _caller_explicit_proxy_process_image(
         self,
@@ -7545,6 +7784,14 @@ class ActivityGenerator:
                 rng=rng,
                 allow_failure=False,
             )
+
+        self._repair_browser_http_process_attribution(
+            event,
+            source_system=resolved_source_system,
+            time=time,
+        )
+        pid = event.network.initiating_pid
+        process_ctx = event.process
 
         # Automatic weird.log synthesis is intentionally disabled for now. The
         # Zeek weird type space is broad and state-sensitive; poorly matched

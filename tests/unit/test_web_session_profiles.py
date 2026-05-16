@@ -49,6 +49,12 @@ def test_health_check_profile_is_server_scoped():
     assert "monitoring" in profile["source_role_any"]
 
 
+def test_internal_human_browser_profile_is_workstation_scoped():
+    profile = load_web_session_profiles()["visitor_classes"]["human_browser"]
+
+    assert profile["source_type_any"] == ["workstation"]
+
+
 def test_user_agent_honors_source_os_pool():
     profile = load_web_session_profiles()["visitor_classes"]["human_browser"]
     ua = pick_web_user_agent(random.Random(1), profile, source_os="linux")

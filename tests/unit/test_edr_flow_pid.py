@@ -31,9 +31,10 @@ from unittest.mock import Mock
 
 import pytest
 
+from evidenceforge.events.contexts import HttpContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.state_manager import StateManager
-from evidenceforge.models import System
+from evidenceforge.models import System, User
 
 
 @pytest.fixture
@@ -224,6 +225,136 @@ class TestConnectionPidPropagation:
         assert event.network.initiating_pid == local_svc_pid
         assert event.edr is not None
         assert event.edr.actor_id == state_manager.get_process_object_id("WKS-01", local_svc_pid)
+
+    @staticmethod
+    def _browser_http_context() -> HttpContext:
+        return HttpContext(
+            method="GET",
+            host="intranet.example.org",
+            uri="/",
+            version="1.1",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
+            ),
+            request_body_len=0,
+            response_body_len=2048,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["text/html"],
+            tags=[],
+        )
+
+    def test_browser_http_flow_uses_interactive_browser_instead_of_svchost(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """Browser-like HTTP should resolve to a user browser process, not service svchost."""
+        user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.org")
+        activity_gen._users_by_username = {user.username: user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=win_system.hostname,
+            logon_type=2,
+            source_ip=win_system.ip,
+        )
+        explorer_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            user.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.explorer_pid = explorer_pid
+        svchost_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "NETWORK SERVICE",
+            "System",
+            logon_id="0x3e4",
+        )
+        activity_gen._ip_to_system = {win_system.ip: win_system}
+        activity_gen._system_pids = {win_system.hostname: {"svchost_netsvcs": svchost_pid}}
+
+        activity_gen.generate_connection(
+            src_ip=win_system.ip,
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=400,
+            resp_bytes=2048,
+            conn_state="SF",
+            source_system=win_system,
+            http=self._browser_http_context(),
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.process is not None
+        assert event.process.pid == event.network.initiating_pid
+        assert event.process.pid != svchost_pid
+        assert event.process.username == user.username
+        assert event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
+        wfp_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        )
+        assert wfp_event.process is not None
+        assert wfp_event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
+
+    def test_browser_http_flow_without_interactive_session_clears_svchost_attribution(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """A browser UA without a user session should not be rendered as svchost-owned."""
+        state_manager.set_current_time(timestamp)
+        svchost_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\svchost.exe",
+            "svchost.exe -k netsvcs",
+            "NETWORK SERVICE",
+            "System",
+            logon_id="0x3e4",
+        )
+        activity_gen._ip_to_system = {win_system.ip: win_system}
+        activity_gen._system_pids = {win_system.hostname: {"svchost_netsvcs": svchost_pid}}
+
+        activity_gen.generate_connection(
+            src_ip=win_system.ip,
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=400,
+            resp_bytes=2048,
+            conn_state="SF",
+            source_system=win_system,
+            http=self._browser_http_context(),
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == -1
+        assert event.process is None
+        assert event.edr is not None
+        assert event.edr.actor_id == ""
+        wfp_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        ]
+        assert not wfp_events
 
     def test_connection_timestamp_not_before_process_start(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters

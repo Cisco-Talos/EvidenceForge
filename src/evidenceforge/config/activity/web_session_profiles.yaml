@@ -13,6 +13,7 @@ visitor_classes:
     kind: session
     external: true
     internal: true
+    source_type_any: ["workstation"]
     browsing_intensity: normal
     user_agent_pool: browser_any
     user_agent_pool_by_os:
