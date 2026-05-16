@@ -9827,7 +9827,7 @@ class ActivityGenerator:
         service_name: str,
         service_file_name: str,
         service_type: str = "0x10",
-        service_start_type: str = "2",
+        service_start_type: str = "3",
         service_account: str = "LocalSystem",
     ) -> None:
         """Generate service installed event (4697) on target system."""

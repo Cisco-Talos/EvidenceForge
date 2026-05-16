@@ -385,6 +385,22 @@ class SupplementaryAuditEvents(ExpansionRule):
         if match and "service_installed" not in skip:
             svc_name = match.group(1)
             svc_path = match.group(2)
+            service_start_type = "3"
+            start_match = re.search(
+                r"\bstart=\s*(delayed-auto|auto|demand|disabled|boot|system)\b",
+                cmd,
+                re.IGNORECASE,
+            )
+            if start_match:
+                start_value = start_match.group(1).lower()
+                service_start_type = {
+                    "boot": "0",
+                    "system": "1",
+                    "auto": "2",
+                    "delayed-auto": "2",
+                    "demand": "3",
+                    "disabled": "4",
+                }[start_value]
             expanded.append(
                 ExpandedEvent(
                     method="generate_service_installed",
@@ -393,6 +409,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "system": ctx.target_system,
                         "service_name": svc_name,
                         "service_file_name": svc_path,
+                        "service_start_type": service_start_type,
                     },
                     timing=timing,
                     description="4697 service installed from sc create",

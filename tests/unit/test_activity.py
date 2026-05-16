@@ -1686,6 +1686,7 @@ class TestActivityGenerator:
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         service_event = next(event for event in events if event.event_type == "service_installed")
+        assert service_event.service.service_start_type == "3"
         file_event = next(
             event
             for event in events

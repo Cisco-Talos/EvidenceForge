@@ -288,7 +288,7 @@ class ServiceContext:
     service_name: str
     service_file_name: str  # Full command line / binary path
     service_type: str = "0x10"  # 0x10=Own Process, 0x20=Share Process
-    service_start_type: str = "2"  # 2=Auto, 3=Manual, 4=Disabled
+    service_start_type: str = "3"  # 2=Auto, 3=Manual/Demand, 4=Disabled
     service_account: str = "LocalSystem"
 
 
