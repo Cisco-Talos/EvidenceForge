@@ -990,6 +990,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_extra_syslog_system_type(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "packagekitd",
+                    "system_types": ["laptop"],
+                    "messages": ["search-names transaction /12345"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'App "packagekitd" has invalid system_type "laptop"' in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_networkmanager_same_state_transition(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
@@ -1043,6 +1068,44 @@ class TestValidateConfig:
         assert message == (
             "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status nginx"
         )
+
+    def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
+        from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
+
+        programs = [
+            {
+                "app": "packagekitd",
+                "system_types": ["workstation"],
+                "messages": ["search-names transaction /{}"],
+            },
+            {
+                "app": "multipathd",
+                "system_types": ["server"],
+                "roles": ["database"],
+                "messages": ["{device}: add missing path"],
+            },
+            {
+                "app": "accounts-daemon",
+                "exclude_roles": ["database"],
+                "messages": ["user 'admin' has logged in"],
+            },
+        ]
+
+        db_server = filter_syslog_message_entries(
+            programs,
+            is_rhel_like=False,
+            host_roles=["database"],
+            system_type="server",
+        )
+        workstation = filter_syslog_message_entries(
+            programs,
+            is_rhel_like=False,
+            host_roles=[],
+            system_type="workstation",
+        )
+
+        assert [entry["app"] for entry in db_server] == ["multipathd"]
+        assert [entry["app"] for entry in workstation] == ["packagekitd", "accounts-daemon"]
 
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism

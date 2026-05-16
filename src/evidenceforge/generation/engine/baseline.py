@@ -5592,6 +5592,7 @@ class BaselineMixin:
                         _all_programs,
                         is_rhel_like,
                         system.roles,
+                        sys_type,
                     )
                     if not filtered:
                         continue

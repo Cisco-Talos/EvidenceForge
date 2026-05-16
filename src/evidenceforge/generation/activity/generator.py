@@ -2025,6 +2025,8 @@ class ActivityGenerator:
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
+        self._bash_history_command_counts: dict[tuple[str, str], int] = {}
+        self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
         self._foreground_process_finalizers: dict[
             tuple[str, int], tuple[System, str, str, str, datetime]
         ] = {}
@@ -8413,9 +8415,29 @@ class ActivityGenerator:
             )
         )
         if dwell_seconds <= 2.0:
-            dwell_seconds += jitter_rng.uniform(0.4, 4.8)
+            command_count = self._bash_history_command_counts.get(key, 0)
+            quick_streak = self._bash_history_quick_streaks.get(key, 0)
+            roll = jitter_rng.random()
+            if command_count == 0:
+                extra_delay = jitter_rng.uniform(4.0, 18.0)
+            elif roll < 0.16 and quick_streak == 0:
+                extra_delay = jitter_rng.uniform(4.0, 12.0)
+            elif roll < 0.68:
+                extra_delay = jitter_rng.uniform(18.0, 95.0)
+            elif roll < 0.93:
+                extra_delay = jitter_rng.uniform(95.0, 420.0)
+            else:
+                extra_delay = jitter_rng.uniform(420.0, 1500.0)
+            dwell_seconds += extra_delay
+            self._bash_history_quick_streaks[key] = quick_streak + 1 if extra_delay < 14.0 else 0
+        elif dwell_seconds < 45.0:
+            dwell_seconds = dwell_seconds * jitter_rng.uniform(1.0, 2.2) + jitter_rng.uniform(
+                4.0, 18.0
+            )
         else:
-            dwell_seconds *= jitter_rng.uniform(0.85, 1.25)
+            dwell_seconds = max(dwell_seconds, dwell_seconds * jitter_rng.uniform(0.95, 1.35))
+            self._bash_history_quick_streaks[key] = 0
+        self._bash_history_command_counts[key] = self._bash_history_command_counts.get(key, 0) + 1
         self._bash_history_next_time[key] = scheduled_time + timedelta(seconds=dwell_seconds)
         return scheduled_time
 
@@ -8449,11 +8471,17 @@ class ActivityGenerator:
         for _ in range(n_noise):
             # Delay based on complexity of previous command
             if any(prev_cmd.startswith(p) for p in _COMPLEX_PREFIXES):
-                delay = rng.uniform(10.0, 60.0)
+                delay = rng.uniform(20.0, 120.0)
             elif any(prev_cmd.startswith(p) for p in _MEDIUM_PREFIXES):
-                delay = rng.uniform(3.0, 15.0)
+                delay = rng.uniform(8.0, 45.0)
             else:
-                delay = rng.uniform(1.0, 5.0)
+                delay = rng.choice(
+                    [
+                        rng.uniform(4.0, 14.0),
+                        rng.uniform(18.0, 90.0),
+                        rng.uniform(90.0, 240.0),
+                    ]
+                )
             cumulative_delay += delay
             noise_time = time + timedelta(seconds=cumulative_delay)
             noise_cmd, is_typo = pick_bash_command_entry(

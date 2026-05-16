@@ -5,9 +5,11 @@
 #   messages: list of message templates ({} placeholders filled at generation time)
 #   distro: optional - "ubuntu" to restrict to Debian/Ubuntu (excluded on RHEL-like)
 #   roles: optional - list of required host roles (any match = include)
+#   exclude_roles: optional - list of host roles to suppress
+#   system_types: optional - workstation/server/domain_controller scope
 #   transient: optional - true if the process forks per invocation (random PID)
 #
-# If distro/roles are omitted, the entry appears on all Linux hosts.
+# If distro/roles/system_types are omitted, the entry appears on all Linux hosts.
 #
 # Depended on by: generation engine (syslog baseline diversity)
 # Depends on: nothing — standalone (distro/role filters are soft matches)
@@ -16,6 +18,8 @@
 
 programs:
   - app: NetworkManager
+    system_types: [workstation]
+    weight: 3
     messages:
       - "<info>  [{}] dhcp4 (ens160): state changed renew -> bound"
       - "<info>  [{}] device (ens160): state change: disconnected -> prepare"
@@ -23,6 +27,7 @@ programs:
       - "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL"
 
   - app: dbus-daemon
+    weight: 2
     messages:
       - "[system] Activating via systemd: service name='org.freedesktop.hostname1'"
       - "[system] Successfully activated service 'org.freedesktop.resolve1'"
@@ -118,27 +123,57 @@ programs:
       - "bound to {ip} -- renewal in {renewal} seconds."
 
   - app: polkitd
+    weight: 2
+    params:
+      auth_subject:
+        - unix-process
+        - unix-session
+        - system-bus-name
     messages:
-      - "Registered Authentication Agent for unix-process"
-      - "Unregistered Authentication Agent for unix-process"
+      - "Registered Authentication Agent for {auth_subject}"
+      - "Unregistered Authentication Agent for {auth_subject}"
       - "Operator of unix-process:{} successfully authenticated as 'root'"
 
   - app: multipathd
+    system_types: [server]
+    roles: [database]
+    weight: 1
+    params:
+      device:
+        - sda
+        - sdb
+        - dm-0
+      active_paths:
+        - "1"
+        - "2"
     messages:
-      - "sda: add missing path"
-      - "sda: remaining active paths: 1"
+      - "{device}: add missing path"
+      - "{device}: remaining active paths: {active_paths}"
 
   - app: accounts-daemon
+    system_types: [workstation]
     weight: 1
+    params:
+      desktop_user:
+        - admin
+        - ubuntu
+        - deploy
     messages:
-      - "user 'admin' has logged in"
+      - "user '{desktop_user}' has logged in"
 
   - app: packagekitd
+    system_types: [workstation]
+    distro: ubuntu
+    weight: 1
     messages:
       - "search-names transaction /{}"
+      - "resolve transaction /{}"
+      - "get-updates transaction /{}"
 
   - app: unattended-upgr
     distro: ubuntu
+    system_types: [server]
+    weight: 2
     messages:
       - "Allowed origins are: o=Ubuntu,a=jammy"
       - "No packages found that can be upgraded unattended"
@@ -146,15 +181,26 @@ programs:
 
   - app: systemd-resolved
     distro: ubuntu
+    weight: 2
     messages:
       - "Using degraded feature set UDP instead of UDP+EDNS0 for DNS server {dns_server}."
       - "Grace period over, resuming full feature set for DNS server {dns_server}."
       - "Positive Trust Anchors: . IN DS 20326"
 
   - app: thermald
+    system_types: [workstation]
+    weight: 1
+    params:
+      cooling_device:
+        - "0"
+        - "1"
+      zone:
+        - x86_pkg_temp
+        - acpitz
     messages:
       - "Unsupported cpu model, use default config"
-      - "cooling device 0 intel_powerclamp type: 0x02"
+      - "cooling device {cooling_device} intel_powerclamp type: 0x02"
+      - "thermal zone {zone}: trip point updated"
 
   - app: irqbalance
     weight: 1

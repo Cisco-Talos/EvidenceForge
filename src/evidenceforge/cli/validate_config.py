@@ -1920,6 +1920,19 @@ def validate_config() -> ValidationResult:
             if not isinstance(entry, dict):
                 continue
             app = str(entry.get("app") or "<unknown>")
+            _VALID_SYSLOG_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
+            for system_type in entry.get("system_types", []):
+                if system_type not in _VALID_SYSLOG_SYSTEM_TYPES:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            (
+                                f'App "{app}" has invalid system_type "{system_type}" '
+                                f"(valid: {sorted(_VALID_SYSLOG_SYSTEM_TYPES)})"
+                            ),
+                        )
+                    )
             for message in entry.get("messages", []):
                 if not isinstance(message, str):
                     continue

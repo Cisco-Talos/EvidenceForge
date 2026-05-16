@@ -319,7 +319,7 @@ def _choose_template_with_memory(
 
     key = (system_hostname.lower(), username.lower())
     recent = set(_COMMAND_RECENCY.get(key, ()))
-    soft_cap = max(4, min(8, max(1, len(pool) // 4)))
+    soft_cap = max(3, min(6, max(1, len(pool) // 5)))
     attempts = _COMMAND_CANDIDATE_ATTEMPTS
     candidates: list[str] = []
     for _ in range(attempts):
@@ -331,7 +331,7 @@ def _choose_template_with_memory(
             return command
 
     for command in candidates:
-        if command not in recent:
+        if command not in recent and _COMMAND_GLOBAL_COUNTS[command] < soft_cap + 2:
             _remember_command(system_hostname, username, command)
             return command
 

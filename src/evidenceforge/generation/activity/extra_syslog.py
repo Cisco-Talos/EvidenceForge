@@ -44,6 +44,7 @@ def filter_syslog_messages(
     programs: list[dict[str, Any]],
     is_rhel_like: bool,
     host_roles: list[str] | None,
+    system_type: str | None = None,
 ) -> list[tuple[str, list[str], int]]:
     """Filter syslog programs by distro and host roles.
 
@@ -51,13 +52,19 @@ def filter_syslog_messages(
         programs: Raw program entries from YAML.
         is_rhel_like: True for CentOS/RHEL/Rocky/Alma hosts.
         host_roles: List of roles assigned to the host, or None.
+        system_type: Scenario system type, if known.
 
     Returns:
         List of (app_name, messages, weight) tuples matching the host context.
     """
     return [
         (entry["app"], entry["messages"], int(entry.get("weight", 10)))
-        for entry in filter_syslog_message_entries(programs, is_rhel_like, host_roles)
+        for entry in filter_syslog_message_entries(
+            programs,
+            is_rhel_like,
+            host_roles,
+            system_type,
+        )
     ]
 
 
@@ -65,19 +72,36 @@ def filter_syslog_message_entries(
     programs: list[dict[str, Any]],
     is_rhel_like: bool,
     host_roles: list[str] | None,
+    system_type: str | None = None,
 ) -> list[dict[str, Any]]:
     """Filter syslog programs by distro and host roles, preserving entry metadata."""
     result: list[dict[str, Any]] = []
+    normalized_roles = {role.lower() for role in (host_roles or [])}
+    normalized_type = (system_type or "").lower()
     for entry in programs:
         # Distro filter
         distro = entry.get("distro")
         if distro == "ubuntu" and is_rhel_like:
             continue
 
+        # System type filter — workstation-only desktop daemons should not
+        # appear as high-volume server noise, and server-only daemons should
+        # not leak onto laptops.
+        allowed_types = entry.get("system_types")
+        if allowed_types and normalized_type not in {str(t).lower() for t in allowed_types}:
+            continue
+
         # Role filter — if roles specified, host must have at least one
         required_roles = entry.get("roles")
         if required_roles:
-            if not host_roles or not any(r in host_roles for r in required_roles):
+            required = {str(role).lower() for role in required_roles}
+            if not normalized_roles or not normalized_roles.intersection(required):
+                continue
+
+        excluded_roles = entry.get("exclude_roles")
+        if excluded_roles:
+            excluded = {str(role).lower() for role in excluded_roles}
+            if normalized_roles.intersection(excluded):
                 continue
 
         result.append(entry)

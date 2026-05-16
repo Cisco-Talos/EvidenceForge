@@ -163,6 +163,8 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     params: dict[str, list[str]] | None = None
     distro: str | None = None
     roles: list[str] | None = None
+    exclude_roles: list[str] | None = None
+    system_types: list[str] | None = None
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
 

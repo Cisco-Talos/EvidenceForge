@@ -259,7 +259,7 @@ class TestBaselineLinuxBashHistory:
         ]
 
         counts = Counter(picked)
-        assert max(counts.values()) <= 8
+        assert max(counts.values()) <= 6
 
 
 class TestBashHistoryChronological:
@@ -302,6 +302,31 @@ class TestBashHistoryChronological:
 
         assert deltas
         assert any(delta != 2.0 for delta in deltas)
+        assert any(delta > 10.0 for delta in deltas)
+
+    def test_simple_command_dwell_avoids_mechanical_short_bursts(
+        self, state_manager, mock_emitters, linux_system, root_user
+    ):
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        start = datetime(2024, 3, 18, 14, 0, 0, tzinfo=UTC)
+
+        for offset in range(12):
+            ag.generate_bash_command(
+                root_user,
+                linux_system,
+                start + timedelta(seconds=offset * 2),
+                "ls",
+            )
+
+        events = [call.args[0] for call in mock_emitters["bash_history"].emit.call_args_list]
+        deltas = [
+            (events[idx].timestamp - events[idx - 1].timestamp).total_seconds()
+            for idx in range(1, len(events))
+        ]
+
+        assert deltas
+        assert sum(delta <= 10.0 for delta in deltas) <= 3
+        assert any(delta >= 60.0 for delta in deltas)
 
     def test_shred_remove_clears_rendered_history(self, tmp_path):
         """A destructive shred of .bash_history should erase prior collected entries."""
