@@ -206,7 +206,7 @@ class TestIdsAlertCorrelation:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.ssl is not None
         assert event.x509 is not None
-        assert event.network.duration >= 0.8
+        assert event.network.duration > 0.8
 
 
 class TestForegroundProcessTermination:

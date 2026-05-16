@@ -744,7 +744,8 @@ class TestSslUidCorrelation:
 
             conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
 
-        assert conn_row["duration"] >= 0.8
+        assert conn_row["duration"] > 0.8
+        assert conn_row["duration"] != 0.8
 
     def test_x509_rejects_partial_handshake(self):
         """x509.log should not emit certificates for incomplete TLS handshakes."""

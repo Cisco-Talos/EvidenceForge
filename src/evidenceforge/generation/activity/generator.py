@@ -6584,7 +6584,10 @@ class ActivityGenerator:
             )
             tls_min_duration = tls_min_window.min_ms / 1000
             if duration is None or duration < tls_min_duration:
-                duration = tls_min_duration + rng.uniform(0.0, 0.4)
+                max_extra = max(
+                    0.016, min(0.65, (tls_min_window.max_ms - tls_min_window.min_ms) / 1000)
+                )
+                duration = tls_min_duration + rng.uniform(0.015, max_extra)
             else:
                 duration += rng.expovariate(1.0 / 0.35)
                 if rng.random() < 0.08:
