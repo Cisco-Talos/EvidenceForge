@@ -90,6 +90,58 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed
 logger = logging.getLogger(__name__)
 
 
+_HttpGroupKey = tuple[str, int]
+_HttpPlanValue = tuple[_HttpGroupKey, int, bool, int]
+
+
+def _plan_http_request_groups(
+    requests: list[Any],
+    *,
+    request_body_floor: int = 0,
+) -> tuple[dict[int, _HttpPlanValue], dict[_HttpGroupKey, dict[str, int]]]:
+    """Plan source-native HTTP transaction depth and parent flow accounting."""
+    group_counters: dict[str, int] = {}
+    active_group: dict[str, _HttpGroupKey] = {}
+    depths: dict[_HttpGroupKey, int] = {}
+    last_emit_offset: dict[_HttpGroupKey, int] = {}
+    plan: dict[int, _HttpPlanValue] = {}
+    groups: dict[_HttpGroupKey, dict[str, int]] = {}
+
+    for index, req in enumerate(requests):
+        hostname = str(req.hostname)
+        if req.is_page_load or hostname not in active_group:
+            group_counters[hostname] = group_counters.get(hostname, 0) + 1
+            active_group[hostname] = (hostname, group_counters[hostname])
+            depths[active_group[hostname]] = 0
+
+        group_key = active_group[hostname]
+        depths[group_key] += 1
+        trans_depth = depths[group_key]
+        emit_offset_ms = req.time_offset_ms
+        if group_key in last_emit_offset:
+            emit_offset_ms = max(emit_offset_ms, last_emit_offset[group_key] + 600)
+        last_emit_offset[group_key] = emit_offset_ms
+        plan[index] = (group_key, trans_depth, trans_depth == 1, emit_offset_ms)
+
+        group = groups.setdefault(
+            group_key,
+            {
+                "first_offset_ms": emit_offset_ms,
+                "last_offset_ms": emit_offset_ms,
+                "request_body_len": 0,
+                "response_body_len": 0,
+                "request_count": 0,
+            },
+        )
+        group["first_offset_ms"] = min(group["first_offset_ms"], emit_offset_ms)
+        group["last_offset_ms"] = max(group["last_offset_ms"], emit_offset_ms)
+        group["request_body_len"] += max(request_body_floor, req.request_body_len)
+        group["response_body_len"] += req.response_body_len
+        group["request_count"] += 1
+
+    return plan, groups
+
+
 def _session_started_by(session: Any, time: datetime) -> bool:
     """Return whether a session exists at the given activity time."""
     session_start = session.start_time
@@ -4087,37 +4139,33 @@ class BaselineMixin:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
             ]
         session_ua = rng.choice(_session_uas)
-        request_groups: dict[str, dict[str, int]] = {}
-        for req in session_requests:
-            group = request_groups.setdefault(
-                req.hostname,
-                {
-                    "last_offset_ms": req.time_offset_ms,
-                    "request_body_len": 0,
-                    "response_body_len": 0,
-                },
-            )
-            group["last_offset_ms"] = max(group["last_offset_ms"], req.time_offset_ms)
-            group["request_body_len"] += req.request_body_len
-            group["response_body_len"] += req.response_body_len
-        seen_request_groups: set[str] = set()
+        request_plan, request_groups = _plan_http_request_groups(session_requests)
 
-        for req in session_requests:
-            req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
+        planned_requests = sorted(
+            enumerate(session_requests),
+            key=lambda item: (request_plan[item[0]][3], item[0]),
+        )
+        for req_index, req in planned_requests:
+            group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
+            req_ts = base_ts + timedelta(milliseconds=emit_offset_ms)
             self.state_manager.set_current_time(req_ts)
-            group = request_groups[req.hostname]
-            first_in_group = req.hostname not in seen_request_groups
-            seen_request_groups.add(req.hostname)
+            group = request_groups[group_key]
             conn_duration = rng.uniform(0.05, 2.0)
             conn_orig_bytes = req.request_body_len
             conn_resp_bytes = req.response_body_len
-            trans_depth = req.trans_depth
             if first_in_group:
-                trans_depth = 1
-                remaining_ms = max(0, group["last_offset_ms"] - req.time_offset_ms)
-                conn_duration = (remaining_ms / 1000) + rng.uniform(0.25, 1.75)
-                conn_orig_bytes = max(req.request_body_len, group["request_body_len"])
-                conn_resp_bytes = max(req.response_body_len, group["response_body_len"])
+                remaining_ms = max(0, group["last_offset_ms"] - emit_offset_ms)
+                conn_duration = (remaining_ms / 1000) + rng.uniform(1.25, 3.0)
+                request_overhead = 120 * group["request_count"]
+                response_overhead = 160 * group["request_count"]
+                conn_orig_bytes = max(
+                    req.request_body_len,
+                    group["request_body_len"] + request_overhead,
+                )
+                conn_resp_bytes = max(
+                    req.response_body_len,
+                    group["response_body_len"] + response_overhead,
+                )
 
             # Resolve destination IP for CDN subresources
             req_dst_ip = dst_ip
@@ -6095,26 +6143,21 @@ class BaselineMixin:
                         cache_seen[cache_key] = 1
                     visible_requests.append(req)
 
-                request_groups: dict[str, dict[str, int]] = {}
-                for req in visible_requests:
-                    group = request_groups.setdefault(
-                        req.hostname,
-                        {
-                            "last_offset_ms": req.time_offset_ms,
-                            "request_body_len": 0,
-                            "response_body_len": 0,
-                        },
-                    )
-                    group["last_offset_ms"] = max(group["last_offset_ms"], req.time_offset_ms)
-                    group["request_body_len"] += max(200, req.request_body_len)
-                    group["response_body_len"] += req.response_body_len
-                seen_request_groups: set[str] = set()
+                request_plan, request_groups = _plan_http_request_groups(
+                    visible_requests,
+                    request_body_floor=200,
+                )
 
-                for req in visible_requests:
-                    req_ts = base_ts + timedelta(milliseconds=req.time_offset_ms)
-                    group = request_groups[req.hostname]
-                    first_in_group = req.hostname not in seen_request_groups
-                    seen_request_groups.add(req.hostname)
+                planned_requests = sorted(
+                    enumerate(visible_requests),
+                    key=lambda item: (request_plan[item[0]][3], item[0]),
+                )
+                for req_index, req in planned_requests:
+                    group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
+                    req_ts = base_ts + timedelta(milliseconds=emit_offset_ms)
+                    group = request_groups[group_key]
+                    request_overhead = 120 * group["request_count"]
+                    response_overhead = 160 * group["request_count"]
                     self.activity_generator.generate_connection(
                         src_ip=client_ip,
                         dst_ip=effective_dst_ip,
@@ -6123,18 +6166,21 @@ class BaselineMixin:
                         proto="tcp",
                         service=dst_service,
                         duration=(
-                            (max(0, group["last_offset_ms"] - req.time_offset_ms) / 1000)
-                            + rng.uniform(0.25, 1.75)
+                            (max(0, group["last_offset_ms"] - emit_offset_ms) / 1000)
+                            + rng.uniform(1.25, 3.0)
                             if first_in_group
                             else rng.uniform(0.03, 2.0)
                         ),
                         orig_bytes=(
-                            group["request_body_len"]
+                            group["request_body_len"] + request_overhead
                             if first_in_group
                             else max(200, req.request_body_len)
                         ),
                         resp_bytes=(
-                            max(req.response_body_len, group["response_body_len"])
+                            max(
+                                req.response_body_len,
+                                group["response_body_len"] + response_overhead,
+                            )
                             if first_in_group
                             else req.response_body_len
                         ),
@@ -6150,7 +6196,7 @@ class BaselineMixin:
                             status_code=req.status_code,
                             status_msg=_status_message(req.status_code),
                             referrer=req.referrer,
-                            trans_depth=1 if first_in_group else req.trans_depth,
+                            trans_depth=trans_depth,
                             resp_mime_types=response_mime_types_for_status(
                                 req.status_code,
                                 req.content_type,

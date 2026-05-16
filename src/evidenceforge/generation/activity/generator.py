@@ -36,7 +36,7 @@ import random
 import re
 import shlex
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Optional
@@ -102,6 +102,22 @@ from .network import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _HttpPersistentConnection:
+    close_deadline: datetime
+    uid: str
+    src_port: int
+    next_trans_depth: int
+    orig_budget: int
+    resp_budget: int
+    used_orig: int
+    used_resp: int
+
+
+_HTTP_PERSISTENT_REUSE_GUARD = timedelta(milliseconds=900)
+
 
 _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
     {
@@ -1377,7 +1393,6 @@ _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 _AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 240
-_HTTP_PERSISTENT_CONNECTION_TIMEOUT_S = 45.0
 
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
@@ -2118,7 +2133,7 @@ class ActivityGenerator:
             tuple[str, str, str, str, int], tuple[datetime, str]
         ] = {}
         self._http_persistent_connections: dict[
-            tuple[str, str, int, str, str], tuple[datetime, str, int]
+            tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
@@ -6706,17 +6721,24 @@ class ActivityGenerator:
             if http.trans_depth > 1:
                 cached = self._http_persistent_connections.get(http_persistent_key)
                 if cached is not None:
-                    last_activity, cached_uid, cached_src_port = cached
-                    elapsed = (time - last_activity).total_seconds()
-                    if 0 <= elapsed <= _HTTP_PERSISTENT_CONNECTION_TIMEOUT_S:
-                        src_port = cached_src_port
-                        reused_http_uid = cached_uid
+                    reuse_deadline = cached.close_deadline - _HTTP_PERSISTENT_REUSE_GUARD
+                    elapsed = (time - reuse_deadline).total_seconds()
+                    request_body = http.request_body_len or 0
+                    response_body = http.response_body_len or 0
+                    fits_parent_flow = (
+                        cached.used_orig + request_body <= cached.orig_budget
+                        and cached.used_resp + response_body <= cached.resp_budget
+                    )
+                    if elapsed <= 0 and fits_parent_flow:
+                        src_port = cached.src_port
+                        reused_http_uid = cached.uid
                         http_application_layer_only = True
-                        self._http_persistent_connections[http_persistent_key] = (
-                            time,
-                            cached_uid,
-                            cached_src_port,
-                        )
+                        http = replace(http, trans_depth=cached.next_trans_depth)
+                        cached.next_trans_depth += 1
+                        cached.used_orig += request_body
+                        cached.used_resp += response_body
+                    else:
+                        self._http_persistent_connections.pop(http_persistent_key, None)
                 if not http_application_layer_only:
                     http = replace(http, trans_depth=1)
 
@@ -7946,11 +7968,17 @@ class ActivityGenerator:
             and event.http is not None
             and event.network.conn_state == "SF"
             and not event.network.application_layer_only
+            and event.network.duration is not None
         ):
-            self._http_persistent_connections[http_persistent_key] = (
-                time,
-                uid,
-                src_port,
+            self._http_persistent_connections[http_persistent_key] = _HttpPersistentConnection(
+                close_deadline=event.timestamp + timedelta(seconds=event.network.duration),
+                uid=uid,
+                src_port=src_port,
+                next_trans_depth=max(2, event.http.trans_depth + 1),
+                orig_budget=max(event.network.orig_bytes or 0, event.http.request_body_len or 0),
+                resp_budget=max(event.network.resp_bytes or 0, event.http.response_body_len or 0),
+                used_orig=event.http.request_body_len or 0,
+                used_resp=event.http.response_body_len or 0,
             )
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)

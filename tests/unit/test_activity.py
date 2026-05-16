@@ -3724,9 +3724,10 @@ class TestActivityGenerator:
             dst_port=80,
             proto="tcp",
             service="http",
-            duration=1.5,
+            duration=2.0,
             orig_bytes=450,
-            resp_bytes=4096,
+            resp_bytes=12_288,
+            conn_state="SF",
             http=HttpContext(
                 method="GET",
                 host="portal.example.com",
@@ -3747,6 +3748,7 @@ class TestActivityGenerator:
             duration=0.2,
             orig_bytes=320,
             resp_bytes=8192,
+            conn_state="SF",
             http=HttpContext(
                 method="GET",
                 host="portal.example.com",
@@ -3772,6 +3774,90 @@ class TestActivityGenerator:
         assert second_event.network.src_port == first_event.network.src_port
         assert second_event.network.application_layer_only is True
         assert second_event.http.trans_depth == 2
+
+    def test_generate_connection_does_not_reuse_http_uid_after_parent_close(self, state_manager):
+        """A late HTTP request should start a new flow instead of overrunning conn.log."""
+
+        class CollectorEmitter:
+            def __init__(self, predicate):
+                self._predicate = predicate
+                self.events = []
+
+            def can_handle(self, event):
+                return self._predicate(event)
+
+            def emit(self, event):
+                self.events.append(event)
+
+        conn_emitter = CollectorEmitter(
+            lambda event: (
+                event.event_type == "connection"
+                and event.network is not None
+                and not event.network.application_layer_only
+            )
+        )
+        http_emitter = CollectorEmitter(
+            lambda event: event.event_type == "connection" and event.http is not None
+        )
+        emitters = {
+            "zeek_conn": conn_emitter,
+            "zeek_http": http_emitter,
+        }
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        generator = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        first_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.25,
+            orig_bytes=450,
+            resp_bytes=4096,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=4096,
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+        second_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp + timedelta(seconds=2),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.25,
+            orig_bytes=320,
+            resp_bytes=8192,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/assets/app.js",
+                user_agent="Mozilla/5.0",
+                response_body_len=8192,
+                trans_depth=2,
+            ),
+            emit_dns=False,
+        )
+
+        assert first_uid
+        assert second_uid
+        assert second_uid != first_uid
+        assert len(conn_emitter.events) == 2
+        assert len(http_emitter.events) == 2
+        assert http_emitter.events[1].network.application_layer_only is False
+        assert http_emitter.events[1].http.trans_depth == 1
 
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should include byte counts in NetworkContext."""
