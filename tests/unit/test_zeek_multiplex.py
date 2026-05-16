@@ -238,6 +238,8 @@ class TestPerSensorDirectoryRouting:
                 for port in sorted(core_by_port)
             ]
 
+            assert any(offset < 0 for offset in offsets)
+            assert any(offset > 0 for offset in offsets)
             assert max(offsets) - min(offsets) > 0.0005
             assert len(set(offsets)) > 30
             assert max(abs(offset) for offset in offsets) <= 0.005

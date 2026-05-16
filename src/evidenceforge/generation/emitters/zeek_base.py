@@ -106,6 +106,28 @@ def _sensor_clock_skew_us(hostname: str) -> int:
     return timing.clock_skew_min_us + (seed % max(1, width))
 
 
+def _sensor_clock_drift_us(hostname: str, ts: Any) -> int:
+    """Return small time-bucketed clock drift for a sensor timestamp."""
+    if isinstance(ts, datetime):
+        epoch_seconds = int(ts.timestamp())
+    elif isinstance(ts, (int, float)):
+        epoch_seconds = int(ts)
+    else:
+        epoch_seconds = 0
+    # Drift moves slowly, not per packet. Fifteen-minute buckets are enough to
+    # avoid a perfectly fixed offset while keeping well-synced sensors close.
+    bucket = epoch_seconds // 900
+    seed = _stable_seed(f"zeek_sensor_clock_drift:{hostname}:{bucket}")
+    return (seed % 401) - 200
+
+
+def _sensor_clock_adjustment_us(hostname: str, ts: Any) -> int:
+    """Return stable skew plus bounded drift within the configured skew window."""
+    timing = network_sensor_observation_timing()
+    skew = _sensor_clock_skew_us(hostname) + _sensor_clock_drift_us(hostname, ts)
+    return max(timing.clock_skew_min_us, min(timing.clock_skew_max_us, skew))
+
+
 def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
     """Return per-flow capture timestamp variance for a sensor observation."""
     timing = network_sensor_observation_timing()
@@ -590,19 +612,21 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Sensors have stable clock skew plus per-flow capture timing
-                # variance. Keep the offset shared across Zeek log families for
-                # a flow, but avoid a fixed cross-sensor clone delay.
+                # Each sensor has independent clock skew/drift plus per-flow
+                # capture timing. Apply it to every sensor in a multi-sensor
+                # observation so cross-sensor deltas can be positive or
+                # negative instead of always "secondary = primary + delay".
+                ts = render_data.get("ts")
+                if len(targets) > 1 and ts is not None:
+                    sensor_delay_us = _sensor_clock_adjustment_us(
+                        hostname,
+                        ts,
+                    ) + _sensor_path_delay_us(hostname, original_uid)
+                    if isinstance(ts, datetime):
+                        render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
+                    elif isinstance(ts, (int, float)):
+                        render_data["ts"] = ts + sensor_delay_us / 1_000_000
                 if i > 0:
-                    sensor_delay_us = _sensor_clock_skew_us(hostname) + _sensor_path_delay_us(
-                        hostname, original_uid
-                    )
-                    ts = render_data.get("ts")
-                    if ts is not None:
-                        if isinstance(ts, datetime):
-                            render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
-                        elif isinstance(ts, (int, float)):
-                            render_data["ts"] = ts + sensor_delay_us / 1_000_000
                     if render_data.get(
                         "_allow_sensor_observation_variance"
                     ) and not _locks_sensor_packet_accounting(render_data):
