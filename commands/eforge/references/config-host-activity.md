@@ -112,6 +112,8 @@ schedules:
     jitter_minutes: 60
     distro: all
     role: web_server
+    services_any: [nginx, apache2]
+    slot_skip_probability: 0.08
     cron_user: root
     cron_commands:
       debian: "/usr/bin/certbot renew --quiet --deploy-hook 'systemctl reload nginx'"
@@ -130,6 +132,12 @@ schedules:
 | `jitter_minutes` | int | yes | Max jitter offset (per-host deterministic) |
 | `distro` | string | yes | `all`, `debian`, or `rhel` |
 | `role` | string | no | Host role filter (e.g., `web_server`) |
+| `roles` | list[string] | no | Host role filter where any role may match |
+| `exclude_roles` | list[string] | no | Host roles that suppress this schedule |
+| `services_any` | list[string] | no | Required host service/package signals where any service may match |
+| `host_probability` | float | no | Deterministic per-host enable probability between `0.0` and `1.0` |
+| `slot_skip_probability` | float | no | Deterministic per-slot skip probability for frequent timers |
+| `slot_jitter_seconds` | int | no | Extra runtime jitter for frequent timer slots |
 | `process_path` | string | no | Path to service binary for process create events |
 
 **Systemd timer additional fields:**

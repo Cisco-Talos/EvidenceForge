@@ -1178,6 +1178,12 @@ class TestValidateConfig:
             messages = entry.get("messages", [])
             assert not old_exact_messages.intersection(messages)
             assert any("{" in message for message in messages)
+            if app == "systemd-resolved":
+                assert "trust_anchor" not in (entry.get("params") or {})
+                assert all("Positive Trust Anchors" not in message for message in messages)
+            if app == "irqbalance":
+                assert all("{}" not in message and "{0}" not in message for message in messages)
+                assert all("from CPU" not in message for message in messages)
             for message in messages:
                 rendered = render_extra_syslog_message(
                     {**entry, "messages": [message]},
@@ -1188,8 +1194,48 @@ class TestValidateConfig:
                 )
                 assert "{" not in rendered
                 assert "}" not in rendered
+                if app == "systemd-resolved":
+                    assert "UDP+EDNS0 instead of UDP+EDNS0" not in rendered
 
         assert checked_apps == high_volume_apps
+
+    def test_systemd_schedule_filters_by_role_and_service_state(self):
+        from types import SimpleNamespace
+
+        from evidenceforge.generation.engine.baseline import _schedule_applies_to_system
+
+        sched = {
+            "service": "phpsessionclean",
+            "roles": ["web_server"],
+            "exclude_roles": ["forward_proxy"],
+            "services_any": ["php-fpm"],
+            "host_probability": 1.0,
+        }
+
+        php_web = SimpleNamespace(
+            hostname="WEB-EXT-01",
+            roles=["web_server"],
+            services=["apache2", "php-fpm"],
+        )
+        nginx_only = SimpleNamespace(
+            hostname="APP-INT-01",
+            roles=["web_server"],
+            services=["nginx", "systemd"],
+        )
+        proxy = SimpleNamespace(
+            hostname="PROXY-01",
+            roles=["forward_proxy"],
+            services=["squid", "php-fpm"],
+        )
+
+        assert _schedule_applies_to_system(sched, php_web, has_web_role=True)
+        assert not _schedule_applies_to_system(sched, nginx_only, has_web_role=True)
+        assert not _schedule_applies_to_system(sched, proxy, has_web_role=True)
+        assert not _schedule_applies_to_system(
+            {**sched, "host_probability": 0.0},
+            php_web,
+            has_web_role=True,
+        )
 
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
         from evidenceforge.generation.activity import windows_auth_realism

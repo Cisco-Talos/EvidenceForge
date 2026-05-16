@@ -203,6 +203,12 @@ class SystemdScheduleEntry(BaseModel, extra="forbid"):
     typical_day: str | None = None
     # Optional role filter
     role: str | None = None
+    roles: list[str] | None = None
+    exclude_roles: list[str] | None = None
+    services_any: list[str] | None = None
+    host_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    slot_skip_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    slot_jitter_seconds: int | None = Field(default=None, ge=0, le=1800)
     # Optional fields for cron type
     cron_user: str | None = None
     cron_commands: dict[str, str] | None = None

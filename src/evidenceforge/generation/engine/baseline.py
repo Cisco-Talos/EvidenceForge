@@ -703,6 +703,51 @@ def _load_systemd_schedules() -> list[dict[str, Any]]:
     return _CACHED_SCHEDULES
 
 
+def _deterministic_probability_enabled(key: str, probability: float | None) -> bool:
+    """Return whether a stable per-key probability gate is enabled."""
+    if probability is None:
+        return True
+    clamped = max(0.0, min(1.0, float(probability)))
+    if clamped <= 0.0:
+        return False
+    if clamped >= 1.0:
+        return True
+    return (_stable_seed(key) % 10_000) / 10_000.0 < clamped
+
+
+def _schedule_applies_to_system(sched: dict[str, Any], system: Any, has_web_role: bool) -> bool:
+    """Return whether a Linux schedule matches host role and service/package state."""
+    roles = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
+    services = {str(service).lower() for service in (getattr(system, "services", []) or [])}
+
+    legacy_role = sched.get("role")
+    if legacy_role:
+        role = str(legacy_role).lower()
+        if role == "web_server":
+            if role not in roles and not has_web_role:
+                return False
+        elif role not in roles:
+            return False
+
+    required_roles = {str(role).lower() for role in (sched.get("roles") or [])}
+    if required_roles and not roles.intersection(required_roles):
+        return False
+
+    excluded_roles = {str(role).lower() for role in (sched.get("exclude_roles") or [])}
+    if excluded_roles and roles.intersection(excluded_roles):
+        return False
+
+    required_services = {str(service).lower() for service in (sched.get("services_any") or [])}
+    if required_services and not services.intersection(required_services):
+        return False
+
+    service = sched.get("service", "")
+    return _deterministic_probability_enabled(
+        f"sched_host_enabled:{getattr(system, 'hostname', '')}:{service}",
+        sched.get("host_probability"),
+    )
+
+
 def _machine_account_tgs_gap_ms(rng: random.Random, *, first: bool) -> int:
     """Return a realistic gap before machine-account service-ticket requests."""
     if first:
@@ -1070,9 +1115,8 @@ class BaselineMixin:
             if distro == "rhel" and not is_rhel_like:
                 continue
 
-            # Filter by role
-            role = sched.get("role")
-            if role == "web_server" and not has_web_role:
+            # Filter by role and service/package signals
+            if not _schedule_applies_to_system(sched, system, has_web_role):
                 continue
 
             service = sched["service"]
@@ -1113,7 +1157,18 @@ class BaselineMixin:
             if frequency == "30min":
                 # Generate two events per hour
                 for fm in (fire_minute_1, fire_minute_2):
-                    ts = current_hour + timedelta(minutes=fm, seconds=rng.uniform(0, 30))
+                    slot_key = (
+                        f"sched_slot:{system.hostname}:{service}:{current_hour.isoformat()}:{fm}"
+                    )
+                    skip_probability = sched.get("slot_skip_probability")
+                    if skip_probability is not None and not _deterministic_probability_enabled(
+                        slot_key, 1.0 - float(skip_probability)
+                    ):
+                        continue
+                    jitter_seconds = max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                    ts = current_hour + timedelta(
+                        minutes=fm, seconds=rng.uniform(0, jitter_seconds)
+                    )
                     self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
             else:
                 ts = current_hour + timedelta(minutes=fire_minute, seconds=rng.uniform(0, 59))

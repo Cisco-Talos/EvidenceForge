@@ -204,15 +204,27 @@ programs:
         - UDP
         - TCP
         - UDP+EDNS0
-      trust_anchor:
-        - "20326 8 2 e06d44b80b8f1d39a95c0b0d7c65d08458e880409bbc683457104237c7f8ec8d"
-        - "38696 8 2 683d2d0acb8c9b712a1948b27f741219298d0a450d612c483af444a4c0fb2b16"
-        - "20326 8 1 2f6d2c6bdab2a2d15eb06fcddcb0b195"
+      degraded_feature_set:
+        - UDP
+        - TCP
+      scope:
+        - global
+        - eth0
+        - ens160
+        - br0
+      cache_bucket:
+        - positive
+        - negative
+        - stale
+      packet_size:
+        - "512"
+        - "1232"
+        - "1472"
     messages:
-      - "Using degraded feature set {feature_set} instead of UDP+EDNS0 for DNS server {dns_server} after transaction {0}."
-      - "Grace period over, resuming full feature set {feature_set} for DNS server {dns_server} after probe {0}."
-      - "Positive Trust Anchors: . IN DS {trust_anchor}"
-      - "Cache miss for transaction {}, retrying DNS server {dns_server} with {feature_set}."
+      - "Using degraded feature set {degraded_feature_set} instead of UDP+EDNS0 for DNS server {dns_server} after transaction {0}."
+      - "Grace period over, resuming full feature set UDP+EDNS0 for DNS server {dns_server} after probe {0}."
+      - "Flushed {cache_bucket} cache scope {scope} after DNS server {dns_server} changed features."
+      - "Transaction {0} switched to {feature_set} with advertised UDP packet size {packet_size}."
 
   - app: thermald
     system_types: [workstation]
@@ -240,7 +252,34 @@ programs:
       numa_node:
         - "0"
         - "1"
+      irq:
+        - "16"
+        - "24"
+        - "32"
+        - "45"
+        - "64"
+        - "86"
+        - "122"
+        - "137"
+        - "154"
+        - "181"
+      device:
+        - ens160
+        - nvme0q1
+        - ahci
+        - virtio0-input
+        - mlx5_comp0
+      affinity_mask:
+        - "00000001"
+        - "00000002"
+        - "00000004"
+        - "00000008"
+      moved:
+        - "0"
+        - "1"
+        - "2"
     messages:
-      - "Balancing is ineffective: IRQs are pinned by affinity policy on CPU {cpu} during sample {0}"
-      - "IRQ {} affinity hint keeps vector on CPU {cpu}"
-      - "NUMA node {numa_node}: no movable IRQs found during rebalance pass {0}"
+      - "IRQ {irq} affinity hint keeps vector on CPU {cpu} ({device})"
+      - "IRQ {irq} classified for CPU {cpu} balancing on {device}"
+      - "Skipping IRQ {irq}: banned by affinity mask {affinity_mask} ({device})"
+      - "NUMA node {numa_node}: balancing pass complete, {moved} IRQs moved"
