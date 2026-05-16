@@ -415,9 +415,9 @@ class TestPermitRecords:
         output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
         built_line = next(line for line in output.splitlines() if "%ASA-6-302020:" in line)
         assert "Built inbound ICMP connection" in built_line
-        assert "faddr outside:203.0.113.50/8" in built_line
-        assert "gaddr dmz:172.16.0.5/0" in built_line
-        assert "laddr dmz:172.16.0.5/0" in built_line
+        assert "faddr 203.0.113.50/8" in built_line
+        assert "gaddr 172.16.0.5/0" in built_line
+        assert "laddr 172.16.0.5/0" in built_line
 
     def test_inbound_direction_for_external_source(self, asa_emitter, tmp_path):
         """External source -> internal destination should be 'inbound'."""

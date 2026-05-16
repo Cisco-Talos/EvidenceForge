@@ -47,10 +47,10 @@ BUILT_TCP_UDP = re.compile(
     r"\((\S+)/(\d+)\)"
 )
 
-# Built ICMP: "Built {inbound/outbound} ICMP connection for faddr iface:ip/type ..."
+# Built ICMP: "Built {inbound/outbound} ICMP connection for faddr ip/type ..."
 BUILT_ICMP = re.compile(
     r"Built\s+(?:inbound|outbound)\s+ICMP\s+connection\s+for\s+faddr\s+"
-    r"(\w+):(\S+)/(\d+)"
+    r"(?:(\w+):)?(\S+)/(\d+)"
 )
 
 # Teardown connection: "Teardown TCP connection 12345 for inside:10.0.10.50/54321 to ..."
@@ -61,10 +61,10 @@ TEARDOWN_TCP_UDP = re.compile(
     r"duration\s+(\S+)\s+bytes\s+(\d+)"
 )
 
-# Teardown ICMP: "Teardown ICMP connection for faddr iface:ip/type ..."
+# Teardown ICMP: "Teardown ICMP connection for faddr ip/type ..."
 TEARDOWN_ICMP = re.compile(
     r"Teardown\s+ICMP\s+connection\s+for\s+faddr\s+"
-    r"(\w+):(\S+)/(\d+)"
+    r"(?:(\w+):)?(\S+)/(\d+)"
 )
 
 # Deny: "Deny tcp src outside:104.248.71.33/44231 dst inside:10.0.10.50/445 ..."
@@ -182,7 +182,8 @@ class CiscoAsaParser(LogParser):
         elif msg_id in (302020,):
             match = BUILT_ICMP.search(message)
             if match:
-                fields["dst_interface"] = match.group(1)
+                if match.group(1):
+                    fields["dst_interface"] = match.group(1)
                 fields["dst_ip"] = match.group(2)
                 fields["icmp_type"] = int(match.group(3))
         elif msg_id in (302014, 302016):
@@ -200,7 +201,8 @@ class CiscoAsaParser(LogParser):
         elif msg_id in (302021,):
             match = TEARDOWN_ICMP.search(message)
             if match:
-                fields["dst_interface"] = match.group(1)
+                if match.group(1):
+                    fields["dst_interface"] = match.group(1)
                 fields["dst_ip"] = match.group(2)
                 fields["icmp_type"] = int(match.group(3))
         elif msg_id == 106023:

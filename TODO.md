@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Fix Cisco ASA ICMP connection rendering so `%ASA-6-302020` and `%ASA-6-302021` rows match SOF-ELK's Cisco ASA parser; verified a focused four-row sample and a full 269,999-row ASA corpus through the external-parser harness.
 - [x] Consolidate SOF-ELK external parser execution so one Filebeat/Logstash container pair processes every supported log family in a run, and the CLI prints/writes one combined result report instead of separate validator sections.
 - [x] Add SOF-ELK external parser support for Cisco ASA logs, web access logs, and Linux syslog in priority order, committing each source after the harness can surface parse issues with actionable record context.
   - [x] Cisco ASA — staged `cisco_asa.log` through SOF-ELK's syslog archive Filebeat input plus `1100-preprocess-syslog.conf` and `6018-cisco_asa.conf`; captured `event.original`; ignored non-fatal `_grokparsefailure_1100-03` path-year diagnostics; unit checks and a two-record container smoke test passed.

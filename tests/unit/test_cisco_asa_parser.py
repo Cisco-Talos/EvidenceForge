@@ -79,6 +79,19 @@ class TestParseBuiltRecords:
         log = tmp_path / "cisco_asa.log"
         log.write_text(
             "<166>Jun 15 14:23:05 fw01 %ASA-6-302020: Built outbound ICMP connection "
+            "for faddr 203.0.113.50/8 gaddr 10.0.10.50/0 laddr 10.0.10.50/0\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        assert records[0].fields["msg_id"] == 302020
+        assert records[0].fields["dst_ip"] == "203.0.113.50"
+        assert records[0].fields["icmp_type"] == 8
+
+    def test_parse_302020_icmp_built_accepts_legacy_interface_prefix(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302020: Built outbound ICMP connection "
             "for faddr outside:203.0.113.50/8 gaddr inside:10.0.10.50/0 "
             "laddr inside:10.0.10.50/0\n"
         )
@@ -86,6 +99,7 @@ class TestParseBuiltRecords:
         records = list(parser.parse_file(log))
         assert len(records) == 1
         assert records[0].fields["msg_id"] == 302020
+        assert records[0].fields["dst_interface"] == "outside"
         assert records[0].fields["dst_ip"] == "203.0.113.50"
         assert records[0].fields["icmp_type"] == 8
 
