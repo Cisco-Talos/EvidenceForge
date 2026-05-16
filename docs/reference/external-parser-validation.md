@@ -22,11 +22,14 @@ Supported in the V1 harness:
 - JSONL output instead of Elasticsearch
 - Cisco ASA firewall logs staged through SOF-ELK's syslog archive path with
   `1100-preprocess-syslog.conf` and `6018-cisco_asa.conf`
+- Web access logs staged through SOF-ELK's HTTPD archive path with
+  `6100-httpd.conf`, `8060-postprocess-useragent.conf`, and
+  `8110-postprocess-httpd.conf`
 
 Not yet covered:
 
 - Windows XML logs
-- IDS, syslog, proxy, web, eCAR
+- IDS, syslog, proxy, eCAR
 - Elasticsearch output behavior
 
 SOF-ELK has dedicated filters for the Zeek types it supports today, such as
@@ -56,8 +59,8 @@ At runtime it:
 1. Scans the generated `data/` directory to determine which validators apply.
 2. Warns about generated log families that do not yet have an external parser
    validator.
-3. Runs every matching validator. Today that means SOF-ELK for Zeek and Cisco
-   ASA files. The
+3. Runs every matching validator. Today that means SOF-ELK for Zeek, Cisco ASA,
+   and web access files. The
    validator phase shows stage progress plus host/sensor, log family, and
    subtype progress while parsed records are checked after the third-party
    parser has produced output.
@@ -65,7 +68,8 @@ At runtime it:
    repository.
 5. Stages generated files under temporary SOF-ELK-style trees such as
    `/logstash/zeek/<sensor>/<zeek-log-name>.log` and
-   `/logstash/syslog/<sensor>/cisco_asa.log`.
+   `/logstash/syslog/<sensor>/cisco_asa.log` or
+   `/logstash/httpd/<sensor>/web_access.log`.
 6. Builds a temporary Logstash pipeline:
    - a small Beats input wrapper
    - unchanged SOF-ELK filter files
@@ -131,6 +135,13 @@ Cisco ASA files stage through SOF-ELK's recursive syslog file input:
 | --- | --- |
 | `<sensor>/cisco_asa.log` | `/logstash/syslog/<sensor>/cisco_asa.log` |
 | `cisco_asa.log` | `/logstash/syslog/default/cisco_asa.log` |
+
+Web access files stage through SOF-ELK's recursive HTTPD file input:
+
+| EvidenceForge file | Staged SOF-ELK file |
+| --- | --- |
+| `<sensor>/web_access.log` | `/logstash/httpd/<sensor>/web_access.log` |
+| `web_access.log` | `/logstash/httpd/default/web_access.log` |
 
 ## Commands
 
@@ -205,6 +216,9 @@ such as `sof-elk-zeek/` or `sof-elk-cisco-asa/`. Useful SOF-ELK artifacts are:
 | `sof-elk-cisco-asa/stage/logstash/syslog/...` | ASA files as SOF-ELK sees them |
 | `sof-elk-cisco-asa/parsed/events.jsonl` | Parsed ASA events |
 | `sof-elk-cisco-asa/parsed/sof_elk_parser_failures.json` | Structured ASA failure report when validation fails |
+| `sof-elk-web-access/stage/logstash/httpd/...` | Web access files as SOF-ELK sees them |
+| `sof-elk-web-access/parsed/events.jsonl` | Parsed web access events |
+| `sof-elk-web-access/parsed/sof_elk_parser_failures.json` | Structured web access failure report when validation fails |
 
 The failure report includes:
 
@@ -230,6 +244,11 @@ The first ignored optional enrichment tag is SOF-ELK `_grokparsefail_6200-01`
 on `zeek_dns`. SOF-ELK emits this when it cannot derive `dns.answers.ip` from
 `dns.answers.data`; non-address DNS answer types such as `NS`, `PTR`, `MX`, and
 `SOA` remain valid parsed DNS records.
+
+Other explicitly ignored optional tags include `_grokparsefailure_1100-03` on
+`cisco_asa`, which is SOF-ELK's optional archive path-year lookup, and
+`_grokparsefail_8110-01` on `web_access`, which is optional HTTPD page/not-page
+classification after the access record has already parsed.
 
 ## Current Medium Dataset Result
 

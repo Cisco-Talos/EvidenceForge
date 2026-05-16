@@ -54,6 +54,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
 )
 from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_WEB_ACCESS_VALIDATOR,
     classify_parser_tags,
 )
 
@@ -105,7 +106,34 @@ CISCO_ASA_SPEC = SofElkSourceSpec(
     required_tags=("got_cisco", "parse_done"),
 )
 
-SOF_ELK_SOURCE_SPECS: tuple[SofElkSourceSpec, ...] = (CISCO_ASA_SPEC,)
+WEB_ACCESS_SPEC = SofElkSourceSpec(
+    validator=SOF_ELK_WEB_ACCESS_VALIDATOR,
+    display_name="SOF-ELK Web Access",
+    format_name="web_access",
+    logtype="web",
+    subtype="access",
+    source_names=("web_access.log",),
+    staged_directory="httpd",
+    staged_name="web_access.log",
+    filebeat_input="httpdlog.yml",
+    filter_files=(
+        "1000-preprocess-all.conf",
+        "6100-httpd.conf",
+        "8060-postprocess-useragent.conf",
+        "8110-postprocess-httpd.conf",
+        "8999-postprocess-all.conf",
+    ),
+    output_label_type="httpdlog",
+    required_paths=(
+        "source.ip",
+        "http.request.method",
+        "http.response.status_code",
+        "url.path",
+    ),
+    required_tags=("parse_done",),
+)
+
+SOF_ELK_SOURCE_SPECS: tuple[SofElkSourceSpec, ...] = (CISCO_ASA_SPEC, WEB_ACCESS_SPEC)
 SOF_ELK_SOURCE_SPECS_BY_VALIDATOR: dict[str, SofElkSourceSpec] = {
     spec.validator: spec for spec in SOF_ELK_SOURCE_SPECS
 }

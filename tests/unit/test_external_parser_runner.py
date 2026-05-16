@@ -28,6 +28,7 @@ from pathlib import Path
 
 from evidenceforge.external_parsers.runner import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
     detect_external_parser_plan,
     group_logs_for_progress,
@@ -58,12 +59,23 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         "for inside:10.0.10.5/54321 to outside:198.51.100.10/443\n",
         encoding="utf-8",
     )
+    (data_dir / "web-01.example.test").mkdir()
+    (data_dir / "web-01.example.test" / "web_access.log").write_text(
+        '198.51.100.25 - - [15/Jun/2026:14:23:05 +0000] "GET /index.html HTTP/1.1" '
+        '200 512 "-" "Mozilla/5.0"\n',
+        encoding="utf-8",
+    )
 
     plan = detect_external_parser_plan(data_dir)
 
-    assert plan.validators == (SOF_ELK_ZEEK_VALIDATOR, SOF_ELK_CISCO_ASA_VALIDATOR)
+    assert plan.validators == (
+        SOF_ELK_ZEEK_VALIDATOR,
+        SOF_ELK_CISCO_ASA_VALIDATOR,
+        SOF_ELK_WEB_ACCESS_VALIDATOR,
+    )
     assert {(log.logtype, log.subtype) for log in plan.supported_logs} == {
         ("firewall", "cisco_asa"),
+        ("web", "access"),
         ("zeek", "conn"),
         ("zeek", "http"),
     }

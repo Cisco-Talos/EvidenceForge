@@ -32,10 +32,15 @@ from evidenceforge.external_parsers.sof_elk_sources import SOF_ELK_SOURCE_SPECS_
 from evidenceforge.external_parsers.sof_elk_zeek import ZEEK_LOG_SPECS
 from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_WEB_ACCESS_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
 )
 
-VALIDATOR_ORDER = (SOF_ELK_ZEEK_VALIDATOR, SOF_ELK_CISCO_ASA_VALIDATOR)
+VALIDATOR_ORDER = (
+    SOF_ELK_ZEEK_VALIDATOR,
+    SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_WEB_ACCESS_VALIDATOR,
+)
 
 _LOG_FILE_SUFFIXES = {".alert", ".bash_history", ".history", ".json", ".log", ".xml"}
 _UNSUPPORTED_FILE_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
@@ -44,7 +49,6 @@ _UNSUPPORTED_FILE_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("syslog.log", "syslog", "linux", "syslog"),
     ("snort_alert.log", "ids", "snort", "snort_alert"),
     ("proxy_access.log", "proxy", "access", "proxy_access"),
-    ("web_access.log", "web", "access", "web_access"),
     ("ecar.json", "ecar", "ecar", "ecar"),
 )
 
