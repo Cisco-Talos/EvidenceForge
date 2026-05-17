@@ -12,24 +12,19 @@ written to temporary JSONL artifacts instead of Elasticsearch.
 
 ## Quickstart
 
-Run the full developer-facing pipeline against an existing generated `data/`
-directory:
-
-```bash
-uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data
-```
-
-For target-dependent SOF-ELK checks, generate the dataset with the SOF-ELK
-output target first:
+Generate the dataset with the SOF-ELK output target, then run the full
+developer-facing pipeline against the generated `data/` directory:
 
 ```bash
 uv run eforge generate scenarios/apt-healthcare-breach/scenario.yaml --target sof-elk
+uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data
 ```
 
-Zeek and web access logs are target-invariant. Windows, Linux syslog, and Cisco
-ASA validation require `OUTPUT_TARGET.txt` to say `sof-elk`; default-target
-datasets are reported with clear unsupported/wrong-target warnings for those
-validators.
+The script requires `OUTPUT_TARGET.txt` to exist beside the scenario artifacts
+or inside `data/`, and the marker must contain `sof-elk`. Missing, invalid, or
+`default` markers exit gracefully before discovery/staging with a message that
+explains how to regenerate the dataset. This keeps the SOF-ELK lane from
+quietly validating only the target-invariant subset of a default-target dataset.
 
 For a durable report location, pass a work directory:
 
@@ -74,6 +69,7 @@ Not yet supported:
 
 - Native Windows/Sysmon XML files from the `default` target
 - Default-target Linux syslog and Cisco ASA layouts
+- Any dataset missing `OUTPUT_TARGET.txt` or marked with `default`
 - IDS and proxy logs
 - eCAR and bash history, which have no stable third-party standard parser target
 - Elasticsearch output behavior

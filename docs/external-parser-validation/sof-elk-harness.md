@@ -37,6 +37,11 @@ uv run python scripts/external_parser.py <data-dir> \
   --timeout 180
 ```
 
+The script requires an explicit `OUTPUT_TARGET.txt` marker set to `sof-elk`
+before it performs discovery, staging, or Compose startup. Legacy datasets with
+no marker and datasets marked `default` must be regenerated with
+`eforge generate --target sof-elk` before they can enter this SOF-ELK pipeline.
+
 If `--work-dir` is omitted, the runner creates a temporary directory with an
 `eforge-external-parsers-` prefix.
 
@@ -162,9 +167,8 @@ files such as `zeek_http.json` are staged under the synthetic `default` sensor.
 
 Year-partitioned syslog-family paths matter. SOF-ELK uses the archive path to
 recover the year for RFC3164/BSD timestamps. New target-dependent generated
-data should use `eforge generate --target sof-elk`; default-target syslog,
-Cisco ASA, and Windows XML files are detected and reported as unsupported for
-SOF-ELK validation rather than silently staged as if they were compatible.
+data should use `eforge generate --target sof-elk`; the script rejects
+default-target or markerless datasets before any files are staged.
 
 ## Output Artifacts
 

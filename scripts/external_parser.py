@@ -60,6 +60,11 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
     SofElkHarnessError,
     SofElkParserError,
 )
+from evidenceforge.output_targets import (
+    OUTPUT_TARGET_FILENAME,
+    OutputTarget,
+    normalize_output_target,
+)
 
 INGEST_STEP_TOTAL = 5
 console = Console()
@@ -119,6 +124,8 @@ def _run(args: argparse.Namespace) -> int:
     if not data_dir.is_dir():
         console.print(f"[bold red]error:[/bold red] data directory does not exist: {data_dir}")
         return 1
+    if not _require_sof_elk_output_target(data_dir):
+        return 1
 
     work_dir = (
         args.work_dir.resolve()
@@ -147,6 +154,64 @@ def _run(args: argparse.Namespace) -> int:
         timeout=args.timeout,
         runtime=args.runtime,
     )
+
+
+def _require_sof_elk_output_target(data_dir: Path) -> bool:
+    marker = _find_output_target_marker(data_dir)
+    if marker is None:
+        searched = "\n".join(
+            f"  - {candidate}" for candidate in _output_target_marker_candidates(data_dir)
+        )
+        error_console.print(
+            "[bold red]error:[/bold red] SOF-ELK external parser validation requires "
+            f"an explicit `{OUTPUT_TARGET_FILENAME}` marker set to `sof-elk`."
+        )
+        error_console.print(
+            "This script intentionally does not run against legacy or default-target datasets "
+            "because their on-disk formats do not match SOF-ELK's parser expectations."
+        )
+        error_console.print(
+            "Regenerate the dataset with `uv run eforge generate <scenario.yaml> --target sof-elk`."
+        )
+        error_console.print(f"Searched for `{OUTPUT_TARGET_FILENAME}` in:\n{searched}")
+        return False
+
+    raw_value = marker.read_text(encoding="utf-8").strip()
+    try:
+        output_target = normalize_output_target(raw_value)
+    except ValueError:
+        error_console.print(
+            f"[bold red]error:[/bold red] {marker} contains unsupported output target "
+            f"{raw_value!r}; expected `sof-elk`."
+        )
+        return False
+    if output_target != OutputTarget.SOF_ELK:
+        error_console.print(
+            f"[bold red]error:[/bold red] {marker} says `{output_target.value}`; "
+            "SOF-ELK external parser validation requires `sof-elk`."
+        )
+        error_console.print(
+            "Regenerate the dataset with `uv run eforge generate <scenario.yaml> --target sof-elk`."
+        )
+        return False
+    return True
+
+
+def _find_output_target_marker(data_dir: Path) -> Path | None:
+    for candidate in _output_target_marker_candidates(data_dir):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _output_target_marker_candidates(data_dir: Path) -> tuple[Path, ...]:
+    data_dir = data_dir.resolve()
+    candidates = [data_dir / OUTPUT_TARGET_FILENAME]
+    if data_dir.name == "data":
+        candidates.append(data_dir.parent / OUTPUT_TARGET_FILENAME)
+    else:
+        candidates.append(data_dir / "data" / OUTPUT_TARGET_FILENAME)
+    return tuple(dict.fromkeys(candidates))
 
 
 def _selected_validators(

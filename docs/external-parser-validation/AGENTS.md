@@ -18,6 +18,10 @@ Primary full-dataset command:
 uv run python scripts/external_parser.py <data-dir> --work-dir <work-dir>
 ```
 
+This script is SOF-ELK-target only. The generated dataset must have an explicit
+`OUTPUT_TARGET.txt` marker set to `sof-elk`; missing, invalid, or `default`
+markers should fail before discovery or staging.
+
 Contributor smoke command:
 
 ```bash
@@ -28,9 +32,8 @@ Implementation lives under `src/evidenceforge/external_parsers/`. The script
 entrypoint is `scripts/external_parser.py`. Keep this developer-facing; do not
 add it to the user-facing `eforge` CLI.
 
-For SOF-ELK checks on Windows/Sysmon, Linux syslog, or Cisco ASA, use data
-generated with `eforge generate --target sof-elk`. Zeek and web access are
-target-invariant.
+For SOF-ELK checks, use data generated with
+`eforge generate --target sof-elk`.
 
 Ignored parser tags must be explicit, scoped, tested, and documented. Never add
 a blanket `_grokparsefail*` ignore.

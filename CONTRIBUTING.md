@@ -86,7 +86,9 @@ For target-dependent parser support, add or update smoke fixtures for the
 target that the parser expects. SOF-ELK checks for Windows/Sysmon, Linux syslog,
 and Cisco ASA use `eforge generate --target sof-elk`; default-target output
 must still be covered by normal generation/evaluation tests and should produce a
-clear unsupported/wrong-target diagnostic in the external-parser runner.
+clear diagnostic in the external-parser runner. The developer-facing SOF-ELK
+script requires `OUTPUT_TARGET.txt` to exist and contain `sof-elk`; legacy or
+default-target datasets exit before parser discovery/staging.
 
 Coverage is reserved for final readiness checks before opening a `dev` → `main`
 release PR:

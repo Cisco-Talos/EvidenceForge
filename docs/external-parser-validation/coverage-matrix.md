@@ -3,9 +3,10 @@
 This matrix tracks which generated log families currently have third-party
 parser validation and which SOF-ELK filters are used.
 
-Target-dependent SOF-ELK validators require datasets generated with
-`eforge generate --target sof-elk`. The runner reads `OUTPUT_TARGET.txt`; if the
-marker is missing, the dataset is treated as legacy/default output.
+The developer-facing SOF-ELK runner requires datasets generated with
+`eforge generate --target sof-elk`. The script reads `OUTPUT_TARGET.txt` and
+exits before discovery/staging if the marker is missing, invalid, or anything
+other than `sof-elk`.
 
 ## Supported
 
