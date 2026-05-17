@@ -52,6 +52,7 @@ from evidenceforge.generation.emitters.syslog_family import (
     syslog_route_year,
 )
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.output_targets import OutputTarget
 
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
@@ -63,8 +64,8 @@ _TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
-    Per-sensor/year directory routing: each firewall sensor gets its own yearly
-    log file.
+    Default target writes flat per-sensor files. SOF-ELK target writes
+    per-sensor/year files so Logstash can infer BSD syslog years.
 
     Handles all connection events visible to firewall sensors. Unlike Snort
     (which requires IdsContext), the ASA emitter renders every connection it
@@ -832,14 +833,17 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         if not targets:
             self.emit_to_sensors(rendered, None)
             return
-        route_targets = [
-            make_syslog_family_route_key(
-                sensor_hostname,
-                event_data["timestamp"],
-                direct_file_mode=self._direct_file_mode,
-            )
-            for sensor_hostname in targets
-        ]
+        if self.output_target == OutputTarget.SOF_ELK:
+            route_targets = [
+                make_syslog_family_route_key(
+                    sensor_hostname,
+                    event_data["timestamp"],
+                    direct_file_mode=self._direct_file_mode,
+                )
+                for sensor_hostname in targets
+            ]
+        else:
+            route_targets = targets
         self.emit_to_sensors(rendered, route_targets)
 
     def _render_event(self, event_data: dict[str, Any]) -> str | None:

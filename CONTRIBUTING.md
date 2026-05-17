@@ -82,6 +82,12 @@ If there is no applicable third-party parser yet, update the coverage matrix
 and keep discovery warnings/tests in place so the unsupported format is not
 silently skipped.
 
+For target-dependent parser support, add or update smoke fixtures for the
+target that the parser expects. SOF-ELK checks for Windows/Sysmon, Linux syslog,
+and Cisco ASA use `eforge generate --target sof-elk`; default-target output
+must still be covered by normal generation/evaluation tests and should produce a
+clear unsupported/wrong-target diagnostic in the external-parser runner.
+
 Coverage is reserved for final readiness checks before opening a `dev` → `main`
 release PR:
 

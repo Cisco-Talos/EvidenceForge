@@ -79,7 +79,12 @@ For scripted or non-interactive use:
 | `eforge install-skills [--agent claude\|codex] [--global]` | Install agent skills (`--global` is Claude-only) |
 | `eforge version` | Show version |
 
-Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output directory, `--force` / `-f` to overwrite existing output without prompting.
+Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output
+directory, `--force` / `-f` to overwrite existing output without prompting,
+and `--target default|sof-elk` to choose the generated file layout. The
+`default` target is SIEM-neutral; `sof-elk` emits target-specific variants such
+as Snare Windows events and year-partitioned RFC3164 syslog for parser
+validation.
 
 ## Customizing Configuration
 
@@ -220,16 +225,20 @@ ActivityGenerator (builds SecurityEvents with composable contexts)
     v
 EventDispatcher (routes to StateManager + matching emitters)
     |
-    +---> WindowsEventEmitter ---> Security XML + Snare/RFC3164 sidecar
-    +---> SysmonEmitter ---------> Sysmon XML + Snare/RFC3164 sidecar
+    +---> WindowsEventEmitter ---> default XML / sof-elk Snare syslog
+    +---> SysmonEmitter ---------> default XML / sof-elk Snare syslog
     +---> ZeekEmitter(s) --------> conn/dns/http/ssl/... (NDJSON)
     +---> EcarEmitter -----------> ecar.json (NDJSON)
-    +---> SyslogEmitter ---------> <host>/<year>/syslog.log
+    +---> SyslogEmitter ---------> default RFC5424 / sof-elk RFC3164 year layout
     +---> BashHistoryEmitter ----> per-user bash history
     +---> SnortEmitter ----------> snort_alert.log
+    +---> CiscoAsaEmitter -------> default flat / sof-elk year layout
     +---> WebEmitter ------------> web_access.log
     +---> ProxyEmitter ----------> proxy_access.log
 ```
+
+Generation records the selected output target in `OUTPUT_TARGET.txt` and
+emitters apply it only where file shape differs.
 
 `WorldModel` compiles authoritative host and user capabilities from scenario fields like `primary_system`, `roles`, `services`, and workstation assignments. `WorldPlanner` then chooses realistic interactive, network, SSH, and RDP session paths before `ActivityGenerator` emits the correlated evidence.
 

@@ -109,6 +109,27 @@ def render_rfc3164_syslog(
     return f"<{pri}>{format_rfc3164_timestamp(timestamp)} {host} {tag}: {message or ''}"
 
 
+def render_rfc5424_syslog(
+    *,
+    pri: int,
+    timestamp: datetime | str,
+    hostname: str,
+    app_name: str,
+    message: str,
+    pid: Any = None,
+    msgid: str = "-",
+    structured_data: str = "-",
+) -> str:
+    """Render an RFC5424 syslog line."""
+    ts = coerce_syslog_datetime(timestamp).isoformat().replace("+00:00", "Z")
+    host = _syslog_header_token(hostname, default="-")
+    app = _syslog_header_token(app_name, default="-")
+    procid = _syslog_header_token(pid, default="-")
+    msgid = _syslog_header_token(msgid, default="-")
+    structured_data = structured_data if structured_data else "-"
+    return f"<{pri}>1 {ts} {host} {app} {procid} {msgid} {structured_data} {message or ''}"
+
+
 def make_syslog_family_route_key(
     source_name: str,
     timestamp: datetime | str,

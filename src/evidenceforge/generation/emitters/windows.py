@@ -58,6 +58,7 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
 )
+from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -1768,11 +1769,12 @@ class WindowsEventEmitter(LogEmitter):
 
             host_fqdn = event.get("Computer", "")
             snare_timestamp = event.get("TimeCreated")
-            if isinstance(snare_timestamp, datetime):
+            if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
                 snare_rendered = render_windows_security_snare_syslog(event)
                 self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
-            rendered = self._render_event(event)
-            self._get_host_writer(host_fqdn).write(rendered)
+            elif self.output_target == OutputTarget.DEFAULT:
+                rendered = self._render_event(event)
+                self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
         self._cleanup_spool_unlocked()
@@ -2000,7 +2002,9 @@ class WindowsEventEmitter(LogEmitter):
 
     @property
     def event_count(self) -> int:
-        return sum(w.event_count for w in self._host_writers.values())
+        return sum(w.event_count for w in self._host_writers.values()) + sum(
+            w.event_count for w in self._snare_writers.values()
+        )
 
     @event_count.setter
     def event_count(self, value: int) -> None:

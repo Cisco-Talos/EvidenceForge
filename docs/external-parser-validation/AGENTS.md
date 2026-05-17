@@ -28,5 +28,9 @@ Implementation lives under `src/evidenceforge/external_parsers/`. The script
 entrypoint is `scripts/external_parser.py`. Keep this developer-facing; do not
 add it to the user-facing `eforge` CLI.
 
+For SOF-ELK checks on Windows/Sysmon, Linux syslog, or Cisco ASA, use data
+generated with `eforge generate --target sof-elk`. Zeek and web access are
+target-invariant.
+
 Ignored parser tags must be explicit, scoped, tested, and documented. Never add
 a blanket `_grokparsefail*` ignore.

@@ -958,6 +958,11 @@ output:
 
 Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
+Output formats here are canonical and target-neutral. Choose target-specific
+file shapes, such as SOF-ELK Snare Windows events or year-partitioned RFC3164
+syslog, with `eforge generate --target default|sof-elk`; do not encode a parser
+target in scenario YAML.
+
 `proxy_access` requires at least one system with `roles: [forward_proxy]`. If it is requested without a forward proxy system, validation warns because no proxy access log file will be generated. When proxy logs are requested, add `environment.proxy.mode` to make transparent vs explicit proxy semantics clear. Current proxy behavior assumes TLS interception, so HTTPS can include CONNECT plus inspected request rows; non-intercepting tunnel-only proxy behavior is deferred.
 
 #### Format Filtering

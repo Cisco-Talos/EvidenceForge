@@ -19,6 +19,18 @@ directory:
 uv run python scripts/external_parser.py scenarios/apt-healthcare-breach/data
 ```
 
+For target-dependent SOF-ELK checks, generate the dataset with the SOF-ELK
+output target first:
+
+```bash
+uv run eforge generate scenarios/apt-healthcare-breach/scenario.yaml --target sof-elk
+```
+
+Zeek and web access logs are target-invariant. Windows, Linux syslog, and Cisco
+ASA validation require `OUTPUT_TARGET.txt` to say `sof-elk`; default-target
+datasets are reported with clear unsupported/wrong-target warnings for those
+validators.
+
 For a durable report location, pass a work directory:
 
 ```bash
@@ -53,16 +65,17 @@ uv run pytest --include-external-parsers -m external_parser --no-cov
 Supported through SOF-ELK today:
 
 - Zeek: every Zeek log type EvidenceForge can emit
-- Cisco ASA firewall logs
+- Cisco ASA firewall logs generated with `--target sof-elk`
 - Web access logs
-- Linux syslog
-- Windows Security and Sysmon Snare/RFC3164 sidecars
+- Linux syslog generated with `--target sof-elk`
+- Windows Security and Sysmon Snare/RFC3164 logs generated with `--target sof-elk`
 
 Not yet supported:
 
-- Native Windows/Sysmon XML files (the parallel Snare sidecars are validated)
-- IDS, proxy, eCAR
-- Bash history
+- Native Windows/Sysmon XML files from the `default` target
+- Default-target Linux syslog and Cisco ASA layouts
+- IDS and proxy logs
+- eCAR and bash history, which have no stable third-party standard parser target
 - Elasticsearch output behavior
 
 See [coverage-matrix.md](coverage-matrix.md) for the current parser/filter

@@ -243,15 +243,15 @@ LogEmitter (ABC)
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
-├── WindowsEventEmitter              # Security XML plus Snare/RFC3164 sidecar
-├── SysmonEventEmitter               # Sysmon XML plus Snare/RFC3164 sidecar
+├── WindowsEventEmitter              # Security XML (default) or Snare syslog (sof-elk)
+├── SysmonEventEmitter               # Sysmon XML (default) or Snare syslog (sof-elk)
 ├── ZeekEmitter                      # conn.log (base for 13 Zeek types)
 │   ├── ZeekDnsEmitter               # dns.log
 │   ├── ZeekHttpEmitter              # http.log
 │   ├── ZeekSslEmitter               # ssl.log
 │   └── ... (10 more Zeek types)
 ├── EcarEmitter                      # eCAR NDJSON (MITRE CAR model, objectID/actorID graph via EdrContext)
-├── SyslogEmitter                    # Linux syslog (RFC3164, per-host/year)
+├── SyslogEmitter                    # Linux syslog (default RFC5424 or sof-elk RFC3164/year)
 ├── BashHistoryEmitter               # Per-user bash history
 ├── SnortEmitter                     # Snort IDS alerts
 ├── CiscoAsaEmitter                  # Cisco ASA firewall syslog (Built/Teardown/Deny)
@@ -259,7 +259,13 @@ LogEmitter (ABC)
 └── ProxyEmitter                     # HTTP forward proxy access logs (W3C Extended)
 ```
 
-**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/<year>/cisco_asa.log`. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
+**Output target policy:** `eforge generate --target default|sof-elk` selects
+target-specific rendering only where a consuming tool needs a different shape.
+Scenario YAML and `--formats` stay canonical. `OUTPUT_TARGET.txt` records the
+selected target beside `GROUND_TRUTH.md`; missing markers are treated as
+legacy/default during evaluation.
+
+**Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/cisco_asa.log` for the default target or `<sensor_hostname>/<year>/cisco_asa.log` for the SOF-ELK target. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
 
 **Proxy path modeling:** `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions.
 

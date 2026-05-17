@@ -3,6 +3,10 @@
 This matrix tracks which generated log families currently have third-party
 parser validation and which SOF-ELK filters are used.
 
+Target-dependent SOF-ELK validators require datasets generated with
+`eforge generate --target sof-elk`. The runner reads `OUTPUT_TARGET.txt`; if the
+marker is missing, the dataset is treated as legacy/default output.
+
 ## Supported
 
 | EvidenceForge output | Validator | SOF-ELK input | SOF-ELK filters | Notes |
@@ -20,22 +24,24 @@ parser validation and which SOF-ELK filters are used.
 | Zeek `packet_filter` | `sof-elk-zeek` | Supplemental EvidenceForge input | JSON preprocess and Zeek postprocess filters | JSON ingestion and count validation. |
 | Zeek `pe` | `sof-elk-zeek` | Supplemental EvidenceForge input | JSON preprocess and Zeek postprocess filters | JSON ingestion and count validation. |
 | Zeek `reporter` | `sof-elk-zeek` | Supplemental EvidenceForge input | JSON preprocess and Zeek postprocess filters | JSON ingestion and count validation. |
-| Cisco ASA `cisco_asa.log` | `sof-elk-cisco-asa` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6018-cisco_asa.conf`, `8999-postprocess-all.conf` | Staged under `/logstash/syslog/<year>/<sensor>/cisco_asa.log`; requires `got_cisco` and `parse_done`. |
+| Cisco ASA `cisco_asa.log` | `sof-elk-cisco-asa` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6018-cisco_asa.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated under `<sensor>/<year>/cisco_asa.log`, staged under `/logstash/syslog/<year>/<sensor>/cisco_asa.log`, and requires `got_cisco` plus `parse_done`. |
 | Web access `web_access.log` | `sof-elk-web-access` | `httpdlog.yml` | `1000-preprocess-all.conf`, `6100-httpd.conf`, `8060-postprocess-useragent.conf`, `8110-postprocess-httpd.conf`, `8999-postprocess-all.conf` | Optional page classification miss `_grokparsefail_8110-01` is ignored. |
-| Linux `syslog.log` | `sof-elk-syslog` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6012-dhcpd.conf`, `6013-bindquery.conf`, `6015-sshd.conf`, `6016-pam.conf`, `6017-iptables.conf`, `8100-postprocess-syslog.conf`, `8999-postprocess-all.conf` | Generated RFC3164 files should live under `<host>/<year>/syslog.log`; staged year is validated against parsed `@timestamp`. |
-| Windows Security `windows_event_security_snare.log` | `sof-elk-windows-security-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | Generated sidecar lives under `<host>/<year>/windows_event_security_snare.log`; staged under `/logstash/syslog/<year>/<host>/...`; requires `snare_log`, `parse_done`, and normalized `winlog.*` fields. |
-| Sysmon `windows_event_sysmon_snare.log` | `sof-elk-windows-sysmon-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | Same Snare/SOF-ELK path as Windows Security; validates `winlog.event_id`, provider, channel, computer, and staged source year. |
+| Linux `syslog.log` | `sof-elk-syslog` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6012-dhcpd.conf`, `6013-bindquery.conf`, `6015-sshd.conf`, `6016-pam.conf`, `6017-iptables.conf`, `8100-postprocess-syslog.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated RFC3164 files live under `<host>/<year>/syslog.log`, and staged year is validated against parsed `@timestamp`. |
+| Windows Security `windows_event_security_snare.log` | `sof-elk-windows-security-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; generated under `<host>/<year>/windows_event_security_snare.log`, staged under `/logstash/syslog/<year>/<host>/...`, and requires `snare_log`, `parse_done`, and normalized `winlog.*` fields. |
+| Sysmon `windows_event_sysmon_snare.log` | `sof-elk-windows-sysmon-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | `sof-elk` target only; validates `winlog.event_id`, provider, channel, computer, and staged source year. |
 
 ## Unsupported
 
 | EvidenceForge output | Validator | Notes |
 | --- | --- | --- |
-| Windows Event Security XML | NONE | XML remains generated and evaluated internally; third-party SOF-ELK validation uses the parallel Snare sidecar. |
-| Sysmon XML | NONE | XML remains generated and evaluated internally; third-party SOF-ELK validation uses the parallel Snare sidecar. |
+| Windows Event Security XML (`default` target) | NONE | XML remains generated and evaluated internally; SOF-ELK validation requires `--target sof-elk` Snare syslog output instead. |
+| Sysmon XML (`default` target) | NONE | XML remains generated and evaluated internally; SOF-ELK validation requires `--target sof-elk` Snare syslog output instead. |
+| Linux syslog (`default` target) | NONE | Default output is flat RFC5424; SOF-ELK validation expects `--target sof-elk` RFC3164 year-partitioned syslog. |
+| Cisco ASA (`default` target) | NONE | Default output is flat per-sensor ASA syslog; SOF-ELK validation expects `--target sof-elk` year-partitioned ASA syslog. |
 | Snort/IDS alert logs | NONE | Detected as unsupported so they are not silently skipped. |
 | Proxy access logs | NONE | Detected as unsupported so they are not silently skipped. |
-| eCAR JSON | NONE | Detected as unsupported so it is not silently skipped. |
-| Bash history | NONE | Detected as unsupported. This is command history text, not a parser-normalized log family. |
+| eCAR JSON | NONE | Officially unsupported for external-parser validation because there is no stable third-party standard parser target. |
+| Bash history | NONE | Officially unsupported for external-parser validation because command history text is not a parser-normalized log family. |
 
 Contributor rule: when adding a generated log family with no parser support,
 update this matrix and keep discovery warnings visible.

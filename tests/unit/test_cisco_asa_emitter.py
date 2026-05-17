@@ -42,6 +42,7 @@ def asa_emitter(tmp_path):
         output_path=tmp_path,
         sensor_hostnames=["fw01"],
     )
+    emitter.configure_output_target("sof-elk")
     emitter._segment_config = [
         {"name": "workstations", "cidr": "10.0.10.0/24"},
         {"name": "servers", "cidr": "10.0.20.0/24"},
@@ -920,6 +921,7 @@ class TestNatRecords:
                 output_path=sub_dir,
                 sensor_hostnames=["fw01"],
             )
+            emitter.configure_output_target("sof-elk")
             emitter._segment_config = asa_emitter._segment_config
             emitter._sensor_interfaces = asa_emitter._sensor_interfaces
 

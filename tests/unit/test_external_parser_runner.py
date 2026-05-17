@@ -37,12 +37,14 @@ from evidenceforge.external_parsers.runner import (
     group_logs_for_progress,
     unsupported_summary,
 )
+from evidenceforge.output_targets import write_output_target_marker
 
 
 def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupported(
     tmp_path: Path,
 ) -> None:
     data_dir = tmp_path / "data"
+    write_output_target_marker(tmp_path, "sof-elk")
     (data_dir / "sensor-a").mkdir(parents=True)
     (data_dir / "sensor-a" / "conn.json").write_text("{}\n", encoding="utf-8")
     (data_dir / "sensor-a" / "http.json").write_text("{}\n", encoding="utf-8")
@@ -111,8 +113,36 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         ("zeek", "http"),
     }
     assert unsupported_summary(plan.unsupported_logs) == {
-        "bash history": ["bash_history"],
-        "windows events": ["security"],
+        "bash history": ["bash_history (No stable third-party standard parser target)"],
+        "windows events": ["security (SOF-ELK validation uses Snare syslog, not Windows XML)"],
+    }
+
+
+def test_default_target_syslog_family_logs_are_reported_as_wrong_target(
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "data"
+    (data_dir / "fw-01.example.test").mkdir(parents=True)
+    (data_dir / "fw-01.example.test" / "cisco_asa.log").write_text(
+        "<166>Jun 15 14:23:05 fw01 %ASA-6-302013: Built outbound TCP connection 7 "
+        "for inside:10.0.10.5/54321 to outside:198.51.100.10/443\n",
+        encoding="utf-8",
+    )
+    (data_dir / "linux-01.example.test").mkdir()
+    (data_dir / "linux-01.example.test" / "syslog.log").write_text(
+        "<86>1 2026-06-15T14:23:05Z linux-01 sshd 1234 - - Accepted password "
+        "for alice from 198.51.100.25 port 54321 ssh2\n",
+        encoding="utf-8",
+    )
+
+    plan = detect_external_parser_plan(data_dir)
+
+    assert plan.validators == ()
+    assert unsupported_summary(plan.unsupported_logs) == {
+        "firewall": [
+            "cisco_asa (SOF-ELK validation requires data generated with --target sof-elk)"
+        ],
+        "syslog": ["linux (SOF-ELK validation requires data generated with --target sof-elk)"],
     }
 
 

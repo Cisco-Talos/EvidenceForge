@@ -204,6 +204,7 @@ class EmitterSetupMixin:
                 output_path = self.output_dir / f"{format_name}{format_def.output.file_extension}"
                 emitter = emitter_classes[format_name](format_def, output_path, threaded=True)
 
+            emitter.configure_output_target(self.output_target)
             self.emitters[format_name] = emitter
             logger.info(f"Initialized {format_name} emitter (threaded)")
 

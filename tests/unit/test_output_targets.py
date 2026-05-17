@@ -1,0 +1,75 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# SPDX-License-Identifier: MIT
+
+"""Tests for target-aware output policy."""
+
+from pathlib import Path
+
+import pytest
+
+from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
+from evidenceforge.output_targets import (
+    FORMAT_TARGET_POLICIES,
+    OutputTarget,
+    external_parser_unsupported_formats,
+    normalize_output_target,
+    read_output_target_marker,
+    target_dependent_formats,
+    write_output_target_marker,
+)
+
+
+def test_output_target_marker_defaults_to_default_for_legacy_data(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    assert read_output_target_marker(data_dir) == OutputTarget.DEFAULT
+
+
+def test_output_target_marker_round_trips_from_scenario_root_or_data_dir(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    marker = write_output_target_marker(tmp_path, "sof-elk")
+
+    assert marker.read_text(encoding="utf-8") == "sof-elk\n"
+    assert read_output_target_marker(tmp_path) == OutputTarget.SOF_ELK
+    assert read_output_target_marker(data_dir) == OutputTarget.SOF_ELK
+
+
+def test_invalid_output_target_raises_clear_error() -> None:
+    with pytest.raises(ValueError, match="expected one of: default, sof-elk"):
+        normalize_output_target("splunk")
+
+
+def test_every_emitted_canonical_format_has_target_policy() -> None:
+    assert set(_build_emitter_classes()) == set(FORMAT_TARGET_POLICIES)
+
+
+def test_target_policy_identifies_v1_target_dependent_and_unsupported_formats() -> None:
+    assert target_dependent_formats() == {
+        "windows_event_security",
+        "windows_event_sysmon",
+        "syslog",
+        "cisco_asa",
+    }
+    assert external_parser_unsupported_formats() == {"ecar", "bash_history"}

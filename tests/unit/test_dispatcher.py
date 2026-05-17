@@ -583,6 +583,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         output_path = tmp_path / "syslog.log"
         emitter = SyslogEmitter(format_def, output_path, buffer_size=1)
+        emitter.configure_output_target("sof-elk")
         emitter.emit_raw(
             {
                 "timestamp": datetime(2024, 10, 14, 20, 1, 25, tzinfo=UTC),
@@ -620,6 +621,7 @@ class TestCanHandleDefault:
 
         format_def = load_format("syslog")
         emitter = SyslogEmitter(format_def, tmp_path, buffer_size=10)
+        emitter.configure_output_target("sof-elk")
         for timestamp in (
             datetime(2024, 12, 31, 23, 59, 59, tzinfo=UTC),
             datetime(2025, 1, 1, 0, 0, 1, tzinfo=UTC),
@@ -651,6 +653,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         output_path = tmp_path / "syslog.log"
         emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        emitter.configure_output_target("sof-elk")
         for timestamp, message in [
             (
                 datetime(2024, 3, 18, 12, 10, 9, tzinfo=UTC),
@@ -698,6 +701,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         output_path = tmp_path / "syslog.log"
         emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        emitter.configure_output_target("sof-elk")
         for timestamp, message in [
             (
                 datetime(2024, 3, 18, 12, 1, 55, tzinfo=UTC),
@@ -743,6 +747,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         output_path = tmp_path / "syslog.log"
         emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        emitter.configure_output_target("sof-elk")
         timestamp = datetime(2024, 10, 14, 19, 0, 53, tzinfo=UTC)
         for message in [
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
@@ -777,6 +782,7 @@ class TestCanHandleDefault:
         format_def = load_format("syslog")
         output_path = tmp_path / "syslog.log"
         emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        emitter.configure_output_target("sof-elk")
         timestamp = datetime(2024, 3, 18, 12, 11, 6, tzinfo=UTC)
         for message in [
             "DHCPACK of 10.10.1.99 from 10.10.2.10",

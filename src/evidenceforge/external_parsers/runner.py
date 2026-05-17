@@ -38,6 +38,10 @@ from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
 )
+from evidenceforge.output_targets import (
+    OutputTarget,
+    read_output_target_marker,
+)
 
 VALIDATOR_ORDER = (
     SOF_ELK_ZEEK_VALIDATOR,
@@ -56,6 +60,20 @@ _UNSUPPORTED_FILE_PATTERNS: tuple[tuple[str, str, str, str], ...] = (
     ("proxy_access.log", "proxy", "access", "proxy_access"),
     ("ecar.json", "ecar", "ecar", "ecar"),
 )
+_SOF_ELK_TARGET_DEPENDENT_VALIDATORS = {
+    SOF_ELK_CISCO_ASA_VALIDATOR,
+    SOF_ELK_SYSLOG_VALIDATOR,
+    SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
+    SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
+}
+_UNSUPPORTED_REASON_BY_FORMAT = {
+    "windows_event_security": "SOF-ELK validation uses Snare syslog, not Windows XML",
+    "windows_event_sysmon": "SOF-ELK validation uses Snare syslog, not Windows XML",
+    "snort_alert": "No SOF-ELK IDS fast-alert validator is wired yet",
+    "proxy_access": "No SOF-ELK proxy/W3C validator is wired yet",
+    "ecar": "No stable third-party standard parser target",
+    "bash_history": "No stable third-party standard parser target",
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +86,7 @@ class DetectedLog:
     subtype: str
     format_name: str | None
     validator: str | None
+    unsupported_reason: str | None = None
 
     @property
     def supported(self) -> bool:
@@ -80,6 +99,7 @@ class ExternalParserPlan:
     """Discovered external parser work for a generated data directory."""
 
     data_dir: Path
+    output_target: OutputTarget
     logs: tuple[DetectedLog, ...]
     validators: tuple[str, ...]
 
@@ -107,6 +127,7 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
         External parser plan with matching validators and unsupported logs.
     """
     data_dir = data_dir.resolve()
+    output_target = read_output_target_marker(data_dir)
     logs_by_path: dict[Path, DetectedLog] = {}
 
     for spec in ZEEK_LOG_SPECS:
@@ -126,6 +147,16 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
     for spec in SOF_ELK_SOURCE_SPECS_BY_VALIDATOR.values():
         for source_name in spec.source_names:
             for path in sorted(data_dir.rglob(source_name)):
+                validator = spec.validator
+                unsupported_reason = None
+                if (
+                    output_target != OutputTarget.SOF_ELK
+                    and spec.validator in _SOF_ELK_TARGET_DEPENDENT_VALIDATORS
+                ):
+                    validator = None
+                    unsupported_reason = (
+                        "SOF-ELK validation requires data generated with --target sof-elk"
+                    )
                 _add_detected_log(
                     logs_by_path,
                     data_dir=data_dir,
@@ -133,7 +164,8 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
                     logtype=spec.logtype,
                     subtype=spec.subtype,
                     format_name=spec.format_name,
-                    validator=spec.validator,
+                    validator=validator,
+                    unsupported_reason=unsupported_reason,
                 )
 
     for filename, logtype, subtype, format_name in _UNSUPPORTED_FILE_PATTERNS:
@@ -146,6 +178,7 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
                 subtype=subtype,
                 format_name=format_name,
                 validator=None,
+                unsupported_reason=_UNSUPPORTED_REASON_BY_FORMAT.get(format_name),
             )
 
     for path in sorted(data_dir.rglob("*.bash_history")):
@@ -157,6 +190,7 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
             subtype="bash_history",
             format_name="bash_history",
             validator=None,
+            unsupported_reason=_UNSUPPORTED_REASON_BY_FORMAT["bash_history"],
         )
 
     for path in _candidate_log_files(data_dir):
@@ -181,7 +215,12 @@ def detect_external_parser_plan(data_dir: Path) -> ExternalParserPlan:
     validators = tuple(
         validator for validator in VALIDATOR_ORDER if validator in discovered_validators
     )
-    return ExternalParserPlan(data_dir=data_dir, logs=logs, validators=validators)
+    return ExternalParserPlan(
+        data_dir=data_dir,
+        output_target=output_target,
+        logs=logs,
+        validators=validators,
+    )
 
 
 def group_logs_for_progress(logs: tuple[DetectedLog, ...]) -> ProgressGroups:
@@ -203,7 +242,10 @@ def unsupported_summary(logs: tuple[DetectedLog, ...]) -> dict[str, list[str]]:
     summary: dict[str, set[str]] = defaultdict(set)
     for log in logs:
         if not log.supported:
-            summary[log.logtype].add(log.subtype)
+            label = log.subtype
+            if log.unsupported_reason:
+                label = f"{label} ({log.unsupported_reason})"
+            summary[log.logtype].add(label)
     return {logtype: sorted(subtypes) for logtype, subtypes in sorted(summary.items())}
 
 
@@ -216,6 +258,7 @@ def _add_detected_log(
     subtype: str,
     format_name: str | None,
     validator: str | None,
+    unsupported_reason: str | None = None,
 ) -> None:
     path = path.resolve()
     logs_by_path[path] = DetectedLog(
@@ -225,6 +268,7 @@ def _add_detected_log(
         subtype=subtype,
         format_name=format_name,
         validator=validator,
+        unsupported_reason=unsupported_reason,
     )
 
 

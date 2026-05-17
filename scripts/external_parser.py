@@ -129,6 +129,7 @@ def _run(args: argparse.Namespace) -> int:
     validators = _selected_validators(plan, args.validator)
 
     console.print(f"[bold]Data directory:[/bold] {data_dir}")
+    console.print(f"[bold]Output target:[/bold] {plan.output_target.value}")
     console.print(f"[bold]Work directory:[/bold] {work_dir}")
     _print_plan_summary(plan, validators)
 
@@ -155,7 +156,12 @@ def _selected_validators(
     if not requested_validators:
         return plan.validators
     requested = tuple(dict.fromkeys(requested_validators))
-    return tuple(validator for validator in VALIDATOR_ORDER if validator in requested)
+    available = set(plan.validators)
+    return tuple(
+        validator
+        for validator in VALIDATOR_ORDER
+        if validator in requested and validator in available
+    )
 
 
 def _print_plan_summary(plan: ExternalParserPlan, validators: tuple[str, ...]) -> None:

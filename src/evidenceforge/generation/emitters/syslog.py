@@ -39,6 +39,7 @@ from evidenceforge.generation.emitters.syslog_family import (
     coerce_syslog_datetime,
     make_syslog_family_route_key,
     render_rfc3164_syslog,
+    render_rfc5424_syslog,
     rfc3164_sort_key,
     sanitize_syslog_family_route_key,
     syslog_family_writer_path,
@@ -46,6 +47,7 @@ from evidenceforge.generation.emitters.syslog_family import (
     syslog_route_source,
     syslog_route_year,
 )
+from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.rng import _stable_seed
 
 _LOGIND_NEW_SESSION_RE = re.compile(
@@ -120,22 +122,45 @@ def _syslog_sort_key(line: str) -> tuple[int, int, int, int, int, int, str]:
     return rfc3164_sort_key(line, lifecycle_priority)
 
 
+_RFC5424_TS_RE = re.compile(r"^<\d{1,3}>1\s+(?P<timestamp>\S+)")
+
+
+def _rfc5424_syslog_sort_key(line: str) -> tuple[str, int, str]:
+    """Sort RFC5424 syslog lines by full timestamp plus lifecycle order."""
+    lifecycle_priority = min(
+        _ssh_lifecycle_priority(line),
+        _systemd_lifecycle_priority(line),
+        _dhclient_lifecycle_priority(line),
+    )
+    match = _RFC5424_TS_RE.match(line)
+    timestamp = match.group("timestamp") if match is not None else ""
+    return (timestamp, lifecycle_priority, line)
+
+
 class SyslogEmitter(HostMultiplexEmitter):
     """Emitter for Linux syslog format.
 
-    Per-host/year directory routing: each Linux host gets syslog.log files
-    partitioned by event year.
+    Default target writes flat per-host RFC5424 files. SOF-ELK target writes
+    per-host/year RFC3164 files.
     Renders any SecurityEvent that carries a SyslogContext on a Linux host.
     """
 
     _log_filename = "syslog.log"
     _flat_filename = "syslog.log"
     _sort_flat_file = True
-    _sort_key = staticmethod(_syslog_sort_key)
+    _sort_key = staticmethod(_rfc5424_syslog_sort_key)
     _defer_sorted_flush_until_close = True
 
     # Context-driven: handles any event type that carries SyslogContext
     _supported_types: set[str] = set()
+
+    def configure_output_target(self, target: str | OutputTarget | None) -> None:
+        """Configure target-specific syslog rendering and sort order."""
+        super().configure_output_target(target)
+        if self.output_target == OutputTarget.SOF_ELK:
+            self._sort_key = _syslog_sort_key
+        else:
+            self._sort_key = _rfc5424_syslog_sort_key
 
     def _safe_writer_key(self, host_fqdn: str) -> str:
         return sanitize_syslog_family_route_key(host_fqdn)
@@ -193,12 +218,15 @@ class SyslogEmitter(HostMultiplexEmitter):
         """Route syslog event to per-host file."""
         rendered = self._render_event(event_data)
         host_fqdn = event_data.pop("_host_fqdn", "")
-        route_key = make_syslog_family_route_key(
-            host_fqdn,
-            event_data["timestamp"],
-            direct_file_mode=self._direct_file_mode,
-        )
-        self.emit_to_host(rendered, route_key)
+        if self.output_target == OutputTarget.SOF_ELK:
+            route_key = make_syslog_family_route_key(
+                host_fqdn,
+                event_data["timestamp"],
+                direct_file_mode=self._direct_file_mode,
+            )
+            self.emit_to_host(rendered, route_key)
+            return
+        self.emit_to_host(rendered, host_fqdn)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         ts = event_data.get("timestamp")
@@ -207,6 +235,15 @@ class SyslogEmitter(HostMultiplexEmitter):
         facility = bounded_syslog_int(event_data.get("facility"), default=3, minimum=0, maximum=23)
         severity = bounded_syslog_int(event_data.get("severity"), default=6, minimum=0, maximum=7)
         pid = event_data.get("pid")
+        if self.output_target != OutputTarget.SOF_ELK:
+            return render_rfc5424_syslog(
+                pri=syslog_priority(facility, severity),
+                timestamp=ts,
+                hostname=event_data.get("hostname") or "",
+                app_name=event_data.get("app_name") or "-",
+                pid=pid,
+                message=event_data.get("message") or "",
+            )
         return render_rfc3164_syslog(
             pri=syslog_priority(facility, severity),
             timestamp=ts,
@@ -238,12 +275,17 @@ class SyslogEmitter(HostMultiplexEmitter):
             for route_key, writer in self._writers.items():
                 grouped.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
             for host_key, route_writers in grouped.items():
-                rows: list[tuple[int, tuple[int, int, int, int, int, int, str], str, str]] = []
+                rows: list[tuple[int, tuple[Any, ...], str, str]] = []
                 for route_key, writer in route_writers:
                     year = int(syslog_route_year(route_key) or 0)
                     with writer._lock:
                         for line in writer.buffer:
-                            rows.append((year, _syslog_sort_key(line), route_key, line))
+                            sort_key = (
+                                _syslog_sort_key(line)
+                                if self.output_target == OutputTarget.SOF_ELK
+                                else _rfc5424_syslog_sort_key(line)
+                            )
+                            rows.append((year, sort_key, route_key, line))
                 if not rows:
                     continue
                 rows.sort(key=lambda row: (row[0], row[1]))

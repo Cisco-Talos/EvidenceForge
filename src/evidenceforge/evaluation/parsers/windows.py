@@ -25,10 +25,16 @@
 import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
+from evidenceforge.generation.emitters.windows_snare import (
+    WINDOWS_SECURITY_SNARE_FILENAME,
+    WINDOWS_SYSMON_SNARE_FILENAME,
+)
+
 from . import LogParser, ParsedRecord, register_parser
+from .syslog import _infer_seed_year, _resolve_bsd_year
 
 # Namespace used in Windows Event XML
 NS = "http://schemas.microsoft.com/win/2004/08/events/event"
@@ -36,14 +42,22 @@ NS = "http://schemas.microsoft.com/win/2004/08/events/event"
 # Regex boundaries used for streaming extraction of individual <Event> blocks
 EVENT_START_PATTERN = re.compile(r"<Event(?:\s|>)")
 EVENT_END_PATTERN = re.compile(r"</Event>")
+SNARE_SYSLOG_PATTERN = re.compile(
+    r"^<(?P<pri>\d{1,3})>"
+    r"(?P<timestamp>\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<payload>.*)$"
+)
+EXPANDED_FIELD_PATTERN = re.compile(r"(?P<name>[^:]+):\s+(?P<value>.*?)(?=\s{2}[^:]+:\s+|\s*$)")
 
 
-@register_parser
-class WindowsEventParser(LogParser):
-    format_name = "windows_event_security"
+class _WindowsXmlParser(LogParser):
+    """Shared streaming parser for Windows Event XML files."""
+
+    xml_filename = ""
 
     def can_parse(self, path: Path) -> bool:
-        return path.name == "windows_event_security.xml"
+        return path.name == self.xml_filename
 
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
         event_index = 0
@@ -174,3 +188,164 @@ class WindowsEventParser(LogParser):
             parse_errors=errors,
             line_number=index,
         )
+
+
+class _WindowsSnareParser(_WindowsXmlParser):
+    """Shared parser for Snare-over-RFC3164 Windows event files."""
+
+    snare_filename = ""
+    xml_filename = ""
+
+    def can_parse(self, path: Path) -> bool:
+        return path.name in {self.xml_filename, self.snare_filename}
+
+    def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
+        if path.name == self.snare_filename:
+            yield from self._parse_snare_file(path)
+            return
+        yield from super().parse_file(path)
+
+    def _parse_snare_file(self, path: Path) -> Iterator[ParsedRecord]:
+        seed_year = _infer_seed_year(path, getattr(self, "scenario", None))
+        last_ts: datetime | None = None
+        with path.open("r", encoding="utf-8") as handle:
+            for line_num, line in enumerate(handle, 1):
+                raw = line.rstrip("\n")
+                if not raw:
+                    continue
+                record = self._parse_snare_line(raw, line_num, seed_year, last_ts)
+                if record.timestamp is not None:
+                    last_ts = record.timestamp
+                yield record
+
+    def _parse_snare_line(
+        self,
+        raw: str,
+        line_num: int,
+        seed_year: int,
+        last_ts: datetime | None,
+    ) -> ParsedRecord:
+        fields: dict = {}
+        errors: list[str] = []
+        timestamp = None
+        source_host = None
+
+        match = SNARE_SYSLOG_PATTERN.match(raw)
+        if match is None:
+            errors.append("Line does not match Snare RFC3164 syslog format")
+            return ParsedRecord(
+                source_format=self.format_name,
+                raw=raw,
+                fields=fields,
+                timestamp=None,
+                parse_errors=errors,
+                line_number=line_num,
+            )
+
+        groups = match.groupdict()
+        source_host = groups["hostname"]
+        timestamp = _resolve_bsd_year(groups["timestamp"], seed_year, last_ts)
+        if timestamp is None:
+            errors.append(f"Invalid Snare syslog timestamp: {groups['timestamp']}")
+        else:
+            timestamp = timestamp.replace(tzinfo=UTC)
+
+        fields["pri"] = int(groups["pri"])
+        fields["Computer"] = source_host
+        fields["TimeCreated"] = timestamp.isoformat() if timestamp else groups["timestamp"]
+
+        columns = groups["payload"].split("\t")
+        if len(columns) < 14:
+            errors.append(f"Snare payload has {len(columns)} columns; expected at least 14")
+        else:
+            (
+                computer,
+                marker,
+                criticality,
+                channel,
+                event_record_id,
+                snare_time,
+                event_id,
+                provider,
+                username,
+                _sid,
+                logtype,
+                _computer_repeat,
+                category,
+                full_data,
+                *_extra,
+            ) = columns
+            if marker != "MSWinEventLog":
+                errors.append(f"Unexpected Snare marker: {marker}")
+            fields.update(
+                {
+                    "Computer": computer or source_host,
+                    "Channel": channel,
+                    "Provider": provider,
+                    "User": username,
+                    "LogType": logtype,
+                    "Category": category,
+                    "Message": full_data,
+                    "SnareTimeCreated": snare_time,
+                }
+            )
+            for key, value, converter in (
+                ("EventRecordID", event_record_id, int),
+                ("EventID", event_id, int),
+                ("Criticality", criticality, int),
+            ):
+                try:
+                    fields[key] = converter(value)
+                except ValueError:
+                    fields[key] = value
+                    errors.append(f"Invalid integer field {key}: {value}")
+            fields.update(_parse_expanded_snare_fields(full_data))
+
+        return ParsedRecord(
+            source_format=self.format_name,
+            raw=raw,
+            fields=fields,
+            timestamp=timestamp,
+            parse_errors=errors,
+            line_number=line_num,
+            source_host=source_host,
+        )
+
+
+def _parse_expanded_snare_fields(full_data: str) -> dict[str, str]:
+    """Extract Snare's flattened ``Name: value`` field suffix."""
+    parsed: dict[str, str] = {}
+    tail = full_data.split(":  ", 1)[1] if ":  " in full_data else full_data
+    for match in EXPANDED_FIELD_PATTERN.finditer(tail):
+        name = _snare_field_name(match.group("name").strip())
+        value = match.group("value").strip()
+        if name and value:
+            parsed[name] = value
+    return parsed
+
+
+def _snare_field_name(name: str) -> str:
+    """Return a stable eval-friendly field name for a Snare expanded label."""
+    if not name:
+        return ""
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        return name
+    return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
+
+
+@register_parser
+class WindowsEventParser(_WindowsSnareParser):
+    """Parser for Windows Security XML or SOF-ELK Snare target files."""
+
+    format_name = "windows_event_security"
+    xml_filename = "windows_event_security.xml"
+    snare_filename = WINDOWS_SECURITY_SNARE_FILENAME
+
+
+@register_parser
+class SysmonEventParser(_WindowsSnareParser):
+    """Parser for Sysmon XML or SOF-ELK Snare target files."""
+
+    format_name = "windows_event_sysmon"
+    xml_filename = "windows_event_sysmon.xml"
+    snare_filename = WINDOWS_SYSMON_SNARE_FILENAME

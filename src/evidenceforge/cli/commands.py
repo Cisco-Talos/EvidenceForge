@@ -50,6 +50,11 @@ from rich.progress import (
 from evidenceforge import __version__
 from evidenceforge.generation import GenerationEngine
 from evidenceforge.models.scenario import Scenario
+from evidenceforge.output_targets import (
+    OUTPUT_TARGET_FILENAME,
+    normalize_output_target,
+    write_output_target_marker,
+)
 from evidenceforge.utils import load_yaml
 
 
@@ -147,6 +152,11 @@ def generate(
         "Only generates formats present in both this list and the scenario. "
         "Supports group names (zeek, windows). See 'eforge info format_groups'.",
     ),
+    target: str = typer.Option(
+        "default",
+        "--target",
+        help="Output rendering target: default or sof-elk",
+    ),
 ) -> None:
     """Generate synthetic security logs from a scenario file.
 
@@ -162,9 +172,15 @@ def generate(
     """
     setup_logging(verbose, debug)
     logger = logging.getLogger(__name__)
+    try:
+        output_target = normalize_output_target(target)
+    except ValueError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR) from exc
 
     console.print("[bold blue]EvidenceForge Log Generator[/bold blue]")
     console.print(f"Scenario: {scenario_file}")
+    console.print(f"Output target: {output_target.value}")
 
     # Load and validate scenario
     try:
@@ -289,6 +305,9 @@ def generate(
     manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
     if manifest_path.exists():
         existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
+    target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
+    if target_path.exists():
+        existing.append(f"  {OUTPUT_TARGET_FILENAME} ({target_path})")
 
     has_existing = bool(existing)
     if has_existing:
@@ -382,8 +401,10 @@ def generate(
                 output_dir=gen_data_dir,
                 progress_callback=progress_callback,
                 ground_truth_dir=gen_gt_dir,
+                output_target=output_target,
             )
             engine.generate()
+            write_output_target_marker(gen_gt_dir, output_target)
 
         # Transactional swap: backup old → install new → cleanup backup.
         # If any step fails (including KeyboardInterrupt), old output is
@@ -392,6 +413,7 @@ def generate(
         if staging_dir:
             staged_gt = gen_gt_dir / "GROUND_TRUTH.md"
             staged_manifest = gen_gt_dir / OBSERVATION_MANIFEST_FILENAME
+            staged_target = gen_gt_dir / OUTPUT_TARGET_FILENAME
             if not gen_data_dir.exists():
                 raise RuntimeError("Staged data/ directory missing after generation")
             if not staged_gt.exists():
@@ -400,6 +422,8 @@ def generate(
                 raise RuntimeError(
                     f"Staged {OBSERVATION_MANIFEST_FILENAME} missing after generation"
                 )
+            if not staged_target.exists():
+                raise RuntimeError(f"Staged {OUTPUT_TARGET_FILENAME} missing after generation")
 
             # Clean up stale rollback dirs from prior killed runs
             for stale in ground_truth_dir.glob(".eforge_rollback_*"):
@@ -416,12 +440,16 @@ def generate(
                     gt_path.rename(rollback_dir / "GROUND_TRUTH.md")
                 if manifest_path.exists():
                     manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
+                if target_path.exists():
+                    target_path.rename(rollback_dir / OUTPUT_TARGET_FILENAME)
 
                 # Step 2: Install new output
                 gen_data_dir.rename(data_dir)
                 staged_gt.rename(gt_path)
                 if staged_manifest.exists():
                     staged_manifest.rename(manifest_path)
+                if staged_target.exists():
+                    staged_target.rename(target_path)
                 swap_succeeded = True
 
             except BaseException:
@@ -433,6 +461,8 @@ def generate(
                         gt_path.unlink()
                     if manifest_path.exists():
                         manifest_path.unlink()
+                    if target_path.exists():
+                        target_path.unlink()
                     if (rollback_dir / "data").exists():
                         (rollback_dir / "data").rename(data_dir)
                     if (rollback_dir / "GROUND_TRUTH.md").exists():
@@ -440,6 +470,9 @@ def generate(
                     rollback_manifest = rollback_dir / OBSERVATION_MANIFEST_FILENAME
                     if rollback_manifest.exists():
                         rollback_manifest.rename(manifest_path)
+                    rollback_target = rollback_dir / OUTPUT_TARGET_FILENAME
+                    if rollback_target.exists():
+                        rollback_target.rename(target_path)
                 except Exception:
                     logger.error("Rollback failed — old output may be in: %s", rollback_dir)
                 raise
@@ -460,6 +493,7 @@ def generate(
                 if file.is_file() and file.name in {
                     "GROUND_TRUTH.md",
                     OBSERVATION_MANIFEST_FILENAME,
+                    OUTPUT_TARGET_FILENAME,
                 }:
                     size = file.stat().st_size
                     size_str = f"{size:,} bytes" if size < 1024 else f"{size / 1024:.1f} KB"

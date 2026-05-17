@@ -47,6 +47,7 @@ from evidenceforge.evaluation.pillars import (
 from evidenceforge.evaluation.thresholds import EvalThresholds, load_thresholds
 from evidenceforge.events.observation_manifest import load_observation_manifest
 from evidenceforge.models.scenario import Scenario
+from evidenceforge.output_targets import read_output_target_marker
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,7 @@ class EvaluationEngine:
         self.verbose = verbose
         self._progress = progress_callback
         self._thresholds = load_thresholds()
+        self.output_target = read_output_target_marker(output_dir)
 
     def run(self) -> QualityReport:
         """Execute the full evaluation pipeline."""
@@ -232,6 +234,7 @@ class EvaluationEngine:
 
         # 7. Merge pillar-level supplementary data into report supplementary
         supplementary: dict = {}
+        supplementary["output_target"] = self.output_target.value
         for pillar in pillars:
             supplementary.update(pillar.supplementary)
         if observation_manifest is not None:
@@ -266,7 +269,7 @@ class EvaluationEngine:
 
     def _parse_all_logs(self) -> tuple[dict[str, list[ParsedRecord]], dict[str, int]]:
         """Discover and parse all log files in the output directory."""
-        file_map = discover_log_files(self.output_dir)
+        file_map = discover_log_files(self.output_dir, output_target=self.output_target)
         records: dict[str, list[ParsedRecord]] = {}
         source_counts: dict[str, int] = {}
 
@@ -282,6 +285,7 @@ class EvaluationEngine:
             )
             parser = get_parser(format_name)
             parser.scenario = self.scenario
+            parser.output_target = self.output_target
             format_records: list[ParsedRecord] = []
             for path in paths:
                 logger.info(f"Parsing {format_name}: {path.name}")
