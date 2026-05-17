@@ -40,6 +40,11 @@ uv run python scripts/external_parser.py <data-dir> \
 If `--work-dir` is omitted, the runner creates a temporary directory with an
 `eforge-external-parsers-` prefix.
 
+If `--work-dir` is reused, the harness treats `<work-dir>/sof-elk` as a fresh
+run area. It clears EvidenceForge-owned transient directories before staging
+input so Filebeat registry offsets, old parsed JSONL, and old pipeline logs
+cannot affect the next validation run.
+
 ## Compose Runtime
 
 The runner detects `docker compose` first, then `podman compose`. To force a
@@ -171,6 +176,9 @@ Given `--work-dir <work-dir>`, useful artifacts are:
 | `<work-dir>/sof-elk/parsed/sof_elk_parser_failures.json` | Structured failure report |
 | `<work-dir>/sof-elk/pipeline-logs/filebeat.log` | Filebeat log |
 | `<work-dir>/sof-elk/pipeline-logs/logstash.log` | Logstash log |
+
+These artifacts describe the most recent run for that work directory. Preserve
+older artifacts by choosing a different `--work-dir`.
 
 The failure report includes expected and observed counts, source paths, parsed
 output paths, fatal tag counts, and representative samples with

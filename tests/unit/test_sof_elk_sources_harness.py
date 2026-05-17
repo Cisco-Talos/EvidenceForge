@@ -34,6 +34,8 @@ from evidenceforge.external_parsers.sof_elk_sources import (
     EVENTS_OUTPUT_FILENAME,
     SYSLOG_SPEC,
     WEB_ACCESS_SPEC,
+    WINDOWS_SECURITY_SNARE_SPEC,
+    WINDOWS_SYSMON_SNARE_SPEC,
     SofElkSourceManifest,
     SofElkSourceSpec,
     StagedSourceLog,
@@ -101,6 +103,27 @@ def test_stage_source_logs_preserves_syslog_subdirectories(tmp_path: Path) -> No
     }
 
 
+def test_stage_source_logs_preserves_windows_snare_year_subdirectories(tmp_path: Path) -> None:
+    source_root = tmp_path / "generated"
+    source_dir = source_root / "win-01.example.test" / "2026"
+    source_dir.mkdir(parents=True)
+    (source_dir / "windows_event_security_snare.log").write_text(
+        "<86>Jun 15 14:23:05 win-01.example.test win-01.example.test\tMSWinEventLog\t"
+        "0\tSecurity\t100\tMon Jun 15 14:23:05 2026\t4624\t"
+        "Microsoft-Windows-Security-Auditing\talice\tN/A\tSuccess Audit\t"
+        "win-01.example.test\tLogon\tAn account was successfully logged on.:  "
+        "Account Name: alice  \n",
+        encoding="utf-8",
+    )
+
+    manifest = stage_source_logs(source_root, tmp_path / "stage", WINDOWS_SECURITY_SNARE_SPEC)
+
+    assert manifest.expected_counts == {"windows_event_security_snare": 1}
+    assert {log.staged.relative_to(manifest.logstash_root) for log in manifest.logs} == {
+        Path("syslog/2026/win-01.example.test/windows_event_security_snare.log")
+    }
+
+
 def test_build_sof_elk_source_configs_requests_sof_elk_syslog_input(tmp_path: Path) -> None:
     config = build_sof_elk_source_configs(tmp_path, CISCO_ASA_SPEC)
 
@@ -127,6 +150,16 @@ def test_build_sof_elk_source_configs_requests_sof_elk_syslog_filters(tmp_path: 
     assert config.sof_elk_filter_files == SYSLOG_SPEC.filter_files
     assert not (config.filebeat_inputs_dir / "syslog.yml").exists()
     for filter_file in SYSLOG_SPEC.filter_files:
+        assert not (config.pipeline_dir / filter_file).exists()
+
+
+def test_build_sof_elk_source_configs_requests_sof_elk_snare_filters(tmp_path: Path) -> None:
+    config = build_sof_elk_source_configs(tmp_path, WINDOWS_SYSMON_SNARE_SPEC)
+
+    assert config.sof_elk_filebeat_inputs == ("syslog.yml",)
+    assert "1010-preprocess-snare.conf" in config.sof_elk_filter_files
+    assert "6010-snare.conf" in config.sof_elk_filter_files
+    for filter_file in WINDOWS_SYSMON_SNARE_SPEC.filter_files:
         assert not (config.pipeline_dir / filter_file).exists()
 
 
@@ -288,6 +321,93 @@ def test_validate_source_parsed_output_reports_syslog_parser_context(
     assert sample["log_file_path"] == "/logstash/syslog/2026/linux-01/syslog.log"
 
 
+def test_validate_source_parsed_output_accepts_windows_security_snare_parse(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        WINDOWS_SECURITY_SNARE_SPEC,
+        Path("syslog/2026/win-01/windows_event_security_snare.log"),
+        "windows_event_security_snare.log",
+        source_year=2026,
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_windows_snare_event(
+        path="/logstash/syslog/2026/win-01/windows_event_security_snare.log",
+        provider="Microsoft-Windows-Security-Auditing",
+        channel="Security",
+        event_id=4624,
+    )
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    events = validate_source_parsed_output(manifest, parsed_dir)
+
+    assert len(events) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_source_parsed_output_accepts_optional_windows_snare_enrichment_tag(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        WINDOWS_SYSMON_SNARE_SPEC,
+        Path("syslog/2026/win-01/windows_event_sysmon_snare.log"),
+        "windows_event_sysmon_snare.log",
+        source_year=2026,
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_windows_snare_event(
+        path="/logstash/syslog/2026/win-01/windows_event_sysmon_snare.log",
+        provider="Microsoft-Windows-Sysmon",
+        channel="Microsoft-Windows-Sysmon/Operational",
+        event_id=1,
+    )
+    event["tags"] = ["filebeat", "process_archive", "snare_log", "_grokparsefail_6010-01"]
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("parse_done")
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    events = validate_source_parsed_output(manifest, parsed_dir)
+
+    assert len(events) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_source_parsed_output_keeps_unparsed_windows_snare_tag_fatal(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest(
+        tmp_path,
+        WINDOWS_SYSMON_SNARE_SPEC,
+        Path("syslog/2026/win-01/windows_event_sysmon_snare.log"),
+        "windows_event_sysmon_snare.log",
+        source_year=2026,
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_windows_snare_event(
+        path="/logstash/syslog/2026/win-01/windows_event_sysmon_snare.log",
+        provider="Microsoft-Windows-Sysmon",
+        channel="Microsoft-Windows-Sysmon/Operational",
+        event_id=1,
+    )
+    event["tags"] = ["filebeat", "process_archive", "snare_log", "_grokparsefail_6010-01"]
+    _write_jsonl(parsed_dir / EVENTS_OUTPUT_FILENAME, [event])
+
+    with pytest.raises(SofElkParserError, match="_grokparsefail_6010-01"):
+        validate_source_parsed_output(manifest, parsed_dir)
+
+    report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert report["failure_tag_counts"]["windows_event_sysmon_snare"]["_grokparsefail_6010-01"] == 1
+    sample = report["sample_failures"][0]
+    assert sample["winlog_provider_name"] == "Microsoft-Windows-Sysmon"
+    assert sample["winlog_channel"] == "Microsoft-Windows-Sysmon/Operational"
+
+
 def _fake_sof_elk_dir(tmp_path: Path, spec: SofElkSourceSpec) -> Path:
     sof_elk_dir = tmp_path / f"sof-elk-{spec.format_name}"
     (sof_elk_dir / "lib" / "filebeat_inputs").mkdir(parents=True)
@@ -399,6 +519,44 @@ def _parsed_syslog_event() -> dict[str, object]:
         "source": {"ip": "198.51.100.25", "port": 54321},
         "ssh": {"auth_result": "accepted", "login_method": "password"},
         "user": {"name": "alice"},
+        "@timestamp": "2026-06-15T14:23:05.000Z",
+    }
+
+
+def _parsed_windows_snare_event(
+    *,
+    path: str,
+    provider: str,
+    channel: str,
+    event_id: int,
+) -> dict[str, object]:
+    return {
+        "tags": ["filebeat", "process_archive", "snare_log", "parse_done"],
+        "labels": {"type": "syslog"},
+        "log": {
+            "file": {"path": path},
+            "syslog": {
+                "hostname": "win-01",
+                "appname": provider,
+            },
+        },
+        "event": {
+            "original": (
+                "<86>Jun 15 14:23:05 win-01 win-01\tMSWinEventLog\t0\t"
+                f"{channel}\t100\tMon Jun 15 14:23:05 2026\t{event_id}\t"
+                f"{provider}\talice\tN/A\tSuccess Audit\twin-01\tLogon\t"
+                "An account was successfully logged on.:  Account Name: alice  "
+            ),
+            "provider": provider,
+        },
+        "host": {"hostname": "win-01"},
+        "winlog": {
+            "event_id": event_id,
+            "provider_name": provider,
+            "channel": channel,
+            "computer_name": "win-01",
+        },
+        "message": "An account was successfully logged on.",
         "@timestamp": "2026-06-15T14:23:05.000Z",
     }
 

@@ -98,10 +98,13 @@ def render_rfc3164_syslog(
     app_name: str,
     message: str,
     pid: Any = None,
+    include_app_tag: bool = True,
 ) -> str:
     """Render a BSD/RFC3164-style syslog line."""
-    app = _syslog_tag_token(app_name, default="-")
     host = _syslog_header_token(hostname, default="-")
+    if not include_app_tag:
+        return f"<{pri}>{format_rfc3164_timestamp(timestamp)} {host} {message or ''}"
+    app = _syslog_tag_token(app_name, default="-")
     tag = f"{app}[{pid}]" if pid not in (None, "") else app
     return f"<{pri}>{format_rfc3164_timestamp(timestamp)} {host} {tag}: {message or ''}"
 

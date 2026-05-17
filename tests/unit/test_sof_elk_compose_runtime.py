@@ -31,10 +31,12 @@ import pytest
 
 from evidenceforge.external_parsers import compose_runtime
 from evidenceforge.external_parsers.compose_runtime import (
+    EXTERNAL_PARSER_RUN_DIR_NAMES,
     ComposeCommand,
     build_generated_config,
     create_compose_run,
     find_compose_runtime,
+    reset_external_parser_run_directories,
 )
 from evidenceforge.external_parsers.errors import SofElkHarnessError
 
@@ -82,6 +84,23 @@ def test_find_compose_runtime_errors_when_compose_is_missing(
 
     with pytest.raises(SofElkHarnessError, match="Docker Compose or Podman Compose"):
         find_compose_runtime()
+
+
+def test_reset_external_parser_run_directories_clears_transient_state(tmp_path: Path) -> None:
+    for name in EXTERNAL_PARSER_RUN_DIR_NAMES:
+        directory = tmp_path / name
+        directory.mkdir()
+        (directory / "stale-state").write_text("old", encoding="utf-8")
+    preserved = tmp_path / "preserved.txt"
+    preserved.write_text("keep", encoding="utf-8")
+
+    reset_external_parser_run_directories(tmp_path)
+
+    for name in EXTERNAL_PARSER_RUN_DIR_NAMES:
+        directory = tmp_path / name
+        assert directory.is_dir()
+        assert not (directory / "stale-state").exists()
+    assert preserved.read_text(encoding="utf-8") == "keep"
 
 
 def test_create_compose_run_writes_prep_and_compose_files(

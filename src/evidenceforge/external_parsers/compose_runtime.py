@@ -43,6 +43,14 @@ HARNESS_RUN_ID_LABEL = "evidenceforge.external_parser.run_id"
 COMPOSE_REQUIRED_MESSAGE = (
     "Docker Compose or Podman Compose is required for external parser validation"
 )
+EXTERNAL_PARSER_RUN_DIR_NAMES = (
+    "stage",
+    "parsed",
+    "pipeline-logs",
+    "filebeat-data",
+    "logstash-data",
+    "runtime-config-src",
+)
 
 ProgressCallback = Callable[[str, dict[str, object]], None]
 
@@ -78,6 +86,19 @@ class SofElkComposeRun:
     compose_file: Path
     prep_script: Path
     generated_config: SofElkGeneratedConfig
+
+
+def reset_external_parser_run_directories(work_dir: Path) -> None:
+    """Clear and recreate transient parser state below a run work directory."""
+    work_dir = work_dir.resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    for name in EXTERNAL_PARSER_RUN_DIR_NAMES:
+        path = work_dir / name
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        path.mkdir(parents=True, exist_ok=True)
 
 
 def find_compose_runtime(runtime: str | None = None) -> ComposeCommand:

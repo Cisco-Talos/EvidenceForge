@@ -33,6 +33,8 @@ SOF_ELK_ZEEK_VALIDATOR = "sof-elk-zeek"
 SOF_ELK_CISCO_ASA_VALIDATOR = "sof-elk-cisco-asa"
 SOF_ELK_WEB_ACCESS_VALIDATOR = "sof-elk-web-access"
 SOF_ELK_SYSLOG_VALIDATOR = "sof-elk-syslog"
+SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR = "sof-elk-windows-security-snare"
+SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR = "sof-elk-windows-sysmon-snare"
 
 _DEFAULT_FATAL_TAGS = frozenset(
     {
@@ -118,6 +120,24 @@ def _is_parsed_pam_auth_failure(event: JsonMapping) -> bool:
     ) or message.startswith("authentication failure; ")
 
 
+def _is_parsed_snare_windows_event(event: JsonMapping) -> bool:
+    tags = event.get("tags", [])
+    if not isinstance(tags, list):
+        return False
+    tag_set = {str(tag) for tag in tags}
+    if not {"snare_log", "parse_done"}.issubset(tag_set):
+        return False
+    return all(
+        _get_path(event, path) not in (None, "")
+        for path in (
+            "winlog.event_id",
+            "winlog.provider_name",
+            "winlog.channel",
+            "winlog.computer_name",
+        )
+    )
+
+
 TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
     ParserTagRule(
         validator=SOF_ELK_ZEEK_VALIDATOR,
@@ -179,6 +199,30 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
             "failure detail fields."
         ),
         event_predicate=_is_parsed_pam_auth_failure,
+    ),
+    ParserTagRule(
+        validator=SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
+        log_type="windows_event_security_snare",
+        tag="_grokparsefail_6010-01",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/6010-snare.conf",
+        reason=(
+            "Second-stage expanded-data enrichment can leave a grok miss even after "
+            "the Snare CSV record parsed and required winlog fields were normalized."
+        ),
+        event_predicate=_is_parsed_snare_windows_event,
+    ),
+    ParserTagRule(
+        validator=SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
+        log_type="windows_event_sysmon_snare",
+        tag="_grokparsefail_6010-01",
+        disposition=ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT,
+        source="SOF-ELK configfiles/6010-snare.conf",
+        reason=(
+            "Second-stage expanded-data enrichment can leave a grok miss even after "
+            "the Snare CSV record parsed and required winlog fields were normalized."
+        ),
+        event_predicate=_is_parsed_snare_windows_event,
     ),
 )
 _RULES_BY_KEY = {(rule.validator, rule.log_type, rule.tag): rule for rule in TAG_POLICY_RULES}

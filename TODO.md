@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-05-16
+**Last Updated:** 2026-05-17
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -39,7 +39,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Clarify external parser progress output by separating SOF-ELK ingest staging from parsed JSONL validation bars.
 - [x] Move SOF-ELK external parser execution to a Compose-only runtime with an ephemeral prep container so GPL parser configs stay out of the repo and host work directory.
 - [x] Consolidate external parser validation docs, contributor guidance, ignored-tag documentation, and local skill instructions under the new developer-facing workflow.
+- [x] Add parallel Snare-over-RFC3164 syslog sidecar output for Windows Security and Sysmon XML logs, then wire those sidecar logs into SOF-ELK external parser validation.
+- [x] Diagnose and fix zero observed counts for regenerated Windows/Sysmon Snare sidecars in full SOF-ELK external-parser runs by clearing stale Filebeat registry and parsed-output state before each harness invocation; reran the regenerated apt healthcare dataset and observed exact Security/Sysmon Snare count matches.
 - [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier flushes to write year-partitioned syslog files, while preserving final sort/logind normalization at close.
+- [ ] **P2** Revisit proxy access log realism and parser compatibility; consider switching `proxy_access.log` from W3C Extended format to Apache/Nginx combined-style output with absolute URLs and CONNECT targets.
 - [x] Treat SOF-ELK PAM auth-failure remainder misses as optional enrichment only after the PAM envelope has parsed, and polish generated console PAM auth failures to a more canonical `/dev/tty1` shape.
 - [x] Tighten Linux syslog parser compatibility by ignoring only parsed PAM open/close SSHD overlap tags, rendering OpenSSH disconnects in SOF-ELK's preauth-supported shape, and using a more typical console `logname=LOGIN` PAM auth-failure detail.
 - [x] Remove empty OpenSSH `rdomain ""` suffix from generated SSH connection syslog messages so default Linux SSH evidence matches common OpenSSH output and SOF-ELK's SSHD parser.

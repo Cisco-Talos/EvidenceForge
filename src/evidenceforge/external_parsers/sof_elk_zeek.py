@@ -37,6 +37,7 @@ from evidenceforge.external_parsers.compose_runtime import (
     build_generated_config,
     create_compose_run,
     find_compose_runtime,
+    reset_external_parser_run_directories,
     run_sof_elk_compose,
 )
 from evidenceforge.external_parsers.errors import SofElkHarnessError, SofElkParserError
@@ -395,19 +396,12 @@ def run_sof_elk_zeek_parser(
         Successful parse result with parsed events by log type.
     """
     work_dir = work_dir.resolve()
+    reset_external_parser_run_directories(work_dir)
     staging_dir = work_dir / "stage"
     parsed_dir = work_dir / "parsed"
     pipeline_log_dir = work_dir / "pipeline-logs"
     filebeat_data_dir = work_dir / "filebeat-data"
     logstash_data_dir = work_dir / "logstash-data"
-    for directory in (
-        staging_dir,
-        parsed_dir,
-        pipeline_log_dir,
-        filebeat_data_dir,
-        logstash_data_dir,
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
 
     progress_callback("validator_step", {"description": "Staging Zeek files"})
     manifest = stage_zeek_logs(source_root, staging_dir)

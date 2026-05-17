@@ -38,6 +38,7 @@ from evidenceforge.external_parsers.compose_runtime import (
     SofElkGeneratedConfig,
     build_generated_config,
     create_compose_run,
+    reset_external_parser_run_directories,
     run_sof_elk_compose,
 )
 from evidenceforge.external_parsers.sof_elk_zeek import (
@@ -58,6 +59,8 @@ from evidenceforge.external_parsers.tag_policy import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
+    SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
+    SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
     classify_parser_tags,
 )
 
@@ -160,10 +163,60 @@ SYSLOG_SPEC = SofElkSourceSpec(
     required_paths=("log.syslog.hostname", "log.syslog.appname"),
 )
 
+WINDOWS_SECURITY_SNARE_SPEC = SofElkSourceSpec(
+    validator=SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
+    display_name="SOF-ELK Windows Security Snare",
+    format_name="windows_event_security_snare",
+    logtype="windows events",
+    subtype="security_snare",
+    source_names=("windows_event_security_snare.log",),
+    staged_directory="syslog",
+    staged_name="windows_event_security_snare.log",
+    filebeat_input="syslog.yml",
+    filter_files=(
+        "1000-preprocess-all.conf",
+        "1010-preprocess-snare.conf",
+        "1100-preprocess-syslog.conf",
+        "6010-snare.conf",
+        "8999-postprocess-all.conf",
+    ),
+    output_label_type="syslog",
+    required_paths=(
+        "winlog.event_id",
+        "winlog.provider_name",
+        "winlog.channel",
+        "winlog.computer_name",
+    ),
+    required_tags=("snare_log", "parse_done"),
+)
+
+WINDOWS_SYSMON_SNARE_SPEC = SofElkSourceSpec(
+    validator=SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
+    display_name="SOF-ELK Windows Sysmon Snare",
+    format_name="windows_event_sysmon_snare",
+    logtype="windows events",
+    subtype="sysmon_snare",
+    source_names=("windows_event_sysmon_snare.log",),
+    staged_directory="syslog",
+    staged_name="windows_event_sysmon_snare.log",
+    filebeat_input="syslog.yml",
+    filter_files=WINDOWS_SECURITY_SNARE_SPEC.filter_files,
+    output_label_type="syslog",
+    required_paths=(
+        "winlog.event_id",
+        "winlog.provider_name",
+        "winlog.channel",
+        "winlog.computer_name",
+    ),
+    required_tags=("snare_log", "parse_done"),
+)
+
 SOF_ELK_SOURCE_SPECS: tuple[SofElkSourceSpec, ...] = (
     CISCO_ASA_SPEC,
     WEB_ACCESS_SPEC,
     SYSLOG_SPEC,
+    WINDOWS_SECURITY_SNARE_SPEC,
+    WINDOWS_SYSMON_SNARE_SPEC,
 )
 SOF_ELK_SOURCE_SPECS_BY_VALIDATOR: dict[str, SofElkSourceSpec] = {
     spec.validator: spec for spec in SOF_ELK_SOURCE_SPECS
@@ -280,19 +333,12 @@ def run_sof_elk_source_parser(
 ) -> SofElkSourceResult:
     """Run Filebeat and Logstash against a staged non-Zeek source."""
     work_dir = work_dir.resolve()
+    reset_external_parser_run_directories(work_dir)
     staging_dir = work_dir / "stage"
     parsed_dir = work_dir / "parsed"
     pipeline_log_dir = work_dir / "pipeline-logs"
     filebeat_data_dir = work_dir / "filebeat-data"
     logstash_data_dir = work_dir / "logstash-data"
-    for directory in (
-        staging_dir,
-        parsed_dir,
-        pipeline_log_dir,
-        filebeat_data_dir,
-        logstash_data_dir,
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
 
     progress_callback("validator_step", {"description": f"Staging {spec.format_name} files"})
     manifest = stage_source_logs(source_root, staging_dir, spec)
@@ -506,6 +552,10 @@ def _failure_event_summary(
         "http_method": _get_path(event, "http.request.method"),
         "http_status_code": _get_path(event, "http.response.status_code"),
         "url_path": _get_path(event, "url.path"),
+        "winlog_event_id": _get_path(event, "winlog.event_id"),
+        "winlog_provider_name": _get_path(event, "winlog.provider_name"),
+        "winlog_channel": _get_path(event, "winlog.channel"),
+        "winlog_computer_name": _get_path(event, "winlog.computer_name"),
     }
 
 

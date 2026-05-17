@@ -28,6 +28,11 @@ uv run python scripts/external_parser.py \
   --timeout 180
 ```
 
+Each run clears the parser-owned `sof-elk/stage`, `sof-elk/parsed`,
+`sof-elk/pipeline-logs`, `sof-elk/filebeat-data`, `sof-elk/logstash-data`, and
+`sof-elk/runtime-config-src` directories before staging new input. Use a unique
+work directory when you need to keep artifacts from multiple runs side by side.
+
 The runner auto-detects supported logs. Do not pass validator names for normal
 use. Unsupported logs are reported as warnings so new formats are visible
 without blocking supported parser checks.
@@ -51,10 +56,11 @@ Supported through SOF-ELK today:
 - Cisco ASA firewall logs
 - Web access logs
 - Linux syslog
+- Windows Security and Sysmon Snare/RFC3164 sidecars
 
 Not yet supported:
 
-- Windows XML logs
+- Native Windows/Sysmon XML files (the parallel Snare sidecars are validated)
 - IDS, proxy, eCAR
 - Bash history
 - Elasticsearch output behavior

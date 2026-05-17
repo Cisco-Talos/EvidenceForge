@@ -243,8 +243,8 @@ LogEmitter (ABC)
 ├── _buffer: list                    # 10K event buffer before flush
 └── _flush()                         # Write buffer to file
 │
-├── WindowsEventEmitter              # Security.evtx XML, 30 event IDs
-├── SysmonEventEmitter               # Sysmon.evtx XML
+├── WindowsEventEmitter              # Security XML plus Snare/RFC3164 sidecar
+├── SysmonEventEmitter               # Sysmon XML plus Snare/RFC3164 sidecar
 ├── ZeekEmitter                      # conn.log (base for 13 Zeek types)
 │   ├── ZeekDnsEmitter               # dns.log
 │   ├── ZeekHttpEmitter              # http.log

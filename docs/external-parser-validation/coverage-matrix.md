@@ -23,13 +23,15 @@ parser validation and which SOF-ELK filters are used.
 | Cisco ASA `cisco_asa.log` | `sof-elk-cisco-asa` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6018-cisco_asa.conf`, `8999-postprocess-all.conf` | Staged under `/logstash/syslog/<year>/<sensor>/cisco_asa.log`; requires `got_cisco` and `parse_done`. |
 | Web access `web_access.log` | `sof-elk-web-access` | `httpdlog.yml` | `1000-preprocess-all.conf`, `6100-httpd.conf`, `8060-postprocess-useragent.conf`, `8110-postprocess-httpd.conf`, `8999-postprocess-all.conf` | Optional page classification miss `_grokparsefail_8110-01` is ignored. |
 | Linux `syslog.log` | `sof-elk-syslog` | `syslog.yml` | `1000-preprocess-all.conf`, `1100-preprocess-syslog.conf`, `6012-dhcpd.conf`, `6013-bindquery.conf`, `6015-sshd.conf`, `6016-pam.conf`, `6017-iptables.conf`, `8100-postprocess-syslog.conf`, `8999-postprocess-all.conf` | Generated RFC3164 files should live under `<host>/<year>/syslog.log`; staged year is validated against parsed `@timestamp`. |
+| Windows Security `windows_event_security_snare.log` | `sof-elk-windows-security-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | Generated sidecar lives under `<host>/<year>/windows_event_security_snare.log`; staged under `/logstash/syslog/<year>/<host>/...`; requires `snare_log`, `parse_done`, and normalized `winlog.*` fields. |
+| Sysmon `windows_event_sysmon_snare.log` | `sof-elk-windows-sysmon-snare` | `syslog.yml` | `1000-preprocess-all.conf`, `1010-preprocess-snare.conf`, `1100-preprocess-syslog.conf`, `6010-snare.conf`, `8999-postprocess-all.conf` | Same Snare/SOF-ELK path as Windows Security; validates `winlog.event_id`, provider, channel, computer, and staged source year. |
 
 ## Unsupported
 
 | EvidenceForge output | Validator | Notes |
 | --- | --- | --- |
-| Windows Event Security XML | NONE | EvidenceForge emits plain text XML, not binary EVTX. Needs a parser that expects the same XML shape. |
-| Sysmon XML | NONE | Same XML constraint as Windows Event Security. |
+| Windows Event Security XML | NONE | XML remains generated and evaluated internally; third-party SOF-ELK validation uses the parallel Snare sidecar. |
+| Sysmon XML | NONE | XML remains generated and evaluated internally; third-party SOF-ELK validation uses the parallel Snare sidecar. |
 | Snort/IDS alert logs | NONE | Detected as unsupported so they are not silently skipped. |
 | Proxy access logs | NONE | Detected as unsupported so they are not silently skipped. |
 | eCAR JSON | NONE | Detected as unsupported so it is not silently skipped. |

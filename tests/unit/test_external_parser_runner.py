@@ -30,6 +30,8 @@ from evidenceforge.external_parsers.runner import (
     SOF_ELK_CISCO_ASA_VALIDATOR,
     SOF_ELK_SYSLOG_VALIDATOR,
     SOF_ELK_WEB_ACCESS_VALIDATOR,
+    SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
+    SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
     SOF_ELK_ZEEK_VALIDATOR,
     detect_external_parser_plan,
     group_logs_for_progress,
@@ -47,6 +49,22 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
     (data_dir / "win-01.example.test").mkdir()
     (data_dir / "win-01.example.test" / "windows_event_security.xml").write_text(
         "<Events />\n",
+        encoding="utf-8",
+    )
+    (data_dir / "win-01.example.test" / "2026").mkdir(parents=True)
+    (data_dir / "win-01.example.test" / "2026" / "windows_event_security_snare.log").write_text(
+        "<86>Jun 15 14:23:05 win-01.example.test win-01.example.test\tMSWinEventLog\t"
+        "0\tSecurity\t100\tMon Jun 15 14:23:05 2026\t4624\t"
+        "Microsoft-Windows-Security-Auditing\talice\tN/A\tSuccess Audit\t"
+        "win-01.example.test\tLogon\tAn account was successfully logged on.:  "
+        "Account Name: alice  \n",
+        encoding="utf-8",
+    )
+    (data_dir / "win-01.example.test" / "2026" / "windows_event_sysmon_snare.log").write_text(
+        "<14>Jun 15 14:23:06 win-01.example.test win-01.example.test\tMSWinEventLog\t"
+        "0\tMicrosoft-Windows-Sysmon/Operational\t101\tMon Jun 15 14:23:06 2026\t1\t"
+        "Microsoft-Windows-Sysmon\talice\tN/A\tInformation\twin-01.example.test\t"
+        "Process Create\tProcess Create:  Image: C:\\Windows\\System32\\cmd.exe  \n",
         encoding="utf-8",
     )
     (data_dir / "linux-01.example.test" / "bash_history").mkdir(parents=True)
@@ -80,11 +98,15 @@ def test_detect_external_parser_plan_selects_zeek_validator_and_warns_unsupporte
         SOF_ELK_CISCO_ASA_VALIDATOR,
         SOF_ELK_WEB_ACCESS_VALIDATOR,
         SOF_ELK_SYSLOG_VALIDATOR,
+        SOF_ELK_WINDOWS_SECURITY_SNARE_VALIDATOR,
+        SOF_ELK_WINDOWS_SYSMON_SNARE_VALIDATOR,
     )
     assert {(log.logtype, log.subtype) for log in plan.supported_logs} == {
         ("firewall", "cisco_asa"),
         ("syslog", "linux"),
         ("web", "access"),
+        ("windows events", "security_snare"),
+        ("windows events", "sysmon_snare"),
         ("zeek", "conn"),
         ("zeek", "http"),
     }
