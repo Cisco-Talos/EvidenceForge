@@ -167,3 +167,28 @@ class TestWebEmitterCanHandle:
 
         assert r'"https://example.com/search?q=\"quoted\""' in rendered_lines[0]
         assert r'"Mozilla/5.0 \"Test\""' in rendered_lines[0]
+
+    def test_combined_log_control_characters_are_escaped(self, emitter):
+        """Control characters in request and quoted fields must not forge log records."""
+        host = _make_host("server", ["web_server"])
+        http = HttpContext(
+            method="GET\nPOST",
+            host="web01.example.com",
+            uri='/index.html\n203.0.113.66 - - [15/Jul/2024:12:00:01 +0000] "GET /forged',
+            version="1.1",
+            user_agent="Mozilla/5.0\nForgedUA",
+            response_body_len=1024,
+            status_code=200,
+            referrer="https://example.com/\rforged",
+        )
+        event = _make_event(dst_host=host, http=http)
+        rendered_lines = []
+        emitter.emit_to_host = lambda line, fqdn: rendered_lines.append(line)
+
+        emitter.emit(event)
+
+        assert len(rendered_lines[0].splitlines()) == 1
+        assert "\n" not in rendered_lines[0]
+        assert "\r" not in rendered_lines[0]
+        assert r"GET\nPOST" in rendered_lines[0]
+        assert r"Mozilla/5.0\\nForgedUA" in rendered_lines[0]

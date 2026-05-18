@@ -119,6 +119,31 @@ def _stable_hex_token(hostname: str, template: str, token: str, occurrence: int)
     return f"{seed & mask:0{width}x}"
 
 
+def _replace_token_occurrences(
+    rng: random.Random,
+    path: str,
+    *,
+    token: str,
+    bits: int,
+    hostname: str,
+    template: str,
+    stable_asset_tokens: bool,
+) -> str:
+    """Replace all occurrences of one token with a single linear pass over the path."""
+    parts = path.split(token)
+    if len(parts) == 1:
+        return path
+
+    output = [parts[0]]
+    for occurrence, part in enumerate(parts[1:]):
+        if stable_asset_tokens:
+            replacement = _stable_hex_token(hostname, template, token, occurrence)
+        else:
+            replacement = f"{rng.getrandbits(bits):0{bits // 4}x}"
+        output.extend((replacement, part))
+    return "".join(output)
+
+
 def _replace_hex_tokens(
     rng: random.Random,
     path: str,
@@ -128,14 +153,15 @@ def _replace_hex_tokens(
     stable_asset_tokens: bool,
 ) -> str:
     for token, bits in (("{hex8}", 32), ("{hex16}", 64)):
-        occurrence = 0
-        while token in path:
-            if stable_asset_tokens:
-                replacement = _stable_hex_token(hostname, template, token, occurrence)
-            else:
-                replacement = f"{rng.getrandbits(bits):0{bits // 4}x}"
-            path = path.replace(token, replacement, 1)
-            occurrence += 1
+        path = _replace_token_occurrences(
+            rng,
+            path,
+            token=token,
+            bits=bits,
+            hostname=hostname,
+            template=template,
+            stable_asset_tokens=stable_asset_tokens,
+        )
     return path
 
 

@@ -40,6 +40,7 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
+    _extract_http_url_from_command,
     _extract_image_from_command,
     _http_context_from_process_command,
     _jitter_default_connection_duration,
@@ -127,6 +128,32 @@ class TestProcessHttpCommandCorrelation:
         assert http.uri == "/rate_limit?resource=core"
         assert http.user_agent == "curl/7.88.1"
         assert http.response_body_len == 1234
+
+    @pytest.mark.parametrize(
+        "command_line",
+        [
+            "curl -s http://[::1",
+            "curl -s http://example.com:99999/",
+        ],
+    )
+    def test_http_context_from_malformed_url_returns_none(self, command_line):
+        """Malformed overlay-provided URLs should not crash process-network correlation."""
+        assert (
+            _http_context_from_process_command(
+                "/usr/bin/curl",
+                command_line,
+                response_body_len=1234,
+            )
+            is None
+        )
+
+    def test_extract_http_url_skips_malformed_candidates(self):
+        """Malformed candidates should be skipped so later valid URLs can still correlate."""
+        url = _extract_http_url_from_command(
+            "curl http://[::1 && curl https://api.example.com/status"
+        )
+
+        assert url == "https://api.example.com/status"
 
     def test_http_context_from_static_curl_uses_stable_resource_size(self):
         """Repeated CLI downloads of static resources should keep one object size."""
@@ -3647,6 +3674,33 @@ class TestActivityGenerator:
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         assert all(event.event_type != "explicit_credentials" for event in emitted)
+
+    def test_generate_explicit_credentials_ignores_invalid_target_for_subject_fallback(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Invalid explicit target account text should not crash Windows subject coercion."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        root_user = User(username="root", full_name="root", email="root@example.local")
+
+        activity_gen.generate_explicit_credentials(
+            user=root_user,
+            system=test_system,
+            time=timestamp,
+            target_username=r"CORP\Jane Doe",
+            target_server="DC-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+            source_ip="10.10.3.10",
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.username == r"CORP\Jane Doe"
+        assert explicit.auth.subject_username == "Administrator"
+        assert all(getattr(event.auth, "username", "") != "Jane Doe" for event in emitted)
 
     def test_generate_explicit_credentials_coerces_linux_subject_on_windows(
         self, activity_gen, test_system, state_manager, mock_emitters

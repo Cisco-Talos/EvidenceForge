@@ -301,6 +301,49 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_unsafe_public_dns_templates(self, monkeypatch):
+        from evidenceforge.generation.activity import public_dns_profiles
+
+        def load_invalid_public_dns_profiles():
+            return {
+                "nameserver_profiles": [
+                    {
+                        "name": "bad_ns",
+                        "weight": 1,
+                        "answer_sets": [["{missing}"]],
+                        "soa_rnames": ["{domain:1000000000}"],
+                    }
+                ],
+                "mail_profiles": [
+                    {
+                        "name": "bad_mx",
+                        "weight": 1,
+                        "answer_sets": [["0 {domain_hyphen}.mail.example.net"]],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(
+            public_dns_profiles,
+            "load_public_dns_profiles",
+            load_invalid_public_dns_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "public DNS answer templates may only use" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "public DNS answer templates must not use format specifiers" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_warns_for_unknown_ocsp_responder(self, monkeypatch):
         from evidenceforge.generation.activity import dns_registry, tls_realism
 
@@ -742,6 +785,38 @@ class TestValidateConfig:
                 "max_minutes must be greater than or equal to min_minutes" in issue.message
                 or "host_count_max must be greater than or equal to host_count_min" in issue.message
             )
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_auth_noise_account_names(self, monkeypatch):
+        from evidenceforge.generation.activity import auth_noise
+
+        def load_invalid_auth_noise_config():
+            return {
+                "scheduled_stale_credentials": {
+                    "account_base_names": ["svc_backup", "bad name", "svc/foo"],
+                    "host_count_min": 1,
+                    "host_count_max": 1,
+                    "interval_ranges": [{"min_minutes": 60, "max_minutes": 120, "weight": 1}],
+                    "first_occurrence_seconds_min": 0,
+                    "first_occurrence_seconds_max": 2700,
+                    "jitter_seconds_min": -420,
+                    "jitter_seconds_max": 780,
+                    "skip_probability": 0.10,
+                    "backoff_probability": 0.10,
+                    "backoff_seconds_min": 900,
+                    "backoff_seconds_max": 3600,
+                }
+            }
+
+        monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "auth_noise.yaml"
+            and "account_base_names entries must match scenario username syntax" in issue.message
             for issue in result.issues
         )
 
@@ -1272,6 +1347,39 @@ class TestValidateConfig:
             "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status nginx"
         )
 
+    def test_extra_syslog_treats_contextual_services_as_literals(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        entry = {
+            "app": "sudo",
+            "messages": [
+                "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+            ],
+            "params": {
+                "sudo_user": ["deploy"],
+                "tty": ["pts/1"],
+                "cwd": ["/srv/app"],
+                "service": ["ssh"],
+                "sudo_command": ["/bin/systemctl status {service}"],
+            },
+        }
+
+        missing_placeholder = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["{missing}"],
+        )
+        unmatched_brace = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["{"],
+        )
+
+        assert missing_placeholder.endswith("COMMAND=/bin/systemctl status {missing}")
+        assert unmatched_brace.endswith("COMMAND=/bin/systemctl status {")
+
     def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
         from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
 
@@ -1429,5 +1537,69 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "windows_auth_realism.yaml"
             and "emission_probabilities" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_unsafe_web_session_profile_fields(self, monkeypatch):
+        from evidenceforge.generation.activity import web_session_profiles
+
+        real_loader = web_session_profiles.load_web_session_profiles
+
+        def load_invalid_web_session_profiles():
+            data = real_loader()
+            visitor_classes = dict(data["visitor_classes"])
+            probe = dict(visitor_classes["opportunistic_probe"])
+            requests = [dict(request) for request in probe["requests"]]
+            requests[0] = {
+                **requests[0],
+                "path": "/wp-login.php\nforged",
+                "method": "GET\nPOST",
+                "status": "not-an-int",
+                "type": "text/html\nforged",
+            }
+            probe["requests"] = requests
+            visitor_classes["opportunistic_probe"] = probe
+            user_agent_pools = dict(data["user_agent_pools"])
+            user_agent_pools["scanner"] = [*user_agent_pools["scanner"], "BadUA\nForged"]
+            return {
+                **data,
+                "visitor_classes": visitor_classes,
+                "user_agent_pools": user_agent_pools,
+            }
+
+        monkeypatch.setattr(
+            web_session_profiles, "load_web_session_profiles", load_invalid_web_session_profiles
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "path must be a single-line path" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "method must be a supported single-line HTTP method" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "status must be an integer from 100 to 599" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "type must be a single-line MIME type" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "must be a non-empty single-line string" in issue.message
             for issue in result.issues
         )

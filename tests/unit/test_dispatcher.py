@@ -132,6 +132,27 @@ class TestObservationProfiles:
         emitter.emit.assert_called_once_with(event)
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"visible": 1}
 
+    def test_empty_configured_profile_uses_default_visible_policy(self, monkeypatch):
+        """An explicitly configured empty profile should not be mistaken for unknown."""
+        from evidenceforge.config import observation_profiles
+
+        monkeypatch.setattr(
+            observation_profiles,
+            "load_observation_profiles",
+            lambda: {"profiles": {"complete": {}, "empty_profile": {}}},
+        )
+
+        policy = ObservationPolicy("empty_profile")
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+
+        assert policy.profile == {}
+        assert policy.decide("windows_event_sysmon", event).status == "visible"
+
+    def test_unknown_profile_still_raises(self):
+        """Missing profile names are still rejected during policy construction."""
+        with pytest.raises(ValueError, match="Unknown observation_profile: missing_profile"):
+            ObservationPolicy("missing_profile")
+
     def test_source_missingness_drops_rendering_without_skipping_state(self, monkeypatch):
         """Non-complete profiles can drop source rows without corrupting canonical state."""
         monkeypatch.setattr(

@@ -35,3 +35,24 @@ def test_public_dns_profiles_preserve_well_known_provider_overrides():
         "0 microsoft-com.mail.protection.outlook.com"
     ]
     assert _public_dns_soa_answers("microsoft.com")[0].endswith("azuredns-hostmaster.microsoft.com")
+
+
+def test_public_dns_answer_renderer_allows_only_literal_domain_tokens():
+    from evidenceforge.generation.activity.generator import _render_public_dns_answer
+
+    assert _render_public_dns_answer("10 {domain_hyphen}.mx.{domain}", "victim.test") == (
+        "10 victim-test.mx.victim.test"
+    )
+    assert _render_public_dns_answer("literal {{ brace }} {domain}", "victim.test") == (
+        "literal { brace } victim.test"
+    )
+
+
+def test_public_dns_answer_renderer_rejects_unsafe_format_fields():
+    import pytest
+
+    from evidenceforge.generation.activity.generator import _render_public_dns_answer
+
+    for template in ("{missing}", "{domain:1000000000}", "{domain!r}", "{domain.__class__}"):
+        with pytest.raises(ValueError, match="public DNS answer templates"):
+            _render_public_dns_answer(template, "victim.test")

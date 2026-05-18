@@ -9,6 +9,7 @@ from evidenceforge.events.observation_manifest import (
     OBSERVATION_MANIFEST_FILENAME,
     build_observation_manifest,
     load_observation_manifest,
+    observation_manifest_matches_scenario,
     write_observation_manifest,
 )
 from evidenceforge.models import (
@@ -130,3 +131,66 @@ def test_write_manifest_rejects_dangling_symlink(tmp_path) -> None:
 
     assert output_path.is_symlink()
     assert not outside_target.exists()
+
+
+def test_load_manifest_rejects_symlinked_sidecar(tmp_path) -> None:
+    """Eval should not trust a manifest symlinked out of the evaluated tree."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    attacker_dir = tmp_path / "attacker"
+    attacker_dir.mkdir()
+    attacker_manifest = attacker_dir / OBSERVATION_MANIFEST_FILENAME
+    write_observation_manifest(
+        attacker_manifest,
+        _scenario(),
+        {"step-001": {"windows_security": {"dropped": 1}}},
+    )
+    try:
+        (tmp_path / OBSERVATION_MANIFEST_FILENAME).symlink_to(attacker_manifest)
+    except OSError as exc:
+        pytest.skip(f"Symlink creation unsupported in this environment: {exc}")
+
+    assert load_observation_manifest(data_dir, _scenario()) is None
+
+
+def test_load_manifest_rejects_complete_scenario_profile(tmp_path) -> None:
+    """Complete-profile scenarios should ignore observation sidecars entirely."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    scenario = _scenario()
+    write_observation_manifest(
+        tmp_path / OBSERVATION_MANIFEST_FILENAME,
+        scenario,
+        {"step-001": {"windows_security": {"dropped": 1}}},
+    )
+    scenario.observation_profile = "complete"
+
+    assert load_observation_manifest(data_dir, scenario) is None
+
+
+def test_load_manifest_rejects_mismatched_scenario_metadata(tmp_path) -> None:
+    """Forged manifests must match the evaluated scenario, not only storyline IDs."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    scenario = _scenario()
+    forged = _scenario()
+    forged.name = "different-scenario"
+    write_observation_manifest(
+        tmp_path / OBSERVATION_MANIFEST_FILENAME,
+        forged,
+        {"step-001": {"windows_security": {"dropped": 1}}},
+    )
+
+    assert load_observation_manifest(data_dir, scenario) is None
+
+
+def test_manifest_binding_requires_storyline_metadata_match() -> None:
+    """Manifest event exemptions should be bound to actor/system/event metadata."""
+    scenario = _scenario()
+    manifest = build_observation_manifest(
+        scenario,
+        {"step-001": {"windows_security": {"dropped": 1}}},
+    )
+    manifest.storyline_events[0].actor = "mallory"
+
+    assert observation_manifest_matches_scenario(manifest, scenario) is False

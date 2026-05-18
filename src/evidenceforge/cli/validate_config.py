@@ -491,7 +491,13 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
-    from evidenceforge.generation.activity.web_session_profiles import load_web_session_profiles
+    from evidenceforge.generation.activity.web_session_profiles import (
+        is_safe_http_header_value,
+        is_safe_http_method,
+        is_safe_http_path,
+        is_safe_mime_type,
+        load_web_session_profiles,
+    )
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
@@ -1128,6 +1134,26 @@ def validate_config() -> ValidationResult:
         result.issues.append(
             Issue("ERROR", "web_session_profiles.yaml", "user_agent_pools must be a mapping")
         )
+    if isinstance(web_ua_pools, dict):
+        for pool_name, user_agents in web_ua_pools.items():
+            if not isinstance(user_agents, list) or not user_agents:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'User-Agent pool "{pool_name}" must be a non-empty list',
+                    )
+                )
+                continue
+            for index, user_agent in enumerate(user_agents):
+                if not is_safe_http_header_value(user_agent):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'User-Agent pool "{pool_name}" entry {index} must be a non-empty single-line string',
+                        )
+                    )
     if isinstance(web_visitor_classes, dict) and isinstance(web_ua_pools, dict):
         for class_name, class_data in web_visitor_classes.items():
             if not isinstance(class_data, dict):
@@ -1237,6 +1263,43 @@ def validate_config() -> ValidationResult:
                                     f'Visitor class "{class_name}" request {index} missing "{required}"',
                                 )
                             )
+                    if not is_safe_http_path(request.get("path")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} path must be a single-line path starting with "/"',
+                            )
+                        )
+                    if not is_safe_http_method(request.get("method")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} method must be a supported single-line HTTP method',
+                            )
+                        )
+                    status = request.get("status")
+                    if (
+                        not isinstance(status, int)
+                        or isinstance(status, bool)
+                        or not 100 <= status <= 599
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} status must be an integer from 100 to 599',
+                            )
+                        )
+                    if not is_safe_mime_type(request.get("type")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} type must be a single-line MIME type',
+                            )
+                        )
 
     # --- Checks 11-13: Traffic Profile Integrity ---
     role_traffic = traffic_data.get("role_traffic", {})

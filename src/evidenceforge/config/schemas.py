@@ -12,9 +12,12 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 
 from __future__ import annotations
 
+import re
 from typing import Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
 
@@ -64,6 +67,9 @@ class PublicDnsAnswerProfile(BaseModel, extra="forbid"):
     def optional_strings_non_empty(cls, v: list[str], info) -> list[str]:
         if any(not item for item in v):
             raise ValueError(f"{info.field_name} entries must be non-empty")
+        if info.field_name == "soa_rnames":
+            for item in v:
+                validate_public_dns_answer_template(item)
         return v
 
     @field_validator("answer_sets")
@@ -76,6 +82,8 @@ class PublicDnsAnswerProfile(BaseModel, extra="forbid"):
                 raise ValueError("answer_sets entries must not be empty")
             if any(not answer for answer in answer_set):
                 raise ValueError("answer strings must be non-empty")
+            for answer in answer_set:
+                validate_public_dns_answer_template(answer)
         return v
 
 
@@ -864,6 +872,8 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
 
 # --- Auth Noise ---
 
+_AUTH_NOISE_ACCOUNT_NAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
+
 
 class AuthNoiseIntervalRange(BaseModel, extra="forbid"):
     """A weighted interval range for auth-noise recurrence."""
@@ -897,10 +907,16 @@ class ScheduledStaleCredentialsConfig(BaseModel, extra="forbid"):
 
     @field_validator("account_base_names")
     @classmethod
-    def account_base_names_non_empty(cls, v: list[str]) -> list[str]:
+    def account_base_names_match_usernames(cls, v: list[str]) -> list[str]:
         for name in v:
-            if not name or not name.strip():
+            stripped_name = name.strip() if isinstance(name, str) else ""
+            if not stripped_name:
                 raise ValueError("account_base_names entries must be non-empty")
+            if _AUTH_NOISE_ACCOUNT_NAME_RE.fullmatch(stripped_name) is None:
+                raise ValueError(
+                    "account_base_names entries must match scenario username syntax "
+                    "^[a-zA-Z0-9._$-]+$"
+                )
         return v
 
     @model_validator(mode="after")

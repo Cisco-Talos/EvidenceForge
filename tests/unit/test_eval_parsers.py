@@ -210,6 +210,23 @@ class TestSyslogParser:
         records = list(parser.parse_file(GOOD_FIXTURES / "syslog.log"))
         assert all(r.timestamp is not None for r in records)
 
+    def test_long_rfc5424_version_is_parse_error_not_crash(self, tmp_path):
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log = tmp_path / "syslog.log"
+        long_version = "1" * 5000
+        log.write_text(
+            f"<34>{long_version} 2026-03-18T12:00:00Z host app 123 ID47 - message\n",
+            encoding="utf-8",
+        )
+
+        parser = SyslogParser()
+        records = list(parser.parse_file(log))
+
+        assert len(records) == 1
+        assert records[0].fields == {}
+        assert records[0].parse_errors == ["Line does not match RFC 5424 or legacy syslog format"]
+
     def test_scenario_year_overrides_mtime(self, tmp_path):
         """Scenario time_window.start year wins over file mtime year."""
         from types import SimpleNamespace

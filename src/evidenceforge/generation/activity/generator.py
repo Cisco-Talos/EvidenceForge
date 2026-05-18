@@ -130,6 +130,7 @@ _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
     }
 )
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_USER_MODEL_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
     "mysql",
@@ -317,10 +318,14 @@ def _extract_nmap_ports(command_line: str) -> list[int]:
 
 
 def _extract_http_url_from_command(command_line: str) -> str | None:
-    """Return the first HTTP(S) URL embedded in a process command line."""
+    """Return the first valid HTTP(S) URL embedded in a process command line."""
     for match in re.finditer(r"https?://[^\s'\"<>]+", command_line):
         candidate = match.group(0).rstrip(").,;]")
-        parsed = urlsplit(candidate)
+        try:
+            parsed = urlsplit(candidate)
+            _ = parsed.port
+        except ValueError:
+            continue
         if parsed.scheme in {"http", "https"} and parsed.hostname:
             return candidate
     return None
@@ -379,12 +384,15 @@ def _http_context_from_process_command(
     http_url = _extract_http_url_from_command(command_line)
     if not http_url:
         return None
-    parsed = urlsplit(http_url)
-    host = parsed.hostname or ""
-    if not host:
+    try:
+        parsed = urlsplit(http_url)
+        host = parsed.hostname or ""
+        if not host:
+            return None
+        service = "ssl" if parsed.scheme == "https" else "http"
+        port = parsed.port or (443 if service == "ssl" else 80)
+    except ValueError:
         return None
-    service = "ssl" if parsed.scheme == "https" else "http"
-    port = parsed.port or (443 if service == "ssl" else 80)
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
@@ -1517,10 +1525,9 @@ def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
 
 def _render_public_dns_answer(template: str, domain: str) -> str:
     """Render a public DNS answer template using source-owned domain tokens."""
-    return template.format(
-        domain=domain,
-        domain_hyphen=domain.replace(".", "-"),
-    )
+    from evidenceforge.config.public_dns_templates import render_public_dns_answer_template
+
+    return render_public_dns_answer_template(template, domain)
 
 
 def _public_dns_answer_set(kind: str, domain: str) -> list[str]:
@@ -2205,7 +2212,7 @@ class ActivityGenerator:
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
-        self._terminated_process_keys: set[tuple[str, int]] = set()
+        self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
@@ -2231,6 +2238,20 @@ class ActivityGenerator:
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
         self._last_connection_effective_dst_ip = ""
+
+    def _process_termination_recorded(
+        self,
+        hostname: str,
+        pid: int,
+        start_time: datetime | None,
+    ) -> bool:
+        """Return whether a process instance termination was already generated."""
+        if start_time is None:
+            return any(
+                terminated_host == hostname and terminated_pid == pid
+                for terminated_host, terminated_pid, _ in self._terminated_process_keys
+            )
+        return (hostname, pid, start_time) in self._terminated_process_keys
 
     def _remember_foreground_process_finalizer(
         self,
@@ -2268,10 +2289,12 @@ class ActivityGenerator:
             logon_id,
             termination_time,
         ) in sorted(self._foreground_process_finalizers.items(), key=lambda item: item[1][4]):
-            if key in self._terminated_process_keys or termination_time > window_end:
+            if termination_time > window_end:
                 continue
             running = self.state_manager.get_process(system.hostname, key[1])
             if running is None:
+                continue
+            if self._process_termination_recorded(system.hostname, key[1], running.start_time):
                 continue
             process_user = known_users.get(username) or User(
                 username=username,
@@ -6060,11 +6083,14 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
-        termination_key = (system.hostname, pid)
-        if termination_key in self._terminated_process_keys:
+        running_proc = self.state_manager.get_process(system.hostname, pid)
+        if self._process_termination_recorded(
+            system.hostname,
+            pid,
+            running_proc.start_time if running_proc is not None else None,
+        ):
             return
 
-        running_proc = self.state_manager.get_process(system.hostname, pid)
         if (
             running_proc is not None
             and running_proc.last_activity_time is not None
@@ -6133,7 +6159,8 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
-        self._terminated_process_keys.add(termination_key)
+        termination_start_time = event.process.start_time if event.process is not None else None
+        self._terminated_process_keys.add((system.hostname, pid, termination_start_time))
 
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
@@ -8105,13 +8132,14 @@ class ActivityGenerator:
                 application=wfp_application,
             )
 
-        if (
-            pid > 0
-            and resolved_source_system is not None
-            and process_ctx is not None
-            and (resolved_source_system.hostname, pid) not in self._terminated_process_keys
-        ):
+        if pid > 0 and resolved_source_system is not None and process_ctx is not None:
             running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if self._process_termination_recorded(
+                resolved_source_system.hostname,
+                pid,
+                running.start_time if running is not None else None,
+            ):
+                return uid
             lifetime = (
                 self._foreground_process_lifetime_for_attribution(resolved_source_system, running)
                 if running is not None
@@ -10407,22 +10435,24 @@ class ActivityGenerator:
         if candidate and candidate.lower() not in _LINUX_LOCAL_ACCOUNTS:
             if candidate in known_users:
                 return known_users[candidate]
-            return User(
-                username=candidate,
-                full_name=candidate,
-                email=f"{candidate}@{self._valid_fallback_email_domain()}",
-            )
+            if _USER_MODEL_USERNAME_RE.fullmatch(candidate):
+                return User(
+                    username=candidate,
+                    full_name=candidate,
+                    email=f"{candidate}@{self._valid_fallback_email_domain()}",
+                )
 
         assigned_user = getattr(system, "assigned_user", "")
         if assigned_user:
             assigned = known_users.get(assigned_user)
             if assigned is not None:
                 return assigned
-            return User(
-                username=assigned_user,
-                full_name=assigned_user,
-                email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
-            )
+            if _USER_MODEL_USERNAME_RE.fullmatch(assigned_user):
+                return User(
+                    username=assigned_user,
+                    full_name=assigned_user,
+                    email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
+                )
         return User(
             username="Administrator",
             full_name="Administrator",
