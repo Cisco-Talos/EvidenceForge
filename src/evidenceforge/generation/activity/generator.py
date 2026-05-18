@@ -65,6 +65,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
+from evidenceforge.generation.activity.network_params import proxy_connect_status_message
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
@@ -6473,14 +6474,6 @@ class ActivityGenerator:
                 tunnel_status_code = proxy_context.tunnel_status_code
                 if tunnel_status_code is None:
                     tunnel_status_code = proxy_context.status_code
-                connect_status_messages = {
-                    200: "Connection Established",
-                    403: "Forbidden",
-                    407: "Proxy Authentication Required",
-                    502: "Bad Gateway",
-                    503: "Service Unavailable",
-                    504: "Gateway Timeout",
-                }
                 client_http = HttpContext(
                     method="CONNECT",
                     host=proxy_context.host,
@@ -6490,9 +6483,11 @@ class ActivityGenerator:
                     request_body_len=0,
                     response_body_len=0,
                     status_code=tunnel_status_code,
-                    status_msg=connect_status_messages.get(
+                    status_msg=proxy_connect_status_message(
                         tunnel_status_code,
-                        "Connection Established" if tunnel_status_code < 400 else "Proxy Error",
+                        proxy_context.host,
+                        proxy_context.user_agent,
+                        time,
                     ),
                     tags=[],
                 )
@@ -6562,8 +6557,11 @@ class ActivityGenerator:
                 proxy_context.time_taken = rng.randint(20, 1500)
                 proxy_context.tunnel_status_code = proxy_context.status_code
                 client_http.status_code = proxy_context.status_code
-                client_http.status_msg = (
-                    "Forbidden" if proxy_context.status_code == 403 else "Proxy Error"
+                client_http.status_msg = proxy_connect_status_message(
+                    proxy_context.status_code,
+                    proxy_context.host,
+                    proxy_context.user_agent,
+                    time,
                 )
                 client_http.response_body_len = 0
 

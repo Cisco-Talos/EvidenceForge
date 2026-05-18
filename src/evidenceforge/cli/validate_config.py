@@ -210,7 +210,11 @@ def validate_config() -> ValidationResult:
                 "public_ntp_servers": "name",
                 "dns_tunnel_ttl_choices": None,
             },
-            "dict_fields": {"dns_tunnel_rtt", "dns_tunnel_rcode_weights"},
+            "dict_fields": {
+                "dns_tunnel_rtt",
+                "dns_tunnel_rcode_weights",
+                "proxy_connect_status_messages",
+            },
             "string_list_fields": {"dns_tunnel_response_templates"},
         },
         "activity/windows_auth_realism.yaml": {
@@ -2209,6 +2213,60 @@ def validate_config() -> ValidationResult:
                         "response-code weights must have a positive finite total",
                     )
                 )
+        proxy_status_messages = net_params.get("proxy_connect_status_messages", {})
+        if not isinstance(proxy_status_messages, dict) or not proxy_status_messages:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (proxy_connect_status_messages)",
+                    "proxy_connect_status_messages must be a non-empty mapping",
+                )
+            )
+        else:
+            for status_code, messages in proxy_status_messages.items():
+                try:
+                    numeric_status = int(status_code)
+                except (TypeError, ValueError):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"status code '{status_code}' must be an integer",
+                        )
+                    )
+                    continue
+                if numeric_status < 100 or numeric_status > 599:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"status code '{status_code}' must be between 100 and 599",
+                        )
+                    )
+                    continue
+                if isinstance(messages, str):
+                    message_list = [messages]
+                elif isinstance(messages, list):
+                    message_list = messages
+                else:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"messages for status {numeric_status} must be a string or list",
+                        )
+                    )
+                    continue
+                if not message_list or not all(
+                    isinstance(message, str) and message.strip() for message in message_list
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"messages for status {numeric_status} must be non-empty strings",
+                        )
+                    )
 
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:

@@ -1828,6 +1828,60 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.status_code == 403
         assert not emitters["zeek_ssl"].emit.called
 
+    def test_failed_connect_status_messages_are_status_specific(self):
+        from evidenceforge.generation.activity.network_params import proxy_connect_status_messages
+
+        configured_messages = proxy_connect_status_messages()
+        for status_code in (407, 502, 503, 504):
+            generator, emitters = _generator(
+                [
+                    NetworkSensor(
+                        type="network",
+                        name="both-sides",
+                        monitoring_segments=["workstations", "dmz"],
+                        direction="bidirectional",
+                        log_formats=["zeek"],
+                    )
+                ]
+            )
+            cache_result = "AUTH_REQUIRED" if status_code == 407 else "GATEWAY_ERROR"
+
+            generator.generate_connection(
+                src_ip="10.0.1.10",
+                dst_ip="93.184.216.34",
+                time=datetime(2024, 1, 15, 10, status_code % 60, 0, tzinfo=UTC),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=5000,
+                source_system=generator._ip_to_system["10.0.1.10"],
+                hostname="example.com",
+                conn_state="SF",
+                proxy=ProxyContext(
+                    client_ip="10.0.1.10",
+                    method="CONNECT",
+                    url="example.com:443",
+                    host="example.com",
+                    status_code=status_code,
+                    sc_bytes=700,
+                    cs_bytes=320,
+                    time_taken=250,
+                    user_agent="Mozilla/5.0",
+                    content_type="text/html",
+                    cache_result=cache_result,
+                    referrer="-",
+                    proxy_fqdn="PROXY-01.example.org",
+                ),
+            )
+
+            http_event = emitters["zeek_http"].emit.call_args.args[0]
+            assert http_event.http.status_code == status_code
+            assert http_event.http.status_msg in configured_messages[status_code]
+            assert http_event.http.status_msg != "Proxy Error"
+            assert not emitters["zeek_ssl"].emit.called
+
     def test_port_only_web_connection_resolves_origin_from_proxy(self):
         generator, emitters = _generator(
             [

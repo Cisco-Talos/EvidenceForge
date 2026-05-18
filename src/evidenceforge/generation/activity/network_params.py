@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import extend_list, load_with_overlay
 from evidenceforge.config.schemas import DnsTunnelRttConfig
+from evidenceforge.utils.rng import _stable_seed
 
 _CACHED_DATA: dict[str, Any] | None = None
 _DEFAULT_DNS_TUNNEL_TTL_CHOICES: list[tuple[int, float]] = [
@@ -29,6 +30,14 @@ _DEFAULT_DNS_TUNNEL_TTL_CHOICES: list[tuple[int, float]] = [
     (45, 2.0),
     (60, 2.0),
 ]
+_DEFAULT_PROXY_CONNECT_STATUS_MESSAGES: dict[int, list[str]] = {
+    200: ["Connection Established"],
+    403: ["Forbidden"],
+    407: ["Proxy Authentication Required"],
+    502: ["Bad Gateway"],
+    503: ["Service Unavailable"],
+    504: ["Gateway Timeout"],
+}
 
 
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -56,6 +65,10 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         )
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
+    if isinstance(overlay.get("proxy_connect_status_messages"), dict):
+        merged_messages = dict(default.get("proxy_connect_status_messages", {}))
+        merged_messages.update(overlay["proxy_connect_status_messages"])
+        result["proxy_connect_status_messages"] = merged_messages
     return result
 
 
@@ -172,3 +185,50 @@ def dns_tunnel_rcode_weights() -> dict[str, float]:
 
     max_weight = max(cleaned.values())
     return {name: weight / max_weight for name, weight in cleaned.items()}
+
+
+def proxy_connect_status_messages() -> dict[int, list[str]]:
+    """Return configured proxy CONNECT status message choices by status code."""
+    raw_messages = load_network_params().get("proxy_connect_status_messages", {})
+    if not isinstance(raw_messages, dict):
+        return dict(_DEFAULT_PROXY_CONNECT_STATUS_MESSAGES)
+
+    cleaned: dict[int, list[str]] = {}
+    for raw_code, raw_values in raw_messages.items():
+        try:
+            code = int(raw_code)
+        except (TypeError, ValueError):
+            continue
+        if code < 100 or code > 599:
+            continue
+        if isinstance(raw_values, str):
+            values = [raw_values]
+        elif isinstance(raw_values, list):
+            values = raw_values
+        else:
+            continue
+        messages = [str(value).strip() for value in values if isinstance(value, str) and value]
+        if messages:
+            cleaned[code] = messages
+
+    result = dict(_DEFAULT_PROXY_CONNECT_STATUS_MESSAGES)
+    result.update(cleaned)
+    return result
+
+
+def proxy_connect_status_message(status_code: int, *seed_parts: object) -> str:
+    """Return a deterministic source-native CONNECT status message."""
+    try:
+        code = int(status_code)
+    except (TypeError, ValueError):
+        return "Proxy Error"
+
+    messages = proxy_connect_status_messages().get(code)
+    if not messages:
+        return "Connection Established" if code < 400 else "Proxy Error"
+    if len(messages) == 1:
+        return messages[0]
+    seed = _stable_seed(
+        "proxy_connect_status:" + "|".join(str(part) for part in (code, *seed_parts))
+    )
+    return messages[seed % len(messages)]

@@ -614,6 +614,31 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_proxy_connect_status_messages_are_loaded_from_network_params_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """Proxy CONNECT status text should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            proxy_connect_status_message,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"proxy_connect_status_messages": {407: ["Custom Proxy Auth Required"]}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert proxy_connect_status_message(407, "example.com") == "Custom Proxy Auth Required"
+            assert proxy_connect_status_message(502, "example.com") != "Proxy Error"
+        finally:
+            reset_network_params_cache()
+
     def test_dns_tunnel_rcode_weights_normalize_overflowing_overlay_total(
         self, tmp_path, monkeypatch
     ):
