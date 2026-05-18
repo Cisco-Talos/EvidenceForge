@@ -29,6 +29,7 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext, ProcessContext
+from evidenceforge.generation import state_manager as state_manager_module
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.exceptions import StateError
 
@@ -339,6 +340,33 @@ class TestSessionManagement:
         ids = [sm.create_session(f"user{i}", f"WS-{i:02d}", 3, f"192.168.1.{i}") for i in range(20)]
 
         assert len(set(ids)) == len(ids)
+
+    def test_create_session_supports_more_than_legacy_host_bucket_count(self):
+        """Large scenarios should not exhaust Windows LogonID host ranges."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        ids = [
+            sm.create_session(f"user{i}", f"WS-{i:03d}", 3, f"192.168.{i // 255}.{i % 255}")
+            for i in range(300)
+        ]
+
+        assert len(ids) == 300
+        assert len(set(ids)) == len(ids)
+        assert len(sm._logon_id_host_bases) == 300
+
+    def test_create_session_probes_unbounded_host_bucket_collision_layers(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Host bucket collisions should probe new high-order ranges without failing."""
+        monkeypatch.setattr(state_manager_module, "_stable_seed", lambda _key: 7)
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        ids = [sm.create_session(f"user{i}", f"WS-{i:03d}", 3, f"192.168.1.{i}") for i in range(3)]
+
+        assert len(set(ids)) == 3
+        assert len(set(sm._logon_id_host_bases.values())) == 3
 
     def test_register_session_marks_external_logon_id_used(self):
         """Externally registered sessions should reserve their LogonID value."""
