@@ -50,6 +50,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Harden storyline authored-IP lookup against repeated full-storyline scans by indexing hostname mappings once per generation run; preserved authored DNS/connection IP behavior and added regression coverage proving repeated lookups do not rescan scenario specs.
 - [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.

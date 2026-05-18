@@ -109,6 +109,39 @@ class TestStorylineCommandNetworks:
             "45.33.32.30"
         )
 
+    def test_storyline_authored_ip_for_hostname_caches_storyline_scan(self):
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    events=[
+                        SimpleNamespace(type="dns_query", query="one.example", answer="192.0.2.10"),
+                        SimpleNamespace(
+                            type="connection", hostname="two.example", dst_ip="192.0.2.20"
+                        ),
+                        SimpleNamespace(
+                            type="dns_query", query="three.example", answer="192.0.2.30"
+                        ),
+                    ]
+                )
+            ]
+        )
+        field_reads = 0
+
+        def counting_storyline_spec_value(spec: Any, field_name: str) -> Any:
+            nonlocal field_reads
+            field_reads += 1
+            return StorylineMixin._storyline_spec_value(spec, field_name)
+
+        engine._storyline_spec_value = counting_storyline_spec_value
+
+        assert engine._storyline_authored_ip_for_hostname("missing.example") is None
+        assert field_reads == 12
+
+        assert engine._storyline_authored_ip_for_hostname("still-missing.example") is None
+        assert engine._storyline_authored_ip_for_hostname("two.example") == "192.0.2.20"
+        assert field_reads == 12
+
 
 class _FakeActivityGenerator:
     def __init__(self) -> None:

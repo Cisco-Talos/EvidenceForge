@@ -59,6 +59,8 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
+_IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
 
 def _is_exfil_connection_spec(spec: Any) -> bool:
     """Return True when a storyline connection describes exfiltration."""
@@ -3842,7 +3844,7 @@ class StorylineMixin:
     def _resolve_storyline_network_target(self, target: str) -> str | None:
         """Resolve a storyline command target host/IP to an environment IP when possible."""
         lowered = target.rstrip(".").lower()
-        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", lowered):
+        if _IPV4_LITERAL_RE.fullmatch(lowered):
             return target
         ad_domain = getattr(self, "_ad_domain", "")
         for system in self.scenario.environment.systems:
@@ -3859,28 +3861,48 @@ class StorylineMixin:
     def _storyline_authored_ip_for_hostname(self, hostname: str) -> str | None:
         """Return an explicit storyline IP for an external hostname when one exists."""
         lowered = hostname.rstrip(".").lower()
+        return self._storyline_authored_ip_index().get(lowered)
+
+    def _storyline_authored_ip_index(self) -> dict[str, str]:
+        """Build a cached hostname-to-authored-IP index from storyline specs."""
+        cached = getattr(self, "_storyline_authored_ip_by_hostname", None)
+        if cached is not None:
+            return cached
+
+        authored_ips: dict[str, str] = {}
         for story_event in getattr(self.scenario, "storyline", []):
             for spec in getattr(story_event, "events", []):
                 event_hostname = self._storyline_spec_value(spec, "hostname")
                 dst_ip = self._storyline_spec_value(spec, "dst_ip")
-                if (
-                    event_hostname
-                    and str(event_hostname).rstrip(".").lower() == lowered
-                    and isinstance(dst_ip, str)
-                    and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", dst_ip)
-                ):
-                    return dst_ip
+                self._record_storyline_authored_ip(
+                    authored_ips,
+                    hostname=event_hostname,
+                    ip=dst_ip,
+                )
 
                 query = self._storyline_spec_value(spec, "query")
                 answer = self._storyline_spec_value(spec, "answer")
-                if (
-                    query
-                    and str(query).rstrip(".").lower() == lowered
-                    and isinstance(answer, str)
-                    and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", answer)
-                ):
-                    return answer
-        return None
+                self._record_storyline_authored_ip(
+                    authored_ips,
+                    hostname=query,
+                    ip=answer,
+                )
+
+        self._storyline_authored_ip_by_hostname = authored_ips
+        return authored_ips
+
+    @staticmethod
+    def _record_storyline_authored_ip(
+        authored_ips: dict[str, str],
+        *,
+        hostname: Any,
+        ip: Any,
+    ) -> None:
+        """Record the first valid authored IP for a normalized storyline hostname."""
+        if not hostname or not isinstance(ip, str) or not _IPV4_LITERAL_RE.fullmatch(ip):
+            return
+        lowered = str(hostname).rstrip(".").lower()
+        authored_ips.setdefault(lowered, ip)
 
     @staticmethod
     def _storyline_spec_value(spec: Any, field_name: str) -> Any:
