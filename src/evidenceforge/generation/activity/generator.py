@@ -79,7 +79,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
-from evidenceforge.models.state import ActiveSession
+from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -5126,7 +5126,7 @@ class ActivityGenerator:
         requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         preferred_key = (system.hostname, username, logon_id)
         preferred_exe = self._preferred_browser_by_session.get(preferred_key)
-        candidates = []
+        candidates: list[RunningProcess] = []
         for proc in self.state_manager.get_processes_on_system(system.hostname):
             if proc.username != username:
                 continue
@@ -8706,6 +8706,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        self.state_manager.set_current_time(time)
         if _get_os_category(system.os) == "windows":
             process_name, command_line = _windows_script_host_process(
                 process_name,
@@ -8740,10 +8741,14 @@ class ActivityGenerator:
                 allow_existing_browser_reuse=False,
             )
 
-        if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:
-            for proc in self.state_manager.get_processes_on_system(system.hostname):
-                if ntpath.basename(proc.image).lower() == exe_name:
-                    return proc.pid
+        singleton_service_pid = self._existing_windows_singleton_service_pid(
+            system=system,
+            process_name=process_name,
+            time=time,
+            username=username,
+        )
+        if singleton_service_pid is not None:
+            return singleton_service_pid
 
         pid = self.state_manager.create_process(
             system=system.hostname,
@@ -12401,6 +12406,46 @@ class ActivityGenerator:
         """Get a seeded system process PID by role name."""
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
+
+    def _existing_windows_singleton_service_pid(
+        self,
+        system: System,
+        process_name: str,
+        time: datetime,
+        username: str,
+    ) -> int | None:
+        """Return an active canonical Windows service singleton PID when one exists."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
+        exe_name = normalized_path.rsplit("\\", 1)[-1]
+        if exe_name not in _WINDOWS_SINGLETON_SERVICE_EXES:
+            return None
+
+        canonical_path = f"c:\\windows\\system32\\{exe_name}"
+        if "\\" in normalized_path and normalized_path != canonical_path:
+            return None
+
+        normalized_username = username.upper()
+        candidates: list[RunningProcess] = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_path = ntpath.normpath(proc.image.replace("/", "\\")).lower()
+            if proc_path != canonical_path:
+                continue
+            if proc.username.upper() != normalized_username:
+                continue
+            if proc.start_time > time:
+                continue
+            parent = self.state_manager.get_process(system.hostname, proc.parent_pid)
+            parent_image = parent.image if parent else ""
+            if ntpath.basename(parent_image).lower() != "services.exe":
+                continue
+            candidates.append(proc)
+
+        if not candidates:
+            return None
+        return max(candidates, key=lambda proc: proc.start_time).pid
 
     def _existing_windows_singleton_pid(
         self,
