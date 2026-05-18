@@ -424,6 +424,60 @@ class TestStorylineScpCorrelation:
         assert conn["hostname"] == "cdn-assets-update.com"
         assert conn["preserve_dst_ip"] is True
 
+    def test_connection_ground_truth_uses_generator_effective_destination(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 10",
+            type="workstation",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.activity_generator._last_connection_effective_dst_ip = "23.45.158.140"
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="connection",
+            source_ip=None,
+            dst_ip="93.184.216.34",
+            dst_port=443,
+            service="ssl",
+            orig_bytes=None,
+            resp_bytes=None,
+            method=None,
+            uri=None,
+            response_body_len=None,
+            description=None,
+            technique=None,
+            user_agent=None,
+            status_code=None,
+            referrer=None,
+            hostname="attacker-validated.example.net",
+            conn_state=None,
+        )
+
+        event = engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="connect to C2",
+            explicit_types={"connection"},
+        )
+
+        assert event is not None
+        assert event["dst_ip"] == "23.45.158.140"
+        assert event["uid"] == "Cscptransfer00001"
+        assert engine.activity_generator.connections[0]["dst_ip"] == "93.184.216.34"
+
     def test_recent_psexesvc_service_runs_follow_on_commands_as_system(self):
         source = System(
             hostname="DC-01",

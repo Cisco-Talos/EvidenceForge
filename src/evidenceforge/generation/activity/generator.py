@@ -2163,6 +2163,7 @@ class ActivityGenerator:
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
+        self._last_connection_effective_dst_ip = ""
 
     def _remember_foreground_process_finalizer(
         self,
@@ -6267,6 +6268,8 @@ class ActivityGenerator:
                 purpose_tags=("web", "saas", "background"),
             )
 
+        self._last_connection_effective_dst_ip = dst_ip
+
         tls_hostname = hostname
         if hostname_from_reverse_dns and not emit_dns and dns is None and http is None:
             # A PTR/reverse-DNS-style fallback is useful for proxy URL rendering
@@ -6854,6 +6857,7 @@ class ActivityGenerator:
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
             last_query = self._dns_cache.get(dns_cache_key, 0)
             if last_query and ts_epoch - last_query < cache_ttl:
+                self._last_connection_effective_dst_ip = dst_ip
                 return ""
             self._dns_cache[dns_cache_key] = ts_epoch
 
@@ -6862,6 +6866,8 @@ class ActivityGenerator:
         if resolved_source_system:
             state_source_hostname = self._build_host_context(resolved_source_system).fqdn
         close_time = time + timedelta(seconds=duration) if duration is not None else None
+
+        self._last_connection_effective_dst_ip = dst_ip
 
         # Phase 1: Allocate IDs from StateManager
         conn_id = self.state_manager.open_connection(

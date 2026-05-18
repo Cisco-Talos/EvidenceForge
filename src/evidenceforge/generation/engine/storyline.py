@@ -1913,9 +1913,14 @@ class StorylineMixin:
                 hostname=conn_hostname,
                 preserve_dst_ip=bool(spec.hostname),
             )
-            malicious_event["dst_ip"] = dst_ip
+            logged_dst_ip = getattr(
+                self.activity_generator,
+                "_last_connection_effective_dst_ip",
+                effective_dst_ip,
+            )
+            malicious_event["dst_ip"] = logged_dst_ip
             malicious_event["dst_port"] = dst_port
-            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, effective_dst_ip)
+            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, logged_dst_ip)
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
