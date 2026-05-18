@@ -244,6 +244,51 @@ class TestPerSensorDirectoryRouting:
             assert len(set(offsets)) > 30
             assert max(abs(offset) for offset in offsets) <= 0.005
 
+    def test_second_sensor_observation_skips_huge_numeric_jitter(self):
+        """Huge raw numeric counters should not crash multi-sensor Zeek jitter."""
+        fmt = load_format("zeek_conn")
+        huge_value = 10**400
+        huge_ip_bytes = huge_value * 41
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHuge1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "proto": "tcp",
+                    "duration": huge_value,
+                    "orig_bytes": huge_value,
+                    "resp_bytes": huge_value,
+                    "orig_pkts": huge_value,
+                    "resp_pkts": huge_value,
+                    "orig_ip_bytes": huge_ip_bytes,
+                    "resp_ip_bytes": huge_ip_bytes,
+                    "conn_state": "SF",
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert core["uid"] != dmz["uid"]
+            for row in (core, dmz):
+                assert row["duration"] == huge_value
+                assert row["orig_bytes"] == huge_value
+                assert row["resp_bytes"] == huge_value
+                assert row["orig_pkts"] == huge_value
+                assert row["resp_pkts"] == huge_value
+                assert row["orig_ip_bytes"] == huge_ip_bytes
+                assert row["resp_ip_bytes"] == huge_ip_bytes
+
     def test_second_sensor_observation_preserves_http_body_lengths(self):
         """HTTP body sizes are transaction facts, not per-sensor packet-counter jitter."""
         fmt = load_format("zeek_http")
