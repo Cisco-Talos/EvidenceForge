@@ -3,6 +3,8 @@
 
 """Tests for the machine-readable observation manifest sidecar."""
 
+import pytest
+
 from evidenceforge.events.observation_manifest import (
     OBSERVATION_MANIFEST_FILENAME,
     build_observation_manifest,
@@ -108,3 +110,23 @@ def test_load_manifest_finds_scenario_root_from_data_dir(tmp_path) -> None:
 
     assert loaded is not None
     assert loaded.storyline_events[0].source_status == {"windows_security": {"dropped": 1}}
+
+
+def test_write_manifest_rejects_dangling_symlink(tmp_path) -> None:
+    """Manifest writes should not follow dangling sidecar symlinks."""
+    output_path = tmp_path / OBSERVATION_MANIFEST_FILENAME
+    outside_target = tmp_path / "outside-manifest.json"
+    try:
+        output_path.symlink_to(outside_target)
+    except OSError as exc:
+        pytest.skip(f"Symlink creation unsupported in this environment: {exc}")
+
+    with pytest.raises(PermissionError):
+        write_observation_manifest(
+            output_path,
+            _scenario(),
+            {"step-001": {"windows_security": {"visible": 1}}},
+        )
+
+    assert output_path.is_symlink()
+    assert not outside_target.exists()
