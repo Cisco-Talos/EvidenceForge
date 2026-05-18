@@ -59,6 +59,8 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
+_MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
+
 
 def _is_exfil_connection_spec(spec: Any) -> bool:
     """Return True when a storyline connection describes exfiltration."""
@@ -3787,12 +3789,14 @@ class StorylineMixin:
             command_line,
         )
         if shell_b64_match:
-            try:
-                decoded = base64.b64decode(shell_b64_match.group(1), validate=True).decode("utf-8")
-            except (binascii.Error, UnicodeDecodeError, ValueError):
-                decoded = ""
-            if decoded and decoded not in texts:
-                texts.append(decoded)
+            token = shell_b64_match.group(1)
+            if len(token) <= _MAX_EMBEDDED_COMMAND_B64_CHARS:
+                try:
+                    decoded = base64.b64decode(token, validate=True).decode("utf-8")
+                except (binascii.Error, UnicodeDecodeError, ValueError):
+                    decoded = ""
+                if decoded and decoded not in texts:
+                    texts.append(decoded)
         encoded_match = re.search(
             r"(?i)(?:-|/)(?:encodedcommand|enc|e)\s+([A-Za-z0-9+/=]+)",
             command_line,
@@ -3801,6 +3805,9 @@ class StorylineMixin:
             return texts
 
         token = encoded_match.group(1)
+        if len(token) > _MAX_EMBEDDED_COMMAND_B64_CHARS:
+            return texts
+
         try:
             decoded_bytes = base64.b64decode(token, validate=True)
         except (binascii.Error, ValueError):

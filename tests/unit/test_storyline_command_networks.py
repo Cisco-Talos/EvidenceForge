@@ -30,6 +30,34 @@ class TestStorylineCommandNetworks:
 
         assert url == "https://cdn.example.test/stage.ps1"
 
+    def test_extract_http_url_skips_oversized_encoded_command(self, monkeypatch):
+        def fail_b64decode(*args: Any, **kwargs: Any) -> bytes:
+            raise AssertionError("oversized EncodedCommand token should not be decoded")
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.engine.storyline.base64.b64decode",
+            fail_b64decode,
+        )
+        command = "powershell.exe -EncodedCommand " + ("A" * 20_000)
+
+        url = StorylineMixin._extract_http_url(command)
+
+        assert url is None
+
+    def test_extract_http_url_skips_oversized_shell_base64_decode(self, monkeypatch):
+        def fail_b64decode(*args: Any, **kwargs: Any) -> bytes:
+            raise AssertionError("oversized shell base64 token should not be decoded")
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.engine.storyline.base64.b64decode",
+            fail_b64decode,
+        )
+        command = "printf '" + ("A" * 20_000) + "' | base64 -d"
+
+        url = StorylineMixin._extract_http_url(command)
+
+        assert url is None
+
     def test_parse_http_url_target_accepts_valid_url(self):
         target = StorylineMixin._parse_http_url_target("https://cdn.example.test:8443/stage.ps1")
 
