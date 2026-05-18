@@ -9,9 +9,57 @@ from evidenceforge.generation.activity.site_maps import (
     PageDef,
     SiteMap,
     SubresourceDef,
+    _replace_hex_tokens,
     get_site_map,
     load_site_maps,
 )
+
+
+class TestHexTokenReplacement:
+    """Verify hex-token substitution remains bounded for overlay-controlled paths."""
+
+    def test_replaces_many_hex_tokens_without_quadratic_loop(self):
+        rng = random.Random(42)
+        path = "/asset/" + "{hex8}" * 2048 + "/" + "{hex16}" * 2048
+
+        replaced = _replace_hex_tokens(
+            rng,
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=False,
+        )
+
+        assert "{hex8}" not in replaced
+        assert "{hex16}" not in replaced
+        assert len(replaced) == len("/asset//") + (2048 * 8) + (2048 * 16)
+
+    def test_stable_hex_tokens_preserve_per_occurrence_values(self):
+        rng = random.Random(42)
+        path = "/assets/app.{hex8}.{hex8}.{hex16}.js"
+
+        replaced_one = _replace_hex_tokens(
+            rng,
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=True,
+        )
+        replaced_two = _replace_hex_tokens(
+            random.Random(999),
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=True,
+        )
+
+        assert replaced_one == replaced_two
+        assert "{hex" not in replaced_one
+        segments = replaced_one.rsplit("/", 1)[1].split(".")
+        assert len(segments[1]) == 8
+        assert len(segments[2]) == 8
+        assert segments[1] != segments[2]
+        assert len(segments[3]) == 16
 
 
 class TestLoadSiteMaps:
