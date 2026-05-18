@@ -30,7 +30,7 @@ from pathlib import Path
 from . import LogParser, ParsedRecord, register_parser
 
 RFC5424_PATTERN = re.compile(
-    r"^<(?P<pri>\d{1,3})>(?P<version>\d+)\s+"
+    r"^<(?P<pri>\d{1,3})>(?P<version>1)\s+"
     r"(?P<timestamp>\S+)\s+"
     r"(?P<hostname>\S+)\s+"
     r"(?P<app_name>\S+)\s+"
