@@ -1974,6 +1974,50 @@ class TestWindowsEventEmitter:
         assert len(session_lines) == 2
         assert session_lines[0] == session_lines[1]
 
+    def test_duplicate_unlock_suppression_handles_many_paired_type7_logons(
+        self, format_def, temp_output
+    ):
+        """Duplicate unlock suppression should drop paired type 7 logons at scale."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = "WKS-01.corp.local"
+        logon_id = "0x4f2a1b"
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event_count = 400
+        events = [
+            {
+                "EventID": 4801,
+                "TimeCreated": base,
+                "Computer": host,
+                "TargetLogonId": logon_id,
+                "SessionId": 2,
+            },
+        ]
+        for offset in range(1, event_count):
+            unlock_time = base + timedelta(seconds=offset * 3)
+            events.extend(
+                [
+                    {
+                        "EventID": 4801,
+                        "TimeCreated": unlock_time,
+                        "Computer": host,
+                        "TargetLogonId": logon_id,
+                        "SessionId": 2,
+                    },
+                    {
+                        "EventID": 4624,
+                        "TimeCreated": unlock_time + timedelta(milliseconds=50),
+                        "Computer": host,
+                        "TargetLogonId": logon_id,
+                        "LogonType": 7,
+                    },
+                ]
+            )
+        emitter._event_dicts = events
+
+        emitter._suppress_duplicate_lock_unlock_transitions()
+
+        assert emitter._event_dicts == [events[0]]
+
     def test_duplicate_lock_unlock_state_transitions_are_suppressed(self, format_def, temp_output):
         """Security 4800/4801 should alternate chronologically for a session."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)

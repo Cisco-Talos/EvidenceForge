@@ -33,6 +33,7 @@ import os
 import random
 import sqlite3
 import tempfile
+from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
@@ -73,6 +74,32 @@ _WFP_FILTER_BUCKET_OFFSETS = {
     "outbound_default": 20,
     "inbound_default": 21,
 }
+
+
+def _record_dropped_unlock(
+    dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]],
+    computer: str,
+    logon_id: str,
+    unlock_ts: datetime,
+) -> None:
+    """Index a suppressed unlock for efficient LogonType 7 pairing."""
+    dropped_unlocks_by_session.setdefault((computer, logon_id), []).append(unlock_ts)
+
+
+def _has_nearby_dropped_unlock(
+    dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]],
+    computer: str,
+    logon_id: str,
+    logon_ts: datetime,
+) -> bool:
+    """Return whether a type 7 logon is paired to a suppressed duplicate unlock."""
+    unlock_times = dropped_unlocks_by_session.get((computer, logon_id))
+    if not unlock_times:
+        return False
+    normalized_ts = ensure_utc(logon_ts)
+    earliest_unlock_ts = normalized_ts - timedelta(seconds=2)
+    unlock_index = bisect_left(unlock_times, earliest_unlock_ts)
+    return unlock_index < len(unlock_times) and unlock_times[unlock_index] <= normalized_ts
 
 
 def _windows_path_basename(path: str) -> str:
@@ -1635,7 +1662,7 @@ class WindowsEventEmitter(LogEmitter):
         """Keep spooled 4800/4801 as a chronological session state machine."""
         session_state: dict[tuple[str, str, str], str] = {}
         dropped_rowids: set[int] = set()
-        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+        dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]] = {}
 
         for rowid, event in self._iter_spooled_rows_unlocked(ordered=True):
             event_id = event.get("EventID")
@@ -1654,7 +1681,9 @@ class WindowsEventEmitter(LogEmitter):
             if session_state.get(key) == next_state:
                 dropped_rowids.add(rowid)
                 if event_id == 4801:
-                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                    _record_dropped_unlock(
+                        dropped_unlocks_by_session, computer, logon_id, ensure_utc(ts)
+                    )
                 continue
             session_state[key] = next_state
 
@@ -1668,15 +1697,8 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             computer = str(event.get("Computer", ""))
             logon_id = str(event.get("TargetLogonId") or "")
-            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
-                delta = ensure_utc(ts) - unlock_ts
-                if (
-                    computer == drop_computer
-                    and logon_id == drop_logon_id
-                    and timedelta(0) <= delta <= timedelta(seconds=2)
-                ):
-                    dropped_rowids.add(rowid)
-                    break
+            if _has_nearby_dropped_unlock(dropped_unlocks_by_session, computer, logon_id, ts):
+                dropped_rowids.add(rowid)
 
         self._delete_spooled_events_unlocked(dropped_rowids)
 
@@ -1827,7 +1849,7 @@ class WindowsEventEmitter(LogEmitter):
 
         session_state: dict[tuple[str, str, str], str] = {}
         dropped_indexes: set[int] = set()
-        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+        dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]] = {}
 
         for index, event in sorted(enumerate(self._event_dicts), key=_sort_key):
             event_id = event.get("EventID")
@@ -1846,7 +1868,9 @@ class WindowsEventEmitter(LogEmitter):
             if session_state.get(key) == next_state:
                 dropped_indexes.add(index)
                 if event_id == 4801:
-                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                    _record_dropped_unlock(
+                        dropped_unlocks_by_session, computer, logon_id, ensure_utc(ts)
+                    )
                 continue
             session_state[key] = next_state
 
@@ -1860,22 +1884,15 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             computer = str(event.get("Computer", ""))
             logon_id = str(event.get("TargetLogonId") or "")
-            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
-                delta = ensure_utc(ts) - unlock_ts
-                if (
-                    computer == drop_computer
-                    and logon_id == drop_logon_id
-                    and timedelta(0) <= delta <= timedelta(seconds=2)
-                ):
-                    dropped_indexes.add(index)
-                    break
+            if _has_nearby_dropped_unlock(dropped_unlocks_by_session, computer, logon_id, ts):
+                dropped_indexes.add(index)
 
-            if dropped_indexes:
-                self._event_dicts = [
-                    event
-                    for index, event in enumerate(self._event_dicts)
-                    if index not in dropped_indexes
-                ]
+        if dropped_indexes:
+            self._event_dicts = [
+                event
+                for index, event in enumerate(self._event_dicts)
+                if index not in dropped_indexes
+            ]
 
     def _shift_process_creates_after_logons(self) -> None:
         """Prevent visible Security 4688 rows from preceding same-session 4624 rows."""
