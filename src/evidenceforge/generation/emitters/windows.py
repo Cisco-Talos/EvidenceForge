@@ -1870,12 +1870,12 @@ class WindowsEventEmitter(LogEmitter):
                     dropped_indexes.add(index)
                     break
 
-            if dropped_indexes:
-                self._event_dicts = [
-                    event
-                    for index, event in enumerate(self._event_dicts)
-                    if index not in dropped_indexes
-                ]
+        if dropped_indexes:
+            self._event_dicts = [
+                event
+                for index, event in enumerate(self._event_dicts)
+                if index not in dropped_indexes
+            ]
 
     def _shift_process_creates_after_logons(self) -> None:
         """Prevent visible Security 4688 rows from preceding same-session 4624 rows."""

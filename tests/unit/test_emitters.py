@@ -2025,6 +2025,52 @@ class TestWindowsEventEmitter:
             (4801, base + timedelta(minutes=20)),
         ]
 
+    def test_duplicate_lock_unlock_transitions_are_suppressed_without_type7_logon(
+        self, format_def, temp_output
+    ):
+        """Duplicate Security 4800/4801 rows should be removed without Type 7 logons."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = "WKS-01.corp.local"
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4800,
+                "TimeCreated": base,
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4800,
+                "TimeCreated": base + timedelta(minutes=5),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4801,
+                "TimeCreated": base + timedelta(minutes=20),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+            {
+                "EventID": 4801,
+                "TimeCreated": base + timedelta(minutes=25),
+                "Computer": host,
+                "TargetLogonId": "0x4f2a1b",
+                "SessionId": 2,
+            },
+        ]
+
+        emitter._suppress_duplicate_lock_unlock_transitions()
+
+        remaining = [(event["EventID"], event["TimeCreated"]) for event in emitter._event_dicts]
+        assert remaining == [
+            (4800, base),
+            (4801, base + timedelta(minutes=20)),
+        ]
+
     def test_spooled_duplicate_lock_unlock_state_transitions_are_suppressed(
         self, format_def, temp_output
     ):
