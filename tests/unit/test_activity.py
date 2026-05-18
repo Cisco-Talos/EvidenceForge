@@ -1952,6 +1952,55 @@ class TestActivityGenerator:
         assert all(event.network.src_ip == source.ip for event in network_events)
         assert all(event.network.dst_ip == target.ip for event in network_events)
 
+    def test_remote_service_network_evidence_caps_sequential_source_ports(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Sequential SMB/RPC evidence source ports should stay in the valid TCP range."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Admin",
+            email="alice@example.com",
+            primary_system=source.hostname,
+        )
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={source.hostname: source, target.hostname: target}
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+
+        with patch.object(generator_module, "_ephemeral_port", return_value=65535):
+            activity_gen.generate_service_installed(
+                user,
+                target,
+                timestamp,
+                service_name="PSEXESVC",
+                service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            )
+
+        remote_service_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.service in {"smb", "dce_rpc"}
+        ]
+        source_ports = [event.network.src_port for event in remote_service_events]
+
+        assert source_ports == [65534, 65535]
+        assert all(0 <= port <= 65535 for port in source_ports)
+
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

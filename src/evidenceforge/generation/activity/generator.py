@@ -10987,10 +10987,15 @@ class ActivityGenerator:
         if _get_os_category(target_system.os) != "windows":
             return
         rng = _get_rng()
-        base_src_port = _ephemeral_port(rng, _get_os_category(source_system.os))
         flow_specs = (
             (445, "smb", time - timedelta(milliseconds=rng.randint(1100, 1800))),
             (135, "dce_rpc", time - timedelta(milliseconds=rng.randint(350, 900))),
+        )
+        source_os = _get_os_category(source_system.os)
+        max_ephemeral_port = 60999 if source_os == "linux" else 65535
+        base_src_port = min(
+            _ephemeral_port(rng, source_os),
+            max_ephemeral_port - len(flow_specs) + 1,
         )
         for idx, (dst_port, service, flow_time) in enumerate(flow_specs):
             self.generate_connection(
