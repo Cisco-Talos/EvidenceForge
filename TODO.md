@@ -46,6 +46,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Remediate Windows singleton PID path traversal telemetry suppression — canonicalize Windows singleton paths with ntpath before seeded PID reuse and cover traversal variants with a unit test.
 - [x] Fix DNS tunnel label payload accounting so sequence metadata does not truncate counted exfiltration bytes.
 - [x] Fix actor-scoped LogonID inheritance for typed `log_cleared` storyline events.
+- [x] Automated PR Review & Merge run 2026-05-16 — reviewed open PR #163 against `dev`; found the underlying issues real but the branch needed two follow-up fixes before merge. Prepared and verified local amended commit `a0a3528`, but could not publish/comment/reject/merge because direct git push could not resolve GitHub and the GitHub write action was rejected.
+- [x] Automated PR Review & Merge follow-up 2026-05-16 — re-evaluated amended PR #163 (`044b097`) against `dev`; prior inbound web-session status issue is fixed, but CLI HTTP command parsing still treats `curl -sI` as GET and bare lowercase `curl -i` as HEAD, so the PR is not ready to merge. PR remains draft and also calls out a verified DB bash-history/eCAR timing mismatch as next work.
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
