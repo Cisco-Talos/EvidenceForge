@@ -67,4 +67,7 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
         self.emit_event(event_data)
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
-        return self._render_zeek_json(event_data)
+        render_data = dict(event_data)
+        render_data.setdefault("revoketime", None)
+        render_data.setdefault("revokereason", None)
+        return self._render_zeek_json(render_data)
