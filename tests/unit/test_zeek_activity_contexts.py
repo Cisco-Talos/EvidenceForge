@@ -473,7 +473,7 @@ class TestSslContextPopulation:
         messages = [event.syslog.message for event in syslog_events]
         times = [event.timestamp for event in syslog_events]
         assert messages == [
-            'Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22 rdomain ""',
+            "Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22",
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
