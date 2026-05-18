@@ -124,6 +124,24 @@ class TestProcessHttpCommandCorrelation:
         assert second_http.response_body_len == expected_size
         assert first_http.resp_mime_types == ["image/x-icon"]
 
+    @pytest.mark.parametrize(
+        "command_line",
+        [
+            "curl -s http://example.com:99999/payload",
+            "wget http://example.com:abc/payload",
+            "curl -s http://[not-a-valid-host/payload",
+        ],
+    )
+    def test_http_context_from_command_rejects_malformed_url_port(self, command_line):
+        """Malformed command-line URL ports should not abort HTTP context inference."""
+        result = _http_context_from_process_command(
+            "/usr/bin/curl",
+            command_line,
+            response_body_len=1234,
+        )
+
+        assert result is None
+
     def test_proxy_context_preserves_cli_http_user_agent(self):
         """Proxy logs should not replace a caller-provided CLI User-Agent."""
         generator = ActivityGenerator(StateManager(), {})
@@ -249,6 +267,51 @@ class TestProcessHttpCommandCorrelation:
         assert isinstance(http, HttpContext)
         assert http.user_agent == "curl/7.88.1"
         assert http.uri == "/methods/api.test"
+
+    def test_generate_connection_ignores_malformed_process_http_command(self):
+        """Attributed TCP connections should not crash on a malformed stored command URL."""
+        state = StateManager()
+        generator = ActivityGenerator(
+            state,
+            {},
+            dispatcher=EventDispatcher(state_manager=state, emitters={}),
+        )
+        source = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        generator._ip_to_system = {source.ip: source}
+
+        timestamp = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        state.set_current_time(timestamp)
+        pid = state.create_process(
+            system=source.hostname,
+            parent_pid=4,
+            image="/usr/bin/curl",
+            command_line="curl -s http://example.com:99999/payload",
+            username="sarah.martinez",
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+
+        uid = generator.generate_connection(
+            src_ip=source.ip,
+            dst_ip="203.0.113.20",
+            time=timestamp + timedelta(seconds=1),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=400,
+            resp_bytes=1200,
+            emit_dns=False,
+            pid=pid,
+            source_system=source,
+        )
+
+        assert uid.startswith("C")
 
 
 class TestNetworkValidation:
