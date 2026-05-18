@@ -2138,7 +2138,7 @@ class ActivityGenerator:
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
-        self._terminated_process_keys: set[tuple[str, int]] = set()
+        self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
@@ -2163,6 +2163,25 @@ class ActivityGenerator:
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
+
+    def _process_termination_recorded(
+        self,
+        hostname: str,
+        pid: int,
+        start_time: datetime | None,
+    ) -> bool:
+        """Return whether a process instance termination was already generated.
+
+        Windows PIDs can be reused after wraparound. De-duplication must therefore include
+        the process start time whenever a current process is available instead of treating
+        every later use of the same host/PID pair as already terminated.
+        """
+        if start_time is None:
+            return any(
+                terminated_host == hostname and terminated_pid == pid
+                for terminated_host, terminated_pid, _ in self._terminated_process_keys
+            )
+        return (hostname, pid, start_time) in self._terminated_process_keys
 
     def _remember_foreground_process_finalizer(
         self,
@@ -2200,10 +2219,12 @@ class ActivityGenerator:
             logon_id,
             termination_time,
         ) in sorted(self._foreground_process_finalizers.items(), key=lambda item: item[1][4]):
-            if key in self._terminated_process_keys or termination_time > window_end:
+            if termination_time > window_end:
                 continue
             running = self.state_manager.get_process(system.hostname, key[1])
             if running is None:
+                continue
+            if self._process_termination_recorded(system.hostname, key[1], running.start_time):
                 continue
             process_user = known_users.get(username) or User(
                 username=username,
@@ -5970,11 +5991,14 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
-        termination_key = (system.hostname, pid)
-        if termination_key in self._terminated_process_keys:
+        running_proc = self.state_manager.get_process(system.hostname, pid)
+        if self._process_termination_recorded(
+            system.hostname,
+            pid,
+            running_proc.start_time if running_proc is not None else None,
+        ):
             return
 
-        running_proc = self.state_manager.get_process(system.hostname, pid)
         if (
             running_proc is not None
             and running_proc.last_activity_time is not None
@@ -6043,7 +6067,8 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
-        self._terminated_process_keys.add(termination_key)
+        termination_start_time = event.process.start_time if event.process is not None else None
+        self._terminated_process_keys.add((system.hostname, pid, termination_start_time))
 
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
@@ -8008,13 +8033,14 @@ class ActivityGenerator:
                 application=wfp_application,
             )
 
-        if (
-            pid > 0
-            and resolved_source_system is not None
-            and process_ctx is not None
-            and (resolved_source_system.hostname, pid) not in self._terminated_process_keys
-        ):
+        if pid > 0 and resolved_source_system is not None and process_ctx is not None:
             running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if self._process_termination_recorded(
+                resolved_source_system.hostname,
+                pid,
+                running.start_time if running is not None else None,
+            ):
+                return uid
             lifetime = (
                 self._foreground_process_lifetime_for_attribution(resolved_source_system, running)
                 if running is not None
