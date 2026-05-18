@@ -13,6 +13,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.paths import safe_write_text
 from evidenceforge.utils.time import resolve_time_window
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ def write_observation_manifest(
 ) -> None:
     """Write OBSERVATION_MANIFEST.json next to GROUND_TRUTH.md."""
     manifest = build_observation_manifest(scenario, source_evidence_status)
-    output_path.write_text(manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    safe_write_text(output_path, manifest.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
 
 def find_observation_manifest(output_dir: Path) -> Path | None:

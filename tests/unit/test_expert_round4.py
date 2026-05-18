@@ -127,6 +127,27 @@ class TestPerUserToolAffinity:
 
         assert command in {"systemctl status mysql", "systemctl status sshd"}
 
+    def test_service_placeholder_ignores_recursive_host_service_names(self):
+        """Scenario services containing template markers must not recurse forever."""
+        command = _resolve_template(
+            "systemctl status {service}",
+            random.Random(42),
+            {"service": ["apache2"]},
+            ["{service}", "x{service}", "mysql"],
+        )
+
+        assert command == "systemctl status mysql"
+
+    def test_template_resolution_is_bounded_for_recursive_candidates(self):
+        """Replacement values with the current token should not trigger unbounded expansion."""
+        command = _resolve_template(
+            "echo {arg}",
+            random.Random(42),
+            {"arg": ["x{arg}"]},
+        )
+
+        assert command == "echo x{arg}"
+
 
 class TestPerUserBrowserAffinity:
     """P1-7c: Per-user browser affinity."""
