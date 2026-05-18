@@ -8,9 +8,9 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.time import resolve_time_window
@@ -18,6 +18,8 @@ from evidenceforge.utils.time import resolve_time_window
 logger = logging.getLogger(__name__)
 
 OBSERVATION_MANIFEST_FILENAME = "OBSERVATION_MANIFEST.json"
+MAX_OBSERVATION_MANIFEST_BYTES = 1_048_576
+_OBSERVATION_STATUSES = frozenset({"visible", "delayed", "dropped", "filtered", "out_of_window"})
 
 ObservationManifestKind = Literal["storyline", "red_herring"]
 ObservationStatusCounts = dict[str, dict[str, int]]
@@ -37,6 +39,20 @@ class ObservationManifestEvent(BaseModel):
     source_status: ObservationStatusCounts = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("source_status")
+    @classmethod
+    def validate_source_status(cls, value: ObservationStatusCounts) -> ObservationStatusCounts:
+        """Validate source observation status counters are known and non-negative."""
+        for source, statuses in value.items():
+            for status, count in statuses.items():
+                if status not in _OBSERVATION_STATUSES:
+                    raise ValueError(
+                        f"source_status[{source!r}] contains unknown status {status!r}"
+                    )
+                if count < 0:
+                    raise ValueError(f"source_status[{source!r}][{status!r}] must be non-negative")
+        return value
 
     @property
     def visible_or_delayed_count(self) -> int:
@@ -125,27 +141,96 @@ def write_observation_manifest(
 
 
 def find_observation_manifest(output_dir: Path) -> Path | None:
-    """Find an observation manifest for an eval output directory."""
+    """Find a trusted observation manifest for an eval output directory."""
+    output_root = output_dir.resolve()
+    allowed_parents = {output_root, output_root.parent}
     candidates = [
         output_dir / OBSERVATION_MANIFEST_FILENAME,
         output_dir.parent / OBSERVATION_MANIFEST_FILENAME,
     ]
     for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            return candidate
+        if candidate.is_symlink():
+            logger.warning("Ignoring symlinked observation manifest %s", candidate)
+            continue
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.parent not in allowed_parents:
+            logger.warning("Ignoring out-of-root observation manifest %s", candidate)
+            continue
+        if not resolved.is_file():
+            continue
+        if resolved.stat().st_size > MAX_OBSERVATION_MANIFEST_BYTES:
+            logger.warning("Ignoring oversized observation manifest %s", candidate)
+            continue
+        return resolved
     return None
 
 
-def load_observation_manifest(output_dir: Path) -> ObservationManifest | None:
+def load_observation_manifest(
+    output_dir: Path,
+    scenario: Scenario | None = None,
+) -> ObservationManifest | None:
     """Load an observation manifest for eval, returning None if absent/invalid."""
+    if scenario is not None and scenario.observation_profile == "complete":
+        return None
     path = find_observation_manifest(output_dir)
     if path is None:
         return None
     try:
-        return ObservationManifest.model_validate_json(path.read_text(encoding="utf-8"))
+        manifest = ObservationManifest.model_validate_json(path.read_text(encoding="utf-8"))
     except (OSError, ValidationError, ValueError) as exc:
         logger.warning("Ignoring invalid observation manifest %s: %s", path, exc)
         return None
+    if scenario is not None and not observation_manifest_matches_scenario(manifest, scenario):
+        logger.warning("Ignoring observation manifest %s because it does not match scenario", path)
+        return None
+    return manifest
+
+
+def observation_manifest_matches_scenario(
+    manifest: ObservationManifest,
+    scenario: Scenario,
+) -> bool:
+    """Return whether a manifest is bound to the supplied scenario metadata."""
+    if scenario.observation_profile == "complete":
+        return False
+    if manifest.scenario_name != scenario.name:
+        return False
+    if manifest.observation_profile != scenario.observation_profile:
+        return False
+    if manifest.collection_window != _collection_window(scenario):
+        return False
+    return _manifest_events_match_scenario(
+        manifest.storyline_events, scenario.storyline or [], "storyline"
+    ) and _manifest_events_match_scenario(
+        manifest.red_herring_events, scenario.red_herrings or [], "red_herring"
+    )
+
+
+def _manifest_events_match_scenario(
+    manifest_events: list[ObservationManifestEvent],
+    scenario_events: list[Any],
+    expected_kind: ObservationManifestKind,
+) -> bool:
+    if len(manifest_events) != len(scenario_events):
+        return False
+    for index, (manifest_event, scenario_event) in enumerate(
+        zip(manifest_events, scenario_events, strict=True)
+    ):
+        if manifest_event.index != index or manifest_event.kind != expected_kind:
+            return False
+        expected_event_types = sorted({spec.type for spec in scenario_event.events})
+        if (
+            manifest_event.storyline_id != scenario_event.id
+            or manifest_event.actor != scenario_event.actor
+            or manifest_event.system != scenario_event.system
+            or manifest_event.activity != scenario_event.activity
+            or manifest_event.event_types != expected_event_types
+        ):
+            return False
+    return True
 
 
 def _collection_window(scenario: Scenario) -> dict[str, str | None]:

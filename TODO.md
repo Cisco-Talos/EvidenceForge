@@ -50,6 +50,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Harden observation manifest evaluation trust boundaries so forged sidecars cannot suppress causality coverage failures — evaluator now rejects symlinked, oversized, and out-of-root sidecars; ignores manifests for complete-profile scenarios; binds manifests to scenario/profile/window/storyline metadata before causality exemptions; and covers forged sidecar regressions with focused tests.
 - [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.
