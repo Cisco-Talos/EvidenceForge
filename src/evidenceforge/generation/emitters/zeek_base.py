@@ -38,6 +38,7 @@ When no sensors are configured (backward compat), writes directly to:
 
 import json
 import logging
+import math
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -111,6 +112,8 @@ def _sensor_clock_drift_us(hostname: str, ts: Any) -> int:
     if isinstance(ts, datetime):
         epoch_seconds = int(ts.timestamp())
     elif isinstance(ts, (int, float)):
+        if not math.isfinite(ts):
+            return 0
         epoch_seconds = int(ts)
     else:
         epoch_seconds = 0

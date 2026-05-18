@@ -196,6 +196,32 @@ class TestPerSensorDirectoryRouting:
             assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
             assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
 
+    def test_non_finite_numeric_timestamp_does_not_crash_multi_sensor_emit(self):
+        """Raw Zeek timestamps may be NaN or infinity; multi-sensor drift must not crash."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            for idx, ts in enumerate((float("nan"), float("inf"), float("-inf"))):
+                emitter.emit_event(
+                    {
+                        "ts": ts,
+                        "uid": f"CTestNonFinite{idx}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 50000 + idx,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "conn_state": "SF",
+                        "_sensor_hostnames": ["core", "dmz"],
+                    }
+                )
+            emitter.close()
+
+            for sensor in ("core", "dmz"):
+                assert len((base / sensor / "conn.json").read_text().splitlines()) == 3
+
     def test_sensor_timestamp_offsets_vary_by_flow(self):
         """Cross-sensor timestamps should not collapse into one fixed offset band."""
         fmt = load_format("zeek_conn")
