@@ -1504,10 +1504,9 @@ def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
 
 def _render_public_dns_answer(template: str, domain: str) -> str:
     """Render a public DNS answer template using source-owned domain tokens."""
-    return template.format(
-        domain=domain,
-        domain_hyphen=domain.replace(".", "-"),
-    )
+    from evidenceforge.config.public_dns_templates import render_public_dns_answer_template
+
+    return render_public_dns_answer_template(template, domain)
 
 
 def _public_dns_answer_set(kind: str, domain: str) -> list[str]:

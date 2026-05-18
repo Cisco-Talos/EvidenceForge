@@ -247,6 +247,49 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_unsafe_public_dns_templates(self, monkeypatch):
+        from evidenceforge.generation.activity import public_dns_profiles
+
+        def load_invalid_public_dns_profiles():
+            return {
+                "nameserver_profiles": [
+                    {
+                        "name": "bad_ns",
+                        "weight": 1,
+                        "answer_sets": [["{missing}"]],
+                        "soa_rnames": ["{domain:1000000000}"],
+                    }
+                ],
+                "mail_profiles": [
+                    {
+                        "name": "bad_mx",
+                        "weight": 1,
+                        "answer_sets": [["0 {domain_hyphen}.mail.example.net"]],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(
+            public_dns_profiles,
+            "load_public_dns_profiles",
+            load_invalid_public_dns_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "public DNS answer templates may only use" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "public DNS answer templates must not use format specifiers" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_warns_for_unknown_ocsp_responder(self, monkeypatch):
         from evidenceforge.generation.activity import dns_registry, tls_realism
 

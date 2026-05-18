@@ -16,6 +16,8 @@ from typing import Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
+
 # --- DNS Registry ---
 
 
@@ -62,6 +64,9 @@ class PublicDnsAnswerProfile(BaseModel, extra="forbid"):
     def optional_strings_non_empty(cls, v: list[str], info) -> list[str]:
         if any(not item for item in v):
             raise ValueError(f"{info.field_name} entries must be non-empty")
+        if info.field_name == "soa_rnames":
+            for item in v:
+                validate_public_dns_answer_template(item)
         return v
 
     @field_validator("answer_sets")
@@ -74,6 +79,8 @@ class PublicDnsAnswerProfile(BaseModel, extra="forbid"):
                 raise ValueError("answer_sets entries must not be empty")
             if any(not answer for answer in answer_set):
                 raise ValueError("answer strings must be non-empty")
+            for answer in answer_set:
+                validate_public_dns_answer_template(answer)
         return v
 
 
