@@ -220,8 +220,8 @@ ActivityGenerator (builds SecurityEvents with composable contexts)
     v
 EventDispatcher (routes to StateManager + matching emitters)
     |
-    +---> WindowsEventEmitter ---> Security.evtx (XML)
-    +---> SysmonEmitter ---------> Sysmon.evtx (XML)
+    +---> WindowsEventEmitter ---> Security XML + Snare/RFC3164 sidecar
+    +---> SysmonEmitter ---------> Sysmon XML + Snare/RFC3164 sidecar
     +---> ZeekEmitter(s) --------> conn/dns/http/ssl/... (NDJSON)
     +---> EcarEmitter -----------> ecar.json (NDJSON)
     +---> SyslogEmitter ---------> <host>/<year>/syslog.log

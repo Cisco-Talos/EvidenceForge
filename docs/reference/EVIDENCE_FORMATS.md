@@ -16,6 +16,8 @@ output/
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
+    <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 sidecar
+    <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 sidecar
     <year>/syslog.log                      # Linux syslog (RFC3164; Linux only)
     bash_history/<username>.bash_history    # Per-user bash history (Linux only)
   <sensor-name>/                           # Per-sensor directories (network)
@@ -42,6 +44,12 @@ output/
 **Format:** XML (`<Events><Event>...</Event></Events>`)
 **Provider:** Microsoft-Windows-Security-Auditing (except 1102)
 **Channel:** Security
+
+**Parser-validation sidecar:** `<hostname.domain>/<year>/windows_event_security_snare.log`
+uses Snare-style Windows Event Log fields inside an RFC3164 syslog envelope.
+The XML file remains the canonical EvidenceForge Windows Security output while
+the Snare sidecar provides a standards-shaped path for third-party parser
+validation.
 
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
@@ -93,6 +101,11 @@ output/
 **Format:** XML (`<Events><Event>...</Event></Events>`)
 **Provider:** Microsoft-Windows-Sysmon
 **Channel:** Microsoft-Windows-Sysmon/Operational
+
+**Parser-validation sidecar:** `<hostname.domain>/<year>/windows_event_sysmon_snare.log`
+uses the same Snare-over-RFC3164 family as Windows Security. This sidecar is
+generated in parallel with XML so SOF-ELK and other syslog/Snare-aware tools can
+validate the events without requiring binary EVTX files.
 
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
