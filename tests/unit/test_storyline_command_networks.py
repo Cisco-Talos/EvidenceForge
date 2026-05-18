@@ -118,9 +118,20 @@ class _FakeActivityGenerator:
         self.processes: list[dict] = []
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
+        self.bash_commands: list[dict] = []
+        self.bash_schedule_offset: timedelta | None = None
 
-    def generate_bash_command(self, *args: Any, **kwargs: Any) -> None:
-        return None
+    def generate_bash_command(self, *args: Any, **kwargs: Any) -> datetime | None:
+        requested_time = args[2]
+        scheduled_time = (
+            requested_time + self.bash_schedule_offset
+            if self.bash_schedule_offset is not None
+            else None
+        )
+        self.bash_commands.append(
+            {"args": args, "kwargs": kwargs, "scheduled_time": scheduled_time}
+        )
+        return scheduled_time
 
     def _resolve_parent(self, *args: Any, **kwargs: Any) -> int:
         return 1
@@ -298,6 +309,46 @@ class TestStorylineScpCorrelation:
             < timedelta(milliseconds=901)
         )
         assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
+
+    def test_linux_process_uses_scheduled_bash_history_time(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.activity_generator.bash_schedule_offset = timedelta(seconds=45)
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        requested_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="id",
+            command_line="id",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=requested_time,
+            activity="check current user",
+            explicit_types={"process"},
+        )
+
+        scheduled_time = requested_time + timedelta(seconds=45)
+        assert engine.activity_generator.bash_commands[0]["scheduled_time"] == scheduled_time
+        assert engine.activity_generator.processes[0]["time"] == scheduled_time
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(

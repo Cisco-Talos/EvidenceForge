@@ -45,6 +45,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Remediate Windows singleton PID path traversal telemetry suppression — canonicalize Windows singleton paths with ntpath before seeded PID reuse and cover traversal variants with a unit test.
 - [x] Fix DNS tunnel label payload accounting so sequence metadata does not truncate counted exfiltration bytes.
 - [x] Fix actor-scoped LogonID inheritance for typed `log_cleared` storyline events.
+- [x] Fix Linux storyline bash-history dwell scheduling so process telemetry uses the scheduled shell command timestamp.
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
