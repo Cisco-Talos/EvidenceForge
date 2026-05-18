@@ -40,13 +40,27 @@ def load_extra_syslog_messages() -> list[dict[str, Any]]:
     return _CACHED_DATA
 
 
+def get_positive_syslog_weight(entry: dict[str, Any]) -> int | None:
+    """Return a positive syslog weight, or None for invalid overlay-provided values."""
+    weight = entry.get("weight", 10)
+    if isinstance(weight, bool):
+        return None
+    try:
+        normalized_weight = int(weight)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if normalized_weight <= 0:
+        return None
+    return normalized_weight
+
+
 def filter_syslog_messages(
     programs: list[dict[str, Any]],
     is_rhel_like: bool,
     host_roles: list[str] | None,
     system_type: str | None = None,
 ) -> list[tuple[str, list[str], int]]:
-    """Filter syslog programs by distro and host roles.
+    """Filter syslog programs by distro, host roles, and generation-safe weights.
 
     Args:
         programs: Raw program entries from YAML.
@@ -57,15 +71,18 @@ def filter_syslog_messages(
     Returns:
         List of (app_name, messages, weight) tuples matching the host context.
     """
-    return [
-        (entry["app"], entry["messages"], int(entry.get("weight", 10)))
-        for entry in filter_syslog_message_entries(
-            programs,
-            is_rhel_like,
-            host_roles,
-            system_type,
-        )
-    ]
+    result: list[tuple[str, list[str], int]] = []
+    for entry in filter_syslog_message_entries(
+        programs,
+        is_rhel_like,
+        host_roles,
+        system_type,
+    ):
+        weight = get_positive_syslog_weight(entry)
+        if weight is None:
+            continue
+        result.append((entry["app"], entry["messages"], weight))
+    return result
 
 
 def filter_syslog_message_entries(
@@ -141,6 +158,12 @@ def render_extra_syslog_message(
         if pool:
             render_values[key] = rng.choice(pool)
     for key, value in list(render_values.items()):
+        if key == "service":
+            # Scenario-provided system.services are literal service names, not trusted
+            # format templates. Nested templates such as sudo_command can still
+            # substitute {service}, but braces inside the service name itself must
+            # not be interpreted as format placeholders.
+            continue
         if isinstance(value, str) and "{" in value:
             render_values[key] = value.format(positional_value, **render_values)
     return template.format(positional_value, **render_values)

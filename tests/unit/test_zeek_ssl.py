@@ -683,6 +683,33 @@ class TestSslUidCorrelation:
 
         assert base_ts.timestamp() <= x509_row["ts"] <= base_ts.timestamp() + 0.01
 
+    def test_raw_ocsp_event_defaults_missing_optional_revocation_fields(self):
+        """Raw OCSP rows may omit optional revocation details without crashing."""
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "ocsp.json"
+            emitter = ZeekOcspEmitter(ocsp_fmt, output)
+            emitter.emit_raw(
+                {
+                    "ts": 1705312800.0,
+                    "id": "Frawocsp1234567",
+                    "hashAlgorithm": "sha1",
+                    "issuerNameHash": "issuer-name",
+                    "issuerKeyHash": "issuer-key",
+                    "serialNumber": "01",
+                    "certStatus": "good",
+                    "thisUpdate": 1705310000.0,
+                    "nextUpdate": 1705900000.0,
+                }
+            )
+            emitter.close()
+
+            row = json.loads(output.read_text().splitlines()[0])
+
+        assert row["certStatus"] == "good"
+        assert "revoketime" not in row
+        assert "revokereason" not in row
+
     def test_revoked_ocsp_status_renders_revocation_metadata(self):
         """Revoked OCSP rows should include source-native revocation details."""
         ocsp_fmt = load_format("zeek_ocsp")

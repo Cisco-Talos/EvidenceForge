@@ -36,6 +36,7 @@ import random
 import re
 import shlex
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
@@ -79,7 +80,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
-from evidenceforge.models.state import ActiveSession
+from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -129,6 +130,7 @@ _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
     }
 )
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_USER_MODEL_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
     "mysql",
@@ -248,6 +250,10 @@ _LINUX_ALIAS_COMMANDS = {
     "la": ("/usr/bin/ls", "ls -A"),
     "l": ("/usr/bin/ls", "ls -CF"),
 }
+_LINUX_SHELL_MAX_INFERRED_PROCESSES = 4
+_LINUX_SHELL_MAX_INFER_STAGES = 32
+_LINUX_SHELL_MAX_STAGE_CHARS = 4096
+_LINUX_SHELL_MAX_SCAN_CHARS = 32768
 _NMAP_PORT_SERVICES = {
     21: "ftp",
     22: "ssh",
@@ -312,10 +318,14 @@ def _extract_nmap_ports(command_line: str) -> list[int]:
 
 
 def _extract_http_url_from_command(command_line: str) -> str | None:
-    """Return the first HTTP(S) URL embedded in a process command line."""
+    """Return the first valid HTTP(S) URL embedded in a process command line."""
     for match in re.finditer(r"https?://[^\s'\"<>]+", command_line):
         candidate = match.group(0).rstrip(").,;]")
-        parsed = urlsplit(candidate)
+        try:
+            parsed = urlsplit(candidate)
+            _ = parsed.port
+        except ValueError:
+            continue
         if parsed.scheme in {"http", "https"} and parsed.hostname:
             return candidate
     return None
@@ -374,12 +384,15 @@ def _http_context_from_process_command(
     http_url = _extract_http_url_from_command(command_line)
     if not http_url:
         return None
-    parsed = urlsplit(http_url)
-    host = parsed.hostname or ""
-    if not host:
+    try:
+        parsed = urlsplit(http_url)
+        host = parsed.hostname or ""
+        if not host:
+            return None
+        service = "ssl" if parsed.scheme == "https" else "http"
+        port = parsed.port or (443 if service == "ssl" else 80)
+    except ValueError:
         return None
-    service = "ssl" if parsed.scheme == "https" else "http"
-    port = parsed.port or (443 if service == "ssl" else 80)
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
@@ -998,6 +1011,14 @@ def _dns_payload_accounting(
     return normalized_duration, normalized_orig, normalized_resp
 
 
+_NONINTERACTIVE_BASH_USERS = {"apache", "www-data", "nginx", "httpd", "tomcat"}
+
+
+def _is_noninteractive_bash_user(user: User) -> bool:
+    """Return True for service accounts that should not render shell history."""
+    return user.username.lower() in _NONINTERACTIVE_BASH_USERS
+
+
 # Fixed baseline activity patterns (no LLM expansion)
 # Format: (activity_type, probability)
 # Phase 5.6: Widened probability gaps for user diversity scoring
@@ -1504,10 +1525,9 @@ def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
 
 def _render_public_dns_answer(template: str, domain: str) -> str:
     """Render a public DNS answer template using source-owned domain tokens."""
-    return template.format(
-        domain=domain,
-        domain_hyphen=domain.replace(".", "-"),
-    )
+    from evidenceforge.config.public_dns_templates import render_public_dns_answer_template
+
+    return render_public_dns_answer_template(template, domain)
 
 
 def _public_dns_answer_set(kind: str, domain: str) -> list[str]:
@@ -1611,48 +1631,93 @@ def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
 
 
 def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
-    """Infer process image and command line for a Linux shell-history command."""
-    processes = _linux_command_processes_from_shell(command)
+    """Infer the first process image and command line for a Linux shell-history command."""
+    processes = _linux_command_processes_from_shell(command, max_processes=1)
     return processes[0] if processes else None
 
 
-def _linux_command_processes_from_shell(command: str) -> list[tuple[str, str]]:
-    """Infer source-native process argv entries from a Linux shell command."""
-    return [
-        process
-        for stage in _split_linux_pipeline(command)
-        if (process := _linux_command_process_from_stage(stage)) is not None
-    ]
+def _linux_command_processes_from_shell(
+    command: str,
+    *,
+    max_processes: int | None = _LINUX_SHELL_MAX_INFERRED_PROCESSES,
+    max_stages: int = _LINUX_SHELL_MAX_INFER_STAGES,
+) -> list[tuple[str, str]]:
+    """Infer bounded source-native process argv entries from a Linux shell command."""
+    if max_processes is not None and max_processes <= 0:
+        return []
+
+    processes: list[tuple[str, str]] = []
+    for stage in _iter_linux_pipeline_stages(command, max_stages=max_stages):
+        process = _linux_command_process_from_stage(stage)
+        if process is None:
+            continue
+        processes.append(process)
+        if max_processes is not None and len(processes) >= max_processes:
+            break
+    return processes
 
 
-def _split_linux_pipeline(command: str) -> list[str]:
-    """Split a shell command on unquoted pipeline/control separators."""
-    stages: list[str] = []
+def _split_linux_pipeline(
+    command: str, *, max_stages: int = _LINUX_SHELL_MAX_INFER_STAGES
+) -> list[str]:
+    """Split a shell command on unquoted pipeline/control separators with a stage cap."""
+    return list(_iter_linux_pipeline_stages(command, max_stages=max_stages))
+
+
+def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[str]:
+    """Yield bounded unquoted pipeline/control stages from a Linux shell command."""
+    if max_stages <= 0:
+        return
+
     current: list[str] = []
+    current_too_long = False
     quote: str | None = None
     escaped = False
+    yielded = 0
     index = 0
-    while index < len(command):
+    scan_limit = min(len(command), _LINUX_SHELL_MAX_SCAN_CHARS)
+
+    def append_current(char: str) -> None:
+        nonlocal current_too_long
+        if current_too_long:
+            return
+        if len(current) >= _LINUX_SHELL_MAX_STAGE_CHARS:
+            current.clear()
+            current_too_long = True
+            return
+        current.append(char)
+
+    def finish_stage() -> str | None:
+        nonlocal current, current_too_long
+        if current_too_long:
+            current = []
+            current_too_long = False
+            return None
+        stage = "".join(current).strip()
+        current = []
+        return stage or None
+
+    while index < scan_limit and yielded < max_stages:
         char = command[index]
         if escaped:
-            current.append(char)
+            append_current(char)
             escaped = False
             index += 1
             continue
         if char == "\\" and quote != "'":
-            current.append(char)
+            append_current(char)
             escaped = True
             index += 1
             continue
         if quote:
-            current.append(char)
+            append_current(char)
             if char == quote:
                 quote = None
             index += 1
             continue
         if char in {"'", '"'}:
             quote = char
-            current.append(char)
+            append_current(char)
             index += 1
             continue
         separator_width = 0
@@ -1661,18 +1726,19 @@ def _split_linux_pipeline(command: str) -> list[str]:
         elif command[index : index + 2] == "&&":
             separator_width = 2
         if separator_width:
-            stage = "".join(current).strip()
-            if stage:
-                stages.append(stage)
-            current = []
+            stage = finish_stage()
+            if stage is not None:
+                yielded += 1
+                yield stage
             index += separator_width
             continue
-        current.append(char)
+        append_current(char)
         index += 1
-    stage = "".join(current).strip()
-    if stage:
-        stages.append(stage)
-    return stages
+
+    if yielded < max_stages:
+        stage = finish_stage()
+        if stage is not None:
+            yield stage
 
 
 def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
@@ -1830,7 +1896,10 @@ def _proxy_http_response_body_len(
     return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
 
 
-_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]+ \d{4}\]")
+# Bound the free-form timestamp middle so malformed raw syslog messages cannot trigger
+# repeated long scans/backtracking while preserving Apache timestamp variants with
+# fractional seconds or timezone tokens.
+_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]{1,40} \d{4}\]")
 _APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d+)\]")
 
 
@@ -1901,24 +1970,29 @@ def _is_ip_literal(value: str) -> bool:
 
 def _tls_certificate_serial(seed: str) -> str:
     """Return a stable certificate serial with CA-realistic length variation."""
+    from evidenceforge.config.schemas import TLS_SERIAL_LENGTH_MAX_WEIGHT
     from evidenceforge.generation.activity.tls_realism import serial_number_config
 
     configured_lengths = serial_number_config().get("byte_lengths", [])
-    lengths: list[int] = []
-    weights: list[int] = []
+    weighted_lengths: dict[int, int] = {}
     for entry in configured_lengths:
         if not isinstance(entry, dict):
             continue
         try:
             byte_length = int(entry.get("bytes", 0))
             weight = int(entry.get("weight", 0))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
-        if 1 <= byte_length <= 20 and weight > 0:
-            lengths.append(byte_length)
-            weights.append(weight)
+        if 1 <= byte_length <= 20 and 0 < weight <= TLS_SERIAL_LENGTH_MAX_WEIGHT:
+            weighted_lengths[byte_length] = min(
+                weighted_lengths.get(byte_length, 0) + weight,
+                TLS_SERIAL_LENGTH_MAX_WEIGHT,
+            )
 
-    if not lengths:
+    if weighted_lengths:
+        lengths = list(weighted_lengths)
+        weights = list(weighted_lengths.values())
+    else:
         lengths = [8, 9, 10, 12, 16, 18, 20]
         weights = [8, 6, 6, 14, 40, 12, 14]
 
@@ -2136,9 +2210,9 @@ class ActivityGenerator:
             tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
-        self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
+        self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
-        self._terminated_process_keys: set[tuple[str, int]] = set()
+        self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
@@ -2163,6 +2237,21 @@ class ActivityGenerator:
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
+        self._last_connection_effective_dst_ip = ""
+
+    def _process_termination_recorded(
+        self,
+        hostname: str,
+        pid: int,
+        start_time: datetime | None,
+    ) -> bool:
+        """Return whether a process instance termination was already generated."""
+        if start_time is None:
+            return any(
+                terminated_host == hostname and terminated_pid == pid
+                for terminated_host, terminated_pid, _ in self._terminated_process_keys
+            )
+        return (hostname, pid, start_time) in self._terminated_process_keys
 
     def _remember_foreground_process_finalizer(
         self,
@@ -2200,10 +2289,12 @@ class ActivityGenerator:
             logon_id,
             termination_time,
         ) in sorted(self._foreground_process_finalizers.items(), key=lambda item: item[1][4]):
-            if key in self._terminated_process_keys or termination_time > window_end:
+            if termination_time > window_end:
                 continue
             running = self.state_manager.get_process(system.hostname, key[1])
             if running is None:
+                continue
+            if self._process_termination_recorded(system.hostname, key[1], running.start_time):
                 continue
             process_user = known_users.get(username) or User(
                 username=username,
@@ -2575,19 +2666,27 @@ class ActivityGenerator:
         dst_port: int,
         time: datetime,
     ) -> datetime:
-        """Avoid exact duplicate Zeek ICMP summaries for the same tuple and timestamp."""
-        if len(self._recent_icmp_observations) > 100_000:
-            self._recent_icmp_observations.clear()
+        """Avoid exact duplicate Zeek ICMP summaries for the same tuple and timestamp.
+
+        ICMP scans can intentionally repeat the same source/destination pair at very high
+        rates, and Zeek collapses the source/destination ports to type/code values. Track the
+        next usable microsecond timestamp per rendered ICMP tuple so duplicates are assigned
+        in constant time instead of linearly probing through previously emitted timestamps.
+        """
+        if len(self._next_icmp_observation_ts_us) > 100_000:
+            self._next_icmp_observation_ts_us.clear()
         zeek_type = src_port if src_port else 8
         zeek_code = dst_port if dst_port else 0
-        adjusted = time
-        while True:
-            ts_us = int(round(adjusted.timestamp() * 1_000_000))
-            key = (src_ip, zeek_type, dst_ip, zeek_code, ts_us)
-            if key not in self._recent_icmp_observations:
-                self._recent_icmp_observations.add(key)
-                return adjusted
-            adjusted += timedelta(milliseconds=11)
+        tuple_key = (src_ip, zeek_type, dst_ip, zeek_code)
+        requested_ts_us = int(round(time.timestamp() * 1_000_000))
+        adjusted_ts_us = max(
+            requested_ts_us,
+            self._next_icmp_observation_ts_us.get(tuple_key, requested_ts_us),
+        )
+        self._next_icmp_observation_ts_us[tuple_key] = adjusted_ts_us + 11_000
+        if adjusted_ts_us == requested_ts_us:
+            return time
+        return time + timedelta(microseconds=adjusted_ts_us - requested_ts_us)
 
     def _infer_connection_pid(
         self,
@@ -3224,26 +3323,25 @@ class ActivityGenerator:
         current_pid = event.network.initiating_pid
         if current_pid > 0:
             current = self.state_manager.get_process(source_system.hostname, current_pid)
-            if (
-                current is not None
-                and current.image.lower() == expected_image
-                and not self._foreground_process_expired_for_attribution(
-                    source_system,
-                    current,
-                    time,
-                )
+            if current is not None and not self._foreground_process_expired_for_attribution(
+                source_system,
+                current,
+                time,
             ):
-                self._set_connection_process_context(
-                    event,
-                    source_system=source_system,
-                    pid=current_pid,
-                )
-                self.state_manager.update_process_activity_time(
-                    source_system.hostname,
-                    current_pid,
-                    time,
-                )
-                return
+                if current.image.lower() == expected_image:
+                    self._set_connection_process_context(
+                        event,
+                        source_system=source_system,
+                        pid=current_pid,
+                    )
+                    self.state_manager.update_process_activity_time(
+                        source_system.hostname,
+                        current_pid,
+                        time,
+                    )
+                    return
+                if not self._windows_proxy_pid_should_be_replaced(current):
+                    return
 
         client_pid, client_image = self._ensure_browser_http_client_process(
             source_system=source_system,
@@ -3277,18 +3375,20 @@ class ActivityGenerator:
         proxy_sys: System,
         dst_port: int,
     ) -> str | None:
-        """Return the caller process image when it already fits proxy client telemetry."""
+        """Return the caller process image when valid proxy client telemetry owns it."""
         if pid <= 0 or source_system is None:
             return None
 
         running = self.state_manager.get_process(source_system.hostname, pid)
-        if running is not None and self._foreground_process_expired_for_attribution(
+        if running is None:
+            return None
+        if self._foreground_process_expired_for_attribution(
             source_system,
             running,
             time=time,
         ):
             return None
-        candidate_image = running.image if running is not None else process_image
+        candidate_image = running.image or process_image
         if not candidate_image:
             return None
 
@@ -3307,7 +3407,20 @@ class ActivityGenerator:
         expected_image = hint[0]
         if candidate_image.lower() == expected_image.lower():
             return candidate_image
-        return None
+        if self._windows_proxy_pid_should_be_replaced(running):
+            return None
+        return candidate_image
+
+    @staticmethod
+    def _windows_proxy_pid_should_be_replaced(process: Any) -> bool:
+        """Return whether a Windows PID is known service-owned proxy attribution noise."""
+        image = str(getattr(process, "image", "") or "")
+        command_line = str(getattr(process, "command_line", "") or "")
+        exe_name = ntpath.basename(image).lower()
+        return (
+            _windows_service_process_account(image, command_line) is not None
+            or exe_name in _WINDOWS_SINGLETON_SERVICE_EXES
+        )
 
     def _attach_ssl_context(
         self,
@@ -5126,7 +5239,7 @@ class ActivityGenerator:
         requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         preferred_key = (system.hostname, username, logon_id)
         preferred_exe = self._preferred_browser_by_session.get(preferred_key)
-        candidates = []
+        candidates: list[RunningProcess] = []
         for proc in self.state_manager.get_processes_on_system(system.hostname):
             if proc.username != username:
                 continue
@@ -5970,11 +6083,14 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
-        termination_key = (system.hostname, pid)
-        if termination_key in self._terminated_process_keys:
+        running_proc = self.state_manager.get_process(system.hostname, pid)
+        if self._process_termination_recorded(
+            system.hostname,
+            pid,
+            running_proc.start_time if running_proc is not None else None,
+        ):
             return
 
-        running_proc = self.state_manager.get_process(system.hostname, pid)
         if (
             running_proc is not None
             and running_proc.last_activity_time is not None
@@ -6043,7 +6159,8 @@ class ActivityGenerator:
         )
 
         self.dispatcher.dispatch(event)
-        self._terminated_process_keys.add(termination_key)
+        termination_start_time = event.process.start_time if event.process is not None else None
+        self._terminated_process_keys.add((system.hostname, pid, termination_start_time))
 
         logger.debug(
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
@@ -6243,10 +6360,11 @@ class ActivityGenerator:
             dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         # Infer common payload service from destination port before proxy
-        # routing and DNS expansion. Some callers provide only port/protocol;
-        # explicit proxy semantics still need to catch 80/443 before a
-        # client-side origin DNS lookup is emitted.
-        if proto == "tcp" and dst_port in (80, 443) and service is None and not is_tcp_probe:
+        # routing and DNS expansion. Some callers provide only port/protocol or
+        # source-common aliases (for example "https"); explicit proxy semantics
+        # still need to catch 80/443 before a client-side origin DNS lookup is
+        # emitted. Keep the empty-string raw-TCP sentinel unchanged.
+        if proto == "tcp" and dst_port in (80, 443) and service != "" and not is_tcp_probe:
             service = "http" if dst_port == 80 else "ssl"
 
         if (
@@ -6266,6 +6384,8 @@ class ActivityGenerator:
                 source_system=source_system,
                 purpose_tags=("web", "saas", "background"),
             )
+
+        self._last_connection_effective_dst_ip = dst_ip
 
         tls_hostname = hostname
         if hostname_from_reverse_dns and not emit_dns and dns is None and http is None:
@@ -6428,6 +6548,7 @@ class ActivityGenerator:
             if (
                 proxy_context.host
                 and "." in proxy_context.host
+                and not _is_ip_literal(proxy_context.host)
                 and not proxy_context.host.endswith(f".{ad_domain}")
                 and not proxy_context.host.endswith(".local")
                 and not preserve_explicit_proxy_dst_ip
@@ -6854,6 +6975,7 @@ class ActivityGenerator:
             cache_ttl = _dns_base_ttl(hostname, _dns_is_internal_name(hostname, ad_domain))
             last_query = self._dns_cache.get(dns_cache_key, 0)
             if last_query and ts_epoch - last_query < cache_ttl:
+                self._last_connection_effective_dst_ip = dst_ip
                 return ""
             self._dns_cache[dns_cache_key] = ts_epoch
 
@@ -6862,6 +6984,8 @@ class ActivityGenerator:
         if resolved_source_system:
             state_source_hostname = self._build_host_context(resolved_source_system).fqdn
         close_time = time + timedelta(seconds=duration) if duration is not None else None
+
+        self._last_connection_effective_dst_ip = dst_ip
 
         # Phase 1: Allocate IDs from StateManager
         conn_id = self.state_manager.open_connection(
@@ -8008,13 +8132,14 @@ class ActivityGenerator:
                 application=wfp_application,
             )
 
-        if (
-            pid > 0
-            and resolved_source_system is not None
-            and process_ctx is not None
-            and (resolved_source_system.hostname, pid) not in self._terminated_process_keys
-        ):
+        if pid > 0 and resolved_source_system is not None and process_ctx is not None:
             running = self.state_manager.get_process(resolved_source_system.hostname, pid)
+            if self._process_termination_recorded(
+                resolved_source_system.hostname,
+                pid,
+                running.start_time if running is not None else None,
+            ):
+                return uid
             lifetime = (
                 self._foreground_process_lifetime_for_attribution(resolved_source_system, running)
                 if running is not None
@@ -8466,7 +8591,7 @@ class ActivityGenerator:
             # Literal command string (direct commands, typos, etc.)
             command = activity_type_or_command
 
-        if user.username.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}:
+        if _is_noninteractive_bash_user(user):
             logger.debug(
                 "Skipping bash_history for noninteractive web service user %s on %s",
                 user.username,
@@ -8489,6 +8614,14 @@ class ActivityGenerator:
         command: str,
     ) -> None:
         """Dispatch a bash-history event at an already scheduled command time."""
+        if _is_noninteractive_bash_user(user):
+            logger.debug(
+                "Skipping bash_history for noninteractive web service user %s on %s",
+                user.username,
+                system.hostname,
+            )
+            return
+
         from evidenceforge.events.contexts import ShellContext
 
         event = SecurityEvent(
@@ -8511,7 +8644,9 @@ class ActivityGenerator:
         """Emit process telemetry for interactive Linux shell commands when state supports it."""
         if _get_os_category(system.os) != "linux":
             return
-        processes = _linux_command_processes_from_shell(command)
+        processes = _linux_command_processes_from_shell(
+            command, max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES
+        )
         if not processes:
             return
 
@@ -8550,7 +8685,7 @@ class ActivityGenerator:
         ):
             return
 
-        for index, (image, process_command_line) in enumerate(processes[:4]):
+        for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             process_time = time + timedelta(milliseconds=rng.randint(20, 180) + index * 35)
             pid = self.generate_process(
@@ -8706,6 +8841,7 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import ProcessContext
 
+        self.state_manager.set_current_time(time)
         if _get_os_category(system.os) == "windows":
             process_name, command_line = _windows_script_host_process(
                 process_name,
@@ -8740,10 +8876,14 @@ class ActivityGenerator:
                 allow_existing_browser_reuse=False,
             )
 
-        if _get_os_category(system.os) == "windows" and exe_name in _WINDOWS_SINGLETON_SERVICE_EXES:
-            for proc in self.state_manager.get_processes_on_system(system.hostname):
-                if ntpath.basename(proc.image).lower() == exe_name:
-                    return proc.pid
+        singleton_service_pid = self._existing_windows_singleton_service_pid(
+            system=system,
+            process_name=process_name,
+            time=time,
+            username=username,
+        )
+        if singleton_service_pid is not None:
+            return singleton_service_pid
 
         pid = self.state_manager.create_process(
             system=system.hostname,
@@ -10295,22 +10435,24 @@ class ActivityGenerator:
         if candidate and candidate.lower() not in _LINUX_LOCAL_ACCOUNTS:
             if candidate in known_users:
                 return known_users[candidate]
-            return User(
-                username=candidate,
-                full_name=candidate,
-                email=f"{candidate}@{self._valid_fallback_email_domain()}",
-            )
+            if _USER_MODEL_USERNAME_RE.fullmatch(candidate):
+                return User(
+                    username=candidate,
+                    full_name=candidate,
+                    email=f"{candidate}@{self._valid_fallback_email_domain()}",
+                )
 
         assigned_user = getattr(system, "assigned_user", "")
         if assigned_user:
             assigned = known_users.get(assigned_user)
             if assigned is not None:
                 return assigned
-            return User(
-                username=assigned_user,
-                full_name=assigned_user,
-                email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
-            )
+            if _USER_MODEL_USERNAME_RE.fullmatch(assigned_user):
+                return User(
+                    username=assigned_user,
+                    full_name=assigned_user,
+                    email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
+                )
         return User(
             username="Administrator",
             full_name="Administrator",
@@ -10987,10 +11129,15 @@ class ActivityGenerator:
         if _get_os_category(target_system.os) != "windows":
             return
         rng = _get_rng()
-        base_src_port = _ephemeral_port(rng, _get_os_category(source_system.os))
         flow_specs = (
             (445, "smb", time - timedelta(milliseconds=rng.randint(1100, 1800))),
             (135, "dce_rpc", time - timedelta(milliseconds=rng.randint(350, 900))),
+        )
+        source_os = _get_os_category(source_system.os)
+        max_ephemeral_port = 60999 if source_os == "linux" else 65535
+        base_src_port = min(
+            _ephemeral_port(rng, source_os),
+            max_ephemeral_port - len(flow_specs) + 1,
         )
         for idx, (dst_port, service, flow_time) in enumerate(flow_specs):
             self.generate_connection(
@@ -12401,6 +12548,46 @@ class ActivityGenerator:
         """Get a seeded system process PID by role name."""
         pids = getattr(self, "_system_pids", {}).get(hostname, {})
         return pids.get(role, fallback)
+
+    def _existing_windows_singleton_service_pid(
+        self,
+        system: System,
+        process_name: str,
+        time: datetime,
+        username: str,
+    ) -> int | None:
+        """Return an active canonical Windows service singleton PID when one exists."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        normalized_path = ntpath.normpath(process_name.replace("/", "\\")).lower()
+        exe_name = normalized_path.rsplit("\\", 1)[-1]
+        if exe_name not in _WINDOWS_SINGLETON_SERVICE_EXES:
+            return None
+
+        canonical_path = f"c:\\windows\\system32\\{exe_name}"
+        if "\\" in normalized_path and normalized_path != canonical_path:
+            return None
+
+        normalized_username = username.upper()
+        candidates: list[RunningProcess] = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_path = ntpath.normpath(proc.image.replace("/", "\\")).lower()
+            if proc_path != canonical_path:
+                continue
+            if proc.username.upper() != normalized_username:
+                continue
+            if proc.start_time > time:
+                continue
+            parent = self.state_manager.get_process(system.hostname, proc.parent_pid)
+            parent_image = parent.image if parent else ""
+            if ntpath.basename(parent_image).lower() != "services.exe":
+                continue
+            candidates.append(proc)
+
+        if not candidates:
+            return None
+        return max(candidates, key=lambda proc: proc.start_time).pid
 
     def _existing_windows_singleton_pid(
         self,

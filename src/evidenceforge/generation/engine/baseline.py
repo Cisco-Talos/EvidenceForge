@@ -5726,6 +5726,7 @@ class BaselineMixin:
                     # role/distro tags for data-driven filtering.
                     from evidenceforge.generation.activity.extra_syslog import (
                         filter_syslog_message_entries,
+                        get_positive_syslog_weight,
                         load_extra_syslog_messages,
                         render_extra_syslog_message,
                     )
@@ -5737,11 +5738,16 @@ class BaselineMixin:
                         system.roles,
                         sys_type,
                     )
-                    if not filtered:
+                    weighted_entries = [
+                        (candidate, weight)
+                        for candidate in filtered
+                        if (weight := get_positive_syslog_weight(candidate)) is not None
+                    ]
+                    if not weighted_entries:
                         continue
                     entry = rng.choices(
-                        filtered,
-                        weights=[int(candidate.get("weight", 10)) for candidate in filtered],
+                        [candidate for candidate, _weight in weighted_entries],
+                        weights=[weight for _candidate, weight in weighted_entries],
                         k=1,
                     )[0]
                     app = entry["app"]

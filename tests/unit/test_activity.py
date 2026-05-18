@@ -40,6 +40,7 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
+    _extract_http_url_from_command,
     _extract_image_from_command,
     _http_context_from_process_command,
     _jitter_default_connection_duration,
@@ -53,6 +54,32 @@ from evidenceforge.generation.activity.tls_realism import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+
+
+class TestApacheRawSyslogNormalization:
+    def test_embedded_timestamp_regex_matches_apache_variants(self):
+        """Apache raw syslog timestamp normalization should keep common timestamp variants."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+
+        assert pattern.search("[Mon Jan 1 12:34:56 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 +0000 2026] message")
+
+    def test_embedded_timestamp_regex_has_bounded_middle_token(self):
+        """Scenario-controlled raw syslog messages must not hit an unbounded timestamp scan."""
+        pattern_text = generator_module._APACHE_EMBEDDED_TS_RE.pattern
+
+        assert "[^\\]]+" not in pattern_text
+        assert "{1,40}" in pattern_text
+
+    def test_embedded_timestamp_regex_handles_many_malformed_prefixes_quickly(self):
+        """Malformed Apache-like prefixes should not cause super-linear regex work."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+        malicious_message = "[Mon Jan 1 " * 20_000
+
+        result = pattern.sub("[Mon Jan 01 00:00:00.000000 2026]", malicious_message, count=1)
+
+        assert result == malicious_message
 
 
 class TestStateObjectIds:
@@ -101,6 +128,32 @@ class TestProcessHttpCommandCorrelation:
         assert http.uri == "/rate_limit?resource=core"
         assert http.user_agent == "curl/7.88.1"
         assert http.response_body_len == 1234
+
+    @pytest.mark.parametrize(
+        "command_line",
+        [
+            "curl -s http://[::1",
+            "curl -s http://example.com:99999/",
+        ],
+    )
+    def test_http_context_from_malformed_url_returns_none(self, command_line):
+        """Malformed overlay-provided URLs should not crash process-network correlation."""
+        assert (
+            _http_context_from_process_command(
+                "/usr/bin/curl",
+                command_line,
+                response_body_len=1234,
+            )
+            is None
+        )
+
+    def test_extract_http_url_skips_malformed_candidates(self):
+        """Malformed candidates should be skipped so later valid URLs can still correlate."""
+        url = _extract_http_url_from_command(
+            "curl http://[::1 && curl https://api.example.com/status"
+        )
+
+        assert url == "https://api.example.com/status"
 
     def test_http_context_from_static_curl_uses_stable_resource_size(self):
         """Repeated CLI downloads of static resources should keep one object size."""
@@ -1519,6 +1572,100 @@ class TestActivityGenerator:
         assert process_event.timestamp == scheduled_time
         assert bash_event.timestamp == scheduled_time
 
+    def test_linux_process_activity_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Linux app-catalog processes should not emit shell history for service users."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="www-data",
+        )
+        service_user = User(
+            username="www-data",
+            full_name="Web Service",
+            email="www-data@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: (
+                "/usr/bin/code",
+                "code --no-sandbox /home/www-data/projects/data-pipeline",
+            ),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line
+            == "code --no-sandbox /home/www-data/projects/data-pipeline"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
+    def test_linux_process_system_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Legacy Linux process templates should not emit shell history for service users."""
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="apache",
+        )
+        service_user = User(
+            username="apache",
+            full_name="Apache Service",
+            email="apache@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/sbin/cron", "/usr/sbin/cron -f")]},
+        ):
+            activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_system")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "/usr/sbin/cron -f"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1951,6 +2098,55 @@ class TestActivityGenerator:
         }
         assert all(event.network.src_ip == source.ip for event in network_events)
         assert all(event.network.dst_ip == target.ip for event in network_events)
+
+    def test_remote_service_network_evidence_caps_sequential_source_ports(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Sequential SMB/RPC evidence source ports should stay in the valid TCP range."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Admin",
+            email="alice@example.com",
+            primary_system=source.hostname,
+        )
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={source.hostname: source, target.hostname: target}
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+
+        with patch.object(generator_module, "_ephemeral_port", return_value=65535):
+            activity_gen.generate_service_installed(
+                user,
+                target,
+                timestamp,
+                service_name="PSEXESVC",
+                service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            )
+
+        remote_service_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.service in {"smb", "dce_rpc"}
+        ]
+        source_ports = [event.network.src_port for event in remote_service_events]
+
+        assert source_ports == [65534, 65535]
+        assert all(0 <= port <= 65535 for port in source_ports)
 
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3479,6 +3675,33 @@ class TestActivityGenerator:
         ]
         assert all(event.event_type != "explicit_credentials" for event in emitted)
 
+    def test_generate_explicit_credentials_ignores_invalid_target_for_subject_fallback(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Invalid explicit target account text should not crash Windows subject coercion."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        root_user = User(username="root", full_name="root", email="root@example.local")
+
+        activity_gen.generate_explicit_credentials(
+            user=root_user,
+            system=test_system,
+            time=timestamp,
+            target_username=r"CORP\Jane Doe",
+            target_server="DC-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+            source_ip="10.10.3.10",
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.username == r"CORP\Jane Doe"
+        assert explicit.auth.subject_username == "Administrator"
+        assert all(getattr(event.auth, "username", "") != "Jane Doe" for event in emitted)
+
     def test_generate_explicit_credentials_coerces_linux_subject_on_windows(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -4580,6 +4803,59 @@ class TestActivityGenerator:
             ("/usr/bin/uptime", "uptime"),
         ]
 
+    def test_linux_shell_single_process_inference_stops_after_first_stage(self, monkeypatch):
+        """Single-process inference should not parse unused pipeline stages."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str]:
+            parsed_stages.append(stage)
+            return "/usr/bin/whoami", stage
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+
+        process = generator_module._linux_command_process_from_shell("whoami | id | df | uptime")
+
+        assert process == ("/usr/bin/whoami", "whoami")
+        assert parsed_stages == ["whoami"]
+
+    def test_linux_shell_process_inference_limits_emitted_pipeline_stages(self, monkeypatch):
+        """Pipeline process inference should parse only the emitted process budget."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str]:
+            parsed_stages.append(stage)
+            return "/usr/bin/whoami", stage
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+        command = " | ".join(["whoami"] * 100)
+
+        processes = generator_module._linux_command_processes_from_shell(command)
+
+        assert len(processes) == 4
+        assert parsed_stages == ["whoami"] * 4
+
+    def test_linux_shell_process_inference_limits_unmatched_pipeline_stages(self, monkeypatch):
+        """Unmatched pipeline stages should not be parsed without a stage cap."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str] | None:
+            parsed_stages.append(stage)
+            return None
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+        command = " | ".join(["unknown"] * 100)
+
+        processes = generator_module._linux_command_processes_from_shell(command)
+
+        assert processes == []
+        assert len(parsed_stages) == 32
+
     def test_generate_bash_command_emits_pipeline_children_with_clean_argv(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -4940,6 +5216,41 @@ def activity_gen():
         "syslog": Mock(),
     }
     return ActivityGenerator(sm, mock_emitters)
+
+
+def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+
+    class CountingDict(dict[tuple[str, int, str, int], int]):
+        """Dictionary that counts next-timestamp lookups."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_calls = 0
+
+        def get(self, key: tuple[str, int, str, int], default: int = 0) -> int:
+            self.get_calls += 1
+            return super().get(key, default)
+
+    next_timestamps = CountingDict()
+    activity_gen._next_icmp_observation_ts_us = next_timestamps
+    base_time = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    adjusted_times = [
+        activity_gen._disambiguate_icmp_observation_time(
+            "10.0.0.1",
+            0,
+            "10.0.0.2",
+            0,
+            base_time,
+        )
+        for _ in range(1000)
+    ]
+
+    assert adjusted_times[0] == base_time
+    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert next_timestamps.get_calls == len(adjusted_times)
+    assert len(next_timestamps) == 1
 
 
 def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):

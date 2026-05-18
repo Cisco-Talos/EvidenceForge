@@ -3,12 +3,15 @@
 
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
+import math
 import random
 import re
 from datetime import UTC, datetime
 
+import pytest
 import yaml
 
+from evidenceforge.config.schemas import TlsRealismConfig
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import NetworkContext, X509Context
 from evidenceforge.generation.activity.generator import (
@@ -28,6 +31,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     certificate_subject_key_profile,
     chain_template_for_issuer,
+    load_tls_realism,
     multi_label_public_suffixes,
     ocsp_config,
     pick_ocsp_responder,
@@ -205,6 +209,46 @@ class TestTlsIssuers:
         assert all(16 <= len(serial) <= 40 for serial in serials)
         assert all(len(serial) % 2 == 0 for serial in serials)
         assert all(re.fullmatch(r"[0-9A-F]+", serial) for serial in serials)
+
+    def test_tls_certificate_serial_ignores_non_finite_overlay_weight(self, tmp_path, monkeypatch):
+        """Non-finite overlay weights should not crash serial generation."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump(
+                {"serial_numbers": {"byte_lengths": [{"bytes": 16, "weight": float("inf")}]}}
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            serial = _tls_certificate_serial("non-finite-overlay")
+        finally:
+            reset_tls_realism_cache()
+
+        assert re.fullmatch(r"[0-9A-F]+", serial)
+        assert 16 <= len(serial) <= 40
+
+    def test_tls_certificate_serial_ignores_oversized_overlay_weight(self, tmp_path, monkeypatch):
+        """Oversized integer overlay weights should not reach random.choices()."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump({"serial_numbers": {"byte_lengths": [{"bytes": 16, "weight": 10**400}]}})
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            serial = _tls_certificate_serial("oversized-overlay")
+            with pytest.raises(ValueError, match="weight must be <="):
+                TlsRealismConfig(**load_tls_realism())
+        finally:
+            reset_tls_realism_cache()
+
+        assert re.fullmatch(r"[0-9A-F]+", serial)
+        assert 16 <= len(serial) <= 40
 
     def test_ocsp_responder_selection_is_issuer_aware(self):
         """OCSP responders should come from issuer-specific config."""
@@ -569,6 +613,33 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_dns_tunnel_rcode_weights_normalize_overflowing_overlay_total(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response-code weights should stay safe for random.choices."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rcode_weights,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_rcode_weights": {"NOERROR": 1.0e308, "NXDOMAIN": 1.0e308}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            weights = dns_tunnel_rcode_weights()
+
+            assert weights == {"NOERROR": 1.0, "NXDOMAIN": 1.0}
+            assert math.isfinite(sum(weights.values()))
+        finally:
+            reset_network_params_cache()
+
     def test_dns_tunnel_ttl_choices_are_loaded_from_network_params_overlay(
         self, tmp_path, monkeypatch
     ):
@@ -592,6 +663,42 @@ class TestTlsIssuers:
             assert (9, 5.0) in dns_tunnel_ttl_choices()
         finally:
             reset_network_params_cache()
+
+    def test_dns_tunnel_ttl_choices_ignore_non_finite_overlay_values(self, monkeypatch):
+        """Non-finite overlay TTL values should not crash runtime config loading."""
+        from evidenceforge.generation.activity import network_params
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {"dns_tunnel_ttl_choices": [{"value": float("inf"), "weight": 1}]},
+        )
+
+        assert network_params.dns_tunnel_ttl_choices() == list(
+            network_params._DEFAULT_DNS_TUNNEL_TTL_CHOICES
+        )
+
+    def test_dns_tunnel_ttl_choices_normalize_overflowing_weight_totals(self, monkeypatch):
+        """Huge finite weights should remain usable by random.choices after normalization."""
+        from evidenceforge.generation.activity import network_params
+        from evidenceforge.generation.engine.storyline import _choose_dns_tunnel_campaign_ttl
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {
+                "dns_tunnel_ttl_choices": [
+                    {"value": 9, "weight": 1e308},
+                    {"value": 10, "weight": 1e308},
+                ]
+            },
+        )
+
+        choices = network_params.dns_tunnel_ttl_choices()
+
+        assert choices == [(9, 1.0), (10, 1.0)]
+        assert math.isfinite(sum(weight for _value, weight in choices))
+        assert _choose_dns_tunnel_campaign_ttl(choices, random.Random(7)) in {9, 10}
 
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""

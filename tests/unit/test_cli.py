@@ -24,6 +24,7 @@
 
 from unittest.mock import Mock, patch
 
+import pytest
 from typer.testing import CliRunner
 
 from evidenceforge import __version__
@@ -187,6 +188,30 @@ output:
         call_kwargs = mock_engine_class.call_args.kwargs
         assert "progress_callback" in call_kwargs
         assert callable(call_kwargs["progress_callback"])
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_rejects_dangling_sidecar_symlink(
+        self, mock_engine_class, scenarios_dir, tmp_path
+    ):
+        """Dangling generated sidecar symlinks should be rejected before generation."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+        ground_truth = tmp_path / "GROUND_TRUTH.md"
+        outside_target = tmp_path / "outside-ground-truth.md"
+        try:
+            ground_truth.symlink_to(outside_target)
+        except OSError as exc:
+            pytest.skip(f"Symlink creation unsupported in this environment: {exc}")
+
+        result = runner.invoke(
+            app, ["generate", str(scenarios_dir / "minimal.yaml"), "--output", str(tmp_path)]
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "symlink" in result.stdout.lower()
+        assert not mock_engine.generate.called
+        assert ground_truth.is_symlink()
+        assert not outside_target.exists()
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_handles_generation_error(self, mock_engine_class, scenarios_dir, tmp_path):

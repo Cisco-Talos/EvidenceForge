@@ -117,6 +117,9 @@ class TestPidAlwaysPresent:
         assert row["logon_type"] == 7
         assert row["objectID"] == "session-1"
 
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["logon_type"] == "7"
+
     def test_pid_none_becomes_negative_one(self, emitter, ts):
         """Explicit pid=None should become -1."""
         rendered = emitter._render_event(
@@ -1028,6 +1031,57 @@ class TestChronologicalOutput:
         parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
+
+    def test_parent_order_skips_self_parented_pid_without_hanging(self):
+        """Raw eCAR self-parented PID records should not loop forever."""
+        line = json.dumps(
+            {
+                "timestamp_ms": 1000,
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "self-parent",
+                "pid": 123,
+                "ppid": 123,
+            },
+            separators=(",", ":"),
+        )
+
+        normalized = EcarEmitter._normalize_process_parent_order([line])
+
+        row = json.loads(normalized[0])
+        assert row["timestamp_ms"] == 1000
+
+    def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
+        """Raw eCAR cyclic ppid records should not loop forever."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "first",
+                    "pid": 123,
+                    "ppid": 456,
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "second",
+                    "pid": 456,
+                    "ppid": 123,
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = EcarEmitter._normalize_process_parent_order(lines)
+
+        rows = [json.loads(line) for line in normalized]
+        assert [row["timestamp_ms"] for row in rows] == [1000, 1000]
 
 
 class TestTidAlwaysPresent:

@@ -4,6 +4,22 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.7.2 (2026-05-18)
+
+This patch release packages the final automated PR review integration batch after v0.7.1. The branch contains only `fix:`, `test:`, and `docs:` work since the prior version bump, so the version moves from `0.7.1` to `0.7.2` under the pre-1.0 semver policy.
+
+**Automated PR review integrations**
+
+- Hardened session offset allocation for far-future scenarios and merged the accepted Codex review fixes for bounded event handling, parser resilience, emitter accounting, and validation guards (`592d943`, `83d5e36`).
+- Integrated the accepted after-rebase fixes for current `dev`, including Zeek and web/session realism hardening, safer config validation paths, and source-native rendering corrections (`944249d`).
+- Reworked the real-but-not-ready PR fixes at the owning layers: sidecar-safe writes, bounded bash template expansion, Zeek OCSP optional-field defaults, and generation-safe extra syslog weights (`e707e1a`).
+- Integrated the final approved PR set, covering site-map expansion bounds, observation-manifest trust binding, public DNS template validation, malformed URL handling, syslog/profile validation, non-finite Zeek timestamp guards, explicit-credential fallback validation, and PID-reuse process termination tracking (`4529265`).
+
+**Automation records and validation**
+
+- Recorded the full slow suite pass after final integration: `uv run pytest -v --include-slow --no-cov` completed with `3265 passed`, `24 skipped` (`c072849`).
+- Preserved the PR #163 automated review notes in `TODO.md`, including the prior amended review state and remaining concerns that were later handled through the review workflow (`88af3a2`).
+
 ## v0.7.1 (2026-05-16)
 
 This patch release packages the latest `dev` branch realism work since v0.7.0. The branch contains only `fix:` and `docs:` commits, so the version moves from `0.7.0` to `0.7.1` under the pre-1.0 semver policy.

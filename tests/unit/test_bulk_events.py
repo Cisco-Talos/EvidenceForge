@@ -18,6 +18,7 @@ from evidenceforge.generation.engine.storyline import (
     _is_c2_http_request,
     _iter_dns_tunnel_ticks,
     _iter_periodic_ticks,
+    _iter_shuffled_port_scan_pairs,
     _observed_web_scan_status,
     _port_scan_connection_profile,
     _scan_target_exposes_port,
@@ -578,6 +579,30 @@ class TestWebScanConnectionProfile:
         assert not _web_scan_path_allows_referrer(
             {"uri": "/robots.txt", "status": 200, "ids": {"sid": 1}}
         )
+
+
+class TestPortScanPairIteration:
+    def test_iter_shuffled_port_scan_pairs_covers_product_once(self):
+        targets = ["10.0.0.10", "10.0.0.11", "10.0.0.12"]
+        ports = [22, 80, 443, 3389]
+
+        pairs = list(_iter_shuffled_port_scan_pairs(targets, ports, random.Random(17)))
+
+        assert len(pairs) == len(targets) * len(ports)
+        assert set(pairs) == {(target, port) for target in targets for port in ports}
+        assert pairs != [(target, port) for target in targets for port in ports]
+
+    def test_iter_shuffled_port_scan_pairs_is_lazy_generator(self):
+        targets = [f"10.0.0.{index}" for index in range(1, 5001)]
+        ports = list(range(1, 5001))
+
+        iterator = _iter_shuffled_port_scan_pairs(targets, ports, random.Random(23))
+        first_pairs = [next(iterator) for _ in range(8)]
+
+        assert len(first_pairs) == 8
+        assert len(set(first_pairs)) == 8
+        assert all(target in targets for target, _port in first_pairs)
+        assert all(port in ports for _target, port in first_pairs)
 
 
 class TestPortScanConnectionProfile:

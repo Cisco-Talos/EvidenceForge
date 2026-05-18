@@ -170,7 +170,7 @@ class EvaluationEngine:
         )
 
         logger.info(f"Parsed {total_records} records across {len(source_counts)} sources")
-        observation_manifest = load_observation_manifest(self.output_dir)
+        observation_manifest = load_observation_manifest(self.output_dir, self.scenario)
         context = EvaluationContext(observation_manifest=observation_manifest)
 
         # 2. Run each available pillar scorer

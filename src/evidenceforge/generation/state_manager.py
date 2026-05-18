@@ -118,17 +118,18 @@ class StateManager:
         if base is not None:
             return base
 
-        for salt in range(512):
-            # Keep values in the 32-bit LUID-looking space while leaving enough
-            # room for boot-relative growth during multi-day uptime windows.
-            bucket = 0x10 + (_stable_seed(f"logon_luid_host_{system}_{salt}") % 0xE0)
-            candidate = bucket << 24
+        bucket = 0x100000 + _stable_seed(f"logon_luid_host_{system}")
+        salt = 0
+        while True:
+            # Use a 32-bit host bucket and leave the low 32 bits for boot-relative
+            # growth during multi-day uptime windows. Collision probes occupy new
+            # high-order layers, avoiding the old fixed 224-host allocation cap.
+            candidate = ((salt << 32) + bucket) << 32
             if candidate not in self._logon_id_used_host_bases:
                 self._logon_id_host_bases[system] = candidate
                 self._logon_id_used_host_bases.add(candidate)
                 return candidate
-
-        raise StateError("LogonID host range allocation exhausted")
+            salt += 1
 
     def _host_logon_epoch(self, system: str, current_time: datetime) -> datetime:
         """Return the boot/uptime epoch used for host-local LUID allocation."""
@@ -150,18 +151,19 @@ class StateManager:
         return 56 + (_stable_seed(f"logon_luid_stride:{system}:{block}") % 73)
 
     def _logon_luid_block_offset(self, system: str, block: int) -> int:
-        """Return cumulative per-host LUID churn before a minute-scale block."""
-        offsets = self._logon_id_block_offsets.setdefault(system, {0: 0})
-        if block in offsets:
-            return offsets[block]
+        """Return deterministic per-host LUID churn before a minute-scale block.
 
-        last_block = max(offsets)
-        offset = offsets[last_block]
-        for current_block in range(last_block, block):
-            gap = 17 + (_stable_seed(f"logon_luid_block_gap:{system}:{current_block}") % 61)
-            offset += (60 * self._logon_luid_block_stride(system, current_block)) + gap
-            offsets[current_block + 1] = offset
-        return offsets[block]
+        Scenario event times can be far outside the visible generation window.
+        Compute the block offset directly instead of caching every elapsed
+        minute, keeping allocation CPU and memory bounded by the number of
+        emitted events rather than attacker-controlled wall-clock distance.
+        """
+        if block <= 0:
+            return 0
+
+        block_width = 8192
+        jitter = _stable_seed(f"logon_luid_block_jitter:{system}:{block}") % 512
+        return (block * block_width) + jitter
 
     def _allocate_logon_luid(self, system: str, event_time: datetime) -> int:
         """Allocate a deterministic host-local Windows LogonID.
@@ -524,26 +526,10 @@ class StateManager:
                 minute_in_quarter = (elapsed_seconds % 900) // 60
                 block = elapsed_quarters // 16
                 quarter_in_block = elapsed_quarters % 16
-                block_offsets = self._linux_logind_session_block_offsets.setdefault(
-                    system,
-                    {0: 0},
-                )
-                if block not in block_offsets:
-                    last_block = max(block_offsets)
-                    offset = block_offsets[last_block]
-                    for current_block in range(last_block, block):
-                        stride = 4 + (
-                            _stable_seed(f"logind_session_stride:{system}:{current_block}") % 3
-                        )
-                        gap = _stable_seed(f"logind_session_gap:{system}:{current_block}") % 3
-                        offset += (16 * stride) + gap
-                        block_offsets[current_block + 1] = offset
+                block_offset = self._linux_logind_session_block_offset(system, block)
                 stride = 4 + (_stable_seed(f"logind_session_stride:{system}:{block}") % 3)
                 candidate = (
-                    initial
-                    + block_offsets[block]
-                    + (quarter_in_block * stride)
-                    + (minute_in_quarter // 5)
+                    initial + block_offset + (quarter_in_block * stride) + (minute_in_quarter // 5)
                 )
                 used = self._linux_logind_session_used_ids.setdefault(system, set())
                 allocations = self._linux_logind_session_allocations.setdefault(system, [])
@@ -568,6 +554,15 @@ class StateManager:
                 self._linux_logind_session_counters[system] = rng.randint(20, 250)
             self._linux_logind_session_counters[system] += rng.randint(1, 4)
             return self._linux_logind_session_counters[system]
+
+    def _linux_logind_session_block_offset(self, system: str, block: int) -> int:
+        """Return deterministic logind session churn before a four-hour block."""
+        if block <= 0:
+            return 0
+
+        block_width = 128
+        jitter = _stable_seed(f"logind_session_block_jitter:{system}:{block}") % 16
+        return (block * block_width) + jitter
 
     @staticmethod
     def _linux_logind_matches_elapsed_delta(
@@ -605,18 +600,13 @@ class StateManager:
         return 997 + (_stable_seed(f"linux_pid_stride:{system}:{block}") % 311)
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
-        """Return cumulative per-host Linux PID churn before a coarse time block."""
-        offsets = self._linux_pid_block_offsets.setdefault(system, {0: 0})
-        if block in offsets:
-            return offsets[block]
+        """Return deterministic per-host Linux PID churn before a coarse time block."""
+        if block <= 0:
+            return 0
 
-        last_block = max(offsets)
-        offset = offsets[last_block]
-        for current_block in range(last_block, block):
-            gap = 37 + (_stable_seed(f"linux_pid_block_gap:{system}:{current_block}") % 61)
-            offset += self._linux_pid_block_stride(system, current_block) + gap
-            offsets[current_block + 1] = offset
-        return offsets[block]
+        block_width = 2048
+        jitter = _stable_seed(f"linux_pid_block_jitter:{system}:{block}") % 128
+        return (block * block_width) + jitter
 
     @staticmethod
     def _normalize_linux_pid(pid: int) -> int:

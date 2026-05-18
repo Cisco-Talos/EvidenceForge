@@ -147,7 +147,11 @@ def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None
     generator.finalize_foreground_process_lifetimes(start + timedelta(minutes=1))
 
     assert state.get_process(system.hostname, pid) is None
-    assert (system.hostname, pid) in generator._terminated_process_keys
+    assert generator._process_termination_recorded(
+        system.hostname,
+        pid,
+        start,
+    )
 
 
 def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window() -> None:
@@ -189,7 +193,11 @@ def test_finalize_foreground_process_lifetimes_preserves_commands_beyond_window(
     generator.finalize_foreground_process_lifetimes(start + timedelta(seconds=2))
 
     assert state.get_process(system.hostname, pid) is not None
-    assert (system.hostname, pid) not in generator._terminated_process_keys
+    assert not generator._process_termination_recorded(
+        system.hostname,
+        pid,
+        start,
+    )
 
 
 def test_expired_linux_curl_is_not_valid_for_later_network_attribution() -> None:
@@ -247,3 +255,77 @@ def test_hourly_module_noise_keeps_long_running_windows_processes() -> None:
     )
 
     assert _eligible_for_hourly_module_load(proc, start + timedelta(hours=2))
+
+
+def test_process_termination_dedup_allows_reused_windows_pid() -> None:
+    start = datetime(2024, 3, 18, 17, 56, 39, tzinfo=UTC)
+    state = StateManager()
+    state.set_current_time(start)
+    dispatcher = EventDispatcher(state_manager=state, emitters={})
+    generator = ActivityGenerator(state, {}, dispatcher=dispatcher)
+    system = System(
+        hostname="WS-01",
+        ip="10.10.1.44",
+        os="Windows 11",
+        type="workstation",
+    )
+    user = User(
+        username="analyst",
+        full_name="Alicia Analyst",
+        email="analyst@example.local",
+    )
+
+    first_pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\cmd.exe",
+        command_line="cmd.exe /c whoami",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+    first_proc = state.get_process(system.hostname, first_pid)
+    assert first_proc is not None
+    first_start_time = first_proc.start_time
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=start + timedelta(seconds=5),
+        pid=first_pid,
+        process_name=r"C:\Windows\System32\cmd.exe",
+        logon_id="0x1234",
+    )
+
+    assert state.get_process(system.hostname, first_pid) is None
+    assert generator._process_termination_recorded(system.hostname, first_pid, first_start_time)
+
+    state.set_current_time(start + timedelta(minutes=10))
+    state._pid_counters[system.hostname] = first_pid
+    state._pid_os[system.hostname] = "windows"
+    reused_pid = state.create_process(
+        system=system.hostname,
+        parent_pid=0,
+        image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        command_line="powershell.exe -NoProfile -Command Get-Date",
+        username=user.username,
+        integrity_level="Medium",
+        logon_id="0x1234",
+    )
+    reused_proc = state.get_process(system.hostname, reused_pid)
+    assert reused_proc is not None
+    reused_start_time = reused_proc.start_time
+
+    assert reused_pid == first_pid
+    assert reused_start_time != first_start_time
+
+    generator.generate_process_termination(
+        user=user,
+        system=system,
+        time=start + timedelta(minutes=10, seconds=5),
+        pid=reused_pid,
+        process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        logon_id="0x1234",
+    )
+
+    assert state.get_process(system.hostname, reused_pid) is None
+    assert generator._process_termination_recorded(system.hostname, reused_pid, reused_start_time)

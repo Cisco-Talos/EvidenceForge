@@ -36,6 +36,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Prepare `dev` → `main` PR for final PR-review integration batch — inspected `main..dev`, applied the required v0.7.2 patch version/changelog bump, ran release checks, pushed `dev`, and opened the PR into `main`.
+- [x] Run slow comprehensive pytest suite after final PR integration — `uv run pytest -v --include-slow --no-cov` passed on current `dev` with `3265 passed, 24 skipped`; no regressions or follow-up fixes were needed.
 - [x] Move coverage to the release lane — default/local and feature-PR tests now run without coverage, final `dev` → `main` readiness keeps explicit coverage and slow comprehensive gates, CI/docs/agent guidance are updated, workflow YAML parses, Ruff checks pass, and `uv run pytest --no-cov` passed in 34.74s.
 - [x] Refresh the v0.7.0 `dev` -> `main` release PR after PR #162 merged into `dev` — confirmed the release PR head includes merge commit `87ac753`, kept the version at `0.7.0`, and updated the changelog with the calibration-cleanup work from PR #162.
 - [x] Split slow comprehensive tests from coverage instrumentation in CI and update contributor/agent testing guidance — normal coverage gate passed at 79.38% with slow tests skipped; slow comprehensive suite passed separately with `--no-cov` in 2m36s; Ruff checks passed.
@@ -45,11 +47,16 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Remediate Windows singleton PID path traversal telemetry suppression — canonicalize Windows singleton paths with ntpath before seeded PID reuse and cover traversal variants with a unit test.
 - [x] Fix DNS tunnel label payload accounting so sequence metadata does not truncate counted exfiltration bytes.
 - [x] Fix actor-scoped LogonID inheritance for typed `log_cleared` storyline events.
+- [x] Automated PR Review & Merge run 2026-05-16 — reviewed open PR #163 against `dev`; found the underlying issues real but the branch needed two follow-up fixes before merge. Prepared and verified local amended commit `a0a3528`, but could not publish/comment/reject/merge because direct git push could not resolve GitHub and the GitHub write action was rejected.
+- [x] Automated PR Review & Merge follow-up 2026-05-16 — re-evaluated amended PR #163 (`044b097`) against `dev`; prior inbound web-session status issue is fixed, but CLI HTTP command parsing still treats `curl -sI` as GET and bare lowercase `curl -i` as HEAD, so the PR is not ready to merge. PR remains draft and also calls out a verified DB bash-history/eCAR timing mismatch as next work.
 
 **Goal:** Fix all expert-identified issues that would cause an analyst to reject the data. Consolidated from 6 blind expert panel improvement loops (Threat Hunter, DFIR, Network Eng, Detection Eng) plus infrastructure issues. Work top to bottom.
 
 ### Security Fixes
 
+- [x] Integrate final approved PR review outcomes into `dev` — accepted and adapted the remaining real fixes (#170, #171, #172, #188, #189, #191, #192, #194, #195, #196, #197, #212), then closed duplicate, superseded, or already-addressed PRs (#167, #168, #174, #190, #193, #213) with rationale.
+- [x] Reworked remaining real-but-not-ready PR fixes #165, #169, #204, and #207 against current `dev` — landed sidecar symlink-safe writes, bounded bash template expansion, raw Zeek OCSP optional-field defaults, and generation-safe extra syslog weights with focused coverage.
+- [x] Fix unbounded session offset allocation caches for far-future scenario times — replaced minute/four-hour catch-up caches with direct deterministic offsets and covered far-future allocation cases.
 - [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.
