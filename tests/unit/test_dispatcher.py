@@ -755,6 +755,35 @@ class TestCanHandleDefault:
         assert new_sessions == sorted(new_sessions)
         assert removed_session == new_sessions[0]
 
+    def test_syslog_ignores_oversized_raw_logind_session_ids_on_close(self, tmp_path):
+        """Oversized raw logind session IDs should not crash close-time normalization."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        oversized_session = "1" * 5000
+        emitter.emit_raw(
+            {
+                "timestamp": datetime(2024, 3, 18, 12, 4, 40, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 22523,
+                "facility": 10,
+                "severity": 6,
+                "message": f"New session {oversized_session} of user root.",
+            }
+        )
+
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert f"New session {oversized_session} of user root." in lines[0]
+
     def test_syslog_rewrites_prewindow_logind_removals_below_visible_news(self, tmp_path):
         """Pre-window removes should not reuse a later visible New-session ID."""
         from datetime import UTC, datetime

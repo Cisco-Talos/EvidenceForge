@@ -45,6 +45,17 @@ _LOGIND_REMOVED_SESSION_RE = re.compile(
     r"(?P<prefix>\bsystemd-logind\s+(?P<pid>\d+)\s+\S+\s+\S+\s+Removed session )"
     r"(?P<session>\d+)(?P<suffix>\.)"
 )
+_MAX_LOGIND_SESSION_ID_DIGITS = 18
+
+
+def _parse_logind_session_id(value: str) -> int | None:
+    """Parse bounded systemd-logind session IDs without triggering huge-int failures."""
+    if len(value) > _MAX_LOGIND_SESSION_ID_DIGITS:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _ssh_lifecycle_priority(line: str) -> int:
@@ -268,7 +279,9 @@ class SyslogEmitter(HostMultiplexEmitter):
             if match is None:
                 continue
             pid = match.group("pid")
-            session = int(match.group("session"))
+            session = _parse_logind_session_id(match.group("session"))
+            if session is None:
+                continue
             first_by_pid[pid] = min(session, first_by_pid.get(pid, session))
 
         if not first_by_pid:
@@ -283,6 +296,9 @@ class SyslogEmitter(HostMultiplexEmitter):
             if new_match is not None:
                 pid = new_match.group("pid")
                 original_session = new_match.group("session")
+                if _parse_logind_session_id(original_session) is None:
+                    normalized.append(line)
+                    continue
                 step_seed = _stable_seed(
                     f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
                 )
@@ -303,9 +319,11 @@ class SyslogEmitter(HostMultiplexEmitter):
                 rewritten = rewritten_by_original.get(key)
                 if rewritten is None:
                     pid = removed_match.group("pid")
-                    first_visible = max(
-                        2, first_by_pid.get(pid, int(removed_match.group("session")) + 1)
-                    )
+                    original_session_id = _parse_logind_session_id(removed_match.group("session"))
+                    if original_session_id is None:
+                        normalized.append(line)
+                        continue
+                    first_visible = max(2, first_by_pid.get(pid, original_session_id + 1))
                     step_seed = _stable_seed(
                         "syslog_logind_prewindow_session_step:"
                         f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
