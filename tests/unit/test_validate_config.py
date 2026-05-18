@@ -44,6 +44,60 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_non_mapping_web_scan_ids_ua(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "ids_ua": [],
+                        "paths": [{"uri": "/", "status": 200}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" ids_ua must be a mapping, got list' in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_non_mapping_web_scan_path_ids(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "paths": [{"uri": "/cgi-bin/test", "status": 404, "ids": []}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" path #1 (/cgi-bin/test) ids must be a mapping, got list'
+            in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import endpoint_noise
 

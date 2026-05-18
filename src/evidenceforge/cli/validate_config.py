@@ -2189,52 +2189,79 @@ def validate_config() -> ValidationResult:
         # Validate ids_ua
         if "ids_ua" in preset:
             ids_ua = preset["ids_ua"]
-            for field in _IDS_REQUIRED_FIELDS:
-                if field not in ids_ua:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "web_scan_presets.yaml",
-                            f'Preset "{name}" ids_ua missing required field "{field}"',
-                        )
+            if not isinstance(ids_ua, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_scan_presets.yaml",
+                        f'Preset "{name}" ids_ua must be a mapping, got {type(ids_ua).__name__}',
                     )
-            _record_ids_rule_identity(
-                "web_scan_presets.yaml",
-                ids_ua.get("sid"),
-                ids_ua.get("gid", 1),
-                ids_ua.get("message"),
-            )
+                )
+            else:
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in ids_ua:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" ids_ua missing required field "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    ids_ua.get("sid"),
+                    ids_ua.get("gid", 1),
+                    ids_ua.get("message"),
+                )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
-            for field in _IDS_REQUIRED_FIELDS:
-                if field not in ids_rate:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "web_scan_presets.yaml",
-                            f'Preset "{name}" ids_rate missing required field "{field}"',
-                        )
-                    )
-            _record_ids_rule_identity(
-                "web_scan_presets.yaml",
-                ids_rate.get("sid"),
-                ids_rate.get("gid", 1),
-                ids_rate.get("message"),
-            )
-            threshold = ids_rate.get("threshold")
-            if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+            if not isinstance(ids_rate, dict):
                 result.issues.append(
                     Issue(
-                        "WARNING",
+                        "ERROR",
                         "web_scan_presets.yaml",
-                        f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                        f'Preset "{name}" ids_rate must be a mapping, got {type(ids_rate).__name__}',
                     )
                 )
+            else:
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in ids_rate:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" ids_rate missing required field "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    ids_rate.get("sid"),
+                    ids_rate.get("gid", 1),
+                    ids_rate.get("message"),
+                )
+                threshold = ids_rate.get("threshold")
+                if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                        )
+                    )
         # Validate per-path ids entries
         for i, path_entry in enumerate(preset.get("paths", [])):
             if isinstance(path_entry, dict) and "ids" in path_entry:
                 path_ids = path_entry["ids"]
+                if not isinstance(path_ids, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids must be a mapping, got {type(path_ids).__name__}',
+                        )
+                    )
+                    continue
                 for field in _IDS_REQUIRED_FIELDS:
                     if field not in path_ids:
                         result.issues.append(
