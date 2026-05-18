@@ -1018,6 +1018,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_value",
         "failure_reason",
         "outcome",
+        "logon_type",
         "session_lifecycle",
         "status_code",
         "sub_status",

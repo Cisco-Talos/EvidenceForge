@@ -117,6 +117,9 @@ class TestPidAlwaysPresent:
         assert row["logon_type"] == 7
         assert row["objectID"] == "session-1"
 
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["logon_type"] == "7"
+
     def test_pid_none_becomes_negative_one(self, emitter, ts):
         """Explicit pid=None should become -1."""
         rendered = emitter._render_event(
