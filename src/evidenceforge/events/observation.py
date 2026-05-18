@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
 
-from evidenceforge.config.observation_profiles import get_observation_profile
+from evidenceforge.config.observation_profiles import (
+    get_observation_profile,
+    observation_profile_exists,
+)
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.utils.rng import _stable_seed
 
@@ -94,7 +97,7 @@ class ObservationPolicy:
     def __init__(self, profile_name: str = "complete") -> None:
         self.profile_name = profile_name or "complete"
         self.profile = get_observation_profile(self.profile_name)
-        if not self.profile:
+        if not self.profile and not observation_profile_exists(self.profile_name):
             raise ValueError(f"Unknown observation_profile: {self.profile_name}")
         self.default = self.profile.get("default", {})
         self.sources = self.profile.get("sources", {})
