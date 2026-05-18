@@ -52,7 +52,7 @@ from evidenceforge.generation.emitters.windows_event import format_windows_syste
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
-from evidenceforge.utils.windows_ids import align_windows_id
+from evidenceforge.utils.windows_ids import normalize_windows_id_value
 
 win_logger = logging.getLogger(__name__)
 
@@ -336,10 +336,7 @@ class WindowsEventEmitter(LogEmitter):
         normalized = dict(event_data)
         for field in ("ExecutionProcessID", "ExecutionThreadID"):
             value = normalized.get(field)
-            if isinstance(value, int):
-                normalized[field] = align_windows_id(value)
-            elif isinstance(value, str) and value.isdecimal():
-                normalized[field] = str(align_windows_id(int(value)))
+            normalized[field] = normalize_windows_id_value(value)
         return normalized
 
     # Event types where the Windows host is dst_host (target of the action)

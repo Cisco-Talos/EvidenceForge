@@ -23,6 +23,7 @@
 """Helpers for source-native Windows process and thread identifiers."""
 
 import random
+from typing import Any
 
 
 def align_windows_id(value: int) -> int:
@@ -30,6 +31,30 @@ def align_windows_id(value: int) -> int:
     if value <= 0:
         return value
     return ((value + 3) // 4) * 4
+
+
+_WINDOWS_ID_MAX = 0xFFFFFFFF
+_WINDOWS_ID_MAX_DIGITS = len(str(_WINDOWS_ID_MAX))
+
+
+def normalize_windows_id_value(value: Any) -> Any:
+    """Safely align an int or bounded decimal-string Windows PID/TID value.
+
+    Raw scenario events may supply provider Execution PID/TID fields as arbitrary
+    strings. Only convert decimal strings that fit in the Windows 32-bit ID range;
+    leave oversized values untouched so malformed raw input cannot abort rendering.
+    """
+    if isinstance(value, int):
+        return align_windows_id(value)
+    if not isinstance(value, str) or not value.isdecimal():
+        return value
+    if len(value) > _WINDOWS_ID_MAX_DIGITS:
+        return value
+    parsed = int(value)
+    aligned = align_windows_id(parsed)
+    if aligned > _WINDOWS_ID_MAX:
+        return value
+    return str(aligned)
 
 
 def windows_id_randint(rng: random.Random, minimum: int, maximum: int) -> int:
