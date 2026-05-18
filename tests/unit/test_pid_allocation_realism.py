@@ -174,6 +174,33 @@ class TestLinuxPidAllocation:
         assert earlier_pid < later_pid
         assert abs((later_pid - earlier_pid) - 900) > 1.0
 
+    def test_linux_pid_allocation_does_not_materialize_intermediate_time_blocks(self, sm):
+        """Far-future Linux process times must not fill one cache entry per PID block."""
+        boot_time = datetime(2024, 3, 18, 8, 0, 0)
+        sm.register_boot_time("TEST-01", boot_time)
+        sm.set_current_time(boot_time)
+        init_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=0,
+            image="/usr/lib/systemd/systemd",
+            command_line="/usr/lib/systemd/systemd --system",
+            username="root",
+            integrity_level="System",
+        )
+
+        sm.set_current_time(datetime(9998, 12, 31, 23, 59, 0))
+        future_pid = sm.create_process(
+            system="TEST-01",
+            parent_pid=init_pid,
+            image="/usr/bin/bash",
+            command_line="bash /tmp/far-future.sh",
+            username="root",
+            integrity_level="System",
+        )
+
+        assert future_pid > 0
+        assert len(sm._linux_pid_block_offsets.get("TEST-01", {})) == 0
+
     def test_linux_pids_do_not_encode_elapsed_wall_clock_seconds(self, sm):
         """Adjacent Linux process PIDs should not reveal elapsed seconds."""
         boot_time = datetime(2024, 3, 18, 8, 0, 0)

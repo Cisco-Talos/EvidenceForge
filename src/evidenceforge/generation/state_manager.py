@@ -605,18 +605,22 @@ class StateManager:
         return 997 + (_stable_seed(f"linux_pid_stride:{system}:{block}") % 311)
 
     def _linux_pid_block_offset(self, system: str, block: int) -> int:
-        """Return cumulative per-host Linux PID churn before a coarse time block."""
-        offsets = self._linux_pid_block_offsets.setdefault(system, {0: 0})
-        if block in offsets:
-            return offsets[block]
+        """Return cumulative per-host Linux PID churn before a coarse time block.
 
-        last_block = max(offsets)
-        offset = offsets[last_block]
-        for current_block in range(last_block, block):
-            gap = 37 + (_stable_seed(f"linux_pid_block_gap:{system}:{current_block}") % 61)
-            offset += self._linux_pid_block_stride(system, current_block) + gap
-            offsets[current_block + 1] = offset
-        return offsets[block]
+        Storyline timestamps are scenario-controlled and may sit far outside the
+        baseline window. Compute the block offset directly instead of caching
+        every intermediate 5-minute block, so a distant timestamp cannot force
+        unbounded dictionary growth or CPU work during PID allocation.
+        """
+        if block <= 0:
+            return 0
+
+        # Keep offsets strictly increasing while avoiding visible wall-clock
+        # second deltas. The jitter range is smaller than the base stride, so
+        # offset(block + 1) is always greater than offset(block).
+        base_stride = 1_141
+        jitter = _stable_seed(f"linux_pid_cumulative_jitter:{system}:{block}") % 257
+        return (block * base_stride) + jitter
 
     @staticmethod
     def _normalize_linux_pid(pid: int) -> int:
