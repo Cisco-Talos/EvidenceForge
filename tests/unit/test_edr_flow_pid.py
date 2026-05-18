@@ -244,6 +244,48 @@ class TestConnectionPidPropagation:
             tags=[],
         )
 
+    def test_browser_http_flow_preserves_explicit_non_browser_process(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """Explicit malware/tool HTTP ownership should survive browser UA spoofing."""
+        state_manager.set_current_time(timestamp - timedelta(seconds=5))
+        attacker_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            r"powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Public\stage.ps1",
+            "jdoe",
+            "Medium",
+        )
+        activity_gen._ip_to_system = {win_system.ip: win_system}
+
+        activity_gen.generate_connection(
+            src_ip=win_system.ip,
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=400,
+            resp_bytes=2048,
+            conn_state="SF",
+            source_system=win_system,
+            http=self._browser_http_context(),
+            pid=attacker_pid,
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == attacker_pid
+        assert event.process is not None
+        assert event.process.image.endswith(r"\WindowsPowerShell\v1.0\powershell.exe")
+        assert event.edr is not None
+        assert event.edr.actor_id == state_manager.get_process_object_id(
+            win_system.hostname,
+            attacker_pid,
+        )
+
     def test_browser_http_flow_uses_interactive_browser_instead_of_svchost(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters
     ):

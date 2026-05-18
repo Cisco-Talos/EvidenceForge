@@ -3201,6 +3201,7 @@ class ActivityGenerator:
         *,
         source_system: System | None,
         time: datetime,
+        caller_provided_pid: bool = False,
     ) -> None:
         """Prevent browser-like HTTP rows from inheriting service-process ownership."""
         if (
@@ -3224,14 +3225,16 @@ class ActivityGenerator:
         current_pid = event.network.initiating_pid
         if current_pid > 0:
             current = self.state_manager.get_process(source_system.hostname, current_pid)
-            if (
+            current_is_usable = (
                 current is not None
-                and current.image.lower() == expected_image
                 and not self._foreground_process_expired_for_attribution(
                     source_system,
                     current,
                     time,
                 )
+            )
+            if current_is_usable and (
+                caller_provided_pid or current.image.lower() == expected_image
             ):
                 self._set_connection_process_context(
                     event,
@@ -6754,6 +6757,8 @@ class ActivityGenerator:
         else:
             self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
 
+        caller_provided_pid = pid > 0
+
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             dns_pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
             if dns_pid > 0:
@@ -7951,6 +7956,7 @@ class ActivityGenerator:
             event,
             source_system=resolved_source_system,
             time=time,
+            caller_provided_pid=caller_provided_pid,
         )
         pid = event.network.initiating_pid
         process_ctx = event.process
