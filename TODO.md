@@ -50,6 +50,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Remediate recursive bash service template substitution denial-of-service — filtered scenario-provided service names containing template markers, bounded same-token expansion, and covered recursive service/candidate regressions with focused tests.
 - [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.

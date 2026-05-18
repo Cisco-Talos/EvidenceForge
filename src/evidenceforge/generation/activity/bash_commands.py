@@ -70,11 +70,16 @@ def _resolve_server_role(hostname: str, services: list[str]) -> str:
 
 
 def _service_template_values(system_services: list[str] | None, fallback: list[str]) -> list[str]:
-    """Return service placeholder values that fit the current host when possible."""
+    """Return safe service placeholder values that fit the current host when possible."""
     contextual: list[str] = []
     for service in system_services or []:
         normalized = service.strip().lower()
-        if not normalized or normalized in {"dns-client", "systemd"}:
+        if (
+            not normalized
+            or normalized in {"dns-client", "systemd"}
+            or "{" in normalized
+            or "}" in normalized
+        ):
             continue
         if normalized == "ssh":
             normalized = "sshd"
@@ -90,13 +95,15 @@ def _resolve_template(
 ) -> str:
     """Resolve {placeholder} tokens in a command template."""
     result = template
-    # Iterate to handle templates with multiple placeholders
+    # Resolve only the occurrences present for each token when that token is visited.
+    # Scenario-controlled service names are filtered above, but this bound also prevents
+    # any replacement value from recursively expanding the same token forever.
     for key, values in params.items():
         token = "{" + key + "}"
-        while token in result:
-            candidates = (
-                _service_template_values(system_services, values) if key == "service" else values
-            )
+        candidates = (
+            _service_template_values(system_services, values) if key == "service" else values
+        )
+        for _ in range(result.count(token)):
             result = result.replace(token, rng.choice(candidates), 1)
     return result
 
