@@ -1057,6 +1057,58 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_accepts_null_extra_syslog_system_types(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_extra_syslog_messages_with_null_system_types():
+            return [
+                {
+                    "app": "packagekitd",
+                    "system_types": None,
+                    "messages": ["search-names transaction /12345"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog,
+            "load_extra_syslog_messages",
+            load_extra_syslog_messages_with_null_system_types,
+        )
+
+        result = validate_config()
+
+        assert not any(
+            issue.file == "extra_syslog_messages.yaml" and "system_types" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_scalar_extra_syslog_system_types(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_extra_syslog_messages_with_scalar_system_types():
+            return [
+                {
+                    "app": "packagekitd",
+                    "system_types": 7,
+                    "messages": ["search-names transaction /12345"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog,
+            "load_extra_syslog_messages",
+            load_extra_syslog_messages_with_scalar_system_types,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and "system_types" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_networkmanager_same_state_transition(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 

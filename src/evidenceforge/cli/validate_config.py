@@ -1937,7 +1937,10 @@ def validate_config() -> ValidationResult:
                 continue
             app = str(entry.get("app") or "<unknown>")
             _VALID_SYSLOG_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
-            for system_type in entry.get("system_types", []):
+            system_types = entry.get("system_types") or []
+            if not isinstance(system_types, list):
+                continue
+            for system_type in system_types:
                 if system_type not in _VALID_SYSLOG_SYSTEM_TYPES:
                     result.issues.append(
                         Issue(
