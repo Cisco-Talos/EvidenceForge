@@ -45,6 +45,8 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     RemoteThreadContext,
 )
+from evidenceforge.formats.loader import load_format
+from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -119,6 +121,37 @@ class TestPidAlwaysPresent:
 
         record = json.loads(emitter._render_event(row))
         assert record["properties"]["logon_type"] == "7"
+
+    def test_user_session_logon_type_is_declared_ecar_property(self, emitter, ts, caplog):
+        """Rendered eCAR login logon_type should be accepted by format validation."""
+        record = json.loads(
+            emitter._render_event(
+                {
+                    "timestamp": ts,
+                    "hostname": "WS-01",
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-1",
+                    "principal": "alice",
+                    "logon_type": 7,
+                }
+            )
+        )
+        flattened = {key: value for key, value in record.items() if key != "properties"}
+        flattened.update(record["properties"])
+
+        result = validate_event(
+            load_format("ecar"),
+            flattened,
+            event_context="USER_SESSION/LOGIN",
+        )
+
+        assert result.valid, result.errors
+        assert not [
+            log_record
+            for log_record in caplog.records
+            if "Unknown field in ecar (USER_SESSION/LOGIN): logon_type" in log_record.getMessage()
+        ]
 
     def test_pid_none_becomes_negative_one(self, emitter, ts):
         """Explicit pid=None should become -1."""
