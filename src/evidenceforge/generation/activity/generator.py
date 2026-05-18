@@ -312,10 +312,14 @@ def _extract_nmap_ports(command_line: str) -> list[int]:
 
 
 def _extract_http_url_from_command(command_line: str) -> str | None:
-    """Return the first HTTP(S) URL embedded in a process command line."""
+    """Return the first valid HTTP(S) URL embedded in a process command line."""
     for match in re.finditer(r"https?://[^\s'\"<>]+", command_line):
         candidate = match.group(0).rstrip(").,;]")
-        parsed = urlsplit(candidate)
+        try:
+            parsed = urlsplit(candidate)
+            _ = parsed.port
+        except ValueError:
+            continue
         if parsed.scheme in {"http", "https"} and parsed.hostname:
             return candidate
     return None
@@ -374,12 +378,15 @@ def _http_context_from_process_command(
     http_url = _extract_http_url_from_command(command_line)
     if not http_url:
         return None
-    parsed = urlsplit(http_url)
-    host = parsed.hostname or ""
-    if not host:
+    try:
+        parsed = urlsplit(http_url)
+        host = parsed.hostname or ""
+        if not host:
+            return None
+        service = "ssl" if parsed.scheme == "https" else "http"
+        port = parsed.port or (443 if service == "ssl" else 80)
+    except ValueError:
         return None
-    service = "ssl" if parsed.scheme == "https" else "http"
-    port = parsed.port or (443 if service == "ssl" else 80)
     path = parsed.path or "/"
     if parsed.query:
         path = f"{path}?{parsed.query}"
