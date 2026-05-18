@@ -3,6 +3,7 @@
 
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
+import math
 import random
 import re
 from datetime import UTC, datetime
@@ -566,6 +567,33 @@ class TestTlsIssuers:
         reset_network_params_cache()
         try:
             assert dns_tunnel_rcode_weights() == {"NOERROR": 80.0, "NXDOMAIN": 20.0}
+        finally:
+            reset_network_params_cache()
+
+    def test_dns_tunnel_rcode_weights_normalize_overflowing_overlay_total(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response-code weights should stay safe for random.choices."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rcode_weights,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_rcode_weights": {"NOERROR": 1.0e308, "NXDOMAIN": 1.0e308}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            weights = dns_tunnel_rcode_weights()
+
+            assert weights == {"NOERROR": 1.0, "NXDOMAIN": 1.0}
+            assert math.isfinite(sum(weights.values()))
         finally:
             reset_network_params_cache()
 

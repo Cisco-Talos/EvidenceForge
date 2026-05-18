@@ -26,6 +26,7 @@ Runs integrity checks across all config YAML files (activity, personas,
 formats, evaluation) and reports errors, warnings, and info items.
 """
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -204,7 +205,13 @@ def validate_config() -> ValidationResult:
             "list_fields": {"mime_types": None, "analyzer_sets": None},
         },
         "activity/network_params.yaml": {
-            "list_fields": {"oui_prefixes": None, "public_ntp_servers": "name"},
+            "list_fields": {
+                "oui_prefixes": None,
+                "public_ntp_servers": "name",
+                "dns_tunnel_ttl_choices": None,
+            },
+            "dict_fields": {"dns_tunnel_rtt", "dns_tunnel_rcode_weights"},
+            "string_list_fields": {"dns_tunnel_response_templates"},
         },
         "activity/windows_auth_realism.yaml": {
             "dict_fields": {"workstation_lock"},
@@ -2095,22 +2102,26 @@ def validate_config() -> ValidationResult:
                         )
                     )
                     continue
-                if not isinstance(weight, int | float) or weight <= 0:
+                if (
+                    not isinstance(weight, int | float)
+                    or weight <= 0
+                    or not math.isfinite(float(weight))
+                ):
                     result.issues.append(
                         Issue(
                             "ERROR",
                             "network_params.yaml (dns_tunnel_rcode_weights)",
-                            f"weight for '{rcode}' must be a positive number",
+                            f"weight for '{rcode}' must be a positive finite number",
                         )
                     )
                     continue
                 total_weight += float(weight)
-            if total_weight <= 0:
+            if total_weight <= 0 or not math.isfinite(total_weight):
                 result.issues.append(
                     Issue(
                         "ERROR",
                         "network_params.yaml (dns_tunnel_rcode_weights)",
-                        "at least one response code must have positive weight",
+                        "response-code weights must have a positive finite total",
                     )
                 )
 

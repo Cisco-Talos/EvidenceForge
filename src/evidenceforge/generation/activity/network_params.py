@@ -152,4 +152,12 @@ def dns_tunnel_rcode_weights() -> dict[str, float]:
             continue
         if numeric > 0 and math.isfinite(numeric):
             cleaned[name] = numeric
-    return cleaned or {"NOERROR": 1.0}
+    if not cleaned:
+        return {"NOERROR": 1.0}
+
+    total_weight = sum(cleaned.values())
+    if math.isfinite(total_weight):
+        return cleaned
+
+    max_weight = max(cleaned.values())
+    return {name: weight / max_weight for name, weight in cleaned.items()}
