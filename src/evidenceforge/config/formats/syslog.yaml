@@ -25,7 +25,7 @@ fields:
   - name: facility
     type: integer
     required: false
-    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv). Rendered into RFC 5424 PRI."
+    description: "Syslog facility (1=user, 4=auth, 3=daemon, 10=authpriv). Rendered into PRI."
     constraints:
       min_value: 0
       max_value: 23
@@ -33,7 +33,7 @@ fields:
   - name: severity
     type: integer
     required: false
-    description: "Syslog severity (6=info, 5=notice, 4=warning). Rendered into RFC 5424 PRI."
+    description: "Syslog severity (6=info, 5=notice, 4=warning). Rendered into PRI."
     constraints:
       min_value: 0
       max_value: 7
@@ -46,7 +46,7 @@ fields:
   - name: pri
     type: integer
     required: false
-    description: "RFC 5424 PRI value derived from facility * 8 + severity"
+    description: "Syslog PRI value derived from facility * 8 + severity"
     constraints:
       min_value: 0
       max_value: 191
@@ -54,7 +54,7 @@ fields:
   - name: version
     type: integer
     required: false
-    description: "RFC 5424 protocol version. EvidenceForge emits version 1."
+    description: "Legacy RFC 5424 protocol version field. EvidenceForge now emits RFC3164."
     constraints:
       allowed_values: [1]
 
@@ -66,24 +66,24 @@ fields:
   - name: procid
     type: string
     required: false
-    description: "RFC 5424 PROCID token, usually the process ID or '-'"
+    description: "Legacy RFC 5424 PROCID token, usually the process ID or '-'"
 
   - name: msgid
     type: string
     required: false
-    description: "RFC 5424 MSGID token. EvidenceForge currently emits '-'."
+    description: "Legacy RFC 5424 MSGID token. EvidenceForge currently emits RFC3164."
 
   - name: structured_data
     type: string
     required: false
-    description: "RFC 5424 structured-data field. EvidenceForge currently emits '-'."
+    description: "Legacy RFC 5424 structured-data field. EvidenceForge currently emits RFC3164."
 
   - name: syslog_protocol
     type: string
     required: false
-    description: "Parser metadata identifying RFC 5424 output or legacy RFC 3164/BSD eval input."
+    description: "Parser metadata identifying generated RFC3164 output or legacy RFC5424 input."
     constraints:
-      allowed_values: [rfc5424, rfc3164_legacy, iso_legacy]
+      allowed_values: [rfc3164, rfc5424_legacy, rfc3164_legacy, iso_legacy]
 
   - name: message
     type: string
@@ -95,4 +95,4 @@ output:
   file_extension: ".log"
   encoding: utf-8
   template: |
-    <{{ pri }}>1 {{ timestamp }} {{ hostname }} {{ app_name }} {{ procid }} {{ msgid }} {{ structured_data }} {{ message }}
+    <{{ pri }}>{{ timestamp.strftime('%b') }} {{ "%2d"|format(timestamp.day) }} {{ timestamp.strftime('%H:%M:%S') }} {{ hostname }} {{ app_name }}{% if pid %}[{{ pid }}]{% endif %}: {{ message }}

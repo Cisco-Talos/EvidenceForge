@@ -224,7 +224,7 @@ EventDispatcher (routes to StateManager + matching emitters)
     +---> SysmonEmitter ---------> Sysmon.evtx (XML)
     +---> ZeekEmitter(s) --------> conn/dns/http/ssl/... (NDJSON)
     +---> EcarEmitter -----------> ecar.json (NDJSON)
-    +---> SyslogEmitter ---------> syslog.log
+    +---> SyslogEmitter ---------> <host>/<year>/syslog.log
     +---> BashHistoryEmitter ----> per-user bash history
     +---> SnortEmitter ----------> snort_alert.log
     +---> WebEmitter ------------> web_access.log

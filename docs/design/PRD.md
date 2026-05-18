@@ -435,9 +435,10 @@ output/
     windows_events.xml         # Windows Event Logs
     zeek_conn.log              # Zeek connection logs
     ecar.json                  # ECAR events
-    syslog.log                 # Linux syslogs
+    <linux-host>/<year>/syslog.log        # Linux syslogs
     bash_history.log           # Bash history entries
     snort_alerts.log           # Snort/Suricata alerts
+    <firewall>/<year>/cisco_asa.log       # Cisco ASA firewall syslogs
     web_access.log             # Web/proxy logs
 ```
 

@@ -381,7 +381,7 @@ def test_asa_output_sorted(tmp_path):
 
     emitter.flush()
 
-    output_file = tmp_path / "fw01" / "cisco_asa.log"
+    output_file = tmp_path / "fw01" / "2024" / "cisco_asa.log"
     assert output_file.exists(), "ASA output file should exist"
     lines = [line for line in output_file.read_text().strip().split("\n") if line.strip()]
     assert len(lines) >= 10, (

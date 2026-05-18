@@ -16,6 +16,7 @@ output/
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
+    <year>/syslog.log                      # Linux syslog (RFC3164; Linux only)
     bash_history/<username>.bash_history    # Per-user bash history (Linux only)
   <sensor-name>/                           # Per-sensor directories (network)
     conn.json                              # Zeek conn.log (NDJSON)
@@ -25,10 +26,9 @@ output/
     files.json                             # Zeek files.log
     ...                                    # Other Zeek logs
   ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
-  syslog.log                               # Linux syslog (RFC 5424)
   snort_alert.log                          # Snort/Suricata IDS alerts
   <fw-hostname>/                           # Per-firewall directories
-    cisco_asa.log                          # Cisco ASA firewall syslog
+    <year>/cisco_asa.log                   # Cisco ASA firewall syslog
   web_access.log                           # Apache/Nginx access log
   <proxy-hostname.domain>/                 # Per-proxy-host directories
     proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
@@ -173,10 +173,10 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 ## Linux Syslog
 
-**File:** `syslog.log`
-**Format:** RFC 5424 syslog
+**File:** `<hostname.domain>/<year>/syslog.log`
+**Format:** RFC3164/BSD syslog with PRI
 
-Authentication and system logs from Linux hosts. Generated syslog uses RFC 5424 with year-bearing ISO/RFC3339 timestamps. `eforge eval` still accepts older BSD/RFC3164-style syslog as a legacy ingest fallback. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows reuse the same source port as the companion Zeek SSH connection tuple.
+Authentication and system logs from Linux hosts. Generated syslog uses a BSD/RFC3164-style envelope (`<PRI>MMM DD HH:MM:SS HOST APP[PID]: MESSAGE`) and partitions files by event year so yearless syslog timestamps remain unambiguous. `eforge eval` still accepts older RFC5424 and flat BSD/RFC3164 syslog as legacy ingest fallbacks. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows reuse the same source port as the companion Zeek SSH connection tuple.
 
 | Program | Description | Notes |
 |---------|-------------|-------|
@@ -232,7 +232,7 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 ## Cisco ASA Firewall Syslog
 
-**File:** `<fw-hostname>/cisco_asa.log`
+**File:** `<fw-hostname>/<year>/cisco_asa.log`
 **Format:** Cisco ASA syslog (RFC 3164 BSD syslog with ASA message IDs)
 
 Cisco ASA firewall logs for permitted and denied connections. Produced by firewall-type network sensors with `cisco_asa` in their `log_formats`. Each permitted connection generates a Built + Teardown pair; denied connections generate a single Deny record.

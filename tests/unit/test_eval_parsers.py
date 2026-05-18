@@ -200,7 +200,7 @@ class TestSyslogParser:
         assert first.fields["pid"] == 12345
         assert first.fields["facility"] == 10
         assert first.fields["severity"] == 6
-        assert first.fields["syslog_protocol"] == "rfc5424"
+        assert first.fields["syslog_protocol"] == "rfc5424_legacy"
         assert "Accepted publickey" in first.fields["message"]
 
     def test_extracts_timestamps(self):
@@ -257,6 +257,32 @@ class TestSyslogParser:
         assert records[0].timestamp is not None
         assert records[0].timestamp.year == 2024
         assert records[0].fields["syslog_protocol"] == "rfc3164_legacy"
+
+    def test_parent_year_overrides_scenario_for_generated_rfc3164(self, tmp_path):
+        """Generated syslog uses the parent YYYY directory for BSD timestamps."""
+        from types import SimpleNamespace
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_dir = tmp_path / "host" / "2026"
+        log_dir.mkdir(parents=True)
+        log = log_dir / "syslog.log"
+        log.write_text(
+            "<86>Mar 18 12:00:00 host sshd[1]: Connected from 10.0.0.1\n",
+            encoding="utf-8",
+        )
+        scenario = SimpleNamespace(
+            time_window=SimpleNamespace(
+                start=__import__("datetime").datetime(2024, 3, 1, 0, 0, 0, tzinfo=UTC)
+            )
+        )
+        parser = SyslogParser()
+        parser.scenario = scenario
+        records = list(parser.parse_file(log))
+
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2026
+        assert records[0].fields["syslog_protocol"] == "rfc3164"
 
     def test_mtime_fallback_when_no_scenario(self, tmp_path):
         """Without a scenario, year falls back to mtime."""

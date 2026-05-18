@@ -26,7 +26,8 @@ Renders ASA-format syslog entries for connection events observed by firewall
 sensors. Produces Built/Teardown pairs for permitted connections and Deny
 records for blocked connections.
 
-Per-sensor directory routing: each firewall sensor gets its own cisco_asa.log.
+Per-sensor/year directory routing: each firewall sensor gets cisco_asa.log files
+partitioned by event year.
 """
 
 import hashlib
@@ -34,12 +35,22 @@ import ipaddress
 import math
 import re
 from collections import deque
+from collections.abc import Iterable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.generation.emitters.syslog_family import (
+    make_syslog_family_route_key,
+    render_rfc3164_syslog,
+    rfc3164_timestamp_sort_key,
+    sanitize_syslog_family_route_key,
+    syslog_family_writer_path,
+    syslog_route_source,
+    syslog_route_year,
+)
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 
 # ASA facility: local4 (20)
@@ -49,23 +60,11 @@ _TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs",)
 _TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 
 
-def _asa_timestamp_sort_key(line: str) -> str:
-    """Extract timestamp from ASA syslog line for chronological sorting.
-
-    Format: <NNN>Mon DD HH:MM:SS hostname ...
-    Returns the timestamp portion so entries sort chronologically
-    regardless of message ID.
-    """
-    gt = line.find(">")
-    if gt >= 0:
-        return line[gt + 1 : gt + 16]
-    return line
-
-
 class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
-    Per-sensor directory routing: each firewall sensor gets its own log file.
+    Per-sensor/year directory routing: each firewall sensor gets its own yearly
+    log file.
 
     Handles all connection events visible to firewall sensors. Unlike Snort
     (which requires IdsContext), the ASA emitter renders every connection it
@@ -76,7 +75,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     _flat_filename = "cisco_asa.log"
     _supported_types: set[str] = {"connection"}
     _sort_before_flush = True
-    _sort_key_func = staticmethod(_asa_timestamp_sort_key)
+    _sort_key_func = staticmethod(rfc3164_timestamp_sort_key)
 
     def __init__(
         self,
@@ -109,6 +108,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         self._td_avg_window: int = 60  # seconds for average rate calculation
         self._td_cooldown: int = 20  # seconds between re-firings (= burst period)
 
+    def _safe_writer_key(self, sensor_hostname: str) -> str:
+        return sanitize_syslog_family_route_key(sensor_hostname)
+
+    def _writer_path_for_key(self, safe_writer_key: str) -> Path:
+        return syslog_family_writer_path(
+            base_dir=self._base_dir,
+            safe_route_key=safe_writer_key,
+            log_filename=self._log_filename,
+            direct_file_path=self._direct_file_path,
+            flat_filename=self._flat_filename,
+        )
+
     def _next_conn_id(self, sensor_hostname: str, ts: Any = None) -> int:
         """Get a deterministic temporary ASA connection ID."""
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
@@ -134,37 +145,92 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         """Rewrite rendered ASA connection IDs in visible chronological order."""
         with self._writers_lock:
             writers = list(self._writers.items())
-        for sensor_hostname, writer in writers:
-            self._normalize_connection_ids_in_file(writer.output_path, sensor_hostname)
+        by_sensor: dict[str, list[tuple[str, Any]]] = {}
+        for route_key, writer in writers:
+            by_sensor.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
+        for sensor_hostname, route_writers in by_sensor.items():
+            mapping = self._connection_id_mapping(route_writers, sensor_hostname)
+            for _route_key, writer in route_writers:
+                self._apply_connection_id_mapping(writer.output_path, mapping)
 
     @staticmethod
     def _normalize_connection_ids_in_file(path: Path, sensor_hostname: str) -> None:
+        """Rewrite rendered ASA connection IDs in one file.
+
+        Kept for focused tests and direct-file usage. Normal generated output
+        uses _normalize_visible_connection_ids so year-partitioned files share
+        one connection-ID mapping per sensor.
+        """
         if not path.exists():
             return
         lines = path.read_text(encoding="utf-8").splitlines()
         if not lines:
             return
 
+        mapping = CiscoAsaEmitter._build_connection_id_mapping(
+            ((0, line) for line in lines),
+            sensor_hostname,
+        )
+        CiscoAsaEmitter._apply_connection_id_mapping(path, mapping)
+
+    @staticmethod
+    def _connection_id_mapping(
+        route_writers: list[tuple[str, Any]],
+        sensor_hostname: str,
+    ) -> dict[str, int]:
+        rows: list[tuple[int, tuple[int, int, int, int, int], str]] = []
+        for route_key, writer in route_writers:
+            if not writer.output_path.exists():
+                continue
+            year = int(syslog_route_year(route_key) or 0)
+            for line in writer.output_path.read_text(encoding="utf-8").splitlines():
+                rows.append((year, rfc3164_timestamp_sort_key(line), line))
+        rows.sort(key=lambda row: (row[0], row[1], row[2]))
+        return CiscoAsaEmitter._build_connection_id_mapping(
+            ((year, line) for year, _sort_key, line in rows),
+            sensor_hostname,
+        )
+
+    @staticmethod
+    def _build_connection_id_mapping(
+        lines: Iterable[tuple[int, str]],
+        sensor_hostname: str,
+    ) -> dict[str, int]:
         seed = int(hashlib.md5(sensor_hostname.encode()).hexdigest()[:8], 16)
         current = 1_000_000 + seed % 500_000
         mapping: dict[str, int] = {}
-        changed = False
-        normalized: list[str] = []
         pattern = re.compile(r"(connection )(\d+)( for)")
-        for line in lines:
+        for _year, line in lines:
             match = pattern.search(line)
             if match is None:
-                normalized.append(line)
                 continue
             old_id = match.group(2)
             if int(old_id) < 1_000_000:
-                normalized.append(line)
                 continue
             if old_id not in mapping:
                 gap_seed = f"{sensor_hostname}:{current}:{len(mapping)}"
                 gap = 1 + int(hashlib.md5(gap_seed.encode()).hexdigest()[:2], 16) % 5
                 current += gap
                 mapping[old_id] = current
+        return mapping
+
+    @staticmethod
+    def _apply_connection_id_mapping(path: Path, mapping: dict[str, int]) -> None:
+        if not path.exists() or not mapping:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+        pattern = re.compile(r"(connection )(\d+)( for)")
+        changed = False
+        normalized: list[str] = []
+        for line in lines:
+            match = pattern.search(line)
+            if match is None:
+                normalized.append(line)
+                continue
+            old_id = match.group(2)
+            if old_id not in mapping:
+                normalized.append(line)
+                continue
             new_id = str(mapping[old_id])
             normalized.append(pattern.sub(rf"\g<1>{new_id}\g<3>", line, count=1))
             changed = changed or new_id != old_id
@@ -766,17 +832,26 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
         rendered = self._render_event(event_data)
         if rendered is None:
             return
-        self.emit_to_sensors(rendered, sensor_hostnames)
+        targets = sensor_hostnames if sensor_hostnames else self._sensor_hostnames
+        if not targets:
+            self.emit_to_sensors(rendered, None)
+            return
+        route_targets = [
+            make_syslog_family_route_key(
+                sensor_hostname,
+                event_data["timestamp"],
+                direct_file_mode=self._direct_file_mode,
+            )
+            for sensor_hostname in targets
+        ]
+        self.emit_to_sensors(rendered, route_targets)
 
     def _render_event(self, event_data: dict[str, Any]) -> str | None:
-        """Render ASA syslog line via Jinja2 template."""
-        context = {
-            "timestamp": event_data.get("timestamp"),
-            "hostname": event_data.get("hostname"),
-            "severity": event_data.get("severity"),
-            "msg_id": event_data.get("msg_id"),
-            "message": event_data.get("message"),
-            "pri": event_data.get("pri"),
-        }
-        rendered = self._template.render(**context)
-        return rendered.strip()
+        """Render ASA syslog line via the shared RFC3164 syslog-family layer."""
+        return render_rfc3164_syslog(
+            pri=int(event_data.get("pri") or self._pri(event_data.get("severity", 6))),
+            timestamp=event_data["timestamp"],
+            hostname=str(event_data.get("hostname") or ""),
+            app_name=f"%ASA-{event_data.get('severity')}-{event_data.get('msg_id')}",
+            message=str(event_data.get("message") or ""),
+        )

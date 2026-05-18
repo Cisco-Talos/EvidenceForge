@@ -726,8 +726,38 @@ class TestCanHandleDefault:
         emitter.close()
 
         lines = output_path.read_text(encoding="utf-8").splitlines()
-        assert lines[0].startswith("<86>1 2024-10-14T19:00:53.000000Z")
-        assert lines[1].startswith("<86>1 2024-10-14T20:01:25.000000Z")
+        assert lines[0].startswith("<86>Oct 14 19:00:53")
+        assert lines[1].startswith("<86>Oct 14 20:01:25")
+
+    def test_syslog_routes_generated_output_by_event_year(self, tmp_path):
+        """Directory-mode syslog output should split host logs by event year."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        emitter = SyslogEmitter(format_def, tmp_path, buffer_size=10)
+        for timestamp in (
+            datetime(2024, 12, 31, 23, 59, 59, tzinfo=UTC),
+            datetime(2025, 1, 1, 0, 0, 1, tzinfo=UTC),
+        ):
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "sshd",
+                    "pid": 500,
+                    "facility": 10,
+                    "severity": 6,
+                    "message": "Accepted password for admin from 10.0.0.1 port 50000 ssh2",
+                    "_host_fqdn": "linux01.example.test",
+                }
+            )
+        emitter.close()
+
+        assert (tmp_path / "linux01.example.test" / "2024" / "syslog.log").exists()
+        assert (tmp_path / "linux01.example.test" / "2025" / "syslog.log").exists()
 
     def test_syslog_normalizes_logind_session_ids_in_rendered_order(self, tmp_path):
         """Rendered New-session IDs should not move backward after final syslog sort."""
