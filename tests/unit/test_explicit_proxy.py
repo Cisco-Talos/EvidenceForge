@@ -498,6 +498,84 @@ class TestExplicitProxyVisibility:
         assert client_event.process.username == user.username
         assert client_event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
 
+    def test_browser_proxy_user_agent_preserves_valid_storyline_process(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        evil_image = r"C:\Users\alex.morgan\AppData\Roaming\evil.exe"
+        storyline_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=evil_image,
+            command_line=r'"C:\Users\alex.morgan\AppData\Roaming\evil.exe" --beacon',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="cdn-assets-update.com:443",
+                host="cdn-assets-update.com",
+                status_code=200,
+                sc_bytes=4800,
+                cs_bytes=420,
+                time_taken=1200,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                ),
+                content_type="text/plain",
+                cache_result="MISS",
+                referrer="",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="45.33.32.30",
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=storyline_pid,
+            source_system=workstation,
+            hostname="cdn-assets-update.com",
+            conn_state="SF",
+            process_image=evil_image,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid == storyline_pid
+        assert client_event.process.pid == client_event.network.initiating_pid
+        assert client_event.process.username == user.username
+        assert client_event.process.image == evil_image
+
     def test_matching_caller_proxy_process_is_preserved_for_storyline_download(self):
         generator, emitters = _generator(
             [

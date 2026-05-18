@@ -3224,26 +3224,25 @@ class ActivityGenerator:
         current_pid = event.network.initiating_pid
         if current_pid > 0:
             current = self.state_manager.get_process(source_system.hostname, current_pid)
-            if (
-                current is not None
-                and current.image.lower() == expected_image
-                and not self._foreground_process_expired_for_attribution(
-                    source_system,
-                    current,
-                    time,
-                )
+            if current is not None and not self._foreground_process_expired_for_attribution(
+                source_system,
+                current,
+                time,
             ):
-                self._set_connection_process_context(
-                    event,
-                    source_system=source_system,
-                    pid=current_pid,
-                )
-                self.state_manager.update_process_activity_time(
-                    source_system.hostname,
-                    current_pid,
-                    time,
-                )
-                return
+                if current.image.lower() == expected_image:
+                    self._set_connection_process_context(
+                        event,
+                        source_system=source_system,
+                        pid=current_pid,
+                    )
+                    self.state_manager.update_process_activity_time(
+                        source_system.hostname,
+                        current_pid,
+                        time,
+                    )
+                    return
+                if not self._windows_proxy_pid_should_be_replaced(current):
+                    return
 
         client_pid, client_image = self._ensure_browser_http_client_process(
             source_system=source_system,
@@ -3277,18 +3276,20 @@ class ActivityGenerator:
         proxy_sys: System,
         dst_port: int,
     ) -> str | None:
-        """Return the caller process image when it already fits proxy client telemetry."""
+        """Return the caller process image when valid proxy client telemetry owns it."""
         if pid <= 0 or source_system is None:
             return None
 
         running = self.state_manager.get_process(source_system.hostname, pid)
-        if running is not None and self._foreground_process_expired_for_attribution(
+        if running is None:
+            return None
+        if self._foreground_process_expired_for_attribution(
             source_system,
             running,
             time=time,
         ):
             return None
-        candidate_image = running.image if running is not None else process_image
+        candidate_image = running.image or process_image
         if not candidate_image:
             return None
 
@@ -3307,7 +3308,20 @@ class ActivityGenerator:
         expected_image = hint[0]
         if candidate_image.lower() == expected_image.lower():
             return candidate_image
-        return None
+        if self._windows_proxy_pid_should_be_replaced(running):
+            return None
+        return candidate_image
+
+    @staticmethod
+    def _windows_proxy_pid_should_be_replaced(process: Any) -> bool:
+        """Return whether a Windows PID is known service-owned proxy attribution noise."""
+        image = str(getattr(process, "image", "") or "")
+        command_line = str(getattr(process, "command_line", "") or "")
+        exe_name = ntpath.basename(image).lower()
+        return (
+            _windows_service_process_account(image, command_line) is not None
+            or exe_name in _WINDOWS_SINGLETON_SERVICE_EXES
+        )
 
     def _attach_ssl_context(
         self,
