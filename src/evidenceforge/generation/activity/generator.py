@@ -1830,7 +1830,10 @@ def _proxy_http_response_body_len(
     return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
 
 
-_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]+ \d{4}\]")
+# Bound the free-form timestamp middle so malformed raw syslog messages cannot trigger
+# repeated long scans/backtracking while preserving Apache timestamp variants with
+# fractional seconds or timezone tokens.
+_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]{1,40} \d{4}\]")
 _APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d+)\]")
 
 

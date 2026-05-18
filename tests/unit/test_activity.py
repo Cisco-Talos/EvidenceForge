@@ -55,6 +55,32 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
 
+class TestApacheRawSyslogNormalization:
+    def test_embedded_timestamp_regex_matches_apache_variants(self):
+        """Apache raw syslog timestamp normalization should keep common timestamp variants."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+
+        assert pattern.search("[Mon Jan 1 12:34:56 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 +0000 2026] message")
+
+    def test_embedded_timestamp_regex_has_bounded_middle_token(self):
+        """Scenario-controlled raw syslog messages must not hit an unbounded timestamp scan."""
+        pattern_text = generator_module._APACHE_EMBEDDED_TS_RE.pattern
+
+        assert "[^\\]]+" not in pattern_text
+        assert "{1,40}" in pattern_text
+
+    def test_embedded_timestamp_regex_handles_many_malformed_prefixes_quickly(self):
+        """Malformed Apache-like prefixes should not cause super-linear regex work."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+        malicious_message = "[Mon Jan 1 " * 20_000
+
+        result = pattern.sub("[Mon Jan 01 00:00:00.000000 2026]", malicious_message, count=1)
+
+        assert result == malicious_message
+
+
 class TestStateObjectIds:
     def test_missing_process_object_id_returns_empty(self):
         """Unseen process IDs should not fabricate eCAR object IDs."""
