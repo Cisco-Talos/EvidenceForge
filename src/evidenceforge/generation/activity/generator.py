@@ -36,6 +36,7 @@ import random
 import re
 import shlex
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from threading import Lock
@@ -248,6 +249,10 @@ _LINUX_ALIAS_COMMANDS = {
     "la": ("/usr/bin/ls", "ls -A"),
     "l": ("/usr/bin/ls", "ls -CF"),
 }
+_LINUX_SHELL_MAX_INFERRED_PROCESSES = 4
+_LINUX_SHELL_MAX_INFER_STAGES = 32
+_LINUX_SHELL_MAX_STAGE_CHARS = 4096
+_LINUX_SHELL_MAX_SCAN_CHARS = 32768
 _NMAP_PORT_SERVICES = {
     21: "ftp",
     22: "ssh",
@@ -1611,48 +1616,93 @@ def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
 
 
 def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
-    """Infer process image and command line for a Linux shell-history command."""
-    processes = _linux_command_processes_from_shell(command)
+    """Infer the first process image and command line for a Linux shell-history command."""
+    processes = _linux_command_processes_from_shell(command, max_processes=1)
     return processes[0] if processes else None
 
 
-def _linux_command_processes_from_shell(command: str) -> list[tuple[str, str]]:
-    """Infer source-native process argv entries from a Linux shell command."""
-    return [
-        process
-        for stage in _split_linux_pipeline(command)
-        if (process := _linux_command_process_from_stage(stage)) is not None
-    ]
+def _linux_command_processes_from_shell(
+    command: str,
+    *,
+    max_processes: int | None = _LINUX_SHELL_MAX_INFERRED_PROCESSES,
+    max_stages: int = _LINUX_SHELL_MAX_INFER_STAGES,
+) -> list[tuple[str, str]]:
+    """Infer bounded source-native process argv entries from a Linux shell command."""
+    if max_processes is not None and max_processes <= 0:
+        return []
+
+    processes: list[tuple[str, str]] = []
+    for stage in _iter_linux_pipeline_stages(command, max_stages=max_stages):
+        process = _linux_command_process_from_stage(stage)
+        if process is None:
+            continue
+        processes.append(process)
+        if max_processes is not None and len(processes) >= max_processes:
+            break
+    return processes
 
 
-def _split_linux_pipeline(command: str) -> list[str]:
-    """Split a shell command on unquoted pipeline/control separators."""
-    stages: list[str] = []
+def _split_linux_pipeline(
+    command: str, *, max_stages: int = _LINUX_SHELL_MAX_INFER_STAGES
+) -> list[str]:
+    """Split a shell command on unquoted pipeline/control separators with a stage cap."""
+    return list(_iter_linux_pipeline_stages(command, max_stages=max_stages))
+
+
+def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[str]:
+    """Yield bounded unquoted pipeline/control stages from a Linux shell command."""
+    if max_stages <= 0:
+        return
+
     current: list[str] = []
+    current_too_long = False
     quote: str | None = None
     escaped = False
+    yielded = 0
     index = 0
-    while index < len(command):
+    scan_limit = min(len(command), _LINUX_SHELL_MAX_SCAN_CHARS)
+
+    def append_current(char: str) -> None:
+        nonlocal current_too_long
+        if current_too_long:
+            return
+        if len(current) >= _LINUX_SHELL_MAX_STAGE_CHARS:
+            current.clear()
+            current_too_long = True
+            return
+        current.append(char)
+
+    def finish_stage() -> str | None:
+        nonlocal current, current_too_long
+        if current_too_long:
+            current = []
+            current_too_long = False
+            return None
+        stage = "".join(current).strip()
+        current = []
+        return stage or None
+
+    while index < scan_limit and yielded < max_stages:
         char = command[index]
         if escaped:
-            current.append(char)
+            append_current(char)
             escaped = False
             index += 1
             continue
         if char == "\\" and quote != "'":
-            current.append(char)
+            append_current(char)
             escaped = True
             index += 1
             continue
         if quote:
-            current.append(char)
+            append_current(char)
             if char == quote:
                 quote = None
             index += 1
             continue
         if char in {"'", '"'}:
             quote = char
-            current.append(char)
+            append_current(char)
             index += 1
             continue
         separator_width = 0
@@ -1661,18 +1711,19 @@ def _split_linux_pipeline(command: str) -> list[str]:
         elif command[index : index + 2] == "&&":
             separator_width = 2
         if separator_width:
-            stage = "".join(current).strip()
-            if stage:
-                stages.append(stage)
-            current = []
+            stage = finish_stage()
+            if stage is not None:
+                yielded += 1
+                yield stage
             index += separator_width
             continue
-        current.append(char)
+        append_current(char)
         index += 1
-    stage = "".join(current).strip()
-    if stage:
-        stages.append(stage)
-    return stages
+
+    if yielded < max_stages:
+        stage = finish_stage()
+        if stage is not None:
+            yield stage
 
 
 def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
@@ -8511,7 +8562,9 @@ class ActivityGenerator:
         """Emit process telemetry for interactive Linux shell commands when state supports it."""
         if _get_os_category(system.os) != "linux":
             return
-        processes = _linux_command_processes_from_shell(command)
+        processes = _linux_command_processes_from_shell(
+            command, max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES
+        )
         if not processes:
             return
 
@@ -8550,7 +8603,7 @@ class ActivityGenerator:
         ):
             return
 
-        for index, (image, process_command_line) in enumerate(processes[:4]):
+        for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             process_time = time + timedelta(milliseconds=rng.randint(20, 180) + index * 35)
             pid = self.generate_process(
