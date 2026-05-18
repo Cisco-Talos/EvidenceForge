@@ -4749,6 +4749,59 @@ class TestActivityGenerator:
             ("/usr/bin/uptime", "uptime"),
         ]
 
+    def test_linux_shell_single_process_inference_stops_after_first_stage(self, monkeypatch):
+        """Single-process inference should not parse unused pipeline stages."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str]:
+            parsed_stages.append(stage)
+            return "/usr/bin/whoami", stage
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+
+        process = generator_module._linux_command_process_from_shell("whoami | id | df | uptime")
+
+        assert process == ("/usr/bin/whoami", "whoami")
+        assert parsed_stages == ["whoami"]
+
+    def test_linux_shell_process_inference_limits_emitted_pipeline_stages(self, monkeypatch):
+        """Pipeline process inference should parse only the emitted process budget."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str]:
+            parsed_stages.append(stage)
+            return "/usr/bin/whoami", stage
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+        command = " | ".join(["whoami"] * 100)
+
+        processes = generator_module._linux_command_processes_from_shell(command)
+
+        assert len(processes) == 4
+        assert parsed_stages == ["whoami"] * 4
+
+    def test_linux_shell_process_inference_limits_unmatched_pipeline_stages(self, monkeypatch):
+        """Unmatched pipeline stages should not be parsed without a stage cap."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str] | None:
+            parsed_stages.append(stage)
+            return None
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+        command = " | ".join(["unknown"] * 100)
+
+        processes = generator_module._linux_command_processes_from_shell(command)
+
+        assert processes == []
+        assert len(parsed_stages) == 32
+
     def test_generate_bash_command_emits_pipeline_children_with_clean_argv(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -5109,6 +5162,41 @@ def activity_gen():
         "syslog": Mock(),
     }
     return ActivityGenerator(sm, mock_emitters)
+
+
+def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+
+    class CountingDict(dict[tuple[str, int, str, int], int]):
+        """Dictionary that counts next-timestamp lookups."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_calls = 0
+
+        def get(self, key: tuple[str, int, str, int], default: int = 0) -> int:
+            self.get_calls += 1
+            return super().get(key, default)
+
+    next_timestamps = CountingDict()
+    activity_gen._next_icmp_observation_ts_us = next_timestamps
+    base_time = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    adjusted_times = [
+        activity_gen._disambiguate_icmp_observation_time(
+            "10.0.0.1",
+            0,
+            "10.0.0.2",
+            0,
+            base_time,
+        )
+        for _ in range(1000)
+    ]
+
+    assert adjusted_times[0] == base_time
+    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert next_timestamps.get_calls == len(adjusted_times)
+    assert len(next_timestamps) == 1
 
 
 def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):

@@ -389,6 +389,92 @@ class TestGenerateSystemProcess:
         ]
         assert len(security_creates) == 1
 
+    def test_singleton_windows_service_reuse_ignores_noncanonical_future_process(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Singleton service reuse should not select attacker-like future user processes."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+        state_manager.set_current_time(timestamp + timedelta(hours=1))
+        rogue_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Users\Public\spoolsv.exe",
+            r"C:\Users\Public\spoolsv.exe",
+            "bob",
+            "Medium",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        returned_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert returned_pid != rogue_pid
+        returned_proc = state_manager.get_process(win_system.hostname, returned_pid)
+        assert returned_proc is not None
+        assert returned_proc.image == r"C:\Windows\System32\spoolsv.exe"
+        assert returned_proc.username == "SYSTEM"
+        assert returned_proc.start_time == timestamp + timedelta(minutes=10)
+        security_creates = [
+            c[0][0]
+            for c in mock_emitters["windows_event_security"].emit.call_args_list
+            if c[0][0].event_type == "system_process_create"
+            and c[0][0].process.image == r"C:\Windows\System32\spoolsv.exe"
+        ]
+        assert len(security_creates) == 1
+        assert security_creates[0].process.pid == returned_pid
+
+    def test_singleton_windows_service_reuse_ignores_canonical_future_process(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Singleton service reuse should not select processes that start after event time."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+        state_manager.set_current_time(timestamp + timedelta(hours=1))
+        future_pid = state_manager.create_process(
+            win_system.hostname,
+            parent_pid,
+            r"C:\Windows\System32\spoolsv.exe",
+            "spoolsv.exe",
+            "SYSTEM",
+            "System",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        returned_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert returned_pid != future_pid
+        returned_proc = state_manager.get_process(win_system.hostname, returned_pid)
+        assert returned_proc is not None
+        assert returned_proc.start_time == timestamp + timedelta(minutes=10)
+
     def test_allows_multiple_non_singleton_windows_service_processes(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters
     ):

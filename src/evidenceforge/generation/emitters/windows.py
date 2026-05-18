@@ -33,6 +33,7 @@ import os
 import random
 import sqlite3
 import tempfile
+from bisect import bisect_left
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from queue import Empty
@@ -73,6 +74,32 @@ _WFP_FILTER_BUCKET_OFFSETS = {
     "outbound_default": 20,
     "inbound_default": 21,
 }
+
+
+def _record_dropped_unlock(
+    dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]],
+    computer: str,
+    logon_id: str,
+    unlock_ts: datetime,
+) -> None:
+    """Index a suppressed unlock for efficient LogonType 7 pairing."""
+    dropped_unlocks_by_session.setdefault((computer, logon_id), []).append(unlock_ts)
+
+
+def _has_nearby_dropped_unlock(
+    dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]],
+    computer: str,
+    logon_id: str,
+    logon_ts: datetime,
+) -> bool:
+    """Return whether a type 7 logon is paired to a suppressed duplicate unlock."""
+    unlock_times = dropped_unlocks_by_session.get((computer, logon_id))
+    if not unlock_times:
+        return False
+    normalized_ts = ensure_utc(logon_ts)
+    earliest_unlock_ts = normalized_ts - timedelta(seconds=2)
+    unlock_index = bisect_left(unlock_times, earliest_unlock_ts)
+    return unlock_index < len(unlock_times) and unlock_times[unlock_index] <= normalized_ts
 
 
 def _windows_path_basename(path: str) -> str:
@@ -1499,7 +1526,27 @@ class WindowsEventEmitter(LogEmitter):
 
     def _shift_spooled_process_creates_after_visible_parent_unlocked(self) -> None:
         """Prevent spooled Security 4688 children from preceding parent 4688 rows."""
-        max_passes = max(1, self._spooled_count)
+        process_create_events: dict[tuple[str, str], int] = {}
+        parent_keys: dict[tuple[str, str], tuple[str, str]] = {}
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            process_pid = str(event.get("NewProcessId") or "").lower()
+            computer = str(event.get("Computer", ""))
+            if not isinstance(ts, datetime) or not process_pid or process_pid in {"0x0", "0x4"}:
+                continue
+            key = (computer, process_pid)
+            process_create_events[key] = rowid
+            parent_pid = str(event.get("ProcessId") or "").lower()
+            if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                parent_keys[key] = (computer, parent_pid)
+
+        if not process_create_events:
+            return
+
+        cyclic_keys = self._detect_process_parent_cycles(process_create_events, parent_keys)
+        max_passes = len(process_create_events)
         for _ in range(max_passes):
             process_create_times: dict[tuple[str, str], datetime] = {}
             for _, event in self._iter_spooled_rows_unlocked():
@@ -1508,8 +1555,9 @@ class WindowsEventEmitter(LogEmitter):
                 ts = event.get("TimeCreated")
                 process_pid = str(event.get("NewProcessId") or "").lower()
                 computer = str(event.get("Computer", ""))
-                if isinstance(ts, datetime) and process_pid and process_pid not in {"0x0", "0x4"}:
-                    process_create_times[(computer, process_pid)] = ts
+                key = (computer, process_pid)
+                if isinstance(ts, datetime) and key in process_create_events:
+                    process_create_times[key] = ts
 
             changed = False
             updates: list[tuple[str, str, int]] = []
@@ -1517,11 +1565,18 @@ class WindowsEventEmitter(LogEmitter):
                 if event.get("EventID") != 4688:
                     continue
                 ts = event.get("TimeCreated")
-                parent_pid = str(event.get("ProcessId") or "").lower()
+                process_pid = str(event.get("NewProcessId") or "").lower()
                 computer = str(event.get("Computer", ""))
-                if not isinstance(ts, datetime) or parent_pid in {"", "0x0", "0x4", "-"}:
+                key = (computer, process_pid)
+                parent_key = parent_keys.get(key)
+                if (
+                    not isinstance(ts, datetime)
+                    or key in cyclic_keys
+                    or parent_key is None
+                    or parent_key in cyclic_keys
+                ):
                     continue
-                parent_time = process_create_times.get((computer, parent_pid))
+                parent_time = process_create_times.get(parent_key)
                 if parent_time is not None and ts <= parent_time:
                     event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
                     updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
@@ -1632,7 +1687,7 @@ class WindowsEventEmitter(LogEmitter):
         """Keep spooled 4800/4801 as a chronological session state machine."""
         session_state: dict[tuple[str, str, str], str] = {}
         dropped_rowids: set[int] = set()
-        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+        dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]] = {}
 
         for rowid, event in self._iter_spooled_rows_unlocked(ordered=True):
             event_id = event.get("EventID")
@@ -1651,7 +1706,9 @@ class WindowsEventEmitter(LogEmitter):
             if session_state.get(key) == next_state:
                 dropped_rowids.add(rowid)
                 if event_id == 4801:
-                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                    _record_dropped_unlock(
+                        dropped_unlocks_by_session, computer, logon_id, ensure_utc(ts)
+                    )
                 continue
             session_state[key] = next_state
 
@@ -1665,15 +1722,8 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             computer = str(event.get("Computer", ""))
             logon_id = str(event.get("TargetLogonId") or "")
-            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
-                delta = ensure_utc(ts) - unlock_ts
-                if (
-                    computer == drop_computer
-                    and logon_id == drop_logon_id
-                    and timedelta(0) <= delta <= timedelta(seconds=2)
-                ):
-                    dropped_rowids.add(rowid)
-                    break
+            if _has_nearby_dropped_unlock(dropped_unlocks_by_session, computer, logon_id, ts):
+                dropped_rowids.add(rowid)
 
         self._delete_spooled_events_unlocked(dropped_rowids)
 
@@ -1824,7 +1874,7 @@ class WindowsEventEmitter(LogEmitter):
 
         session_state: dict[tuple[str, str, str], str] = {}
         dropped_indexes: set[int] = set()
-        dropped_unlocks: list[tuple[str, str, str, datetime]] = []
+        dropped_unlocks_by_session: dict[tuple[str, str], list[datetime]] = {}
 
         for index, event in sorted(enumerate(self._event_dicts), key=_sort_key):
             event_id = event.get("EventID")
@@ -1843,7 +1893,9 @@ class WindowsEventEmitter(LogEmitter):
             if session_state.get(key) == next_state:
                 dropped_indexes.add(index)
                 if event_id == 4801:
-                    dropped_unlocks.append((*key, ensure_utc(ts)))
+                    _record_dropped_unlock(
+                        dropped_unlocks_by_session, computer, logon_id, ensure_utc(ts)
+                    )
                 continue
             session_state[key] = next_state
 
@@ -1857,22 +1909,15 @@ class WindowsEventEmitter(LogEmitter):
                 continue
             computer = str(event.get("Computer", ""))
             logon_id = str(event.get("TargetLogonId") or "")
-            for drop_computer, drop_logon_id, _session_id, unlock_ts in dropped_unlocks:
-                delta = ensure_utc(ts) - unlock_ts
-                if (
-                    computer == drop_computer
-                    and logon_id == drop_logon_id
-                    and timedelta(0) <= delta <= timedelta(seconds=2)
-                ):
-                    dropped_indexes.add(index)
-                    break
+            if _has_nearby_dropped_unlock(dropped_unlocks_by_session, computer, logon_id, ts):
+                dropped_indexes.add(index)
 
-            if dropped_indexes:
-                self._event_dicts = [
-                    event
-                    for index, event in enumerate(self._event_dicts)
-                    if index not in dropped_indexes
-                ]
+        if dropped_indexes:
+            self._event_dicts = [
+                event
+                for index, event in enumerate(self._event_dicts)
+                if index not in dropped_indexes
+            ]
 
     def _shift_process_creates_after_logons(self) -> None:
         """Prevent visible Security 4688 rows from preceding same-session 4624 rows."""
@@ -1898,33 +1943,74 @@ class WindowsEventEmitter(LogEmitter):
             if logon_time is not None and ts <= logon_time:
                 event["TimeCreated"] = logon_time + timedelta(milliseconds=1)
 
+    @staticmethod
+    def _detect_process_parent_cycles(
+        process_create_events: dict[tuple[str, str], Any],
+        parent_keys: dict[tuple[str, str], tuple[str, str]],
+    ) -> set[tuple[str, str]]:
+        """Return process-create keys that are part of visible parent cycles."""
+        cyclic_keys: set[tuple[str, str]] = set()
+        for key in process_create_events:
+            path: list[tuple[str, str]] = []
+            seen: set[tuple[str, str]] = set()
+            current: tuple[str, str] | None = key
+            while current is not None:
+                if current in seen:
+                    cyclic_keys.update(path[path.index(current) :])
+                    break
+                if current in cyclic_keys:
+                    break
+                seen.add(current)
+                path.append(current)
+                parent_key = parent_keys.get(current)
+                current = parent_key if parent_key in process_create_events else None
+        return cyclic_keys
+
     def _shift_process_creates_after_visible_parent(self) -> None:
         """Prevent visible Security 4688 children from preceding parent 4688 rows."""
-        changed = True
-        while changed:
+        process_create_events: dict[tuple[str, str], dict[str, Any]] = {}
+        parent_keys: dict[tuple[str, str], tuple[str, str]] = {}
+
+        for event in self._event_dicts:
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            process_pid = str(event.get("NewProcessId") or "").lower()
+            computer = str(event.get("Computer", ""))
+            if not isinstance(ts, datetime) or not process_pid or process_pid in {"0x0", "0x4"}:
+                continue
+            key = (computer, process_pid)
+            process_create_events[key] = event
+            parent_pid = str(event.get("ProcessId") or "").lower()
+            if parent_pid and parent_pid not in {"0x0", "0x4", "-"}:
+                parent_keys[key] = (computer, parent_pid)
+
+        if not process_create_events:
+            return
+
+        cyclic_keys = self._detect_process_parent_cycles(process_create_events, parent_keys)
+        max_passes = len(process_create_events)
+        for _ in range(max_passes):
             changed = False
             process_create_times: dict[tuple[str, str], datetime] = {}
-            for event in self._event_dicts:
-                if event.get("EventID") != 4688:
-                    continue
+            for key, event in process_create_events.items():
                 ts = event.get("TimeCreated")
-                process_pid = str(event.get("NewProcessId") or "").lower()
-                computer = str(event.get("Computer", ""))
-                if isinstance(ts, datetime) and process_pid and process_pid not in {"0x0", "0x4"}:
-                    process_create_times[(computer, process_pid)] = ts
+                if isinstance(ts, datetime):
+                    process_create_times[key] = ts
 
-            for event in self._event_dicts:
-                if event.get("EventID") != 4688:
+            for key, event in process_create_events.items():
+                if key in cyclic_keys:
                     continue
                 ts = event.get("TimeCreated")
-                parent_pid = str(event.get("ProcessId") or "").lower()
-                computer = str(event.get("Computer", ""))
-                if not isinstance(ts, datetime) or parent_pid in {"", "0x0", "0x4", "-"}:
+                parent_key = parent_keys.get(key)
+                if not isinstance(ts, datetime) or parent_key is None or parent_key in cyclic_keys:
                     continue
-                parent_time = process_create_times.get((computer, parent_pid))
+                parent_time = process_create_times.get(parent_key)
                 if parent_time is not None and ts <= parent_time:
                     event["TimeCreated"] = parent_time + timedelta(milliseconds=1)
                     changed = True
+            if not changed:
+                break
 
     def _shift_process_terminations_after_dependents(self) -> None:
         """Keep Security 4689 aligned with visible child-process lifecycle.

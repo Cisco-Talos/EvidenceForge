@@ -155,10 +155,17 @@ def _jitter_numeric_observation(
     if value <= 0:
         return
     fraction = _sensor_variation_fraction(hostname, uid, field, magnitude)
-    varied = value * (1.0 + fraction)
-    if isinstance(value, int):
-        varied = int(round(varied))
-    render_data[field] = max(type(value)(minimum), type(value)(varied))
+    try:
+        varied = value * (1.0 + fraction)
+        if isinstance(value, int):
+            varied = int(round(varied))
+        render_data[field] = max(type(value)(minimum), type(value)(varied))
+    except OverflowError:
+        logger.debug(
+            "Skipping Zeek sensor jitter for out-of-range numeric field %s on %s",
+            field,
+            hostname,
+        )
 
 
 def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
@@ -258,8 +265,14 @@ def _apply_sensor_observation_variance(
         ):
             seed = _stable_seed(f"zeek_sensor_duration_floor:{hostname}:{original_uid}")
             direction = -1 if seed % 2 else 1
-            delta = max(duration * 0.0075, 0.000001)
-            render_data["duration"] = max(0.000001, duration + (direction * delta))
+            try:
+                delta = max(duration * 0.0075, 0.000001)
+                render_data["duration"] = max(0.000001, duration + (direction * delta))
+            except OverflowError:
+                logger.debug(
+                    "Skipping Zeek sensor duration floor for out-of-range value on %s",
+                    hostname,
+                )
         else:
             proto = str(render_data.get("proto") or "").lower()
             max_header_bytes = {"udp": 68}.get(proto)

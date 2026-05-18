@@ -38,6 +38,7 @@ import random
 import re
 import shlex
 import uuid
+from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -431,6 +432,44 @@ def _scan_target_exposes_port(
     if port == 3389 and "windows" in target_system.os.lower() and not external:
         return True
     return False
+
+
+def _iter_shuffled_port_scan_pairs(
+    targets: Sequence[str],
+    ports: Sequence[int],
+    rng: random.Random,
+) -> Iterator[tuple[str, int]]:
+    """Yield each target/port probe once in deterministic pseudo-shuffled order.
+
+    Port-scan scenarios can legitimately describe thousands of targets and
+    thousands of ports. Building and shuffling the full Cartesian product would
+    allocate one tuple per probe up front, so this uses an affine permutation of
+    the flattened index space instead. Memory stays proportional to the already
+    resolved target and port lists while preserving a randomized probe order.
+    """
+    target_count = len(targets)
+    port_count = len(ports)
+    total_pairs = target_count * port_count
+    if total_pairs == 0:
+        return
+
+    offset = rng.randrange(total_pairs)
+    step = 1
+    if total_pairs > 1:
+        step = rng.randrange(1, total_pairs)
+        if math.gcd(step, total_pairs) != 1:
+            for delta in range(1, 1025):
+                candidate = (step + delta) % total_pairs or 1
+                if math.gcd(candidate, total_pairs) == 1:
+                    step = candidate
+                    break
+            else:
+                step = 1
+
+    for sequence_index in range(total_pairs):
+        probe_index = (offset + sequence_index * step) % total_pairs
+        target_index, port_index = divmod(probe_index, port_count)
+        yield targets[target_index], ports[port_index]
 
 
 def _port_scan_connection_profile(
@@ -1499,13 +1538,15 @@ class StorylineMixin:
                     time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
             if os_category == "linux":
-                self.activity_generator.generate_bash_command(
+                scheduled_bash_time = self.activity_generator.generate_bash_command(
                     actor,
                     system,
                     time,
                     command_line,
                     emit_process_telemetry=False,
                 )
+                if isinstance(scheduled_bash_time, datetime):
+                    time = scheduled_bash_time
 
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(
@@ -1916,9 +1957,14 @@ class StorylineMixin:
                 hostname=conn_hostname,
                 preserve_dst_ip=bool(spec.hostname),
             )
-            malicious_event["dst_ip"] = dst_ip
+            logged_dst_ip = getattr(
+                self.activity_generator,
+                "_last_connection_effective_dst_ip",
+                effective_dst_ip,
+            )
+            malicious_event["dst_ip"] = logged_dst_ip
             malicious_event["dst_port"] = dst_port
-            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, effective_dst_ip)
+            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, logged_dst_ip)
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
@@ -2379,12 +2425,12 @@ class StorylineMixin:
 
             # Generate scan probes: open service hits plus rejected/filtered denies.
             spacing = 1.0 / spec.scan_rate
-            probe_pairs = [
-                (target_ip, port) for target_ip in resolved_targets for port in spec.ports
-            ]
-            scan_profile_rng.shuffle(probe_pairs)
             total_count = 0
-            for target_ip, port in probe_pairs:
+            for target_ip, port in _iter_shuffled_port_scan_pairs(
+                resolved_targets,
+                spec.ports,
+                scan_profile_rng,
+            ):
                 real_target_ip = vip_to_real_ip.get(target_ip, target_ip)
                 target_system = ip_map.get(real_target_ip)
                 dst_iface = self._resolve_firewall_interface(target_ip)

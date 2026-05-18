@@ -68,6 +68,28 @@ def timestamp():
 class TestHostnameConsistency:
     """DNS query domain, SSL SNI, and proxy hostname must be identical."""
 
+    def test_explicit_unregistered_hostname_tracks_rewritten_destination(
+        self, activity_gen, timestamp, mock_emitters
+    ):
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+        hostname = "attacker-validated.example.net"
+        expected_ip = resolve_domain_ip(hostname, src_host="10.0.1.50")
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+        )
+
+        assert activity_gen._last_connection_effective_dst_ip == expected_ip
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert conn_event.network.dst_ip == expected_ip
+
     def test_ssl_sni_matches_dns_query(self, activity_gen, timestamp, state_manager, mock_emitters):
         """For a web connection with emit_dns=True, SNI should match DNS query domain."""
         state_manager.set_current_time(timestamp)

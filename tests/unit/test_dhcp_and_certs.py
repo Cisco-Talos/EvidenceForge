@@ -8,8 +8,10 @@ import random
 import re
 from datetime import UTC, datetime
 
+import pytest
 import yaml
 
+from evidenceforge.config.schemas import TlsRealismConfig
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import NetworkContext, X509Context
 from evidenceforge.generation.activity.generator import (
@@ -29,6 +31,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     certificate_subject_key_profile,
     chain_template_for_issuer,
+    load_tls_realism,
     multi_label_public_suffixes,
     ocsp_config,
     pick_ocsp_responder,
@@ -206,6 +209,46 @@ class TestTlsIssuers:
         assert all(16 <= len(serial) <= 40 for serial in serials)
         assert all(len(serial) % 2 == 0 for serial in serials)
         assert all(re.fullmatch(r"[0-9A-F]+", serial) for serial in serials)
+
+    def test_tls_certificate_serial_ignores_non_finite_overlay_weight(self, tmp_path, monkeypatch):
+        """Non-finite overlay weights should not crash serial generation."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump(
+                {"serial_numbers": {"byte_lengths": [{"bytes": 16, "weight": float("inf")}]}}
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            serial = _tls_certificate_serial("non-finite-overlay")
+        finally:
+            reset_tls_realism_cache()
+
+        assert re.fullmatch(r"[0-9A-F]+", serial)
+        assert 16 <= len(serial) <= 40
+
+    def test_tls_certificate_serial_ignores_oversized_overlay_weight(self, tmp_path, monkeypatch):
+        """Oversized integer overlay weights should not reach random.choices()."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump({"serial_numbers": {"byte_lengths": [{"bytes": 16, "weight": 10**400}]}})
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            serial = _tls_certificate_serial("oversized-overlay")
+            with pytest.raises(ValueError, match="weight must be <="):
+                TlsRealismConfig(**load_tls_realism())
+        finally:
+            reset_tls_realism_cache()
+
+        assert re.fullmatch(r"[0-9A-F]+", serial)
+        assert 16 <= len(serial) <= 40
 
     def test_ocsp_responder_selection_is_issuer_aware(self):
         """OCSP responders should come from issuer-specific config."""

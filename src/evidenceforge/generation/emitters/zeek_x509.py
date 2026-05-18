@@ -87,6 +87,12 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         event_data: dict[str, Any] = {
             "ts": timestamp,
             "id": x509.fuid,
+            # Keep the parent connection UID as non-rendered correlation metadata so
+            # SensorMultiplexEmitter applies the same per-flow timestamp offset to
+            # x509.log as ssl.log and files.log for this TLS flow.
+            "conn_uids": [event.network.zeek_uid]
+            if event.network and event.network.zeek_uid
+            else [],
             "fingerprint": x509.fingerprint,
             "certificate.version": x509.certificate_version,
             "certificate.serial": x509.certificate_serial,
