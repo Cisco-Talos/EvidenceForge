@@ -1111,6 +1111,39 @@ class TestValidateConfig:
             "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status nginx"
         )
 
+    def test_extra_syslog_treats_contextual_services_as_literals(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        entry = {
+            "app": "sudo",
+            "messages": [
+                "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+            ],
+            "params": {
+                "sudo_user": ["deploy"],
+                "tty": ["pts/1"],
+                "cwd": ["/srv/app"],
+                "service": ["ssh"],
+                "sudo_command": ["/bin/systemctl status {service}"],
+            },
+        }
+
+        missing_placeholder = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["{missing}"],
+        )
+        unmatched_brace = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["{"],
+        )
+
+        assert missing_placeholder.endswith("COMMAND=/bin/systemctl status {missing}")
+        assert unmatched_brace.endswith("COMMAND=/bin/systemctl status {")
+
     def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
         from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
 

@@ -141,6 +141,12 @@ def render_extra_syslog_message(
         if pool:
             render_values[key] = rng.choice(pool)
     for key, value in list(render_values.items()):
+        if key == "service":
+            # Scenario-provided system.services are literal service names, not trusted
+            # format templates. Nested templates such as sudo_command can still
+            # substitute {service}, but braces inside the service name itself must
+            # not be interpreted as format placeholders.
+            continue
         if isinstance(value, str) and "{" in value:
             render_values[key] = value.format(positional_value, **render_values)
     return template.format(positional_value, **render_values)
