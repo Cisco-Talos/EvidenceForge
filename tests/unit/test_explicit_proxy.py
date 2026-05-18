@@ -783,6 +783,41 @@ class TestExplicitProxyVisibility:
         assert http_event.http.request_body_len == 0
         assert http_event.network.orig_bytes > 0
 
+    def test_https_service_alias_uses_explicit_proxy(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="https",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.method == "CONNECT"
+        assert proxy_event.proxy.host == "example.com"
+
     def test_egress_sensor_sees_proxy_to_origin_only(self):
         generator, emitters = _generator(
             [

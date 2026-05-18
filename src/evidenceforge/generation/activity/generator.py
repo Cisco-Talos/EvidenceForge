@@ -6243,10 +6243,11 @@ class ActivityGenerator:
             dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         # Infer common payload service from destination port before proxy
-        # routing and DNS expansion. Some callers provide only port/protocol;
-        # explicit proxy semantics still need to catch 80/443 before a
-        # client-side origin DNS lookup is emitted.
-        if proto == "tcp" and dst_port in (80, 443) and service is None and not is_tcp_probe:
+        # routing and DNS expansion. Some callers provide only port/protocol or
+        # source-common aliases (for example "https"); explicit proxy semantics
+        # still need to catch 80/443 before a client-side origin DNS lookup is
+        # emitted. Keep the empty-string raw-TCP sentinel unchanged.
+        if proto == "tcp" and dst_port in (80, 443) and service != "" and not is_tcp_probe:
             service = "http" if dst_port == 80 else "ssl"
 
         if (
