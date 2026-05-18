@@ -55,6 +55,32 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
 
 
+class TestApacheRawSyslogNormalization:
+    def test_embedded_timestamp_regex_matches_apache_variants(self):
+        """Apache raw syslog timestamp normalization should keep common timestamp variants."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+
+        assert pattern.search("[Mon Jan 1 12:34:56 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 +0000 2026] message")
+
+    def test_embedded_timestamp_regex_has_bounded_middle_token(self):
+        """Scenario-controlled raw syslog messages must not hit an unbounded timestamp scan."""
+        pattern_text = generator_module._APACHE_EMBEDDED_TS_RE.pattern
+
+        assert "[^\\]]+" not in pattern_text
+        assert "{1,40}" in pattern_text
+
+    def test_embedded_timestamp_regex_handles_many_malformed_prefixes_quickly(self):
+        """Malformed Apache-like prefixes should not cause super-linear regex work."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+        malicious_message = "[Mon Jan 1 " * 20_000
+
+        result = pattern.sub("[Mon Jan 01 00:00:00.000000 2026]", malicious_message, count=1)
+
+        assert result == malicious_message
+
+
 class TestStateObjectIds:
     def test_missing_process_object_id_returns_empty(self):
         """Unseen process IDs should not fabricate eCAR object IDs."""
@@ -1519,6 +1545,100 @@ class TestActivityGenerator:
         assert process_event.timestamp == scheduled_time
         assert bash_event.timestamp == scheduled_time
 
+    def test_linux_process_activity_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Linux app-catalog processes should not emit shell history for service users."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="www-data",
+        )
+        service_user = User(
+            username="www-data",
+            full_name="Web Service",
+            email="www-data@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: (
+                "/usr/bin/code",
+                "code --no-sandbox /home/www-data/projects/data-pipeline",
+            ),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line
+            == "code --no-sandbox /home/www-data/projects/data-pipeline"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
+    def test_linux_process_system_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Legacy Linux process templates should not emit shell history for service users."""
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="apache",
+        )
+        service_user = User(
+            username="apache",
+            full_name="Apache Service",
+            email="apache@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/sbin/cron", "/usr/sbin/cron -f")]},
+        ):
+            activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_system")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "/usr/sbin/cron -f"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1951,6 +2071,55 @@ class TestActivityGenerator:
         }
         assert all(event.network.src_ip == source.ip for event in network_events)
         assert all(event.network.dst_ip == target.ip for event in network_events)
+
+    def test_remote_service_network_evidence_caps_sequential_source_ports(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Sequential SMB/RPC evidence source ports should stay in the valid TCP range."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Admin",
+            email="alice@example.com",
+            primary_system=source.hostname,
+        )
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={source.hostname: source, target.hostname: target}
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+
+        with patch.object(generator_module, "_ephemeral_port", return_value=65535):
+            activity_gen.generate_service_installed(
+                user,
+                target,
+                timestamp,
+                service_name="PSEXESVC",
+                service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            )
+
+        remote_service_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.service in {"smb", "dce_rpc"}
+        ]
+        source_ports = [event.network.src_port for event in remote_service_events]
+
+        assert source_ports == [65534, 65535]
+        assert all(0 <= port <= 65535 for port in source_ports)
 
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

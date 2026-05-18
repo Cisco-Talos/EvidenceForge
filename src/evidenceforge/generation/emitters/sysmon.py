@@ -50,7 +50,11 @@ from evidenceforge.generation.emitters.windows_event import format_windows_syste
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
-from evidenceforge.utils.windows_ids import align_windows_id, windows_id_randint
+from evidenceforge.utils.windows_ids import (
+    align_windows_id,
+    normalize_windows_id_value,
+    windows_id_randint,
+)
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -1666,10 +1670,7 @@ class SysmonEventEmitter(LogEmitter):
         event_data = dict(event_data)
         for field in ("ExecutionProcessID", "ExecutionThreadID"):
             value = event_data.get(field)
-            if isinstance(value, int):
-                event_data[field] = align_windows_id(value)
-            elif isinstance(value, str) and value.isdecimal():
-                event_data[field] = str(align_windows_id(int(value)))
+            event_data[field] = normalize_windows_id_value(value)
         if self.threaded:
             self._emit_threaded(event_data)
         else:

@@ -998,6 +998,14 @@ def _dns_payload_accounting(
     return normalized_duration, normalized_orig, normalized_resp
 
 
+_NONINTERACTIVE_BASH_USERS = {"apache", "www-data", "nginx", "httpd", "tomcat"}
+
+
+def _is_noninteractive_bash_user(user: User) -> bool:
+    """Return True for service accounts that should not render shell history."""
+    return user.username.lower() in _NONINTERACTIVE_BASH_USERS
+
+
 # Fixed baseline activity patterns (no LLM expansion)
 # Format: (activity_type, probability)
 # Phase 5.6: Widened probability gaps for user diversity scoring
@@ -1830,7 +1838,10 @@ def _proxy_http_response_body_len(
     return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
 
 
-_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]+ \d{4}\]")
+# Bound the free-form timestamp middle so malformed raw syslog messages cannot trigger
+# repeated long scans/backtracking while preserving Apache timestamp variants with
+# fractional seconds or timezone tokens.
+_APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]{1,40} \d{4}\]")
 _APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d+)\]")
 
 
@@ -6243,10 +6254,11 @@ class ActivityGenerator:
             dst_ip = resolve_domain_ip(hostname, src_host=src_host)
 
         # Infer common payload service from destination port before proxy
-        # routing and DNS expansion. Some callers provide only port/protocol;
-        # explicit proxy semantics still need to catch 80/443 before a
-        # client-side origin DNS lookup is emitted.
-        if proto == "tcp" and dst_port in (80, 443) and service is None and not is_tcp_probe:
+        # routing and DNS expansion. Some callers provide only port/protocol or
+        # source-common aliases (for example "https"); explicit proxy semantics
+        # still need to catch 80/443 before a client-side origin DNS lookup is
+        # emitted. Keep the empty-string raw-TCP sentinel unchanged.
+        if proto == "tcp" and dst_port in (80, 443) and service != "" and not is_tcp_probe:
             service = "http" if dst_port == 80 else "ssl"
 
         if (
@@ -6428,6 +6440,7 @@ class ActivityGenerator:
             if (
                 proxy_context.host
                 and "." in proxy_context.host
+                and not _is_ip_literal(proxy_context.host)
                 and not proxy_context.host.endswith(f".{ad_domain}")
                 and not proxy_context.host.endswith(".local")
                 and not preserve_explicit_proxy_dst_ip
@@ -8466,7 +8479,7 @@ class ActivityGenerator:
             # Literal command string (direct commands, typos, etc.)
             command = activity_type_or_command
 
-        if user.username.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}:
+        if _is_noninteractive_bash_user(user):
             logger.debug(
                 "Skipping bash_history for noninteractive web service user %s on %s",
                 user.username,
@@ -8489,6 +8502,14 @@ class ActivityGenerator:
         command: str,
     ) -> None:
         """Dispatch a bash-history event at an already scheduled command time."""
+        if _is_noninteractive_bash_user(user):
+            logger.debug(
+                "Skipping bash_history for noninteractive web service user %s on %s",
+                user.username,
+                system.hostname,
+            )
+            return
+
         from evidenceforge.events.contexts import ShellContext
 
         event = SecurityEvent(
@@ -10987,10 +11008,15 @@ class ActivityGenerator:
         if _get_os_category(target_system.os) != "windows":
             return
         rng = _get_rng()
-        base_src_port = _ephemeral_port(rng, _get_os_category(source_system.os))
         flow_specs = (
             (445, "smb", time - timedelta(milliseconds=rng.randint(1100, 1800))),
             (135, "dce_rpc", time - timedelta(milliseconds=rng.randint(350, 900))),
+        )
+        source_os = _get_os_category(source_system.os)
+        max_ephemeral_port = 60999 if source_os == "linux" else 65535
+        base_src_port = min(
+            _ephemeral_port(rng, source_os),
+            max_ephemeral_port - len(flow_specs) + 1,
         )
         for idx, (dst_port, service, flow_time) in enumerate(flow_specs):
             self.generate_connection(

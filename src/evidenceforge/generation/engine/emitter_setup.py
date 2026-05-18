@@ -323,7 +323,7 @@ class EmitterSetupMixin:
         _oui_weights = [o["weight"] for o in _oui_prefixes]
         _oui_values = [o["prefix"] for o in _oui_prefixes]
         storyline_macs: dict[str, str] = {}
-        for step in self.scenario.storyline:
+        for step in self.scenario.storyline or []:
             system_name = getattr(step, "system", "")
             if not system_name:
                 continue

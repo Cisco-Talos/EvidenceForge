@@ -750,6 +750,50 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.host == "dynsync-update.net"
         assert proxy_event.proxy.method == "GET"
 
+    def test_raw_ip_with_suppressed_hostname_preserves_proxy_egress_ioc(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        raw_ip = "45.33.32.30"
+        hashed_ip = resolve_domain_ip(raw_ip, src_host="PROXY-01")
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip=raw_ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="",
+            conn_state="SF",
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        assert ("10.0.3.10", raw_ip, 443) in pairs
+        assert ("10.0.3.10", hashed_ip, 443) not in pairs
+
+        dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
+        raw_ip_dns_events = [event for event in dns_events if event.dns.query == raw_ip]
+        assert raw_ip_dns_events
+        assert any(event.dns.answers == [raw_ip] for event in raw_ip_dns_events)
+        assert all(hashed_ip not in event.dns.answers for event in raw_ip_dns_events)
+
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.host == raw_ip
+
     def test_auto_generated_proxy_get_has_no_zeek_request_body(self):
         generator, emitters = _generator(
             [
@@ -782,6 +826,41 @@ class TestExplicitProxyVisibility:
         assert http_event.http.method == "GET"
         assert http_event.http.request_body_len == 0
         assert http_event.network.orig_bytes > 0
+
+    def test_https_service_alias_uses_explicit_proxy(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="https",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="example.com",
+            conn_state="SF",
+        )
+
+        pairs = _conn_pairs(emitters)
+        assert ("10.0.1.10", "10.0.3.10", 8080) in pairs
+        assert ("10.0.1.10", "93.184.216.34", 443) not in pairs
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.method == "CONNECT"
+        assert proxy_event.proxy.host == "example.com"
 
     def test_egress_sensor_sees_proxy_to_origin_only(self):
         generator, emitters = _generator(

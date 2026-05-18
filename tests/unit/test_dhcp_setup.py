@@ -124,6 +124,26 @@ def test_emit_dhcp_leases_uses_storyline_mac_as_host_identity(tmp_path):
     assert engine._dhcp_lease_state["TEST-01"]["mac"] == "dc:a6:32:44:91:7b"
 
 
+def test_emit_dhcp_leases_handles_null_storyline(tmp_path):
+    """Schema-valid null storyline should not crash DHCP warm-up setup."""
+    base_scenario = _scenario_with_storyline_dhcp()
+    scenario = Scenario.model_validate({**base_scenario.model_dump(), "storyline": None})
+    engine = GenerationEngine(scenario, tmp_path)
+    engine.start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    engine.end_time = datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC)
+    engine.warmup_start_time = engine.start_time - timedelta(hours=8)
+    engine.emitters = {"zeek_dhcp": Mock()}
+    engine.state_manager = Mock()
+    engine.activity_generator = Mock()
+
+    engine._emit_dhcp_leases()
+
+    engine.activity_generator.generate_dhcp_lease.assert_called_once()
+    kwargs = engine.activity_generator.generate_dhcp_lease.call_args.kwargs
+    assert kwargs["system"].hostname == "TEST-01"
+    assert engine._dhcp_lease_state["TEST-01"]["mac"] == kwargs["mac"]
+
+
 def test_emit_dhcp_leases_skips_static_infrastructure_servers(tmp_path):
     """Static servers should not get ambient DHCP leases just because Zeek DHCP is enabled."""
     scenario = _scenario_with_storyline_dhcp()

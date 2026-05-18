@@ -30,6 +30,34 @@ class TestStorylineCommandNetworks:
 
         assert url == "https://cdn.example.test/stage.ps1"
 
+    def test_extract_http_url_skips_oversized_encoded_command(self, monkeypatch):
+        def fail_b64decode(*args: Any, **kwargs: Any) -> bytes:
+            raise AssertionError("oversized EncodedCommand token should not be decoded")
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.engine.storyline.base64.b64decode",
+            fail_b64decode,
+        )
+        command = "powershell.exe -EncodedCommand " + ("A" * 20_000)
+
+        url = StorylineMixin._extract_http_url(command)
+
+        assert url is None
+
+    def test_extract_http_url_skips_oversized_shell_base64_decode(self, monkeypatch):
+        def fail_b64decode(*args: Any, **kwargs: Any) -> bytes:
+            raise AssertionError("oversized shell base64 token should not be decoded")
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.engine.storyline.base64.b64decode",
+            fail_b64decode,
+        )
+        command = "printf '" + ("A" * 20_000) + "' | base64 -d"
+
+        url = StorylineMixin._extract_http_url(command)
+
+        assert url is None
+
     def test_parse_http_url_target_accepts_valid_url(self):
         target = StorylineMixin._parse_http_url_target("https://cdn.example.test:8443/stage.ps1")
 
@@ -108,6 +136,39 @@ class TestStorylineCommandNetworks:
         assert engine._storyline_authored_ip_for_hostname("cdn-assets-update.com") == (
             "45.33.32.30"
         )
+
+    def test_storyline_authored_ip_for_hostname_caches_storyline_scan(self):
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    events=[
+                        SimpleNamespace(type="dns_query", query="one.example", answer="192.0.2.10"),
+                        SimpleNamespace(
+                            type="connection", hostname="two.example", dst_ip="192.0.2.20"
+                        ),
+                        SimpleNamespace(
+                            type="dns_query", query="three.example", answer="192.0.2.30"
+                        ),
+                    ]
+                )
+            ]
+        )
+        field_reads = 0
+
+        def counting_storyline_spec_value(spec: Any, field_name: str) -> Any:
+            nonlocal field_reads
+            field_reads += 1
+            return StorylineMixin._storyline_spec_value(spec, field_name)
+
+        engine._storyline_spec_value = counting_storyline_spec_value
+
+        assert engine._storyline_authored_ip_for_hostname("missing.example") is None
+        assert field_reads == 12
+
+        assert engine._storyline_authored_ip_for_hostname("still-missing.example") is None
+        assert engine._storyline_authored_ip_for_hostname("two.example") == "192.0.2.20"
+        assert field_reads == 12
 
 
 class _FakeActivityGenerator:

@@ -118,17 +118,18 @@ class StateManager:
         if base is not None:
             return base
 
-        for salt in range(512):
-            # Keep values in the 32-bit LUID-looking space while leaving enough
-            # room for boot-relative growth during multi-day uptime windows.
-            bucket = 0x10 + (_stable_seed(f"logon_luid_host_{system}_{salt}") % 0xE0)
-            candidate = bucket << 24
+        bucket = 0x100000 + _stable_seed(f"logon_luid_host_{system}")
+        salt = 0
+        while True:
+            # Use a 32-bit host bucket and leave the low 32 bits for boot-relative
+            # growth during multi-day uptime windows. Collision probes occupy new
+            # high-order layers, avoiding the old fixed 224-host allocation cap.
+            candidate = ((salt << 32) + bucket) << 32
             if candidate not in self._logon_id_used_host_bases:
                 self._logon_id_host_bases[system] = candidate
                 self._logon_id_used_host_bases.add(candidate)
                 return candidate
-
-        raise StateError("LogonID host range allocation exhausted")
+            salt += 1
 
     def _host_logon_epoch(self, system: str, current_time: datetime) -> datetime:
         """Return the boot/uptime epoch used for host-local LUID allocation."""

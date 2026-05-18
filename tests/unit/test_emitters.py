@@ -194,6 +194,35 @@ class TestWindowsEventEmitter:
         content = temp_output.read_text()
         assert '<Execution ProcessID="544" ThreadID="116"/>' in content
 
+    def test_emit_event_preserves_oversized_decimal_execution_id(self, format_def, temp_output):
+        """Oversized raw decimal PID/TID strings should not abort Security XML rendering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        oversized_pid = "9" * 5000
+
+        event_data = {
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": oversized_pid,
+            "ExecutionThreadID": "113",
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x3e7abc",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "192.168.1.100",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert f'<Execution ProcessID="{oversized_pid}" ThreadID="116"/>' in content
+
     def test_network_logon_workstation_name_uses_source_host(self, format_def, temp_output):
         """Network 4624 events should name the source workstation, not the destination."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)

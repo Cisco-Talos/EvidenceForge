@@ -126,13 +126,24 @@ def dns_tunnel_ttl_choices() -> list[tuple[int, float]]:
         if not isinstance(entry, dict):
             continue
         try:
-            value = int(entry["value"])
+            raw_value = float(entry["value"])
             weight = float(entry.get("weight", 1.0))
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, OverflowError, TypeError, ValueError):
             continue
+        if not math.isfinite(raw_value) or not raw_value.is_integer():
+            continue
+        value = int(raw_value)
         if 0 <= value <= 3600 and weight > 0 and math.isfinite(weight):
             cleaned.append((value, weight))
-    return cleaned or list(_DEFAULT_DNS_TUNNEL_TTL_CHOICES)
+    if not cleaned:
+        return list(_DEFAULT_DNS_TUNNEL_TTL_CHOICES)
+
+    total_weight = sum(weight for _value, weight in cleaned)
+    if math.isfinite(total_weight):
+        return cleaned
+
+    max_weight = max(weight for _value, weight in cleaned)
+    return [(value, weight / max_weight) for value, weight in cleaned]
 
 
 def dns_tunnel_rcode_weights() -> dict[str, float]:
@@ -152,4 +163,12 @@ def dns_tunnel_rcode_weights() -> dict[str, float]:
             continue
         if numeric > 0 and math.isfinite(numeric):
             cleaned[name] = numeric
-    return cleaned or {"NOERROR": 1.0}
+    if not cleaned:
+        return {"NOERROR": 1.0}
+
+    total_weight = sum(cleaned.values())
+    if math.isfinite(total_weight):
+        return cleaned
+
+    max_weight = max(cleaned.values())
+    return {name: weight / max_weight for name, weight in cleaned.items()}

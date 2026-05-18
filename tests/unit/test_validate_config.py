@@ -563,6 +563,29 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_dns_tunnel_rcode_weight_overflow(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_rcode_weights": {"NOERROR": 1.0e308, "NXDOMAIN": 1.0e308},
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_rcode_weights)"
+            and "positive finite total" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_dns_tunnel_ttl_choices(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 
@@ -582,6 +605,54 @@ class TestValidateConfig:
         assert any(
             issue.severity == "ERROR"
             and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_non_finite_dns_tunnel_ttl_weight(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_ttl_choices": [{"value": 9, "weight": float("inf")}],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_dns_tunnel_ttl_weight_total(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_ttl_choices": [
+                    {"value": 9, "weight": 1e308},
+                    {"value": 10, "weight": 1e308},
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            and "total" in issue.message
             for issue in result.issues
         )
 

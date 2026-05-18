@@ -134,6 +134,41 @@ class TestSysmonEventEmitter:
         content = temp_output.read_text()
         assert '<Execution ProcessID="2756" ThreadID="1544"/>' in content
 
+    def test_emit_sysmon_preserves_oversized_decimal_execution_id(self, format_def, temp_output):
+        """Oversized raw decimal PID/TID strings should not abort Sysmon XML rendering."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
+        oversized_pid = "9" * 5000
+
+        event_data = {
+            "EventID": 1,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": oversized_pid,
+            "ExecutionThreadID": "1543",
+            "UtcTime": "2024-01-15 10:30:00.000",
+            "ProcessGuid": "{12345678-abcd-ef01-2345-678901234567}",
+            "ProcessId": 8052,
+            "Image": r"C:\Windows\System32\cmd.exe",
+            "CommandLine": r"cmd.exe /c whoami",
+            "User": r"CORP\jsmith",
+            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            "LogonId": "0x3e7abc",
+            "IntegrityLevel": "Medium",
+            "Hashes": "SHA1=ABC123,MD5=DEF456,SHA256=GHI789,IMPHASH=JKL012",
+            "ParentProcessGuid": "{87654321-dcba-10fe-5432-109876543210}",
+            "ParentProcessId": 4200,
+            "ParentImage": r"C:\Windows\explorer.exe",
+            "ParentCommandLine": r"C:\Windows\explorer.exe",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert f'<Execution ProcessID="{oversized_pid}" ThreadID="1544"/>' in content
+
     def test_emit_sysmon_create_remote_thread(self, format_def, temp_output):
         """Test emitting Sysmon Event 8 (CreateRemoteThread)."""
         emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
