@@ -897,6 +897,14 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(line)
         return normalized
 
+    @staticmethod
+    def _ecar_int(value: Any, default: int = -1) -> int:
+        """Return an integer eCAR field value or a deterministic fallback."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     @classmethod
     def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
         """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
@@ -907,50 +915,84 @@ class EcarEmitter(HostMultiplexEmitter):
             except json.JSONDecodeError:
                 records.append(None)
 
-        changed = True
-        while changed:
-            changed = False
-            create_times: dict[str, int] = {}
-            create_times_by_pid: dict[int, int] = {}
-            for record in records:
-                if (
-                    record is None
-                    or record.get("object") != "PROCESS"
-                    or record.get("action") != "CREATE"
-                ):
+        create_indexes = [
+            index
+            for index, record in enumerate(records)
+            if record is not None
+            and record.get("object") == "PROCESS"
+            and record.get("action") == "CREATE"
+        ]
+        index_by_object_id: dict[str, int] = {}
+        index_by_pid: dict[int, int] = {}
+        for index in create_indexes:
+            record = records[index]
+            if record is None:
+                continue
+            object_id = record.get("objectID")
+            if object_id:
+                index_by_object_id[str(object_id)] = index
+            pid = cls._ecar_int(record.get("pid"))
+            if pid > 0:
+                current_index = index_by_pid.get(pid)
+                if current_index is None:
+                    index_by_pid[pid] = index
                     continue
-                object_id = record.get("objectID")
-                if object_id:
-                    create_times[str(object_id)] = int(record.get("timestamp_ms", 0))
-                try:
-                    pid = int(record.get("pid", -1))
-                except (TypeError, ValueError):
-                    pid = -1
-                if pid > 0:
-                    create_times_by_pid[pid] = max(
-                        create_times_by_pid.get(pid, 0),
-                        int(record.get("timestamp_ms", 0)),
-                    )
+                current_record = records[current_index]
+                current_ms = (
+                    cls._ecar_int(current_record.get("timestamp_ms"), 0)
+                    if current_record is not None
+                    else 0
+                )
+                if cls._ecar_int(record.get("timestamp_ms"), 0) >= current_ms:
+                    index_by_pid[pid] = index
 
-            for record in records:
-                if (
-                    record is None
-                    or record.get("object") != "PROCESS"
-                    or record.get("action") != "CREATE"
-                ):
+        parent_by_index: dict[int, int] = {}
+        for index in create_indexes:
+            record = records[index]
+            if record is None:
+                continue
+            parent_index: int | None = None
+            parent_id = record.get("actorID")
+            if parent_id:
+                parent_index = index_by_object_id.get(str(parent_id))
+            if parent_index is None:
+                pid = cls._ecar_int(record.get("pid"))
+                parent_pid = cls._ecar_int(record.get("ppid"))
+                if parent_pid > 0 and parent_pid != pid:
+                    parent_index = index_by_pid.get(parent_pid)
+            if parent_index is not None and parent_index != index:
+                parent_by_index[index] = parent_index
+
+        cyclic_indexes: set[int] = set()
+        for index in parent_by_index:
+            seen: set[int] = set()
+            current = index
+            while current in parent_by_index:
+                if current in seen:
+                    cyclic_indexes.update(seen)
+                    break
+                seen.add(current)
+                current = parent_by_index[current]
+        parent_by_index = {
+            index: parent_index
+            for index, parent_index in parent_by_index.items()
+            if index not in cyclic_indexes and parent_index not in cyclic_indexes
+        }
+
+        for _ in range(len(parent_by_index)):
+            changed = False
+            for index, parent_index in parent_by_index.items():
+                record = records[index]
+                parent = records[parent_index]
+                if record is None or parent is None:
                     continue
-                parent_id = record.get("actorID")
-                parent_ms = create_times.get(str(parent_id)) if parent_id else None
-                if parent_ms is None:
-                    try:
-                        parent_pid = int(record.get("ppid", -1))
-                    except (TypeError, ValueError):
-                        parent_pid = -1
-                    parent_ms = create_times_by_pid.get(parent_pid)
-                timestamp_ms = int(record.get("timestamp_ms", 0))
-                if parent_ms is not None and timestamp_ms <= parent_ms:
+                parent_ms = cls._ecar_int(parent.get("timestamp_ms"), 0)
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                if timestamp_ms <= parent_ms:
                     record["timestamp_ms"] = parent_ms + 1
                     changed = True
+            if not changed:
+                break
 
         normalized: list[str] = []
         for line, record in zip(lines, records, strict=True):
