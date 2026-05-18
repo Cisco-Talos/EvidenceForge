@@ -2136,7 +2136,7 @@ class ActivityGenerator:
             tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
-        self._recent_icmp_observations: set[tuple[str, int, str, int, int]] = set()
+        self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
@@ -2575,19 +2575,27 @@ class ActivityGenerator:
         dst_port: int,
         time: datetime,
     ) -> datetime:
-        """Avoid exact duplicate Zeek ICMP summaries for the same tuple and timestamp."""
-        if len(self._recent_icmp_observations) > 100_000:
-            self._recent_icmp_observations.clear()
+        """Avoid exact duplicate Zeek ICMP summaries for the same tuple and timestamp.
+
+        ICMP scans can intentionally repeat the same source/destination pair at very high
+        rates, and Zeek collapses the source/destination ports to type/code values. Track the
+        next usable microsecond timestamp per rendered ICMP tuple so duplicates are assigned
+        in constant time instead of linearly probing through previously emitted timestamps.
+        """
+        if len(self._next_icmp_observation_ts_us) > 100_000:
+            self._next_icmp_observation_ts_us.clear()
         zeek_type = src_port if src_port else 8
         zeek_code = dst_port if dst_port else 0
-        adjusted = time
-        while True:
-            ts_us = int(round(adjusted.timestamp() * 1_000_000))
-            key = (src_ip, zeek_type, dst_ip, zeek_code, ts_us)
-            if key not in self._recent_icmp_observations:
-                self._recent_icmp_observations.add(key)
-                return adjusted
-            adjusted += timedelta(milliseconds=11)
+        tuple_key = (src_ip, zeek_type, dst_ip, zeek_code)
+        requested_ts_us = int(round(time.timestamp() * 1_000_000))
+        adjusted_ts_us = max(
+            requested_ts_us,
+            self._next_icmp_observation_ts_us.get(tuple_key, requested_ts_us),
+        )
+        self._next_icmp_observation_ts_us[tuple_key] = adjusted_ts_us + 11_000
+        if adjusted_ts_us == requested_ts_us:
+            return time
+        return time + timedelta(microseconds=adjusted_ts_us - requested_ts_us)
 
     def _infer_connection_pid(
         self,

@@ -50,6 +50,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Fix quadratic ICMP observation timestamp disambiguation DoS — replaced linear timestamp collision probing with a per-ICMP-tuple next-timestamp map and added regression coverage for constant-time duplicate sequencing.
 - [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.

@@ -4942,6 +4942,41 @@ def activity_gen():
     return ActivityGenerator(sm, mock_emitters)
 
 
+def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+
+    class CountingDict(dict[tuple[str, int, str, int], int]):
+        """Dictionary that counts next-timestamp lookups."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_calls = 0
+
+        def get(self, key: tuple[str, int, str, int], default: int = 0) -> int:
+            self.get_calls += 1
+            return super().get(key, default)
+
+    next_timestamps = CountingDict()
+    activity_gen._next_icmp_observation_ts_us = next_timestamps
+    base_time = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    adjusted_times = [
+        activity_gen._disambiguate_icmp_observation_time(
+            "10.0.0.1",
+            0,
+            "10.0.0.2",
+            0,
+            base_time,
+        )
+        for _ in range(1000)
+    ]
+
+    assert adjusted_times[0] == base_time
+    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert next_timestamps.get_calls == len(adjusted_times)
+    assert len(next_timestamps) == 1
+
+
 def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):
     """_emit_dns_lookup should prune expired entries and enforce a bounded cache size."""
     now = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
