@@ -21,6 +21,7 @@ from evidenceforge.events.contexts import (
     RegistryContext,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.dll_load_profiles import get_module_pe_metadata
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters import SysmonEventEmitter
 
@@ -533,6 +534,35 @@ class TestRenderEvent7:
         assert "Unavailable" in content
         assert '<Data Name="Signed">false</Data>' in content
 
+    def test_event7_system_dll_renders_windows_metadata(self, emitter):
+        """System DLL image loads should not render application PE metadata."""
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="image_load",
+            src_host=_win_host(),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=1,
+                image=r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+                command_line="chrome.exe",
+                username="user",
+            ),
+            image_load=ImageLoadContext(
+                image_loaded=r"C:\Windows\System32\user32.dll",
+                signed=True,
+                signature="Microsoft Windows",
+                signature_status="Valid",
+            ),
+        )
+        emitter._render_sysmon_image_loaded(event)
+
+        event_data = emitter._event_dicts[0]
+        assert event_data["ImageLoaded"] == r"C:\Windows\System32\user32.dll"
+        assert event_data["Product"] == "Microsoft Windows Operating System"
+        assert event_data["Company"] == "Microsoft Corporation"
+        assert event_data["Description"] == "user32.dll system library"
+        assert event_data["Product"] not in {"Google Chrome", "Microsoft Edge"}
+
     def test_unsigned_event7_overrides_valid_signature_status(self, emitter):
         """Unsigned image loads should not render a contradictory Valid signature status."""
         event = SecurityEvent(
@@ -876,6 +906,32 @@ class TestProcessCreateMetadata:
 
         assert metadata[0] == "10.0.20348.2322"
         assert metadata[4] == "TiWorker.exe"
+
+    @pytest.mark.parametrize(
+        "image",
+        [
+            r"C:\Windows\System32\user32.dll",
+            r"C:\Windows\System32\gdi32.dll",
+            r"C:\Windows\System32\ws2_32.dll",
+            r"C:\Windows\System32\dwrite.dll",
+        ],
+    )
+    def test_windows_system_dlls_do_not_inherit_application_metadata(self, image: str):
+        """Catalog-listed System32 modules should keep Windows DLL identity."""
+        basename = image.rsplit("\\", 1)[-1]
+        module_metadata = get_module_pe_metadata(image)
+        direct_metadata = SysmonEventEmitter._get_pe_metadata(image, _win_host())
+        signed_fallback = SysmonEventEmitter._signed_module_metadata(image, "Microsoft Windows")
+
+        assert module_metadata == ("-", "-", "-", "-", "-")
+        assert direct_metadata == ("-", "-", "-", "-", "-")
+        assert signed_fallback == (
+            "10.0.19041.1",
+            f"{basename} system library",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            basename,
+        )
 
     def test_image_load_hashes_follow_rendered_file_identity(self):
         """Same DLL path with different rendered PE metadata must not share hashes."""
