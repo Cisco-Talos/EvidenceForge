@@ -706,58 +706,87 @@ class EcarEmitter(HostMultiplexEmitter):
 
     @classmethod
     def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
-        """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
+        """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows.
+
+        Raw eCAR records can contain arbitrary ``objectID``/``actorID`` or PID
+        relationships, including self-parenting and cycles.  Cyclic parentage is
+        unsatisfiable, so those edges are treated as unshiftable instead of
+        repeatedly advancing timestamps forever during final flush.
+        """
         records: list[dict[str, Any] | None] = []
-        for line in lines:
+        process_create_records: dict[str, dict[str, Any]] = {}
+        pid_keys: dict[int, str] = {}
+        for index, line in enumerate(lines):
             try:
-                records.append(json.loads(line))
+                record = json.loads(line)
             except json.JSONDecodeError:
                 records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "PROCESS" or record.get("action") != "CREATE":
+                continue
+            key = str(record.get("objectID") or f"__process_create_{index}")
+            process_create_records[key] = record
+            try:
+                pid = int(record.get("pid", -1))
+            except (TypeError, ValueError):
+                pid = -1
+            if pid > 0:
+                pid_keys[pid] = key
 
-        changed = True
-        while changed:
+        if not process_create_records:
+            return lines
+
+        parent_keys: dict[str, str] = {}
+        for key, record in process_create_records.items():
+            parent_id = record.get("actorID")
+            if parent_id is not None and str(parent_id) in process_create_records:
+                parent_keys[key] = str(parent_id)
+                continue
+            try:
+                parent_pid = int(record.get("ppid", -1))
+            except (TypeError, ValueError):
+                parent_pid = -1
+            parent_key = pid_keys.get(parent_pid)
+            if parent_key is not None:
+                parent_keys[key] = parent_key
+
+        cyclic_keys: set[str] = set()
+        for key in process_create_records:
+            path: list[str] = []
+            seen: set[str] = set()
+            current: str | None = key
+            while current is not None:
+                if current in seen:
+                    cyclic_keys.update(path[path.index(current) :])
+                    break
+                if current in cyclic_keys:
+                    break
+                seen.add(current)
+                path.append(current)
+                parent_key = parent_keys.get(current)
+                current = parent_key if parent_key in process_create_records else None
+
+        max_passes = len(process_create_records)
+        for _ in range(max_passes):
             changed = False
             create_times: dict[str, int] = {}
-            create_times_by_pid: dict[int, int] = {}
-            for record in records:
-                if (
-                    record is None
-                    or record.get("object") != "PROCESS"
-                    or record.get("action") != "CREATE"
-                ):
-                    continue
-                object_id = record.get("objectID")
-                if object_id:
-                    create_times[str(object_id)] = int(record.get("timestamp_ms", 0))
-                try:
-                    pid = int(record.get("pid", -1))
-                except (TypeError, ValueError):
-                    pid = -1
-                if pid > 0:
-                    create_times_by_pid[pid] = max(
-                        create_times_by_pid.get(pid, 0),
-                        int(record.get("timestamp_ms", 0)),
-                    )
+            for key, record in process_create_records.items():
+                create_times[key] = int(record.get("timestamp_ms", 0))
 
-            for record in records:
-                if (
-                    record is None
-                    or record.get("object") != "PROCESS"
-                    or record.get("action") != "CREATE"
-                ):
+            for key, record in process_create_records.items():
+                if key in cyclic_keys:
                     continue
-                parent_id = record.get("actorID")
-                parent_ms = create_times.get(str(parent_id)) if parent_id else None
-                if parent_ms is None:
-                    try:
-                        parent_pid = int(record.get("ppid", -1))
-                    except (TypeError, ValueError):
-                        parent_pid = -1
-                    parent_ms = create_times_by_pid.get(parent_pid)
+                parent_key = parent_keys.get(key)
+                if parent_key is None or parent_key in cyclic_keys:
+                    continue
+                parent_ms = create_times.get(parent_key)
                 timestamp_ms = int(record.get("timestamp_ms", 0))
                 if parent_ms is not None and timestamp_ms <= parent_ms:
                     record["timestamp_ms"] = parent_ms + 1
                     changed = True
+            if not changed:
+                break
 
         normalized: list[str] = []
         for line, record in zip(lines, records, strict=True):

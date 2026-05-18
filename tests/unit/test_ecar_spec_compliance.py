@@ -703,6 +703,86 @@ class TestChronologicalOutput:
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
 
+    def test_process_create_self_parent_cycle_is_not_shifted_forever(self, tmp_path, ts):
+        """Self-parented raw eCAR process creates should not hang final close."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts,
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "self-parent-process",
+                "actorID": "self-parent-process",
+                "pid": 5000,
+                "ppid": 5000,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert rows[0]["objectID"] == "self-parent-process"
+        assert rows[0]["timestamp_ms"] == int(ts.timestamp() * 1000)
+
+    def test_process_create_mutual_parent_cycle_is_not_shifted_forever(self, tmp_path, ts):
+        """Mutually cyclic raw eCAR process creates should not hang final close."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts,
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "first-process",
+                "actorID": "second-process",
+                "pid": 5001,
+                "ppid": 5002,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "second-process",
+                "actorID": "first-process",
+                "pid": 5002,
+                "ppid": 5001,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        timestamps = {row["objectID"]: row["timestamp_ms"] for row in rows}
+        assert timestamps == {
+            "first-process": int(ts.timestamp() * 1000),
+            "second-process": int(ts.replace(second=1).timestamp() * 1000),
+        }
+
 
 class TestTidAlwaysPresent:
     def test_tid_present_default(self, emitter, ts):
