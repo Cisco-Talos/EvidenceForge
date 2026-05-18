@@ -6428,6 +6428,7 @@ class ActivityGenerator:
             if (
                 proxy_context.host
                 and "." in proxy_context.host
+                and not _is_ip_literal(proxy_context.host)
                 and not proxy_context.host.endswith(f".{ad_domain}")
                 and not proxy_context.host.endswith(".local")
                 and not preserve_explicit_proxy_dst_ip
