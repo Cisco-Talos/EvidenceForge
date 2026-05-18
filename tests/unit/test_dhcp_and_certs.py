@@ -3,6 +3,7 @@
 
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
+import math
 import random
 import re
 from datetime import UTC, datetime
@@ -592,6 +593,42 @@ class TestTlsIssuers:
             assert (9, 5.0) in dns_tunnel_ttl_choices()
         finally:
             reset_network_params_cache()
+
+    def test_dns_tunnel_ttl_choices_ignore_non_finite_overlay_values(self, monkeypatch):
+        """Non-finite overlay TTL values should not crash runtime config loading."""
+        from evidenceforge.generation.activity import network_params
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {"dns_tunnel_ttl_choices": [{"value": float("inf"), "weight": 1}]},
+        )
+
+        assert network_params.dns_tunnel_ttl_choices() == list(
+            network_params._DEFAULT_DNS_TUNNEL_TTL_CHOICES
+        )
+
+    def test_dns_tunnel_ttl_choices_normalize_overflowing_weight_totals(self, monkeypatch):
+        """Huge finite weights should remain usable by random.choices after normalization."""
+        from evidenceforge.generation.activity import network_params
+        from evidenceforge.generation.engine.storyline import _choose_dns_tunnel_campaign_ttl
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {
+                "dns_tunnel_ttl_choices": [
+                    {"value": 9, "weight": 1e308},
+                    {"value": 10, "weight": 1e308},
+                ]
+            },
+        )
+
+        choices = network_params.dns_tunnel_ttl_choices()
+
+        assert choices == [(9, 1.0), (10, 1.0)]
+        assert math.isfinite(sum(weight for _value, weight in choices))
+        assert _choose_dns_tunnel_campaign_ttl(choices, random.Random(7)) in {9, 10}
 
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
