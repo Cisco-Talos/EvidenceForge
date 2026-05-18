@@ -871,6 +871,7 @@ Once baseline activity uses SecurityEvent dispatch, these become straightforward
 ## Post-MVP Enhancements (Future)
 
 ### Short-term
+- [x] Validate auth-noise account base names against scenario username syntax — closed Aardvark-reported local DoS where malformed overlay account names passed validate-config but failed during generation.
 - [ ] **Configurable work-week schedules** — Allow scenario authors to shift the typical workday (e.g., Tues–Sunday for retail/healthcare), define shift workers with non-standard hours, or specify per-persona day-of-week overrides
 - [ ] **Storyline cadence field** — `cadence: human|automated|periodic(interval, jitter)` on storyline steps for malware beacons, AI-driven attacks, and automated exfiltration with appropriate timing (currently all steps use human typing cadence by default)
 - [ ] **Cloud/SaaS log formats** — Azure AD sign-in logs, AWS CloudTrail, GCP audit logs, M365 audit logs. Most modern SOCs are hybrid; on-prem-only formats limit training relevance
