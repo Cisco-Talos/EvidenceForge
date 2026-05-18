@@ -1901,24 +1901,29 @@ def _is_ip_literal(value: str) -> bool:
 
 def _tls_certificate_serial(seed: str) -> str:
     """Return a stable certificate serial with CA-realistic length variation."""
+    from evidenceforge.config.schemas import TLS_SERIAL_LENGTH_MAX_WEIGHT
     from evidenceforge.generation.activity.tls_realism import serial_number_config
 
     configured_lengths = serial_number_config().get("byte_lengths", [])
-    lengths: list[int] = []
-    weights: list[int] = []
+    weighted_lengths: dict[int, int] = {}
     for entry in configured_lengths:
         if not isinstance(entry, dict):
             continue
         try:
             byte_length = int(entry.get("bytes", 0))
             weight = int(entry.get("weight", 0))
-        except (TypeError, ValueError):
+        except (OverflowError, TypeError, ValueError):
             continue
-        if 1 <= byte_length <= 20 and weight > 0:
-            lengths.append(byte_length)
-            weights.append(weight)
+        if 1 <= byte_length <= 20 and 0 < weight <= TLS_SERIAL_LENGTH_MAX_WEIGHT:
+            weighted_lengths[byte_length] = min(
+                weighted_lengths.get(byte_length, 0) + weight,
+                TLS_SERIAL_LENGTH_MAX_WEIGHT,
+            )
 
-    if not lengths:
+    if weighted_lengths:
+        lengths = list(weighted_lengths)
+        weights = list(weighted_lengths.values())
+    else:
         lengths = [8, 9, 10, 12, 16, 18, 20]
         weights = [8, 6, 6, 14, 40, 12, 14]
 

@@ -16,6 +16,8 @@ from typing import Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
+
 # --- DNS Registry ---
 
 
@@ -308,6 +310,8 @@ class TlsSerialLength(BaseModel, extra="forbid"):
     def weight_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("weight must be positive")
+        if v > TLS_SERIAL_LENGTH_MAX_WEIGHT:
+            raise ValueError(f"weight must be <= {TLS_SERIAL_LENGTH_MAX_WEIGHT}")
         return v
 
 
