@@ -978,6 +978,42 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_reports_invalid_extra_syslog_messages_schema(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "attacker-controlled-null-app",
+                    "messages": None,
+                },
+                {
+                    "app": "attacker-controlled-scalar-app",
+                    "messages": 123,
+                },
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-null-app"' in issue.message
+            and "messages" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-scalar-app"' in issue.message
+            and "messages" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_cron_hourly_in_extra_syslog_noise(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
