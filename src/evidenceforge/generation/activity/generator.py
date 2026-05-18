@@ -129,6 +129,7 @@ _WINDOWS_SINGLETON_SERVICE_EXES = frozenset(
     }
 )
 _SYSTEM_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE"}
+_USER_MODEL_USERNAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
 _LINUX_LOCAL_ACCOUNTS = {
     "apache",
     "mysql",
@@ -10295,22 +10296,24 @@ class ActivityGenerator:
         if candidate and candidate.lower() not in _LINUX_LOCAL_ACCOUNTS:
             if candidate in known_users:
                 return known_users[candidate]
-            return User(
-                username=candidate,
-                full_name=candidate,
-                email=f"{candidate}@{self._valid_fallback_email_domain()}",
-            )
+            if _USER_MODEL_USERNAME_RE.fullmatch(candidate):
+                return User(
+                    username=candidate,
+                    full_name=candidate,
+                    email=f"{candidate}@{self._valid_fallback_email_domain()}",
+                )
 
         assigned_user = getattr(system, "assigned_user", "")
         if assigned_user:
             assigned = known_users.get(assigned_user)
             if assigned is not None:
                 return assigned
-            return User(
-                username=assigned_user,
-                full_name=assigned_user,
-                email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
-            )
+            if _USER_MODEL_USERNAME_RE.fullmatch(assigned_user):
+                return User(
+                    username=assigned_user,
+                    full_name=assigned_user,
+                    email=f"{assigned_user}@{self._valid_fallback_email_domain()}",
+                )
         return User(
             username="Administrator",
             full_name="Administrator",
