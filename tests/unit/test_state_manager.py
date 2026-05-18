@@ -159,6 +159,33 @@ class TestStateManagerInit:
         assert ids == sorted(ids)
         assert len(set(ids)) == len(ids)
 
+    def test_linux_logind_session_far_future_time_does_not_materialize_blocks(self):
+        """Far-future logind IDs should not cache every elapsed four-hour block."""
+        import random
+
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", start)
+        rng = random.Random(31)
+
+        session_id = sm.next_linux_logind_session_id(
+            "linux01",
+            rng,
+            start + timedelta(days=1_000_000),
+        )
+
+        assert session_id > 0
+        assert sm._linux_logind_session_block_offsets == {}
+
+    def test_linux_pid_far_future_block_offset_does_not_materialize_blocks(self):
+        """Far-future Linux PID offsets should be direct arithmetic, not catch-up caches."""
+        sm = StateManager()
+
+        offset = sm._linux_pid_block_offset("linux01", 1_000_000_000)
+
+        assert offset > 0
+        assert sm._linux_pid_block_offsets == {}
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
@@ -305,6 +332,17 @@ class TestSessionManagement:
         )
 
         assert int(earlier, 16) < int(later, 16)
+
+    def test_allocate_logon_id_far_future_time_does_not_materialize_blocks(self):
+        """Far-future Windows LogonIDs should not cache every elapsed minute block."""
+        sm = StateManager()
+        boot = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("DC-01", boot)
+
+        logon_id = sm.allocate_logon_id("DC-01", boot + timedelta(days=1_000_000))
+
+        assert int(logon_id, 16) > 0
+        assert sm._logon_id_block_offsets == {}
 
     def test_reassign_session_logon_id_rekeys_session_to_event_time(self):
         """Planned sessions can be re-keyed once final source-native logon time is known."""
