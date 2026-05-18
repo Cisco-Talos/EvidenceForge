@@ -1238,6 +1238,54 @@ class TestDnsSupportQueryTypes:
         assert event.network.dst_ip == "10.0.0.10"
         assert event.dns.AA is True
 
+    def test_default_ad_site_srv_query_resolves_to_dc(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        import evidenceforge.generation.activity.generator as generator_module
+
+        self._force_dns_random(monkeypatch, [0.5, 0.95, 0.5])
+        monkeypatch.setattr(
+            generator_module,
+            "_AD_SRV_QUERIES",
+            ["_ldap._tcp.Default-First-Site-Name._sites.{domain}"],
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._ad_domain = "example.com"
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="142.250.72.36",
+            time=timestamp,
+            hostname="www.gstatic.com",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        assert event.dns is not None
+        assert event.dns.query == "_ldap._tcp.Default-First-Site-Name._sites.example.com"
+        assert event.dns.query_type == "SRV"
+        assert event.dns.rcode == "NOERROR"
+        assert event.dns.answers == ["0 100 389 dc-01.example.com"]
+        assert event.network.dst_ip == "10.0.0.10"
+        assert event.dns.AA is True
+
+    def test_default_ad_site_srv_is_not_nxdomain_noise(self):
+        from evidenceforge.generation.activity.generator import _dns_nxdomain_companion_queries
+        from evidenceforge.generation.activity.network import _AD_SRV_QUERIES
+
+        site_query = "_ldap._tcp.Default-First-Site-Name._sites.{domain}"
+        assert site_query in _AD_SRV_QUERIES
+        assert "_ldap._tcp.Default-First-Site-Name._sites.example.com" not in (
+            _dns_nxdomain_companion_queries("www.gstatic.com", "example.com")
+        )
+
     def test_internal_nxdomain_companions_use_internal_resolver_and_rtt(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
     ):

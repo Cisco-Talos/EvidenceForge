@@ -1843,6 +1843,27 @@ def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
 
 
+def _dns_nxdomain_companion_queries(hostname: str | None, ad_domain: str) -> list[str]:
+    """Return realistic low-volume resolver miss probes for DNS companion noise."""
+    suffix_queries: list[str] = []
+    if (
+        hostname
+        and "." in hostname
+        and not hostname.endswith(f".{ad_domain}")
+        and not hostname.endswith(".local")
+    ):
+        suffix_queries.append(f"{hostname}.{ad_domain}")
+    return suffix_queries + [
+        f"wpad.{ad_domain}",
+        "wpad.local",
+        "wpad",
+        f"isatap.{ad_domain}",
+        "isatap",
+        f"oldserver.{ad_domain}",
+        f"printer01.{ad_domain}",
+    ]
+
+
 def _proxy_request_allows_cache_hit(
     *,
     method: str,
@@ -9376,25 +9397,7 @@ class ActivityGenerator:
         # Occasional resolver search-suffix mistakes/background discovery probes.
         # Keep this low-volume and avoid doubling an already-qualified internal name.
         if rng.random() < 0.05:
-            suffix_queries: list[str] = []
-            if (
-                hostname
-                and "." in hostname
-                and not hostname.endswith(f".{ad_domain}")
-                and not hostname.endswith(".local")
-            ):
-                suffix_queries.append(f"{hostname}.{ad_domain}")
-            nxdomain_queries = [
-                f"wpad.{ad_domain}",
-                "wpad.local",
-                "wpad",
-                f"isatap.{ad_domain}",
-                "isatap",
-                f"_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}",
-                f"oldserver.{ad_domain}",
-                f"printer01.{ad_domain}",
-            ]
-            nxdomain_queries = suffix_queries + nxdomain_queries
+            nxdomain_queries = _dns_nxdomain_companion_queries(hostname, ad_domain)
             nx_query = rng.choice(nxdomain_queries)
             nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
             nx_is_internal = _dns_is_internal_name(nx_query, ad_domain) or nx_query in {
