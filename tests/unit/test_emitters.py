@@ -711,6 +711,53 @@ class TestWindowsEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
 
+    def test_process_create_self_parent_is_not_shifted_forever(self, format_def, temp_output):
+        """Self-parent raw Security 4688 records should be treated as unshiftable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": event_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1234",
+                "NewProcessId": "0x1234",
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time
+
+    def test_process_create_parent_cycle_is_not_shifted_forever(self, format_def, temp_output):
+        """Cyclic raw Security 4688 parent PIDs should be treated as unshiftable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        first_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": first_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x2222",
+                "NewProcessId": "0x1111",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": second_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1111",
+                "NewProcessId": "0x2222",
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == first_time
+        assert emitter._event_dicts[1]["TimeCreated"] == second_time
+
     def test_process_create_shifted_after_visible_logon(self, format_def, temp_output):
         """Security 4688 should not visibly precede its same-session 4624 row."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -795,6 +842,40 @@ class TestWindowsEventEmitter:
 
         child = next(event for event in events if event["NewProcessId"] == "0x1084")
         assert child["TimeCreated"] == parent_time + timedelta(milliseconds=1)
+        emitter._cleanup_spool_unlocked()
+
+    def test_spooled_process_create_parent_cycle_is_not_shifted_forever(
+        self, format_def, temp_output
+    ):
+        """Spooled cyclic raw Security 4688 parent PIDs should be treated as unshiftable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        first_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": first_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x2222",
+                "NewProcessId": "0x1111",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": second_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1111",
+                "NewProcessId": "0x2222",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_creates_after_visible_parent_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        first = next(event for event in events if event["NewProcessId"] == "0x1111")
+        second = next(event for event in events if event["NewProcessId"] == "0x2222")
+        assert first["TimeCreated"] == first_time
+        assert second["TimeCreated"] == second_time
         emitter._cleanup_spool_unlocked()
 
     def test_spooled_process_create_shifted_after_visible_logon(self, format_def, temp_output):
