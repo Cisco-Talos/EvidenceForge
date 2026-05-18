@@ -2122,7 +2122,7 @@ def _tls_key_for_certificate_name(
 ) -> tuple[str, int]:
     """Align generated certificate key metadata with RSA/ECC naming conventions."""
     name = cert_name.lower()
-    if any(marker in name for marker in ("rsa", " r", "-r")):
+    if "rsa" in name:
         return "rsa", max(key_length if key_type == "rsa" else 0, 2048)
     if any(marker in name for marker in ("ecdsa", "ecc", " ec ", "-ec")):
         return "ecdsa", 256 if key_type != "ecdsa" else key_length

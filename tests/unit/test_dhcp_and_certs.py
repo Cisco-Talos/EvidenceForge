@@ -20,6 +20,7 @@ from evidenceforge.generation.activity.generator import (
     _ntp_stratum_and_ref_id,
     _ocsp_status_for_certificate,
     _tls_certificate_serial,
+    _tls_key_for_certificate_name,
     _tls_san_dns_names,
 )
 from evidenceforge.generation.activity.tls_issuers import (
@@ -979,6 +980,130 @@ class TestTlsIssuers:
         assert intermediate.certificate_issuer != intermediate.certificate_subject
         expected = signature_algorithm_for_issuer(intermediate.certificate_issuer)
         assert intermediate.certificate_sig_alg == expected
+
+    def test_known_ecdsa_chain_names_keep_ecdsa_certificate_metadata(self):
+        """Root-like subject names such as Root R4/X2 should not be coerced to RSA."""
+        generator = ActivityGenerator(StateManager(), {})
+        cases = [
+            (
+                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+                "CN=GTS Root R4, O=Google Trust Services LLC, C=US",
+                "rsa",
+                2048,
+                "ecdsa-with-SHA384",
+            ),
+            (
+                "CN=E1, O=Let's Encrypt, C=US",
+                "CN=E1, O=Let's Encrypt, C=US",
+                "CN=ISRG Root X2, O=Internet Security Research Group, C=US",
+                "ecdsa",
+                256,
+                "ecdsa-with-SHA256",
+            ),
+        ]
+
+        for (
+            issuer_name,
+            expected_subject,
+            expected_issuer,
+            expected_key_type,
+            expected_key_length,
+            expected_sig,
+        ) in cases:
+            chain = None
+            for seed in range(1, 200):
+                candidate = generator._build_tls_certificate_chain(
+                    leaf=X509Context(
+                        fuid="FLeaf",
+                        certificate_subject=f"CN=leaf-{seed}.example",
+                        certificate_issuer=issuer_name,
+                    ),
+                    cert_name=f"leaf-{seed}.example",
+                    issuer_name=issuer_name,
+                    event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                    connection_uid=f"CEcdsaChain{seed}",
+                    rng=random.Random(seed),
+                )
+                if any(
+                    cert.certificate_subject == expected_subject
+                    and cert.certificate_issuer == expected_issuer
+                    for cert in candidate
+                ):
+                    chain = candidate
+                    break
+
+            assert chain is not None, expected_subject
+            cert = next(
+                cert
+                for cert in chain
+                if cert.certificate_subject == expected_subject
+                and cert.certificate_issuer == expected_issuer
+            )
+            assert cert.certificate_key_type == expected_key_type
+            assert cert.certificate_key_alg == (
+                "id-ecPublicKey" if expected_key_type == "ecdsa" else "rsaEncryption"
+            )
+            assert cert.certificate_key_length == expected_key_length
+            assert cert.certificate_sig_alg == expected_sig
+
+    def test_root_like_ecdsa_subject_names_do_not_trigger_rsa_name_override(self):
+        """The name fallback should not treat the word Root as an RSA marker."""
+        cases = [
+            (
+                "CN=ISRG Root X2, O=Internet Security Research Group, C=US",
+                "ecdsa",
+                256,
+            ),
+            ("CN=GTS Root R4, O=Google Trust Services LLC, C=US", "ecdsa", 384),
+        ]
+
+        for subject, expected_key_type, expected_key_length in cases:
+            observed = _tls_key_for_certificate_name(
+                subject, expected_key_type, expected_key_length
+            )
+            assert observed == (expected_key_type, expected_key_length)
+
+    def test_public_ca_chain_signatures_match_rendered_issuer_keys(self):
+        """Rendered adjacent x509 chain rows should agree on issuer key family."""
+        generator = ActivityGenerator(StateManager(), {})
+        issuer_names = [
+            "CN=R3, O=Let's Encrypt, C=US",
+            "CN=E1, O=Let's Encrypt, C=US",
+            "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+            "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
+            "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+        ]
+
+        checked = 0
+        for issuer_name in issuer_names:
+            for seed in range(1, 200):
+                chain = generator._build_tls_certificate_chain(
+                    leaf=X509Context(
+                        fuid="FLeaf",
+                        certificate_subject=f"CN=leaf-{seed}.example",
+                        certificate_issuer=issuer_name,
+                        certificate_sig_alg=signature_algorithm_for_issuer(issuer_name),
+                    ),
+                    cert_name=f"leaf-{seed}.example",
+                    issuer_name=issuer_name,
+                    event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                    connection_uid=f"CPublicCaChain{seed}",
+                    rng=random.Random(seed),
+                )
+                if len(chain) < 2:
+                    continue
+                for child, issuer in zip(chain, chain[1:], strict=False):
+                    signature = child.certificate_sig_alg.lower()
+                    if "ecdsa" in signature:
+                        assert issuer.certificate_key_type == "ecdsa", issuer.certificate_subject
+                    if "rsa" in signature:
+                        assert issuer.certificate_key_type == "rsa", issuer.certificate_subject
+                    checked += 1
+                break
+
+        assert checked >= len(issuer_names)
 
     def test_leaf_signature_algorithm_follows_issuer_not_leaf_key(self):
         """An ECDSA leaf signed by an RSA CA should render an RSA signature algorithm."""
