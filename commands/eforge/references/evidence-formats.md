@@ -8,16 +8,24 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 
 ## Output Directory Structure
 
+One generation run emits one output target. The tree below shows both default
+and SOF-ELK target-specific files where they differ; they are not emitted
+together.
+
 ```
 output/
   GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
   OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
+  OUTPUT_TARGET.txt                        # "default" or "sof-elk"; missing legacy marker means default
   ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
   <hostname.domain>/                       # Per-host directories (FQDN)
     windows_event_security.xml             # Windows Security channel events
     windows_event_sysmon.xml               # Sysmon operational channel events
-    <year>/syslog.log                      # Linux syslog (RFC3164; Linux only)
+    syslog.log                             # Linux syslog (default target; RFC5424)
     bash_history/<username>.bash_history    # Per-user bash history (Linux only)
+    <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
+    <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 (sof-elk target)
+    <year>/syslog.log                      # Linux syslog (sof-elk target; RFC3164)
   <sensor-name>/                           # Per-sensor directories (network)
     conn.json                              # Zeek conn.log (NDJSON)
     dns.json                               # Zeek dns.log
@@ -28,20 +36,46 @@ output/
   ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
   snort_alert.log                          # Snort/Suricata IDS alerts
   <fw-hostname>/                           # Per-firewall directories
-    <year>/cisco_asa.log                   # Cisco ASA firewall syslog
+    cisco_asa.log                          # Cisco ASA firewall syslog (default target)
+    <year>/cisco_asa.log                   # Cisco ASA firewall syslog (sof-elk target)
   web_access.log                           # Apache/Nginx access log
   <proxy-hostname.domain>/                 # Per-proxy-host directories
     proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
 ```
 
+## Output Targets
+
+`eforge generate --target default|sof-elk` selects the on-disk rendering and
+layout for tools that expect different formats. Scenario YAML and `--formats`
+remain canonical: request `windows_event_security`, `windows_event_sysmon`,
+`syslog`, `cisco_asa`, and so on, then choose the target at generation time.
+When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
+legacy/default output.
+
+Target-specific behavior in V1:
+
+| Canonical format | `default` target | `sof-elk` target |
+| --- | --- | --- |
+| `windows_event_security` | `<host>/windows_event_security.xml` | `<host>/<year>/windows_event_security_snare.log` |
+| `windows_event_sysmon` | `<host>/windows_event_sysmon.xml` | `<host>/<year>/windows_event_sysmon_snare.log` |
+| `syslog` | `<host>/syslog.log` as RFC5424 | `<host>/<year>/syslog.log` as RFC3164/BSD |
+| `cisco_asa` | `<firewall>/cisco_asa.log` | `<firewall>/<year>/cisco_asa.log` |
+| Zeek, proxy, web access, IDS, eCAR, bash history | Unchanged | Unchanged |
+
 ---
 
 ## Windows Security Events
 
-**File:** `<hostname.domain>/windows_event_security.xml`
-**Format:** XML (`<Events><Event>...</Event></Events>`)
+**Default target file:** `<hostname.domain>/windows_event_security.xml`
+**Default target format:** XML (`<Events><Event>...</Event></Events>`)
+**SOF-ELK target file:** `<hostname.domain>/<year>/windows_event_security_snare.log`
+**SOF-ELK target format:** Snare-style Windows Event Log fields inside an RFC3164 syslog envelope
 **Provider:** Microsoft-Windows-Security-Auditing (except 1102)
 **Channel:** Security
+
+The `default` target emits XML only. The `sof-elk` target emits Snare syslog
+only so SOF-ELK and other syslog/Snare-aware tools can parse the same canonical
+Windows Security events without requiring binary EVTX files.
 
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
@@ -89,10 +123,16 @@ output/
 
 ## Windows Sysmon Events
 
-**File:** `<hostname.domain>/windows_event_sysmon.xml`
-**Format:** XML (`<Events><Event>...</Event></Events>`)
+**Default target file:** `<hostname.domain>/windows_event_sysmon.xml`
+**Default target format:** XML (`<Events><Event>...</Event></Events>`)
+**SOF-ELK target file:** `<hostname.domain>/<year>/windows_event_sysmon_snare.log`
+**SOF-ELK target format:** Snare-style Windows Event Log fields inside an RFC3164 syslog envelope
 **Provider:** Microsoft-Windows-Sysmon
 **Channel:** Microsoft-Windows-Sysmon/Operational
+
+The `default` target emits XML only. The `sof-elk` target emits Snare syslog
+only and `eforge eval` maps both variants back to the canonical
+`windows_event_sysmon` format bucket.
 
 | Event ID | Name | Category | Notes |
 |----------|------|----------|-------|
@@ -173,10 +213,22 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 ## Linux Syslog
 
-**File:** `<hostname.domain>/<year>/syslog.log`
-**Format:** RFC3164/BSD syslog with PRI
+**Default target file:** `<hostname.domain>/syslog.log`
+**Default target format:** RFC5424 syslog with full timestamp year
+**SOF-ELK target file:** `<hostname.domain>/<year>/syslog.log`
+**SOF-ELK target format:** RFC3164/BSD syslog with PRI
 
-Authentication and system logs from Linux hosts. Generated syslog uses a BSD/RFC3164-style envelope (`<PRI>MMM DD HH:MM:SS HOST APP[PID]: MESSAGE`) and partitions files by event year so yearless syslog timestamps remain unambiguous. `eforge eval` still accepts older RFC5424 and flat BSD/RFC3164 syslog as legacy ingest fallbacks. All generated syslog entries are rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive messages from other contexts. This enables correlated dispatch: a logon event carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows reuse the same source port as the companion Zeek SSH connection tuple.
+Authentication and system logs from Linux hosts. The `default` target emits
+flat per-host RFC5424 syslog for SIEM-neutral output. The `sof-elk` target emits
+a BSD/RFC3164 envelope (`<PRI>MMM DD HH:MM:SS HOST APP[PID]: MESSAGE`) and
+partitions files by event year so SOF-ELK can recover the timestamp year from
+the archive path. `eforge eval` accepts both current target variants plus older
+legacy RFC5424 and flat BSD/RFC3164 files. All generated syslog entries are
+rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive
+messages from other contexts. This enables correlated dispatch: a logon event
+carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd
+accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows
+reuse the same source port as the companion Zeek SSH connection tuple.
 
 | Program | Description | Notes |
 |---------|-------------|-------|
@@ -232,7 +284,8 @@ Alert format: `[gid:sid:rev]` where `gid` defaults to 1, `sid` identifies the ru
 
 ## Cisco ASA Firewall Syslog
 
-**File:** `<fw-hostname>/<year>/cisco_asa.log`
+**Default target file:** `<fw-hostname>/cisco_asa.log`
+**SOF-ELK target file:** `<fw-hostname>/<year>/cisco_asa.log`
 **Format:** Cisco ASA syslog (RFC 3164 BSD syslog with ASA message IDs)
 
 Cisco ASA firewall logs for permitted and denied connections. Produced by firewall-type network sensors with `cisco_asa` in their `log_formats`. Each permitted connection generates a Built + Teardown pair; denied connections generate a single Deny record.

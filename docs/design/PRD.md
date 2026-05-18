@@ -432,13 +432,14 @@ output/
     generation.log              # Detailed generation log
     GROUND_TRUTH.md            # Ground truth sidecar (empty for baseline-only scenarios)
     OBSERVATION_MANIFEST.json  # Source-observation sidecar
+    OUTPUT_TARGET.txt          # default or sof-elk output target
     windows_events.xml         # Windows Event Logs
     zeek_conn.log              # Zeek connection logs
     ecar.json                  # ECAR events
-    <linux-host>/<year>/syslog.log        # Linux syslogs
+    <linux-host>/syslog.log               # Linux syslogs (default target)
     bash_history.log           # Bash history entries
     snort_alerts.log           # Snort/Suricata alerts
-    <firewall>/<year>/cisco_asa.log       # Cisco ASA firewall syslogs
+    <firewall>/cisco_asa.log              # Cisco ASA firewall syslogs (default target)
     web_access.log             # Web/proxy logs
 ```
 

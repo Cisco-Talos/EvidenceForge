@@ -54,6 +54,8 @@ Options:
                          `eforge info format_groups` to see available groups. Example:
                          `eforge generate scenario.yaml --formats zeek_conn,zeek_dns` to
                          generate only Zeek connection and DNS logs.
+  --target <name>        Output target: default or sof-elk. The default target is SIEM-neutral.
+                         Use sof-elk when generating SOF-ELK-compatible file layouts.
   --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
@@ -95,10 +97,16 @@ scenarios/<scenario-name>/
   ENVIRONMENT.md         ← created by /eforge scenario
   GROUND_TRUTH.md        ← generated answer key (empty for benign baseline-only runs)
   OBSERVATION_MANIFEST.json ← generated source-observation sidecar
+  OUTPUT_TARGET.txt      ← "default" or "sof-elk"
   data/                  ← generated log files
-    windows/
-      security.xml
-      sysmon.xml
+    <host>/
+      windows_event_security.xml      ← default target Windows Security
+      windows_event_sysmon.xml        ← default target Sysmon
+      syslog.log                      ← default target Linux syslog
+      <year>/
+        windows_event_security_snare.log ← sof-elk target Windows Security
+        windows_event_sysmon_snare.log   ← sof-elk target Sysmon
+        syslog.log                       ← sof-elk target Linux syslog
     zeek/
       conn.json
       dns.json
@@ -160,15 +168,17 @@ After reviewing output, you can suggest:
 
 | Format | Description | Generated For |
 |--------|-------------|---------------|
-| windows | Windows Event Logs (XML) — Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
+| windows | Windows Event Logs — default target XML, SOF-ELK target Snare syslog. Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
 | zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
 | ecar | EDR/XDR telemetry in eCAR format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
-| syslog | Linux syslog (RFC3164/BSD, per-host/year) | Linux systems |
+| syslog | Linux syslog — default target RFC5424 flat per-host, SOF-ELK target RFC3164/BSD per-host/year | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
-| cisco_asa | Cisco ASA firewall syslog (Built/Teardown/Deny) | Firewall sensors |
+| cisco_asa | Cisco ASA firewall syslog — default target flat per-sensor, SOF-ELK target per-sensor/year | Firewall sensors |
 
-When `nat_rules` are configured on the firewall sensor, `<firewall>/<year>/cisco_asa.log` also includes 305011/305012 NAT translation records alongside the normal Built/Teardown connection records.
+When `nat_rules` are configured on the firewall sensor, `cisco_asa.log`
+also includes 305011/305012 NAT translation records alongside the normal
+Built/Teardown connection records.
 
 | web_access | Apache/Nginx combined access logs | Web servers |
 

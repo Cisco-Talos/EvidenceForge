@@ -27,7 +27,8 @@ host's FQDN. Each host gets its own subdirectory:
 
     base_dir/<host-fqdn>/windows_event_security.xml
     base_dir/<host-fqdn>/ecar.json
-    base_dir/<host-fqdn>/<year>/syslog.log
+    base_dir/<host-fqdn>/syslog.log
+    base_dir/<host-fqdn>/<year>/syslog.log  # target-specific syslog layouts
 """
 
 import logging

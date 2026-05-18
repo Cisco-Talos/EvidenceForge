@@ -27,6 +27,8 @@ from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+from evidenceforge.output_targets import OutputTarget
+
 from . import LogParser, ParsedRecord, register_parser
 
 RFC5424_PATTERN = re.compile(
@@ -186,7 +188,9 @@ class SyslogParser(LogParser):
             fields["message"] = groups["message"] or ""
             fields["facility"] = pri // 8
             fields["severity"] = pri % 8
-            fields["syslog_protocol"] = "rfc5424_legacy"
+            fields["syslog_protocol"] = (
+                "rfc5424" if self.output_target == OutputTarget.DEFAULT else "rfc5424_legacy"
+            )
             pid_str = groups["procid"]
         else:
             match = LEGACY_ISO_SYSLOG_PATTERN.match(raw)

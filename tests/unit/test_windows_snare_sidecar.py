@@ -50,7 +50,7 @@ def test_windows_security_snare_renderer_uses_payload_marker_without_syslog_app_
     assert "Account Name: alice" in rendered
 
 
-def test_windows_security_emitter_writes_xml_and_year_partitioned_snare_sidecar(
+def test_windows_security_emitter_default_target_writes_xml_only(
     tmp_path: Path,
 ) -> None:
     emitter = WindowsEventEmitter(
@@ -67,13 +67,61 @@ def test_windows_security_emitter_writes_xml_and_year_partitioned_snare_sidecar(
     snare_2026 = tmp_path / "WIN-01.example.test" / "2026" / "windows_event_security_snare.log"
 
     assert xml_path.exists()
+    assert not snare_2025.exists()
+    assert not snare_2026.exists()
+
+
+def test_windows_security_emitter_sof_elk_target_writes_snare_only(tmp_path: Path) -> None:
+    emitter = WindowsEventEmitter(
+        load_format("windows_event_security"),
+        tmp_path,
+        buffer_size=10,
+    )
+    emitter.configure_output_target("sof-elk")
+    emitter.emit_event(_security_event(datetime(2025, 12, 31, 23, 59, 58, tzinfo=UTC)))
+    emitter.emit_event(_security_event(datetime(2026, 1, 1, 0, 0, 1, tzinfo=UTC)))
+    emitter.close()
+
+    xml_path = tmp_path / "WIN-01.example.test" / "windows_event_security.xml"
+    snare_2025 = tmp_path / "WIN-01.example.test" / "2025" / "windows_event_security_snare.log"
+    snare_2026 = tmp_path / "WIN-01.example.test" / "2026" / "windows_event_security_snare.log"
+
+    assert not xml_path.exists()
     assert snare_2025.exists()
     assert snare_2026.exists()
     assert "\tSecurity\t" in snare_2026.read_text(encoding="utf-8")
     assert "\tMicrosoft-Windows-Security-Auditing\t" in snare_2026.read_text(encoding="utf-8")
 
 
-def test_sysmon_emitter_writes_xml_and_year_partitioned_snare_sidecar(tmp_path: Path) -> None:
+def test_sysmon_emitter_sof_elk_target_writes_year_partitioned_snare_only(
+    tmp_path: Path,
+) -> None:
+    emitter = SysmonEventEmitter(
+        load_format("windows_event_sysmon"),
+        tmp_path,
+        buffer_size=10,
+    )
+    emitter.configure_output_target("sof-elk")
+    emitter.emit_event(_sysmon_process_create_event(datetime(2026, 6, 15, 14, 23, 5, tzinfo=UTC)))
+    emitter.close()
+
+    xml_path = tmp_path / "WIN-01.example.test" / "windows_event_sysmon.xml"
+    snare_path = tmp_path / "WIN-01.example.test" / "2026" / "windows_event_sysmon_snare.log"
+    snare = snare_path.read_text(encoding="utf-8")
+
+    assert not xml_path.exists()
+    assert snare.startswith(
+        "<14>Jun 15 14:23:05 WIN-01.example.test "
+        "WIN-01.example.test\tMSWinEventLog\t0\t"
+        "Microsoft-Windows-Sysmon/Operational\t"
+    )
+    assert "\t1\tMicrosoft-Windows-Sysmon\tCORP\\alice\t" in snare
+    assert "ProcessId: 4321" in snare
+    assert "Image: C:\\Windows\\System32\\cmd.exe" in snare
+    assert "UtcTime: 2026-06-15 14:23:05." in snare
+
+
+def test_sysmon_emitter_default_target_writes_xml_only(tmp_path: Path) -> None:
     emitter = SysmonEventEmitter(
         load_format("windows_event_sysmon"),
         tmp_path,
@@ -84,18 +132,9 @@ def test_sysmon_emitter_writes_xml_and_year_partitioned_snare_sidecar(tmp_path: 
 
     xml_path = tmp_path / "WIN-01.example.test" / "windows_event_sysmon.xml"
     snare_path = tmp_path / "WIN-01.example.test" / "2026" / "windows_event_sysmon_snare.log"
-    snare = snare_path.read_text(encoding="utf-8")
 
     assert xml_path.exists()
-    assert snare.startswith(
-        "<14>Jun 15 14:23:05 WIN-01.example.test "
-        "WIN-01.example.test\tMSWinEventLog\t0\t"
-        "Microsoft-Windows-Sysmon/Operational\t"
-    )
-    assert "\t1\tMicrosoft-Windows-Sysmon\tCORP\\alice\t" in snare
-    assert "ProcessId: 4321" in snare
-    assert "Image: C:\\Windows\\System32\\cmd.exe" in snare
-    assert "UtcTime: 2026-06-15 14:23:05." in snare
+    assert not snare_path.exists()
 
 
 def _security_event(timestamp: datetime) -> dict[str, object]:

@@ -42,6 +42,7 @@ def asa_emitter(tmp_path):
         output_path=tmp_path,
         sensor_hostnames=["fw01"],
     )
+    emitter.configure_output_target("sof-elk")
     emitter._segment_config = [
         {"name": "workstations", "cidr": "10.0.10.0/24"},
         {"name": "servers", "cidr": "10.0.20.0/24"},
@@ -343,7 +344,7 @@ class TestPermitRecords:
         asa_emitter.emit(event)
         asa_emitter.flush()
 
-        output = (tmp_path / "fw01" / "cisco_asa.log").read_text()
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         teardown = next(line for line in output.splitlines() if "%ASA-6-302014:" in line)
         assert "TCP FINs" in teardown
         assert "TCP Reset" not in teardown
@@ -932,6 +933,7 @@ class TestNatRecords:
                 output_path=sub_dir,
                 sensor_hostnames=["fw01"],
             )
+            emitter.configure_output_target("sof-elk")
             emitter._segment_config = asa_emitter._segment_config
             emitter._sensor_interfaces = asa_emitter._sensor_interfaces
 

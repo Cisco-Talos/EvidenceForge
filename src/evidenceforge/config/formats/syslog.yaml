@@ -54,7 +54,7 @@ fields:
   - name: version
     type: integer
     required: false
-    description: "Legacy RFC 5424 protocol version field. EvidenceForge now emits RFC3164."
+    description: "RFC 5424 protocol version field used by the default output target."
     constraints:
       allowed_values: [1]
 
@@ -71,19 +71,19 @@ fields:
   - name: msgid
     type: string
     required: false
-    description: "Legacy RFC 5424 MSGID token. EvidenceForge currently emits RFC3164."
+    description: "RFC 5424 MSGID token used by the default output target."
 
   - name: structured_data
     type: string
     required: false
-    description: "Legacy RFC 5424 structured-data field. EvidenceForge currently emits RFC3164."
+    description: "RFC 5424 structured-data field used by the default output target."
 
   - name: syslog_protocol
     type: string
     required: false
-    description: "Parser metadata identifying generated RFC3164 output or legacy RFC5424 input."
+    description: "Parser metadata identifying generated or legacy syslog protocol variants."
     constraints:
-      allowed_values: [rfc3164, rfc5424_legacy, rfc3164_legacy, iso_legacy]
+      allowed_values: [rfc5424, rfc3164, rfc5424_legacy, rfc3164_legacy, iso_legacy]
 
   - name: message
     type: string
@@ -95,4 +95,4 @@ output:
   file_extension: ".log"
   encoding: utf-8
   template: |
-    <{{ pri }}>{{ timestamp.strftime('%b') }} {{ "%2d"|format(timestamp.day) }} {{ timestamp.strftime('%H:%M:%S') }} {{ hostname }} {{ app_name }}{% if pid %}[{{ pid }}]{% endif %}: {{ message }}
+    <{{ pri }}>1 {{ timestamp.isoformat().replace('+00:00', 'Z') }} {{ hostname }} {{ app_name }} {{ pid | default('-', true) }} {{ msgid | default('-', true) }} {{ structured_data | default('-', true) }} {{ message }}

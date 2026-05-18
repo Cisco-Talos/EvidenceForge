@@ -347,6 +347,7 @@ def test_asa_output_sorted(tmp_path):
         output_path=tmp_path,
         sensor_hostnames=["fw01"],
     )
+    emitter.configure_output_target("sof-elk")
     emitter._segment_config = [
         {"name": "workstations", "cidr": "10.0.10.0/24"},
         {"name": "servers", "cidr": "10.0.20.0/24"},
