@@ -50,6 +50,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Remediate service-user bash history suppression bypass in Linux baseline process activity paths — centralized noninteractive service-account detection and enforced it inside direct bash-history dispatch so Linux app-catalog and legacy process paths preserve process telemetry without fabricating interactive shell history.
 - [x] Harden Windows spool JSON encoding and flushing against scenario-triggered denial-of-service — replaced collision-prone datetime sentinels with typed spool field wrappers and kept final spooled rendering on SQLite-backed streaming fixup passes instead of materializing all rows.
 - [x] Fix TCP DNS fallback packet overhead so TCP SERVFAIL accounting preserves TCP/IP header distributions.
 - [x] Fix unbounded Sysmon parent process-create shift loop for cyclic raw ProcessGuid relationships with cycle detection and bounded parent-ordering passes.

@@ -998,6 +998,14 @@ def _dns_payload_accounting(
     return normalized_duration, normalized_orig, normalized_resp
 
 
+_NONINTERACTIVE_BASH_USERS = {"apache", "www-data", "nginx", "httpd", "tomcat"}
+
+
+def _is_noninteractive_bash_user(user: User) -> bool:
+    """Return True for service accounts that should not render shell history."""
+    return user.username.lower() in _NONINTERACTIVE_BASH_USERS
+
+
 # Fixed baseline activity patterns (no LLM expansion)
 # Format: (activity_type, probability)
 # Phase 5.6: Widened probability gaps for user diversity scoring
@@ -8466,7 +8474,7 @@ class ActivityGenerator:
             # Literal command string (direct commands, typos, etc.)
             command = activity_type_or_command
 
-        if user.username.lower() in {"apache", "www-data", "nginx", "httpd", "tomcat"}:
+        if _is_noninteractive_bash_user(user):
             logger.debug(
                 "Skipping bash_history for noninteractive web service user %s on %s",
                 user.username,
@@ -8489,6 +8497,14 @@ class ActivityGenerator:
         command: str,
     ) -> None:
         """Dispatch a bash-history event at an already scheduled command time."""
+        if _is_noninteractive_bash_user(user):
+            logger.debug(
+                "Skipping bash_history for noninteractive web service user %s on %s",
+                user.username,
+                system.hostname,
+            )
+            return
+
         from evidenceforge.events.contexts import ShellContext
 
         event = SecurityEvent(

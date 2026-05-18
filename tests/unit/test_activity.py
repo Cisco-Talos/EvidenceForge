@@ -1519,6 +1519,100 @@ class TestActivityGenerator:
         assert process_event.timestamp == scheduled_time
         assert bash_event.timestamp == scheduled_time
 
+    def test_linux_process_activity_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Linux app-catalog processes should not emit shell history for service users."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="www-data",
+        )
+        service_user = User(
+            username="www-data",
+            full_name="Web Service",
+            email="www-data@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: (
+                "/usr/bin/code",
+                "code --no-sandbox /home/www-data/projects/data-pipeline",
+            ),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line
+            == "code --no-sandbox /home/www-data/projects/data-pipeline"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
+    def test_linux_process_system_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Legacy Linux process templates should not emit shell history for service users."""
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="apache",
+        )
+        service_user = User(
+            username="apache",
+            full_name="Apache Service",
+            email="apache@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/sbin/cron", "/usr/sbin/cron -f")]},
+        ):
+            activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_system")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "/usr/sbin/cron -f"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
