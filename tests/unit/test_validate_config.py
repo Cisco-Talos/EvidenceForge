@@ -1270,3 +1270,67 @@ class TestValidateConfig:
             and "emission_probabilities" in issue.message
             for issue in result.issues
         )
+
+    def test_validate_config_rejects_unsafe_web_session_profile_fields(self, monkeypatch):
+        from evidenceforge.generation.activity import web_session_profiles
+
+        real_loader = web_session_profiles.load_web_session_profiles
+
+        def load_invalid_web_session_profiles():
+            data = real_loader()
+            visitor_classes = dict(data["visitor_classes"])
+            probe = dict(visitor_classes["opportunistic_probe"])
+            requests = [dict(request) for request in probe["requests"]]
+            requests[0] = {
+                **requests[0],
+                "path": "/wp-login.php\nforged",
+                "method": "GET\nPOST",
+                "status": "not-an-int",
+                "type": "text/html\nforged",
+            }
+            probe["requests"] = requests
+            visitor_classes["opportunistic_probe"] = probe
+            user_agent_pools = dict(data["user_agent_pools"])
+            user_agent_pools["scanner"] = [*user_agent_pools["scanner"], "BadUA\nForged"]
+            return {
+                **data,
+                "visitor_classes": visitor_classes,
+                "user_agent_pools": user_agent_pools,
+            }
+
+        monkeypatch.setattr(
+            web_session_profiles, "load_web_session_profiles", load_invalid_web_session_profiles
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "path must be a single-line path" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "method must be a supported single-line HTTP method" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "status must be an integer from 100 to 599" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "type must be a single-line MIME type" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "must be a non-empty single-line string" in issue.message
+            for issue in result.issues
+        )

@@ -26,14 +26,22 @@ from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
+from evidenceforge.generation.activity.web_session_profiles import escape_log_control_chars
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+
+
+def _combined_log_value(value: str | None) -> str:
+    """Return text safe for one Apache/Nginx combined-log physical line."""
+    if value is None:
+        return ""
+    return escape_log_control_chars(str(value))
 
 
 def _combined_log_quoted(value: str | None) -> str:
     """Return a value safe for an Apache/Nginx combined quoted field."""
     if not value or value == "-":
         return "-"
-    return value.replace("\\", "\\\\").replace('"', r"\"")
+    return _combined_log_value(value).replace("\\", "\\\\").replace('"', r"\"")
 
 
 class WebEmitter(HostMultiplexEmitter):
@@ -92,9 +100,9 @@ class WebEmitter(HostMultiplexEmitter):
             "timestamp": event.timestamp,
             "client_ip": net.src_ip if net else "",
             "username": "-",
-            "method": http.method,
-            "path": http.uri,
-            "protocol": f"HTTP/{http.version}",
+            "method": _combined_log_value(http.method),
+            "path": _combined_log_value(http.uri),
+            "protocol": _combined_log_value(f"HTTP/{http.version}"),
             "status_code": http.status_code,
             "bytes_sent": http.response_body_len,
             "referer": _combined_log_quoted(http.referrer),
