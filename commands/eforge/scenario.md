@@ -33,6 +33,28 @@ The engine does NOT embellish or fill in details. Whatever you put in the scenar
 
 Your job is to understand what the user wants, ask smart questions to fill gaps, and produce a valid, technically detailed scenario YAML file — plus an ENVIRONMENT.md companion document.
 
+## Scenario Bundle Layout
+
+Before writing any files, derive a stable slug from the scenario name and create/use
+`scenarios/<slug>/` as the scenario root. A complete authored/generated exercise should stay
+under that one directory:
+
+```
+scenarios/<slug>/
+  scenario.yaml
+  ENVIRONMENT.md
+  artifacts/                 # Optional authored collateral only, such as phishing .eml files
+  GROUND_TRUTH.md            # Created by generation
+  OBSERVATION_MANIFEST.json  # Created by generation
+  OUTPUT_TARGET.txt          # Created by generation
+  data/                      # Created by generation for every output target
+```
+
+Do not write a single YAML file directly under `scenarios/`, repo-root environment files,
+repo-root artifact directories, generic output directories, or target-named dataset directories. The output target
+(`default` or `sof-elk`) changes source-native file rendering inside the bundle only; it must not
+change the scenario root or create target-named directories.
+
 ## Interview Flow
 
 Use a hybrid approach: let the user describe their idea first, then ask targeted follow-up questions to fill gaps. Don't present a checklist — have a conversation.
@@ -299,7 +321,7 @@ output:
     - format: zeek
     # Available: windows, zeek, ecar, syslog, bash_history,
     #            snort_alert, cisco_asa, web_access, proxy_access
-  destination: "./output"
+  destination: "scenarios/<slug>"
   compression: false
 ```
 
@@ -509,16 +531,18 @@ After generating the scenario YAML, also create an `ENVIRONMENT.md` file in the 
 - This helps analysts understand why some expected events may be absent (filtered by config) and what telemetry is available
 
 **File location:**
-- Save as `ENVIRONMENT.md` in the same directory as the scenario YAML file
-- Name it `<scenario-name>-ENVIRONMENT.md` if the scenario name is available
+- Save as `scenarios/<slug>/ENVIRONMENT.md`
+- Keep `ENVIRONMENT.md` directly under the scenario root, not under `artifacts/`
 
 ## Output Workflow
 
 After the interview, generate both files:
 
-1. **Scenario YAML** — Write to the user's chosen path (default: `scenarios/<scenario-name>/scenario.yaml`)
-2. **ENVIRONMENT.md** — Write alongside the scenario YAML (default: `scenarios/<scenario-name>/ENVIRONMENT.md`)
-3. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
+1. **Scenario root** — Create/use `scenarios/<slug>/` unless the user explicitly requested a different bundle root
+2. **Scenario YAML** — Write to `scenarios/<slug>/scenario.yaml`
+3. **ENVIRONMENT.md** — Write to `scenarios/<slug>/ENVIRONMENT.md`
+4. **Optional authored artifacts** — If you create exercise collateral such as a phishing email message (`.eml`), write it under `scenarios/<slug>/artifacts/`. Do not put standard files such as `ENVIRONMENT.md`, `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, or `OUTPUT_TARGET.txt` in `artifacts/`.
+5. **Realism Review** — Before validating, review the entire scenario as a tough-but-fair devil's advocate. Check:
    - **Attack realism**: Does the attack chain make sense? Would a real attacker do this in this order? Are there missing steps (e.g., no reconnaissance before lateral movement, no persistence after initial access)?
    - **Technical accuracy**: Are command lines correct for the target OS? Are process paths right? Do the MITRE ATT&CK technique IDs match what's actually happening?
    - **Naming realism**: Are all attacker-controlled artifacts (domains, files, processes, created accounts, scheduled tasks, services, staging archives) plausibly named? Would any name immediately tip off a defender? Check for names like `attacker`, `evil.com`, `malware.exe`, `@external`, or anything that screams "malicious".
@@ -560,10 +584,10 @@ Before finalizing the scenario, verify that every storyline event is **discovera
 - Flag the specific storyline event(s) that may not be discoverable
 - Suggest concrete fixes: add a sensor, enable a log format, or adjust the network topology
 - Let the user decide whether to fix the gap or accept it (some scenarios intentionally have blind spots to test whether hunters notice)
-4. **Validate** — Run `eforge validate <scenario-file>` to check schema and cross-references
-5. If validation fails, fix the issues and re-validate
-6. **Summarize** what was created: environment size, time window, attack narrative overview, log formats
+6. **Validate** — Run `eforge validate scenarios/<slug>/scenario.yaml` to check schema and cross-references
+7. If validation fails, fix the issues and re-validate
+8. **Summarize** what was created: scenario root, optional artifacts, environment size, time window, attack narrative overview, log formats
 
 If the user wants to immediately generate logs, suggest using `/eforge generate` or running `eforge generate <scenario-file>`.
 
-When generation completes, the output directory will contain a `GROUND_TRUTH.md` file with the full attack timeline, IOCs, and answer key. Let the user know this exists and where to find it.
+When generation completes, the scenario root will contain `GROUND_TRUTH.md` with the full attack timeline, IOCs, and answer key, plus `data/` for logs. Let the user know these exist and where to find them.

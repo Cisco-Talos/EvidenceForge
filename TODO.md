@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-05-17
+**Last Updated:** 2026-05-19
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -38,6 +38,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 - [x] Extract license-neutral output target rendering and evaluation support from the SOF-ELK external parser branch while leaving parser pipeline code/docs/tests out of dev.
 - [x] Run the full slow-enabled pytest suite on the output-target extraction branch — `uv run pytest --include-slow --no-cov` passed with `3296 passed, 24 skipped`; no regressions or fixes were needed.
+- [x] Run the full slow-enabled pytest suite on current `dev` after Loop 127 — `uv run pytest --include-slow --no-cov` passed with `3369 passed, 2 skipped` in 83.34s; no regressions or fixes were needed.
+- [x] Update eforge skill layout guidance so scenario-authored files, optional artifacts, and generated data stay under `scenarios/<slug>/` regardless of output target. Verification passed: stale-layout grep returned no active old output paths, generated Codex skill validation passed for all eforge skills, `uv run pytest tests/unit/test_install_skills.py --no-cov` passed, and `git diff --check` passed.
 - [x] Prepare the `dev` → `main` PR for output-target rendering — inspected `main..dev`, applied the required v0.8.0 minor version/changelog bump, ran non-coverage release checks, pushed `dev`, and opened the PR into `main`.
 - [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier flushes to write year-partitioned syslog files, while preserving final sort/logind normalization at close.
 - [ ] **P2** Revisit proxy access log realism and parser compatibility; consider switching `proxy_access.log` from W3C Extended format to Apache/Nginx combined-style output with absolute URLs and CONNECT targets.
