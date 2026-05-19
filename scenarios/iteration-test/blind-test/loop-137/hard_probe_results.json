@@ -1,0 +1,34 @@
+{
+  "loop": 137,
+  "userassist": {
+    "sysmonRows": 97,
+    "ecarRows": 96,
+    "numberedPlaceholderRows": 0,
+    "runpathRows": 193,
+    "shortDetailsRows": 0,
+    "examples": []
+  },
+  "polkit": {
+    "actionRowsWithProcess": 139,
+    "mismatchedActionProcessRows": 0,
+    "registeredAgentRows": 131,
+    "invalidRegisteredAgentRows": 0,
+    "examples": []
+  },
+  "peMetadata": {
+    "checkedRows": 2,
+    "missingMetadataRows": 0,
+    "byImage": {
+      "msra.exe": 1,
+      "runas.exe": 1
+    },
+    "examples": []
+  },
+  "processGuid": {
+    "totalRows": 864,
+    "zeroPrefixTailRows": 0,
+    "tinyTailRows": 0,
+    "uniqueTails": 864,
+    "examples": []
+  }
+}
