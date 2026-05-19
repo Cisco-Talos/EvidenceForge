@@ -296,6 +296,17 @@ def _bash_command_dwell_seconds(command: str) -> float:
     return 2.0
 
 
+def _background_linux_shell_command_if_needed(command: str) -> str:
+    """Mark long-running shell commands as backgrounded when more shell activity follows."""
+    stripped = command.rstrip()
+    normalized = stripped.lower()
+    if not stripped or normalized.endswith("&") or " nohup " in f" {normalized} ":
+        return command
+    if any(pattern in normalized for pattern in ("tail -f", "watch ", "--follow")):
+        return f"{stripped} &"
+    return command
+
+
 _WINDOWS_SINGLETON_SYSTEM_PROCESSES = {
     "smss.exe": "smss",
     "csrss.exe": "csrss_s0",
@@ -1875,6 +1886,8 @@ def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
     except ValueError:
         return None
     parts = _strip_linux_shell_redirections(raw_parts)
+    if parts and parts[-1] == "&":
+        parts = parts[:-1]
     if not parts:
         return None
 
@@ -9174,6 +9187,8 @@ class ActivityGenerator:
             )
             return None
 
+        if _get_os_category(system.os) == "linux":
+            command = _background_linux_shell_command_if_needed(command)
         time = self._schedule_bash_history_time(user, system, time, command)
         self._emit_bash_command_event(user, system, time, command)
         if emit_process_telemetry:
@@ -10445,6 +10460,7 @@ class ActivityGenerator:
                     )
                     process_time = time
                     if os_category == "linux":
+                        command_line = _background_linux_shell_command_if_needed(command_line)
                         process_time = self._schedule_bash_history_time(
                             user, system, time, command_line
                         )
@@ -10594,6 +10610,7 @@ class ActivityGenerator:
                     rng = _get_rng()
                     process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])
                     command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = _background_linux_shell_command_if_needed(command_line)
                     process_time = self._schedule_bash_history_time(
                         user, system, time, command_line
                     )

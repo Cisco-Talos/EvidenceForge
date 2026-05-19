@@ -23,7 +23,7 @@
 """Tests for eCAR format spec compliance.
 
 Verifies that the EcarEmitter produces records matching the eCAR spec:
-- pid and tid always present (with -1 sentinel for unavailable)
+- pid and tid are present only when source-native IDs are known
 - ppid only on PROCESS events
 - All properties values are strings
 - parent_image_path in PROCESS/CREATE properties
@@ -69,7 +69,7 @@ def ts():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
-class TestPidAlwaysPresent:
+class TestPidEmission:
     def test_pid_present_on_process_create(self, emitter, ts):
         """PROCESS/CREATE should have pid."""
         rendered = emitter._render_event(
@@ -86,13 +86,13 @@ class TestPidAlwaysPresent:
         record = json.loads(rendered)
         assert record["pid"] == 0
 
-    def test_pid_defaults_to_negative_one(self, emitter, ts):
-        """When pid not set, it should default to -1."""
+    def test_pid_omitted_when_unavailable(self, emitter, ts):
+        """When pid is unavailable, session rows should not carry sentinel IDs."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "USER_SESSION", "action": "LOGIN"}
         )
         record = json.loads(rendered)
-        assert record["pid"] == -1
+        assert "pid" not in record
 
     def test_unlock_reauth_renders_login_with_logon_type(self, emitter, ts):
         """Type 7 unlock reauth should use session lifecycle action vocabulary."""
@@ -182,13 +182,13 @@ class TestPidAlwaysPresent:
             if "Unknown field in ecar (USER_SESSION/LOGIN): logon_type" in log_record.getMessage()
         ]
 
-    def test_pid_none_becomes_negative_one(self, emitter, ts):
-        """Explicit pid=None should become -1."""
+    def test_pid_none_is_omitted(self, emitter, ts):
+        """Explicit pid=None should be omitted."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "FILE", "action": "CREATE", "pid": None}
         )
         record = json.loads(rendered)
-        assert record["pid"] == -1
+        assert "pid" not in record
 
 
 class TestFileEventActions:
@@ -914,6 +914,9 @@ class TestChronologicalOutput:
         assert emitted[0]["pid"] == -1
         assert emitted[0]["outcome"] == "failure"
         assert emitted[0]["connection_state"] == "REJ"
+        rendered = json.loads(emitter._render_event(emitted[0]))
+        assert "pid" not in rendered
+        assert "tid" not in rendered
 
     def test_outbound_flow_with_pid_only_renders_after_process_create(
         self, emitter, monkeypatch, ts
@@ -1147,23 +1150,22 @@ class TestChronologicalOutput:
         assert [row["timestamp_ms"] for row in rows] == [1000, 1000]
 
 
-class TestTidAlwaysPresent:
-    def test_tid_present_default(self, emitter, ts):
-        """tid should always be present, defaulting to -1."""
+class TestTidEmission:
+    def test_tid_omitted_when_unavailable(self, emitter, ts):
+        """Rows without a source-native thread ID should omit tid."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "USER_SESSION", "action": "LOGIN"}
         )
         record = json.loads(rendered)
-        assert "tid" in record
-        assert record["tid"] == -1
+        assert "tid" not in record
 
-    def test_tid_present_on_process(self, emitter, ts):
-        """tid should be present on PROCESS events."""
+    def test_tid_not_invented_on_raw_process_dict(self, emitter, ts):
+        """Low-level rendering should not invent a thread ID without event context."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "PROCESS", "action": "CREATE", "pid": 100, "ppid": 4}
         )
         record = json.loads(rendered)
-        assert "tid" in record
+        assert "tid" not in record
 
     def test_tid_explicit_value(self, emitter, ts):
         """Explicit tid value should be preserved."""

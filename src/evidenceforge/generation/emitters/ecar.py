@@ -574,6 +574,16 @@ class EcarEmitter(HostMultiplexEmitter):
             if principal:
                 event_data["principal"] = principal
             self._apply_edr_context(event_data, event)
+            event_data.setdefault(
+                "tid",
+                self._stable_tid(
+                    event.src_host.hostname,
+                    net.initiating_pid,
+                    event_ts,
+                    "flow_outbound",
+                    getattr(event.src_host, "os_category", ""),
+                ),
+            )
             self.emit_event(event_data)
 
         # INBOUND FLOW on destination host (if destination is internal/known)
@@ -624,6 +634,16 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
                 if principal:
                     event_data["principal"] = principal
+                event_data.setdefault(
+                    "tid",
+                    self._stable_tid(
+                        event.dst_host.hostname,
+                        inbound_pid,
+                        event_ts,
+                        "flow_inbound",
+                        getattr(event.dst_host, "os_category", ""),
+                    ),
+                )
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
 
@@ -1115,8 +1135,9 @@ class EcarEmitter(HostMultiplexEmitter):
 
         Builds the record as a Python dict and serializes directly with
         json.dumps, bypassing the Jinja2 template.  This avoids the fragile
-        comma-handling logic in the old template and enforces spec compliance:
-        pid/tid always present (-1 sentinel), all property values are strings.
+        comma-handling logic in the old template and enforces source-native
+        optionality: pid/tid/ppid are emitted only when known, and all property
+        values are strings.
         """
         # Convert timestamp to milliseconds since epoch
         ts = event_data["timestamp"]
@@ -1134,12 +1155,22 @@ class EcarEmitter(HostMultiplexEmitter):
         if event_data.get("actorID"):
             record["actorID"] = event_data["actorID"]
 
-        # pid and tid are always present per eCAR spec (-1 = unavailable).
-        # ppid is only emitted for PROCESS events.
-        record["pid"] = event_data["pid"] if event_data.get("pid") is not None else -1
-        record["tid"] = event_data["tid"] if event_data.get("tid") is not None else -1
-        if "ppid" in event_data:
-            record["ppid"] = event_data["ppid"] if event_data["ppid"] is not None else -1
+        # pid/tid are optional in the format definition.  Emit them only when
+        # a source-native value is known; avoiding synthetic negative sentinels
+        # keeps session and failed-flow rows from looking like concrete IDs.
+        for key in ("pid", "tid", "ppid"):
+            if key not in event_data:
+                continue
+            value = event_data[key]
+            if value is None:
+                continue
+            try:
+                int_value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if int_value < 0:
+                continue
+            record[key] = int_value
 
         if event_data.get("principal"):
             record["principal"] = event_data["principal"]

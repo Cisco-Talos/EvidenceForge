@@ -5020,6 +5020,74 @@ class TestActivityGenerator:
             "mysqldump --single-transaction ehr patients",
         )
 
+    def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
+        """Background markers belong to shell history, not child process argv."""
+        process = generator_module._linux_command_process_from_shell("tail -f /var/log/syslog &")
+
+        assert process == ("/usr/bin/tail", "tail -f /var/log/syslog")
+
+    def test_generate_bash_command_backgrounds_long_running_follow(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Long-running follow commands should not block later same-shell activity silently."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            "0xabc123",
+        )
+        session.session_shell_pid = bash_pid
+        mock_emitters["bash_history"] = Mock()
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "tail -f /var/log/syslog",
+        )
+
+        bash_events = [
+            call.args[0]
+            for call in mock_emitters["bash_history"].emit.call_args_list
+            if call.args[0].event_type == "bash_command"
+        ]
+        assert bash_events[-1].shell.command == "tail -f /var/log/syslog &"
+
+        process_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+        ]
+        assert process_events[-1].process.command_line == "tail -f /var/log/syslog"
+
     def test_linux_shell_glob_tokens_remain_unquoted_in_process_argv(self):
         """Expanded shell globs should not be rendered as literal quoted wildcards."""
         process = generator_module._linux_command_process_from_shell("du -sh /var/log/*")

@@ -205,7 +205,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 
 **Known Limitations:**
 - eCAR format represents an optional EDR layer — not all systems may have it enabled
-- FLOW events carry the initiating system process pid (svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for SMB, mstsc.exe for RDP); `-1` for kernel/unknown/app-specific traffic
+- FLOW events carry the initiating system process pid when endpoint attribution is available (svchost for DNS/NTP, lsass for Kerberos/LDAP, System PID 4 for SMB, mstsc.exe for RDP); pid/tid fields are omitted when unavailable instead of rendering placeholder IDs
 - Limited EDR object diversity on Linux (mainly PROCESS + USER_SESSION)
 - File paths cycle through a small set of templates
 

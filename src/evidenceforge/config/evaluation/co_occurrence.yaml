@@ -171,15 +171,18 @@ zeek_conn:
 
 
 ecar:
-  # Core fields: always present on every eCAR record
-  - name: "All records have pid"
-    condition: {}
+  # Process-owned eCAR records should carry source-native process/thread IDs.
+  # Session rows and listenerless/failure FLOW rows may legitimately omit them.
+  - name: "PROCESS records have pid"
+    condition:
+      object: "PROCESS"
     checks:
       - field: pid
         present: true
 
-  - name: "All records have tid"
-    condition: {}
+  - name: "PROCESS records have tid"
+    condition:
+      object: "PROCESS"
     checks:
       - field: tid
         present: true
