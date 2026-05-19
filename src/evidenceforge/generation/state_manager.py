@@ -671,6 +671,7 @@ class StateManager:
         system: str,
         pid_rng: random.Random,
         current_time: datetime | None = None,
+        minimum_pid_exclusive: int | None = None,
     ) -> int:
         """Allocate a Linux PID without exposing wall-clock elapsed seconds."""
         current_time = ensure_utc(current_time or self.state.current_time)
@@ -694,6 +695,11 @@ class StateManager:
         while (
             pid in running
             or pid in used
+            or (
+                minimum_pid_exclusive is not None
+                and minimum_pid_exclusive < 4_194_304
+                and pid <= minimum_pid_exclusive
+            )
             or self._linux_pid_matches_elapsed_delta(allocations, current_time, pid)
         ):
             bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
@@ -786,7 +792,19 @@ class StateManager:
                     while self._pid_counters[system] in running:
                         self._pid_counters[system] += 4
             else:
-                pid = self._allocate_linux_pid(system, pid_rng)
+                minimum_pid_exclusive = None
+                parent = self.state.running_processes.get((system, parent_pid))
+                if (
+                    parent is not None
+                    and parent.start_time <= self.state.current_time
+                    and parent.pid > 1
+                ):
+                    minimum_pid_exclusive = parent.pid
+                pid = self._allocate_linux_pid(
+                    system,
+                    pid_rng,
+                    minimum_pid_exclusive=minimum_pid_exclusive,
+                )
 
             # Create process
             ecar_object_id = str(uuid.uuid4())
