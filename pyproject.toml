@@ -22,7 +22,7 @@
 
 [project]
 name = "evidence-forge"
-version = "0.7.2"
+version = "0.8.0"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
 authors = [
@@ -31,7 +31,7 @@ authors = [
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.13.4",
-"typer>=0.25.1",
+    "typer>=0.25.1",
     "rich>=15.0.0",
     "pyyaml>=6.0",
     "pytz>=2026.2",
