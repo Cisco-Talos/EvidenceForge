@@ -156,6 +156,9 @@ class TestPerSensorDirectoryRouting:
                     "orig_ip_bytes": 25204,
                     "resp_ip_bytes": 83881,
                     "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 0,
+                    "_allow_sensor_observation_variance": True,
                     "_sensor_hostnames": ["core", "dmz"],
                 }
             )
@@ -168,7 +171,7 @@ class TestPerSensorDirectoryRouting:
                 assert core[field] == dmz[field]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
-            assert abs(core["ts"] - dmz["ts"]) <= 0.005
+            assert abs(core["ts"] - dmz["ts"]) <= 0.16
             assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert core["orig_pkts"] == dmz["orig_pkts"] == 52
@@ -327,9 +330,9 @@ class TestPerSensorDirectoryRouting:
 
             assert any(offset < 0 for offset in offsets)
             assert any(offset > 0 for offset in offsets)
-            assert max(offsets) - min(offsets) > 0.0005
+            assert max(offsets) - min(offsets) > 0.005
             assert len(set(offsets)) > 30
-            assert max(abs(offset) for offset in offsets) <= 0.005
+            assert max(abs(offset) for offset in offsets) <= 0.16
 
     def test_second_sensor_observation_skips_huge_numeric_jitter(self):
         """Huge raw numeric counters should not crash multi-sensor Zeek jitter."""
@@ -447,6 +450,102 @@ class TestPerSensorDirectoryRouting:
 
             for sensor in ("core", "dmz"):
                 row = json.loads((base / sensor / "conn.json").read_text().splitlines()[0])
+                assert row["orig_bytes"] >= 1024
+                assert row["resp_bytes"] >= 65536
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_lossless_conn_observation_preserves_http_backed_payload_counters(self):
+        """Lossless dual-sensor rows keep the same source-owned flow accounting."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHttpClone12",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "duration": 0.25,
+                    "orig_bytes": 1400,
+                    "resp_bytes": 70_000,
+                    "orig_pkts": 8,
+                    "resp_pkts": 60,
+                    "orig_ip_bytes": 1720,
+                    "resp_ip_bytes": 72_400,
+                    "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 0,
+                    "_http_request_body_len": 1024,
+                    "_http_response_body_len": 65536,
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert dmz["duration"] == core["duration"]
+            assert dmz["orig_bytes"] == core["orig_bytes"]
+            assert dmz["resp_bytes"] == core["resp_bytes"]
+            assert dmz["orig_pkts"] == core["orig_pkts"]
+            assert dmz["resp_pkts"] == core["resp_pkts"]
+            assert dmz["orig_ip_bytes"] == core["orig_ip_bytes"]
+            assert dmz["resp_ip_bytes"] == core["resp_ip_bytes"]
+            for row in (core, dmz):
+                assert row["orig_bytes"] >= 1024
+                assert row["resp_bytes"] >= 65536
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_lossy_conn_observation_varies_http_backed_payload_counters(self):
+        """Declared lossy sensor rows may vary counters while preserving body floors."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHttpLoss12",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "duration": 1800.0,
+                    "orig_bytes": 1400,
+                    "resp_bytes": 70_000,
+                    "orig_pkts": 8,
+                    "resp_pkts": 60,
+                    "orig_ip_bytes": 1720,
+                    "resp_ip_bytes": 72_400,
+                    "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 256,
+                    "_http_request_body_len": 1024,
+                    "_http_response_body_len": 65536,
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert dmz["orig_bytes"] != core["orig_bytes"]
+            assert dmz["resp_bytes"] != core["resp_bytes"]
+            assert abs(dmz["duration"] - core["duration"]) <= 2.0
+            for row in (core, dmz):
                 assert row["orig_bytes"] >= 1024
                 assert row["resp_bytes"] >= 65536
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])

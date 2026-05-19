@@ -353,7 +353,7 @@ def validate_strict(format_name: str, raw: str, fields: dict[str, Any]) -> Valid
 
 
 def _validate_strict_syslog(raw: str, fields: dict[str, Any], result: ValidationResult) -> None:
-    """Require RFC3164 for generated syslog, allowing parser-marked legacy eval input."""
+    """Validate generated RFC5424/RFC3164 syslog and parser-marked legacy input."""
     if not raw.strip():
         return
 
@@ -375,7 +375,7 @@ def _validate_strict_syslog(raw: str, fields: dict[str, Any], result: Validation
         if not _LEGACY_ISO_SYSLOG_RE.match(raw):
             result.add_error("syslog", "Legacy syslog marker does not match ISO-style input")
         return
-    if protocol != "rfc5424_legacy":
+    if protocol not in ("rfc5424", "rfc5424_legacy"):
         result.add_error("syslog", f"Unknown syslog protocol marker: {protocol}")
         return
 

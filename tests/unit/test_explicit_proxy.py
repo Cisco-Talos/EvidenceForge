@@ -7,7 +7,15 @@ import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
-from evidenceforge.events.contexts import FirewallContext, HttpContext, IdsContext, ProxyContext
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import (
+    FirewallContext,
+    HostContext,
+    HttpContext,
+    IdsContext,
+    NetworkContext,
+    ProxyContext,
+)
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -241,6 +249,41 @@ def test_server_ids_http_traffic_keeps_server_proxy_user_agent():
     assert proxy_event.proxy.client_ip == web_server.ip
     assert "Mozilla/" not in proxy_event.proxy.user_agent
     assert proxy_event.proxy.user_agent
+
+
+def test_generated_proxy_time_taken_does_not_mirror_conn_duration_floor():
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="client-tap",
+                monitoring_segments=["workstations"],
+                direction="outbound",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+
+    generator.generate_connection(
+        src_ip="10.0.1.10",
+        dst_ip="93.184.216.34",
+        time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=1.2,
+        orig_bytes=500,
+        resp_bytes=5000,
+        source_system=generator._ip_to_system["10.0.1.10"],
+        hostname="example.com",
+        conn_state="SF",
+    )
+
+    proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+
+    assert proxy_event.proxy.method == "CONNECT"
+    assert proxy_event.proxy.time_taken != 1200
+    assert proxy_event.proxy.time_taken > 0
 
 
 def _system(
@@ -497,6 +540,166 @@ class TestExplicitProxyVisibility:
         assert client_event.process.pid != svchost_pid
         assert client_event.process.username == user.username
         assert client_event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
+
+    def test_connect_target_browser_hint_uses_origin_https_url(self):
+        generator = ActivityGenerator(StateManager(), {})
+
+        image, command_line = generator._browser_http_client_process_hint(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+            ),
+            hostname="r.bing.com",
+            uri="r.bing.com:443",
+            dst_port=8080,
+        )
+
+        assert image.endswith(r"\Microsoft\Edge\Application\msedge.exe")
+        assert command_line.endswith("https://r.bing.com/")
+        assert ":8080/" not in command_line
+
+    def test_browser_proxy_user_agent_replaces_mismatched_browser_pid(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        ie_image = r"C:\Program Files\Internet Explorer\iexplore.exe"
+        stale_ie_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=ie_image,
+            command_line=f'"{ie_image}" https://www.example.com/',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip="10.0.1.10",
+                method="CONNECT",
+                url="r.bing.com:443",
+                host="r.bing.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+                ),
+                content_type="",
+                cache_result="NONE",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="204.79.197.200",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=stale_ie_pid,
+            source_system=workstation,
+            hostname="r.bing.com",
+            conn_state="SF",
+            process_image=ie_image,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.1.10"
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+
+        assert client_event.process is not None
+        assert client_event.process.pid != stale_ie_pid
+        assert client_event.process.image.endswith(r"\Microsoft\Edge\Application\msedge.exe")
+        assert client_event.process.command_line.endswith("https://r.bing.com/")
+
+    def test_browser_http_repair_replaces_mismatched_browser_pid(self):
+        generator, _emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        ie_image = r"C:\Program Files\Internet Explorer\iexplore.exe"
+        stale_ie_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=ie_image,
+            command_line=f'"{ie_image}" https://www.example.com/',
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event = SecurityEvent(
+            timestamp=event_time,
+            event_type="connection",
+            src_host=HostContext(
+                hostname=workstation.hostname,
+                ip=workstation.ip,
+                os=workstation.os,
+                os_category="windows",
+                system_type=workstation.type,
+            ),
+            network=NetworkContext(
+                src_ip=workstation.ip,
+                src_port=53077,
+                dst_ip="10.0.3.10",
+                dst_port=8080,
+                protocol="tcp",
+                initiating_pid=stale_ie_pid,
+            ),
+            http=HttpContext(
+                method="GET",
+                host="r.bing.com",
+                uri="/rp/000000007fbbafbd.css",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+                ),
+                status_code=200,
+                response_body_len=4096,
+            ),
+        )
+
+        generator._repair_browser_http_process_attribution(
+            event,
+            source_system=workstation,
+            time=event_time,
+        )
+
+        assert event.process is not None
+        assert event.process.pid != stale_ie_pid
+        assert event.process.image.endswith(r"\Microsoft\Edge\Application\msedge.exe")
 
     def test_browser_proxy_user_agent_preserves_valid_storyline_process(self):
         generator, emitters = _generator(

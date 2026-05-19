@@ -2029,6 +2029,13 @@ def validate_config() -> ValidationResult:
             messages = entry.get("messages", [])
             if not isinstance(messages, list):
                 messages = []
+            params = entry.get("params")
+            param_strings = (
+                [value for values in params.values() for value in values if isinstance(value, str)]
+                if isinstance(params, dict)
+                else []
+            )
+            schedule_check_values = messages if app == "anacron" else messages + param_strings
             for message in messages:
                 if not isinstance(message, str):
                     continue
@@ -2043,13 +2050,26 @@ def validate_config() -> ValidationResult:
                             f'Persistent app "{app}" has recurring startup banner "{message}"',
                         )
                     )
-                if "cron.hourly" in message_lower:
+            for message in schedule_check_values:
+                if not isinstance(message, str):
+                    continue
+                message_lower = message.lower()
+                schedule_native_patterns = (
+                    "apt.systemd.daily",
+                    "cron.daily",
+                    "cron.hourly",
+                    "debian-sa1",
+                    "logrotate /etc/logrotate.conf",
+                    "update-motd-reboot-required",
+                    "/tmp -xdev -type f -mtime",
+                )
+                if any(pattern in message_lower for pattern in schedule_native_patterns):
                     result.issues.append(
                         Issue(
                             "ERROR",
                             "extra_syslog_messages.yaml",
                             (
-                                f'App "{app}" has schedule-native cron.hourly message '
+                                f'App "{app}" has schedule-native cron/systemd message '
                                 f'"{message}"; use systemd_schedules.yaml or a '
                                 "dedicated schedule-aware generator instead"
                             ),

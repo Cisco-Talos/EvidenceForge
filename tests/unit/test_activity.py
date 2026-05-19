@@ -44,8 +44,10 @@ from evidenceforge.generation.activity.generator import (
     _extract_image_from_command,
     _http_context_from_process_command,
     _jitter_default_connection_duration,
+    _linux_foreground_lifetime,
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
+    _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.generation.activity.tls_realism import (
@@ -54,6 +56,14 @@ from evidenceforge.generation.activity.tls_realism import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+
+
+def test_linux_trivial_command_lifetime_is_subsecond():
+    """Instant Linux utilities should not look like multi-second process telemetry."""
+    lifetime = _linux_foreground_lifetime("/usr/bin/date", "date -u")
+
+    assert lifetime is not None
+    assert lifetime[1] <= 0.8
 
 
 class TestApacheRawSyslogNormalization:
@@ -1504,6 +1514,41 @@ class TestActivityGenerator:
         assert event.kerberos.service_name == "krbtgt/example.local"
         assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
 
+    def test_machine_account_logon_emits_nearby_dc_kerberos_audit(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Machine Kerberos flows should have matching DC 4768/4769 audit records."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        security_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        event_types = {event.event_type for event in security_events}
+        kerberos_events = [
+            event
+            for event in security_events
+            if event.event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+
+        assert {"kerberos_tgt", "kerberos_service", "machine_logon"} <= event_types
+        assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
+        assert all(
+            abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+        )
+
     def test_bash_history_preserves_blocking_command_dwell(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -1523,6 +1568,29 @@ class TestActivityGenerator:
         events = [call.args[0] for call in bash_emitter.emit.call_args_list]
         assert events[0].timestamp == timestamp
         assert events[1].timestamp >= timestamp + timedelta(seconds=45)
+
+    def test_same_user_bash_history_avoids_same_second_across_hosts(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Same-user shell entries on different hosts should not land on the same second."""
+        linux_a = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        linux_b = System(hostname="LNX-02", ip="10.0.0.3", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        activity_gen.generate_bash_command(user, linux_a, timestamp, "whoami")
+        activity_gen.generate_bash_command(user, linux_b, timestamp, "id")
+
+        events = [call.args[0] for call in bash_emitter.emit.call_args_list]
+        event_seconds = [int(event.timestamp.timestamp()) for event in events]
+
+        assert len(events) == 2
+        assert len(set(event_seconds)) == 2
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
@@ -2554,6 +2622,44 @@ class TestActivityGenerator:
         assert event.event_type == "kerberos_preauth_failed"
         assert event.kerberos.source_ip == "-"
         assert event.kerberos.source_port == 0
+
+    def test_kerberos_preauth_failed_can_emit_matching_dc_flow(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Optional 4771 wire evidence should reuse the same source port."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WS-01",
+            ip="10.0.0.20",
+            os="Windows 11",
+            type="workstation",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_kerberos_preauth_failed(
+            test_user.username,
+            source.ip,
+            dc.hostname,
+            timestamp,
+            emit_connection=True,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        preauth = next(event for event in events if event.event_type == "kerberos_preauth_failed")
+        connection = next(event for event in events if event.event_type == "connection")
+        assert preauth.kerberos.source_port == connection.network.src_port
+        assert connection.network.dst_port == 88
 
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -3868,6 +3974,155 @@ class TestActivityGenerator:
         assert event.network.dst_port == dst_port
         assert event.network.service == "ssl"
 
+    def test_generate_connection_uses_source_native_zeek_start_time(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Zeek connection timestamps should include shared source start latency."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.5",
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            src_port=51111,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=12.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.timestamp == _zeek_conn_observation_time(
+            timestamp,
+            "10.0.10.5",
+            51111,
+            "10.0.20.10",
+            22,
+            "tcp",
+            "ssh",
+        )
+
+    def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Internal-to-DC Kerberos conn.log rows should have matching DC audit evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.1.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds", "kerberos"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=dc.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            source_system=source,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        tgt = next(event for event in events if event.event_type == "kerberos_tgt")
+        service = next(event for event in events if event.event_type == "kerberos_service")
+        connection = next(event for event in events if event.event_type == "connection")
+
+        assert tgt.kerberos.target_username == "WEB-EXT-01$"
+        assert tgt.kerberos.source_ip == "::ffff:10.0.1.20"
+        assert service.kerberos.target_username == "WEB-EXT-01$@CORP.LOCAL"
+        assert tgt.timestamp < connection.timestamp
+        assert service.timestamp < connection.timestamp
+        assert (connection.timestamp - tgt.timestamp).total_seconds() < 1
+        assert tgt.kerberos.source_port == connection.network.src_port
+        assert service.kerberos.source_port == connection.network.src_port
+
+    def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Connection-layer KDC audit repair should not duplicate existing nearby audit."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2019",
+            type="server",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_kerberos_tgt(
+            username="FILE-SRV-01$",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=timestamp - timedelta(milliseconds=200),
+        )
+        activity_gen.generate_kerberos_service_ticket(
+            username="FILE-SRV-01$",
+            service_name=f"ldap/{dc.hostname}",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=timestamp - timedelta(milliseconds=80),
+        )
+        audit_events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        audit_ports = {
+            event.kerberos.source_port
+            for event in audit_events
+            if event.event_type in {"kerberos_tgt", "kerberos_service"}
+        }
+        mock_emitters["windows_event_security"].emit.reset_mock()
+
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=dc.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            source_system=source,
+        )
+
+        events = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert events == ["connection"]
+        connection = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
+        assert audit_ports == {connection.network.src_port}
+
     def test_generate_connection_clamps_http_depth_for_one_request_connections(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -3957,6 +4212,8 @@ class TestActivityGenerator:
                 uri="/",
                 user_agent="Mozilla/5.0",
                 response_body_len=4096,
+                flow_response_body_len=12_288,
+                flow_transaction_count=2,
                 trans_depth=1,
             ),
             emit_dns=False,
@@ -3997,6 +4254,44 @@ class TestActivityGenerator:
         assert second_event.network.src_port == first_event.network.src_port
         assert second_event.network.application_layer_only is True
         assert second_event.http.trans_depth == 2
+
+    def test_generate_connection_derives_plain_http_bytes_from_http_context(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Single plain-HTTP transactions should not keep unrelated oversized conn bytes."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=4_900,
+            resp_bytes=44_000,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/favicon.ico",
+                user_agent="Mozilla/5.0",
+                response_body_len=0,
+                status_code=304,
+                status_msg="Not Modified",
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+
+        assert event.network.conn_state == "SF"
+        assert event.network.orig_bytes < 1_200
+        assert 120 <= event.network.resp_bytes < 900
+        assert event.network.resp_bytes > event.http.response_body_len
 
     def test_generate_connection_does_not_reuse_http_uid_after_parent_close(self, state_manager):
         """A late HTTP request should start a new flow instead of overrunning conn.log."""
@@ -4784,11 +5079,90 @@ class TestActivityGenerator:
             "mysqldump --single-transaction ehr patients",
         )
 
+    def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
+        """Background markers belong to shell history, not child process argv."""
+        process = generator_module._linux_command_process_from_shell("tail -f /var/log/syslog &")
+
+        assert process == ("/usr/bin/tail", "tail -f /var/log/syslog")
+
+    def test_generate_bash_command_backgrounds_long_running_follow(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Long-running follow commands should not block later same-shell activity silently."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="LNX-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        session = state_manager.register_session(
+            logon_id="0xabc123",
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=20),
+        )
+        state_manager.set_current_time(command_time - timedelta(seconds=10))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            "0xabc123",
+        )
+        session.session_shell_pid = bash_pid
+        mock_emitters["bash_history"] = Mock()
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "tail -f /var/log/syslog",
+        )
+
+        bash_events = [
+            call.args[0]
+            for call in mock_emitters["bash_history"].emit.call_args_list
+            if call.args[0].event_type == "bash_command"
+        ]
+        assert bash_events[-1].shell.command == "tail -f /var/log/syslog &"
+
+        process_events = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+        ]
+        assert process_events[-1].process.command_line == "tail -f /var/log/syslog"
+
     def test_linux_shell_glob_tokens_remain_unquoted_in_process_argv(self):
         """Expanded shell globs should not be rendered as literal quoted wildcards."""
         process = generator_module._linux_command_process_from_shell("du -sh /var/log/*")
 
         assert process == ("/usr/bin/du", "du -sh /var/log/*")
+
+    def test_linux_mysql_query_argument_remains_shell_safe(self):
+        """SQL passed through mysql -e should keep shell metacharacters quoted."""
+        process = generator_module._linux_command_process_from_shell(
+            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'"
+        )
+
+        assert process == (
+            "/usr/bin/mysql",
+            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'",
+        )
 
     def test_linux_shell_control_operators_split_process_argv(self):
         """Shell control operators should separate child process argv entries."""

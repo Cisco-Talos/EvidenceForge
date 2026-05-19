@@ -26,7 +26,7 @@ Tests concurrent access patterns, counter uniqueness, and lock behavior.
 """
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Barrier, Thread
 
 from evidenceforge.generation.state_manager import StateManager
@@ -167,6 +167,37 @@ class TestStateManagerThreadSafety:
         assert pids_sorted[0] > 0  # PIDs start in realistic range
         for i in range(1, len(pids_sorted)):
             assert pids_sorted[i] > pids_sorted[i - 1]  # Strictly increasing
+
+    def test_linux_child_pid_is_higher_than_visible_parent(self):
+        """Linux child allocation preserves visible parent-before-child PID ordering."""
+        sm = StateManager()
+        start = datetime(2024, 3, 18, 17, 0, 18)
+        sm.set_current_time(start)
+
+        parent_pid = sm.create_process(
+            system="APP-INT-01",
+            parent_pid=0,
+            image="/bin/sh",
+            command_line="/bin/sh -c date",
+            username="root",
+            integrity_level="System",
+        )
+
+        # Simulate a later time bucket/collision candidate that would otherwise
+        # fall below the already visible parent PID.
+        sm._pid_counters["APP-INT-01"] = parent_pid - 500
+        sm.set_current_time(start + timedelta(milliseconds=207))
+
+        child_pid = sm.create_process(
+            system="APP-INT-01",
+            parent_pid=parent_pid,
+            image="/usr/bin/date",
+            command_line="date",
+            username="root",
+            integrity_level="System",
+        )
+
+        assert child_pid > parent_pid
 
     def test_concurrent_connection_creation(self):
         """Test 5 threads creating connections, verify unique connection IDs."""

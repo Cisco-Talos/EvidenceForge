@@ -13,40 +13,44 @@ and SOF-ELK target-specific files where they differ; they are not emitted
 together.
 
 ```
-output/
+scenarios/<slug>/
+  scenario.yaml                            # Scenario authored by /eforge scenario
+  ENVIRONMENT.md                           # Student-facing environment description
+  artifacts/                               # Optional authored collateral, e.g. phishing .eml
   GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
   OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
   OUTPUT_TARGET.txt                        # "default" or "sof-elk"; missing legacy marker means default
-  ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
-  <hostname.domain>/                       # Per-host directories (FQDN)
-    windows_event_security.xml             # Windows Security channel events
-    windows_event_sysmon.xml               # Sysmon operational channel events
-    syslog.log                             # Linux syslog (default target; RFC5424)
-    bash_history/<username>.bash_history    # Per-user bash history (Linux only)
-    <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
-    <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 (sof-elk target)
-    <year>/syslog.log                      # Linux syslog (sof-elk target; RFC3164)
-  <sensor-name>/                           # Per-sensor directories (network)
-    conn.json                              # Zeek conn.log (NDJSON)
-    dns.json                               # Zeek dns.log
-    http.json                              # Zeek http.log
-    ssl.json                               # Zeek ssl.log
-    files.json                             # Zeek files.log
-    ...                                    # Other Zeek logs
-  ecar.json                                # eCAR EDR/XDR telemetry (NDJSON)
-  snort_alert.log                          # Snort/Suricata IDS alerts
-  <fw-hostname>/                           # Per-firewall directories
-    cisco_asa.log                          # Cisco ASA firewall syslog (default target)
-    <year>/cisco_asa.log                   # Cisco ASA firewall syslog (sof-elk target)
-  web_access.log                           # Apache/Nginx access log
-  <proxy-hostname.domain>/                 # Per-proxy-host directories
-    proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
+  data/                                    # Generated logs for every output target
+    <hostname.domain>/                     # Per-host directories (FQDN)
+      windows_event_security.xml           # Windows Security channel events
+      windows_event_sysmon.xml             # Sysmon operational channel events
+      syslog.log                           # Linux syslog (default target; RFC5424)
+      bash_history/<username>.bash_history # Per-user bash history (Linux only)
+      <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
+      <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 (sof-elk target)
+      <year>/syslog.log                    # Linux syslog (sof-elk target; RFC3164)
+    <sensor-name>/                         # Per-sensor directories (network)
+      conn.json                            # Zeek conn.log (NDJSON)
+      dns.json                             # Zeek dns.log
+      http.json                            # Zeek http.log
+      ssl.json                             # Zeek ssl.log
+      files.json                           # Zeek files.log
+      ...                                  # Other Zeek logs
+    ecar.json                              # eCAR EDR/XDR telemetry (NDJSON)
+    snort_alert.log                        # Snort/Suricata IDS alerts
+    <fw-hostname>/                         # Per-firewall directories
+      cisco_asa.log                        # Cisco ASA firewall syslog (default target)
+      <year>/cisco_asa.log                 # Cisco ASA firewall syslog (sof-elk target)
+    web_access.log                         # Apache/Nginx access log
+    <proxy-hostname.domain>/               # Per-proxy-host directories
+      proxy_access.log                     # HTTP forward proxy access log (W3C Extended)
 ```
 
 ## Output Targets
 
 `eforge generate --target default|sof-elk` selects the on-disk rendering and
-layout for tools that expect different formats. Scenario YAML and `--formats`
+file layout inside `scenarios/<slug>/data/` for tools that expect different formats.
+It must not change the scenario root or create target-named directories. Scenario YAML and `--formats`
 remain canonical: request `windows_event_security`, `windows_event_sysmon`,
 `syslog`, `cisco_asa`, and so on, then choose the target at generation time.
 When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
@@ -200,7 +204,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
-| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); failed attempts include failure_reason/status fields and do not imply an established session. |
+| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); Windows successful logons include `logon_type`, while non-Windows sessions use OS-native `session_type` values such as `ssh`, `remote`, `local`, or `service`. Failed attempts include failure_reason/status fields and do not imply an established session. |
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
 
 **Known Limitations:**
@@ -356,12 +360,14 @@ Forward proxy access logs for systems with the `forward_proxy` role. Outbound HT
 The proxy log uses a W3C Extended-style `#Fields` header:
 
 ```text
-#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
+#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result x-proxy-action
 ```
 
 Fields are whitespace-delimited; values with spaces, such as User-Agent strings, are rendered with `+` separators. Missing values are `-`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
+
+**Proxy action field:** The `x-proxy-action` field disambiguates source-native proxy behavior: `tunnel-setup` for CONNECT setup rows, `ssl-inspect` for decrypted HTTPS request rows, `forward` for ordinary forwarded HTTP, and `deny`/`auth-required`/`gateway-error` for proxy-side terminal failures.
 
 **CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
 
@@ -372,5 +378,5 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
 - Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled
-- Cache hit/miss status is probabilistic, not based on actual content caching logic
+- Cache hit/miss status is probabilistic, with stable web-route status generated upstream
 - Limited to HTTP and HTTPS traffic

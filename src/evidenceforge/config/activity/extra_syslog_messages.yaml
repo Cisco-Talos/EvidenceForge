@@ -37,14 +37,46 @@ programs:
 
   - app: rsyslogd
     weight: 1
+    params:
+      action_name:
+        - send_remote
+        - fwd_core
+        - local_file
+        - dyn_file_cache
+      conf_file:
+        - /etc/rsyslog.d/20-forwarding.conf
+        - /etc/rsyslog.d/50-default.conf
+        - /etc/rsyslog.conf
+      module_name:
+        - imjournal
+        - imuxsock
+        - omfwd
+        - omfile
+      queue_name:
+        - fwdRule1
+        - action-remote
+        - main
+        - local-spool
+      relay_target:
+        - logrelay01
+        - siem-forwarder
+        - 10.10.2.30
+      worker_count:
+        - "1"
+        - "2"
+        - "3"
     messages:
       - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {}"
-      - '[origin software="rsyslogd"] rsyslogd was HUPed after config reload id {}'
-      - "omfwd: remote syslog target stayed connected, action queue watermark {}"
+      - "configuration reload completed after SIGHUP, reload id {}"
+      - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {}"
+      - "action '{action_name}' resumed after retry {}, next retry disabled"
+      - "module {module_name}: worker thread pool adjusted to {worker_count}"
+      - "configuration file {conf_file} reloaded, checksum {}"
+      - "main Q: queue {queue_name} has {} messages pending, worker threads {worker_count}"
 
   - app: sudo
     transient: true
-    weight: 2
+    weight: 1
     params:
       sudo_user:
         - admin
@@ -71,28 +103,70 @@ programs:
         - ssh
         - cron
         - app-agent
+        - auditd
         - nginx
         - apache2
         - mysql
+        - php-fpm
         - postgresql
+        - rsyslog
+        - systemd-resolved
       sudo_command:
         - /bin/systemctl status {service}
         - /bin/systemctl restart {service}
         - /usr/bin/journalctl -u {service} -n 50
         - /usr/bin/journalctl -u {service} --since "30 min ago"
+        - /usr/bin/systemctl list-timers --all --no-pager
+        - /usr/bin/systemctl list-units --state=failed --no-pager
+        - /usr/bin/systemd-analyze blame
         - /usr/bin/apt list --upgradable
         - /usr/bin/apt-cache policy openssl
+        - /usr/bin/apt-get -s upgrade
+        - /usr/bin/needrestart -b
         - /usr/bin/tail -n 100 /var/log/auth.log
         - /usr/bin/tail -n 80 /var/log/syslog
         - /usr/bin/grep -i error /var/log/syslog
+        - /usr/bin/grep -i failed /var/log/auth.log
+        - /usr/bin/grep -i oom /var/log/kern.log
+        - /usr/bin/find /etc/systemd/system -maxdepth 2 -type l
+        - /usr/bin/find /var/tmp -maxdepth 1 -mtime +7 -type f
         - /usr/bin/ss -ltnp
+        - /usr/sbin/ss -s
+        - /usr/bin/lsof -i -P -n
+        - /usr/sbin/iptables -L -n -v
         - /usr/bin/lsblk
         - /usr/bin/df -h /var
+        - /usr/bin/free -m
+        - /usr/bin/vmstat 1 5
+        - /usr/bin/iostat -xz 1 3
         - /usr/bin/du -sh /var/log
         - /usr/bin/find /var/log -type f -mtime -1
         - /usr/sbin/service {service} status
     messages:
       - "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+
+  - app: anacron
+    distro: ubuntu
+    system_types: [server, workstation]
+    weight: 1
+    params:
+      job_name:
+        - cron.daily
+        - logrotate
+      delay_minutes:
+        - "2"
+        - "5"
+        - "11"
+        - "17"
+      run_count:
+        - "1"
+        - "2"
+    messages:
+      - "Anacron 2.3 started on {anacron_date}"
+      - "Will run job `{job_name}' in {delay_minutes} min."
+      - "Job `{job_name}' started"
+      - "Job `{job_name}' terminated"
+      - "Normal exit ({run_count} job run)"
 
   - app: sudo
     transient: true
@@ -128,14 +202,39 @@ programs:
   - app: polkitd
     weight: 2
     params:
-      auth_subject:
-        - unix-process
-        - unix-session
-        - system-bus-name
+      action_id:
+        - org.freedesktop.systemd1.manage-units
+        - org.freedesktop.login1.reboot
+        - org.freedesktop.packagekit.system-update
+        - org.freedesktop.NetworkManager.settings.modify.system
+        - org.freedesktop.timedate1.set-timezone
+      auth_user:
+        - root
+        - admin
+        - deploy
+      bus_id:
+        - "42"
+        - "118"
+        - "203"
+        - "417"
+      monotonic_start:
+        - "0"
+        - "1000"
+        - "2000"
+      process_path:
+        - /usr/bin/systemctl
+        - /usr/lib/packagekit/packagekitd
+        - /usr/bin/nmcli
+        - /usr/bin/timedatectl
+      subject_user:
+        - root
+        - deploy
+        - admin
     messages:
-      - "Registered Authentication Agent for {auth_subject}:{0} (system bus name :1.{0})"
-      - "Unregistered Authentication Agent for {auth_subject}:{0} (system bus name :1.{0})"
-      - "Operator of unix-process:{} successfully authenticated as 'root'"
+      - "Registered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id} [{process_path}], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)"
+      - "Unregistered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id}, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)"
+      - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
+      - "Subject unix-process:{0}:{monotonic_start} is authorized for action {action_id}"
 
   - app: multipathd
     system_types: [server]
@@ -189,11 +288,21 @@ programs:
         - libc6
         - python3-apt
         - tzdata
+      phased_percentage:
+        - "10"
+        - "20"
+        - "30"
+        - "40"
+        - "50"
+        - "60"
+        - "70"
+        - "80"
+        - "90"
     messages:
       - "Allowed origins are: {origin_set}"
       - "Checking for unattended upgrades from {origin_set}"
       - "No packages found that can be upgraded unattended (run {})"
-      - "Package {package_name} kept back for phased update percentage {}"
+      - "Package {package_name} kept back for phased update percentage {phased_percentage}"
       - "dpkg --status-fd: processing triggers for man-db ({package_name})"
 
   - app: systemd-resolved

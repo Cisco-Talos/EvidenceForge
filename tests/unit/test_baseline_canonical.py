@@ -38,6 +38,9 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
     _materialize_registry_value_for_time,
+    _module_matches_process,
+    _ufw_block_syn_packet_len,
+    _ufw_block_ttl,
     _windows_scheduled_task_offsets,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -80,6 +83,20 @@ def timestamp():
     return datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
 
 
+class TestModuleLoadProcessMatching:
+    """Tests for process-aware Sysmon module-load pool filtering."""
+
+    def test_chrome_and_edge_modules_stay_in_their_own_package_paths(self):
+        """Chromium-family browsers should not swap package DLL ownership."""
+        chrome_module = r"C:\Program Files\Google\Chrome\Application\120.0.6099.225\libegl.dll"
+        edge_module = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_elf.dll"
+
+        assert _module_matches_process("chrome.exe", chrome_module)
+        assert not _module_matches_process("msedge.exe", chrome_module)
+        assert _module_matches_process("msedge.exe", edge_module)
+        assert not _module_matches_process("chrome.exe", edge_module)
+
+
 class TestIdsAlertCorrelation:
     """IDS alerts should produce both Snort alert and Zeek conn records."""
 
@@ -111,6 +128,47 @@ class TestIdsAlertCorrelation:
         event = snort.emit.call_args[0][0]
         assert event.ids is not None
         assert event.ids.sid == 10001
+
+    def test_ufw_block_packet_profile_is_valid_and_stable(self):
+        """UFW blocked SYN metadata should be valid and path-stable by source."""
+        src_ip = "45.33.74.51"
+
+        lengths = [_ufw_block_syn_packet_len(src_ip) for _ in range(10)]
+        ttls = [_ufw_block_ttl(src_ip) for _ in range(10)]
+
+        assert len(set(lengths)) == 1
+        assert lengths[0] in {40, 44, 48, 52, 60}
+        assert lengths[0] % 4 == 0
+        assert len(set(ttls)) == 1
+        assert 32 <= ttls[0] <= 251
+
+    def test_ufw_block_connection_uses_drop_semantics_and_matching_packet_len(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """A UFW BLOCK companion Zeek row should be S0 with no responder packet."""
+        packet_len = _ufw_block_syn_packet_len("45.33.74.51")
+
+        activity_gen.generate_connection(
+            src_ip="45.33.74.51",
+            dst_ip="10.0.10.5",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            conn_state="S0",
+            src_port=40664,
+            packet_overhead_bytes=packet_len,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args.args[0]
+        assert event.network.conn_state == "S0"
+        assert event.network.history == "S"
+        assert event.network.orig_pkts == 1
+        assert event.network.orig_ip_bytes == packet_len
+        assert event.network.resp_pkts == 0
+        assert event.network.resp_ip_bytes == 0
 
     def test_ids_connection_also_dispatches_to_zeek(
         self, activity_gen, state_manager, mock_emitters, timestamp

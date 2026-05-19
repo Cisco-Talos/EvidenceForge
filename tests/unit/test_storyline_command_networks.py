@@ -8,9 +8,10 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
-from evidenceforge.events.contexts import HostContext
+from evidenceforge.events.contexts import FileTransferContext, HostContext
+from evidenceforge.generation.activity.generator import _zeek_conn_observation_time
 from evidenceforge.generation.engine.storyline import StorylineMixin
-from evidenceforge.models.scenario import System, User
+from evidenceforge.models.scenario import ConnectionEventSpec, System, User
 
 
 class TestStorylineCommandNetworks:
@@ -177,6 +178,7 @@ class _FakeActivityGenerator:
         self.connections: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
+        self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
         self.bash_commands: list[dict] = []
@@ -232,6 +234,9 @@ class _FakeActivityGenerator:
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
 
+    def generate_service_installed(self, **kwargs: Any) -> None:
+        self.service_installs.append(kwargs)
+
     def generate_dhcp_lease(self, **kwargs: Any) -> None:
         self.dhcp_leases.append(kwargs)
 
@@ -243,14 +248,23 @@ class _FakeActivityGenerator:
 
 
 class _FakeStateManager:
+    def __init__(self) -> None:
+        self.sessions: dict[str, SimpleNamespace] = {}
+
     def set_current_time(self, *args: Any, **kwargs: Any) -> None:
         return None
 
     def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
         return [SimpleNamespace(system="SRC", logon_id="0xabc")]
 
+    def get_session(self, logon_id: str) -> SimpleNamespace | None:
+        return self.sessions.get(logon_id)
+
     def get_processes_on_system(self, hostname: str) -> list[SimpleNamespace]:
         return []
+
+    def get_process(self, hostname: str, pid: int) -> SimpleNamespace | None:
+        return None
 
     def create_process(self, *args: Any, **kwargs: Any) -> int:
         return 6505
@@ -313,6 +327,119 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
 
+
+class TestStorylineCommandSideEffects:
+    def test_compress_archive_exfil_emits_archive_sized_smb_download(self):
+        source = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+        )
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.2.20",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+        )
+        actor = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source, file_server], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.state_manager.sessions["0xabc"] = SimpleNamespace(
+            system=file_server.hostname,
+            source_ip=source.ip,
+        )
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.activity_generator._ip_to_system = {
+            source.ip: source,
+            file_server.ip: file_server,
+        }
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        smb_logons: list[dict[str, Any]] = []
+
+        def capture_smb_logon_pair(
+            actor: User,
+            dst_sys: System,
+            src_ip: str,
+            time: datetime,
+            rng: random.Random,
+        ) -> None:
+            _ = time, rng
+            smb_logons.append({"actor": actor.username, "dst": dst_sys.hostname, "src_ip": src_ip})
+
+        engine._emit_smb_logon_pair = capture_smb_logon_pair
+        engine._record_storyline_logon(actor, file_server, "0xabc", source_ip=source.ip)
+        archive_time = datetime(2026, 5, 18, 14, 1, tzinfo=UTC)
+        upload_time = datetime(2026, 5, 18, 14, 25, tzinfo=UTC)
+        process_spec = SimpleNamespace(
+            type="process",
+            process_name="powershell.exe",
+            command_line=(
+                'powershell.exe -NoProfile -Command "Compress-Archive '
+                r"-Path \\FILE-SRV-01\Finance\Q1\* "
+                r"-DestinationPath C:\ProgramData\Microsoft\cache_7f3a.zip"
+                '"'
+            ),
+            supplementary="none",
+        )
+
+        engine._execute_typed_event(
+            spec=process_spec,
+            actor=actor,
+            system=file_server,
+            time=archive_time,
+            activity="Stage archive",
+            explicit_types={"process"},
+        )
+        engine._execute_typed_event(
+            spec=ConnectionEventSpec(
+                dst_ip="45.33.32.30",
+                dst_port=443,
+                hostname="api.westbridge-services.net",
+                service="ssl",
+                source_ip=source.ip,
+                method="POST",
+                uri="/upload/telemetry/7f3a2b19",
+                technique="T1041",
+                description="Exfiltrate staged archive",
+                orig_bytes=314_782_613,
+                resp_bytes=2048,
+            ),
+            actor=actor,
+            system=source,
+            time=upload_time,
+            activity="Upload staged archive",
+            explicit_types={"connection"},
+        )
+
+        assert len(engine.activity_generator.connections) == 2
+        smb_transfer, upload = engine.activity_generator.connections
+        assert smb_transfer["dst_port"] == 445
+        assert smb_transfer["service"] == "smb"
+        assert smb_transfer["src_ip"] == source.ip
+        assert smb_transfer["dst_ip"] == file_server.ip
+        assert archive_time < smb_transfer["time"] < upload_time
+        assert smb_transfer["resp_bytes"] > 300_000_000
+        assert upload["dst_port"] == 443
+
+        file_transfer = smb_transfer["file_transfer"]
+        assert isinstance(file_transfer, FileTransferContext)
+        assert file_transfer.source == "SMB"
+        assert file_transfer.is_orig is False
+        assert file_transfer.total_bytes == smb_transfer["resp_bytes"]
+        assert file_transfer.filename == (r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip")
+        assert smb_logons == [
+            {"actor": actor.username, "dst": file_server.hostname, "src_ip": source.ip}
+        ]
+
     def test_scp_receiver_ssh_syslog_uses_distinct_submillisecond_suffixes(self):
         source = System(
             hostname="SRC",
@@ -352,21 +479,30 @@ class TestStorylineScpCorrelation:
         )
 
         syslog_times = [event["time"] for event in engine.activity_generator.syslog_events]
+        observed_transfer_time = _zeek_conn_observation_time(
+            transfer_time,
+            source.ip,
+            40117,
+            target.ip,
+            22,
+            "tcp",
+            "ssh",
+        )
         assert len(syslog_times) == 3
         assert syslog_times[0] < syslog_times[1] < syslog_times[2]
         assert (
             timedelta(milliseconds=80)
-            < syslog_times[0] - transfer_time
+            < syslog_times[0] - observed_transfer_time
             < timedelta(milliseconds=81)
         )
         assert (
             timedelta(milliseconds=350)
-            < syslog_times[1] - transfer_time
+            < syslog_times[1] - observed_transfer_time
             < timedelta(milliseconds=351)
         )
         assert (
             timedelta(milliseconds=900)
-            < syslog_times[2] - transfer_time
+            < syslog_times[2] - observed_transfer_time
             < timedelta(milliseconds=901)
         )
         assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
@@ -482,6 +618,58 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.processes[0]["ensure_file_event"] is False
+
+    def test_service_installed_reuses_sc_create_start_type(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        base_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\sc.exe",
+                command_line=(
+                    r"sc.exe create DeviceSyncSvc binPath= "
+                    r"C:\Windows\System32\DeviceSyncSvc.exe obj= LocalSystem start= auto"
+                ),
+            ),
+            actor=actor,
+            system=source,
+            time=base_time,
+            activity="create service",
+            explicit_types={"process", "service_installed"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="service_installed",
+                service_name="DeviceSyncSvc",
+                service_file_name=r"C:\Windows\System32\DeviceSyncSvc.exe",
+                service_account="LocalSystem",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=2),
+            activity="service audit",
+            explicit_types={"process", "service_installed"},
+        )
+
+        assert engine.activity_generator.service_installs[0]["service_start_type"] == "2"
 
     def test_process_url_network_reuses_storyline_authored_domain_ip(self):
         source = System(

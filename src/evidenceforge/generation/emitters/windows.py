@@ -223,6 +223,18 @@ def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
 
 
+def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Return the same-user/source key for DC Kerberos ticket ordering checks."""
+    if event.get("EventID") not in {4768, 4769}:
+        return None
+    username = str(event.get("TargetUserName") or "").split("@", 1)[0].lower()
+    source_ip = str(event.get("IpAddress") or "")
+    computer = str(event.get("Computer") or "")
+    if not username or not source_ip or source_ip == "-" or not computer:
+        return None
+    return (computer, username, source_ip)
+
+
 def _special_privilege_fallback(username: str) -> str:
     """Return a realistic 4672 privilege set when AuthContext omits one."""
     normalized = username.upper()
@@ -1563,6 +1575,89 @@ class WindowsEventEmitter(LogEmitter):
         self._spool_conn.commit()
         self._spooled_count = max(0, self._spooled_count - len(rowids))
 
+    @staticmethod
+    def _shift_kerberos_tgts_before_service_ticket_rows(
+        rows: list[tuple[int, dict[str, Any]]],
+    ) -> set[int]:
+        """Move visible 4768 TGT rows before near-term same-principal 4769 rows."""
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                ensure_utc(row[1]["TimeCreated"])
+                if isinstance(row[1].get("TimeCreated"), datetime)
+                else datetime.max.replace(tzinfo=UTC),
+                row[0],
+            ),
+        )
+        tgts_by_key: dict[tuple[str, str, str], list[tuple[int, dict[str, Any], datetime]]] = {}
+        for rowid, event in ordered:
+            if event.get("EventID") != 4768:
+                continue
+            ts = event.get("TimeCreated")
+            key = _kerberos_principal_source_key(event)
+            if key is not None and isinstance(ts, datetime):
+                tgts_by_key.setdefault(key, []).append((rowid, event, ensure_utc(ts)))
+
+        prior_tgt_by_key: dict[tuple[str, str, str], datetime] = {}
+        moved: set[int] = set()
+        for rowid, event in ordered:
+            ts = event.get("TimeCreated")
+            if not isinstance(ts, datetime):
+                continue
+            ts = ensure_utc(ts)
+            key = _kerberos_principal_source_key(event)
+            if key is None:
+                continue
+            if event.get("EventID") == 4768:
+                prior = prior_tgt_by_key.get(key)
+                prior_tgt_by_key[key] = min(prior, ts) if prior is not None else ts
+                continue
+            if event.get("EventID") != 4769:
+                continue
+            prior = prior_tgt_by_key.get(key)
+            if prior is not None and prior <= ts:
+                continue
+            future_tgt = next(
+                (
+                    candidate
+                    for candidate in tgts_by_key.get(key, [])
+                    if candidate[0] not in moved
+                    and candidate[2] > ts
+                    and candidate[2] - ts <= timedelta(seconds=1)
+                ),
+                None,
+            )
+            if future_tgt is None:
+                continue
+            tgt_rowid, tgt_event, _ = future_tgt
+            gap_ms = 20 + (
+                _stable_seed(f"kerberos_tgt_before_tgs:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}")
+                % 181
+            )
+            new_time = ts - timedelta(milliseconds=gap_ms)
+            tgt_event["TimeCreated"] = new_time
+            prior_tgt_by_key[key] = new_time
+            moved.add(tgt_rowid)
+        return moved
+
+    def _shift_kerberos_tgts_before_service_tickets(self) -> None:
+        """Prevent in-memory Security 4769 rows from preceding their visible 4768 rows."""
+        rows = list(enumerate(self._event_dicts))
+        self._shift_kerberos_tgts_before_service_ticket_rows(rows)
+
+    def _shift_spooled_kerberos_tgts_before_service_tickets_unlocked(self) -> None:
+        """Prevent spooled Security 4769 rows from preceding their visible 4768 rows."""
+        rows = list(self._iter_spooled_rows_unlocked())
+        moved = self._shift_kerberos_tgts_before_service_ticket_rows(rows)
+        if not moved:
+            return
+        updates = [
+            (_spool_encode(event), self._event_sort_key(event), rowid)
+            for rowid, event in rows
+            if rowid in moved
+        ]
+        self._update_spooled_events_unlocked(updates)
+
     def _shift_spooled_process_creates_after_visible_parent_unlocked(self) -> None:
         """Prevent spooled Security 4688 children from preceding parent 4688 rows."""
         process_create_events: dict[tuple[str, str], int] = {}
@@ -1783,6 +1878,7 @@ class WindowsEventEmitter(LogEmitter):
 
         if self._spooled_count:
             self._spool_event_dicts_unlocked()
+            self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
@@ -1790,6 +1886,7 @@ class WindowsEventEmitter(LogEmitter):
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
             events = self._iter_spooled_events_unlocked()
         else:
+            self._shift_kerberos_tgts_before_service_tickets()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
             self._shift_process_terminations_after_dependents()

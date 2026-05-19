@@ -173,10 +173,12 @@ schedules:
 
   - service: debian-sa1
     type: cron
-    frequency: daily
+    frequency: 30min
     typical_hour: 0
-    jitter_minutes: 10
+    jitter_minutes: 8
+    slot_skip_probability: 0.08
+    slot_jitter_seconds: 45
     distro: debian
-    cron_user: root
+    cron_user: sysstat
     cron_commands:
       debian: "command -v debian-sa1 > /dev/null && debian-sa1 1 1"

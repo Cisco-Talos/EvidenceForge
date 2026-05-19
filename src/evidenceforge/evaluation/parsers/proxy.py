@@ -30,7 +30,7 @@ from pathlib import Path
 from . import LogParser, ParsedRecord, register_parser
 
 # W3C Extended format:
-# date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
+# date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result [x-proxy-action]
 _PROXY_PATTERN = re.compile(
     r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+"  # timestamp
     r"(\S+)\s+"  # client_ip
@@ -47,6 +47,7 @@ _PROXY_PATTERN = re.compile(
     r"(\S+)\s+"  # referrer
     r"(\S+)\s+"  # content_type
     r"(\S+)"  # cache_result
+    r"(?:\s+(\S+))?"  # optional proxy_action
 )
 
 
@@ -124,6 +125,9 @@ class ProxyAccessParser(LogParser):
         cr = match.group(15)
         if cr != "-":
             fields["cache_result"] = cr
+        action = match.group(16)
+        if action and action != "-":
+            fields["proxy_action"] = action
 
         return ParsedRecord(
             source_format=self.format_name,

@@ -114,6 +114,26 @@ def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
     return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
 
 
+def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
+    """Return an OS-native session label for non-Windows eCAR sessions."""
+    if event.event_type == "ssh_session":
+        return "ssh"
+    if event.event_type == "failed_logon":
+        source_ip = str(getattr(event.auth, "source_ip", "") or "")
+        if source_ip and source_ip != "-":
+            return "remote"
+    logon_type = getattr(event.auth, "logon_type", 0)
+    if logon_type == 10:
+        return "ssh"
+    if logon_type == 5:
+        return "service"
+    if logon_type == 3:
+        return "remote"
+    if logon_type in {2, 7, 11}:
+        return "local"
+    return "session"
+
+
 def _ecar_probability_enabled(key: str, probability: float) -> bool:
     """Return whether a stable per-record probability gate is enabled."""
     clamped = max(0.0, min(1.0, float(probability)))
@@ -250,6 +270,8 @@ class EcarEmitter(HostMultiplexEmitter):
         """Return a plausible source thread ID for process-owned eCAR events."""
         if pid <= 0:
             return -1
+        if os_category == "linux":
+            return pid
         bucket_ms = int(timestamp.timestamp() * 1000)
         tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
         if os_category == "windows":
@@ -267,9 +289,12 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "success",
-            "logon_type": event.auth.logon_type,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") == "windows":
+            event_data["logon_type"] = event.auth.logon_type
+        else:
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -284,6 +309,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") != "windows":
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -307,6 +334,8 @@ class EcarEmitter(HostMultiplexEmitter):
         if getattr(host, "os_category", "") == "windows":
             event_data["status_code"] = event.auth.failure_status
             event_data["sub_status"] = event.auth.failure_substatus
+        else:
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -545,6 +574,16 @@ class EcarEmitter(HostMultiplexEmitter):
             if principal:
                 event_data["principal"] = principal
             self._apply_edr_context(event_data, event)
+            event_data.setdefault(
+                "tid",
+                self._stable_tid(
+                    event.src_host.hostname,
+                    net.initiating_pid,
+                    event_ts,
+                    "flow_outbound",
+                    getattr(event.src_host, "os_category", ""),
+                ),
+            )
             self.emit_event(event_data)
 
         # INBOUND FLOW on destination host (if destination is internal/known)
@@ -595,6 +634,16 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
                 if principal:
                     event_data["principal"] = principal
+                event_data.setdefault(
+                    "tid",
+                    self._stable_tid(
+                        event.dst_host.hostname,
+                        inbound_pid,
+                        event_ts,
+                        "flow_inbound",
+                        getattr(event.dst_host, "os_category", ""),
+                    ),
+                )
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
 
@@ -1002,6 +1051,92 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @classmethod
+    def _normalize_process_reference_order(cls, lines: list[str]) -> list[str]:
+        """Move process-owned telemetry after visible PROCESS/CREATE rows."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        create_ms_by_object_id: dict[str, int] = {}
+        create_ms_by_pid: dict[int, int] = {}
+        for record in records:
+            if (
+                record is None
+                or record.get("object") != "PROCESS"
+                or record.get("action") != "CREATE"
+            ):
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            object_id = record.get("objectID")
+            if object_id:
+                create_ms_by_object_id[str(object_id)] = max(
+                    create_ms_by_object_id.get(str(object_id), 0),
+                    timestamp_ms,
+                )
+            pid = cls._ecar_int(record.get("pid"))
+            if pid > 0:
+                create_ms_by_pid[pid] = max(create_ms_by_pid.get(pid, 0), timestamp_ms)
+
+        def referenced_process_ids(record: dict[str, Any]) -> set[str]:
+            refs: set[str] = set()
+            actor_id = record.get("actorID")
+            if actor_id:
+                refs.add(str(actor_id))
+            if record.get("object") == "PROCESS" and record.get("action") == "OPEN":
+                object_id = record.get("objectID")
+                if object_id:
+                    refs.add(str(object_id))
+            props = record.get("properties") or {}
+            for key in (
+                "target_process_uuid",
+                "target_process_object_id",
+                "source_process_object_id",
+            ):
+                value = props.get(key)
+                if value:
+                    refs.add(str(value))
+            return refs
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS" and record.get("action") == "CREATE":
+                normalized.append(line)
+                continue
+
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            referenced_create_ms = [
+                create_ms_by_object_id[process_id]
+                for process_id in referenced_process_ids(record)
+                if process_id in create_ms_by_object_id
+            ]
+            pid = cls._ecar_int(record.get("pid"))
+            if pid > 0 and pid in create_ms_by_pid:
+                referenced_create_ms.append(create_ms_by_pid[pid])
+            if referenced_create_ms:
+                minimum_ms = max(referenced_create_ms)
+                if timestamp_ms <= minimum_ms:
+                    seed_text = ":".join(
+                        [
+                            str(record.get("id", "")),
+                            str(record.get("object", "")),
+                            str(record.get("action", "")),
+                            str(record.get("objectID", "")),
+                            str(record.get("actorID", "")),
+                        ]
+                    )
+                    stable_delay_ms = 1 + (sum(ord(ch) for ch in seed_text) % 37)
+                    record["timestamp_ms"] = minimum_ms + stable_delay_ms
+                    line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
     @staticmethod
     def _semantic_dedup_key(record: dict[str, Any]) -> str:
         """Return an eCAR semantic identity that ignores generated UUID fields."""
@@ -1038,6 +1173,7 @@ class EcarEmitter(HostMultiplexEmitter):
             for writer in writers:
                 with writer._lock:
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
+                    writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
         super().flush(force=force)
@@ -1061,6 +1197,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "failure_reason",
         "outcome",
         "logon_type",
+        "session_type",
         "session_lifecycle",
         "status_code",
         "sub_status",
@@ -1085,8 +1222,9 @@ class EcarEmitter(HostMultiplexEmitter):
 
         Builds the record as a Python dict and serializes directly with
         json.dumps, bypassing the Jinja2 template.  This avoids the fragile
-        comma-handling logic in the old template and enforces spec compliance:
-        pid/tid always present (-1 sentinel), all property values are strings.
+        comma-handling logic in the old template and enforces source-native
+        optionality: pid/tid/ppid are emitted only when known, and all property
+        values are strings.
         """
         # Convert timestamp to milliseconds since epoch
         ts = event_data["timestamp"]
@@ -1104,12 +1242,22 @@ class EcarEmitter(HostMultiplexEmitter):
         if event_data.get("actorID"):
             record["actorID"] = event_data["actorID"]
 
-        # pid and tid are always present per eCAR spec (-1 = unavailable).
-        # ppid is only emitted for PROCESS events.
-        record["pid"] = event_data["pid"] if event_data.get("pid") is not None else -1
-        record["tid"] = event_data["tid"] if event_data.get("tid") is not None else -1
-        if "ppid" in event_data:
-            record["ppid"] = event_data["ppid"] if event_data["ppid"] is not None else -1
+        # pid/tid are optional in the format definition.  Emit them only when
+        # a source-native value is known; avoiding synthetic negative sentinels
+        # keeps session and failed-flow rows from looking like concrete IDs.
+        for key in ("pid", "tid", "ppid"):
+            if key not in event_data:
+                continue
+            value = event_data[key]
+            if value is None:
+                continue
+            try:
+                int_value = int(value)
+            except (TypeError, ValueError):
+                continue
+            if int_value < 0:
+                continue
+            record[key] = int_value
 
         if event_data.get("principal"):
             record["principal"] = event_data["principal"]

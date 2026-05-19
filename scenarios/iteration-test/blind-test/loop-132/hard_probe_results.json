@@ -1,0 +1,435 @@
+{
+  "ecar": {
+    "bare_tail_examples": [
+      {
+        "command_line": "tail -200",
+        "file": "scenarios/iteration-test/data/DB-PROD-01.meridianhcs.local/ecar.json",
+        "line": 80
+      },
+      {
+        "command_line": "tail -10",
+        "file": "scenarios/iteration-test/data/DB-PROD-01.meridianhcs.local/ecar.json",
+        "line": 180
+      },
+      {
+        "command_line": "tail -20",
+        "file": "scenarios/iteration-test/data/DB-PROD-01.meridianhcs.local/ecar.json",
+        "line": 418
+      },
+      {
+        "command_line": "tail -10",
+        "file": "scenarios/iteration-test/data/DB-PROD-01.meridianhcs.local/ecar.json",
+        "line": 436
+      },
+      {
+        "command_line": "tail -50",
+        "file": "scenarios/iteration-test/data/DB-PROD-01.meridianhcs.local/ecar.json",
+        "line": 460
+      },
+      {
+        "command_line": "tail -30",
+        "file": "scenarios/iteration-test/data/WEB-EXT-01.meridianhcs.local/ecar.json",
+        "line": 846
+      },
+      {
+        "command_line": "tail -20",
+        "file": "scenarios/iteration-test/data/WEB-EXT-01.meridianhcs.local/ecar.json",
+        "line": 1738
+      },
+      {
+        "command_line": "tail -20",
+        "file": "scenarios/iteration-test/data/WEB-EXT-01.meridianhcs.local/ecar.json",
+        "line": 2293
+      },
+      {
+        "command_line": "tail -20",
+        "file": "scenarios/iteration-test/data/WEB-EXT-01.meridianhcs.local/ecar.json",
+        "line": 2538
+      },
+      {
+        "command_line": "tail -30",
+        "file": "scenarios/iteration-test/data/PROXY-01.meridianhcs.local/ecar.json",
+        "line": 1204
+      }
+    ],
+    "bare_tail_process_count": 30,
+    "object_reference_before_process_create_count": 0,
+    "object_reference_before_process_create_examples": [],
+    "pid_only_reference_before_process_create_examples": [],
+    "pid_only_reference_before_process_create_sample_count": 0
+  },
+  "kerberos": {
+    "audit_events_with_nearby_flow": 1573,
+    "audit_events_with_source_port": 1819,
+    "audit_events_without_nearby_flow_sample": [
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4768",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.31",
+        "src_port": 49955,
+        "ts": 1710763957.808168
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4769",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.31",
+        "src_port": 49955,
+        "ts": 1710763957.891168
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4768",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.33",
+        "src_port": 50279,
+        "ts": 1710764217.005223
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4769",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.33",
+        "src_port": 50279,
+        "ts": 1710764217.136223
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4768",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.31",
+        "src_port": 59419,
+        "ts": 1710764220.221124
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4769",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.31",
+        "src_port": 59419,
+        "ts": 1710764220.246124
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4769",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.31",
+        "src_port": 64957,
+        "ts": 1710764233.297462
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4768",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.31",
+        "src_port": 64957,
+        "ts": 1710764233.314462
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4768",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.33",
+        "src_port": 55406,
+        "ts": 1710764277.157987
+      },
+      {
+        "dc_ip": "10.10.2.10",
+        "event_id": "4769",
+        "file": "scenarios/iteration-test/data/DC-01.meridianhcs.local/windows_event_security.xml",
+        "host": "DC-01",
+        "src_ip": "10.10.1.33",
+        "src_port": 55406,
+        "ts": 1710764277.197987
+      }
+    ],
+    "dc_ips": {
+      "10.10.2.10": "DC-01"
+    },
+    "exact_source_port_match_count": 1573,
+    "source_port_mismatch_count": 0,
+    "source_port_mismatch_examples": [],
+    "tcp_88_flows_to_dc": 1086
+  },
+  "loop": 132,
+  "network": {
+    "soa_malformed_count_sampled": 20,
+    "soa_malformed_examples": [
+      {
+        "answer": "ns1.meridianhcs.local hostmaster.meridianhcs.local",
+        "file": "scenarios/iteration-test/data/zeek-core/dns.json",
+        "line": 29,
+        "query": "meridianhcs.local"
+      },
+      {
+        "answer": "ns1.meridianhcs.local hostmaster.meridianhcs.local",
+        "file": "scenarios/iteration-test/data/zeek-core/dns.json",
+        "line": 90,
+        "query": "meridianhcs.local"
+      },
+      {
+        "answer": "ns1.meridianhcs.local hostmaster.meridianhcs.local",
+        "file": "scenarios/iteration-test/data/zeek-core/dns.json",
+        "line": 158,
+        "query": "meridianhcs.local"
+      },
+      {
+        "answer": "ns1.meridianhcs.local hostmaster.meridianhcs.local",
+        "file": "scenarios/iteration-test/data/zeek-core/dns.json",
+        "line": 252,
+        "query": "meridianhcs.local"
+      },
+      {
+        "answer": "ns1.meridianhcs.local hostmaster.meridianhcs.local",
+        "file": "scenarios/iteration-test/data/zeek-core/dns.json",
+        "line": 337,
+        "query": "meridianhcs.local"
+      },
+      {
+        "answer": "ns1.meridianhcs.local hostmaster.meridianhcs.local",
+        "file": "scenarios/iteration-test/data/zeek-core/dns.json",
+        "line": 680,
+        "query": "meridianhcs.local"
+      },
+      {
+        "answer": "jill.ns.cloudflare.com dns.cloudflare.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 184,
+        "query": "medflow.co"
+      },
+      {
+        "answer": "ns1-205.azure-dns.com azuredns-hostmaster.microsoft.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 426,
+        "query": "microsoft.com"
+      },
+      {
+        "answer": "ns-279.awsdns-34.com awsdns-hostmaster.amazon.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 607,
+        "query": "amplitude.com"
+      },
+      {
+        "answer": "jill.ns.cloudflare.com dns.cloudflare.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 678,
+        "query": "loadbalance.io"
+      },
+      {
+        "answer": "amir.ns.cloudflare.com dns.cloudflare.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 706,
+        "query": "mediquant.com"
+      },
+      {
+        "answer": "ns1-205.azure-dns.com azuredns-hostmaster.microsoft.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 714,
+        "query": "windowsupdate.com"
+      },
+      {
+        "answer": "ns1-205.azure-dns.com azuredns-hostmaster.microsoft.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 722,
+        "query": "microsoft.com"
+      },
+      {
+        "answer": "a1-66.akam.net hostmaster.akamai.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 748,
+        "query": "patientiq.io"
+      },
+      {
+        "answer": "jill.ns.cloudflare.com dns.cloudflare.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 845,
+        "query": "carepoint.io"
+      },
+      {
+        "answer": "ns-279.awsdns-34.com awsdns-hostmaster.amazon.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 919,
+        "query": "pollfish.com"
+      },
+      {
+        "answer": "ns1.snapcraft.io hostmaster.snapcraft.io",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 923,
+        "query": "snapcraft.io"
+      },
+      {
+        "answer": "ns1.hover.com admin.dnsimple.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 938,
+        "query": "netscaler.org"
+      },
+      {
+        "answer": "ns1.fastly.net hostmaster.fastly.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 949,
+        "query": "mixpanel.org"
+      },
+      {
+        "answer": "dns1.registrar-servers.com hostmaster.registrar-servers.com",
+        "file": "scenarios/iteration-test/data/zeek-dmz/dns.json",
+        "line": 966,
+        "query": "westbridge-services.net"
+      }
+    ],
+    "soa_total": 20,
+    "zeek_dmz_mtu_average_packet_violation_count_sampled": 20,
+    "zeek_dmz_mtu_average_packet_violation_examples": [
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 19,
+        "orig_avg_ip_bytes_per_pkt": 1284.8,
+        "resp_avg_ip_bytes_per_pkt": 1505.18,
+        "uid": "Ca3qEMHhZRj4djBfXwz"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 44,
+        "orig_avg_ip_bytes_per_pkt": 1311.25,
+        "resp_avg_ip_bytes_per_pkt": 1503.91,
+        "uid": "CvybckAMQSSy50V8hO"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 45,
+        "orig_avg_ip_bytes_per_pkt": 1434.33,
+        "resp_avg_ip_bytes_per_pkt": 1509.65,
+        "uid": "CCRqGAcf8aBNPtmxBD"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 60,
+        "orig_avg_ip_bytes_per_pkt": 1061.2,
+        "resp_avg_ip_bytes_per_pkt": 1501.03,
+        "uid": "CHtsOo4QSlGqaqBKk2"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 71,
+        "orig_avg_ip_bytes_per_pkt": 260.75,
+        "resp_avg_ip_bytes_per_pkt": 1509.14,
+        "uid": "CPGYx6UjHmY0gad7O"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 79,
+        "orig_avg_ip_bytes_per_pkt": 423.8,
+        "resp_avg_ip_bytes_per_pkt": 1506.41,
+        "uid": "CSP4i6NtSMXrd15VVq"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 80,
+        "orig_avg_ip_bytes_per_pkt": 1283.67,
+        "resp_avg_ip_bytes_per_pkt": 1503.55,
+        "uid": "CZRhAxq4VWgUTdjdCyr"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 121,
+        "orig_avg_ip_bytes_per_pkt": 219.4,
+        "resp_avg_ip_bytes_per_pkt": 1508.67,
+        "uid": "CCEcRTdBkySDvTE0Fr"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 139,
+        "orig_avg_ip_bytes_per_pkt": 1502.83,
+        "resp_avg_ip_bytes_per_pkt": 1508.14,
+        "uid": "Cghf4GAsDfc4jfMql5"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 170,
+        "orig_avg_ip_bytes_per_pkt": 134.8,
+        "resp_avg_ip_bytes_per_pkt": 1503.96,
+        "uid": "CKKQazH5y1HEbPMDwn"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 186,
+        "orig_avg_ip_bytes_per_pkt": 1446.65,
+        "resp_avg_ip_bytes_per_pkt": 1507.17,
+        "uid": "CQxmuR0WKnv6lVej47"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 193,
+        "orig_avg_ip_bytes_per_pkt": 314.6,
+        "resp_avg_ip_bytes_per_pkt": 1503.46,
+        "uid": "CCyuU65KtNbCIhhLpA"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 214,
+        "orig_avg_ip_bytes_per_pkt": 1376.8,
+        "resp_avg_ip_bytes_per_pkt": 1502.59,
+        "uid": "CMnnG2Et27dVjCDL2Z"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 222,
+        "orig_avg_ip_bytes_per_pkt": 346.5,
+        "resp_avg_ip_bytes_per_pkt": 1502.43,
+        "uid": "CTbANt3um6BvbYa4cp9"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 276,
+        "orig_avg_ip_bytes_per_pkt": 937.0,
+        "resp_avg_ip_bytes_per_pkt": 1512.0,
+        "uid": "CoLjSa4Aw1CkvyIEhhV"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 291,
+        "orig_avg_ip_bytes_per_pkt": 925.6,
+        "resp_avg_ip_bytes_per_pkt": 1500.65,
+        "uid": "CxEdfU2Erp6E749a0iC"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 295,
+        "orig_avg_ip_bytes_per_pkt": 1491.11,
+        "resp_avg_ip_bytes_per_pkt": 1500.64,
+        "uid": "CHIbp3UO64WTYhaH3Q"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 304,
+        "orig_avg_ip_bytes_per_pkt": 1495.25,
+        "resp_avg_ip_bytes_per_pkt": 1509.05,
+        "uid": "CKUCnxAG98Im7L7vYH0"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 314,
+        "orig_avg_ip_bytes_per_pkt": 1469.38,
+        "resp_avg_ip_bytes_per_pkt": 1500.97,
+        "uid": "CiRaDwwWN4qTBPBhwO"
+      },
+      {
+        "file": "scenarios/iteration-test/data/zeek-dmz/conn.json",
+        "line": 333,
+        "orig_avg_ip_bytes_per_pkt": 807.25,
+        "resp_avg_ip_bytes_per_pkt": 1515.11,
+        "uid": "Cld43AM5wvQ6ElTODy"
+      }
+    ]
+  },
+  "total_records": 80353
+}

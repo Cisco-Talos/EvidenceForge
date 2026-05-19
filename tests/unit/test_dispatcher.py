@@ -809,6 +809,37 @@ class TestCanHandleDefault:
         assert new_sessions == sorted(new_sessions)
         assert removed_session == new_sessions[0]
 
+    def test_syslog_normalizes_kernel_uptime_in_rendered_order(self, tmp_path):
+        """Kernel bracket uptime should not regress after final syslog sorting."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        for timestamp, uptime in [
+            (datetime(2024, 3, 18, 15, 1, 43, 449789, tzinfo=UTC), "2343703.417789"),
+            (datetime(2024, 3, 18, 15, 1, 43, 466984, tzinfo=UTC), "2343703.353984"),
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "kernel",
+                    "pid": None,
+                    "facility": 0,
+                    "severity": 5,
+                    "message": f"[{uptime}] [UFW BLOCK] IN=ens160 OUT= SRC=10.0.0.1",
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert "[2343703.417789]" in lines[0]
+        assert "[2343703.417790]" in lines[1]
+
     def test_syslog_ignores_oversized_raw_logind_session_ids_on_close(self, tmp_path):
         """Oversized raw logind session IDs should not crash close-time normalization."""
         from datetime import UTC, datetime

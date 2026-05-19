@@ -31,9 +31,12 @@ import pytest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
+    BaselineMixin,
+    _cron_shell_command_line,
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
     _is_kerberos_member_server,
+    _kernel_uptime_stamp,
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
     _pick_dc_kerberos_service,
@@ -64,6 +67,109 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
+    """Kernel bracket timestamps should be monotonic within a host boot stream."""
+    scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    first = scenario_start + timedelta(seconds=387.345076)
+    second = scenario_start + timedelta(seconds=387.997014)
+
+    first_stamp = _kernel_uptime_stamp(2332800.0, scenario_start, first)
+    second_stamp = _kernel_uptime_stamp(2332800.0, scenario_start, second)
+
+    assert first_stamp == "2333187.345076"
+    assert second_stamp == "2333187.997014"
+    assert float(second_stamp) > float(first_stamp)
+
+
+def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
+    """Anacron syslog should be a coherent daily run, not random repeated fragments."""
+    engine = type("FakeEngine", (object,), {})()
+    engine.activity_generator = Mock()
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.end_time = datetime(2024, 3, 18, 18, 0, 0, tzinfo=UTC)
+    engine._scenario_tz = None
+    engine._emit_anacron_lifecycle = BaselineMixin._emit_anacron_lifecycle.__get__(
+        engine,
+        type(engine),
+    )
+    ts = datetime(2024, 3, 18, 12, 16, 58, tzinfo=UTC)
+
+    engine._emit_anacron_lifecycle(
+        linux_system,
+        ts - timedelta(hours=2),
+        random.Random(5),
+        {"anacron": 13517},
+    )
+    engine._emit_anacron_lifecycle(linux_system, ts, random.Random(7), {"anacron": 13517})
+    engine._emit_anacron_lifecycle(
+        linux_system,
+        ts + timedelta(hours=1),
+        random.Random(9),
+        {"anacron": 13517},
+    )
+
+    calls = engine.activity_generator.generate_syslog_event.call_args_list
+    messages = [call.kwargs["message"] for call in calls]
+    times = [call.kwargs["time"] for call in calls]
+
+    assert len(messages) == 5
+    assert messages[0] == "Anacron 2.3 started on 2024-03-18"
+    assert all("cron.weekly" not in message for message in messages)
+    assert messages[-1] == "Normal exit (1 job run)"
+    assert times == sorted(times)
+
+
+def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
+    """Cron schedules should not render shell syntax as the cron daemon image."""
+    engine = type("FakeEngine", (object,), {})()
+    engine.state_manager = Mock()
+    engine.activity_generator = Mock()
+    engine.activity_generator.generate_system_process.side_effect = [41200, 41201]
+    engine._emit_scheduled_event = BaselineMixin._emit_scheduled_event.__get__(
+        engine,
+        type(engine),
+    )
+    ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    sched = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "cron_user": "sysstat",
+        "cron_commands": {
+            "debian": "command -v debian-sa1 > /dev/null && debian-sa1 1 1",
+        },
+    }
+
+    engine._emit_scheduled_event(
+        sched,
+        linux_system,
+        ts,
+        random.Random(3),
+        {"cron": 1337},
+        False,
+    )
+
+    process_calls = engine.activity_generator.generate_system_process.call_args_list
+    assert process_calls[0].kwargs["process_name"] == "/bin/sh"
+    assert process_calls[0].kwargs["command_line"] == _cron_shell_command_line(
+        "command -v debian-sa1 > /dev/null && debian-sa1 1 1"
+    )
+    assert process_calls[0].kwargs["parent_pid"] == 1337
+    assert process_calls[0].kwargs["username"] == "sysstat"
+    assert process_calls[0].kwargs["emit_linux_syslog"] is False
+    assert process_calls[1].kwargs["process_name"] == "/usr/lib/sysstat/debian-sa1"
+    assert process_calls[1].kwargs["command_line"] == "debian-sa1 1 1"
+    assert process_calls[1].kwargs["parent_pid"] == 41200
+    assert process_calls[1].kwargs["emit_linux_syslog"] is False
+    syslog_call = engine.activity_generator.generate_syslog_event.call_args
+    assert syslog_call.kwargs["app_name"] == "CRON"
+    assert syslog_call.kwargs["pid"] == 41200
+    assert syslog_call.kwargs["message"] == (
+        "(sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)"
+    )
+    term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
+    assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
 
 
 @pytest.fixture

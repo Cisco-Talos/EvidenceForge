@@ -187,6 +187,52 @@ class TestStateManagerInit:
         assert offset > 0
         assert sm._linux_pid_block_offsets == {}
 
+    def test_linux_visible_pids_stay_in_lived_in_desktop_range_after_days(self):
+        """Long collection windows should not create obvious million-range PID bands."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        sm.set_current_time(boot_time + timedelta(days=3, hours=2))
+
+        pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/mysql",
+            command_line="mysql -u root",
+            username="root",
+            integrity_level="Medium",
+        )
+
+        assert 8_000 <= pid < 180_000
+
+    def test_linux_transient_syslog_pids_share_process_namespace(self):
+        """Syslog-only transient PIDs should not come from a separate low random pool."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        event_time = boot_time + timedelta(days=9, hours=4)
+        sm.register_boot_time("linux01", boot_time)
+
+        sudo_pid = sm.allocate_transient_linux_pid("linux01", event_time)
+        sm.set_current_time(event_time + timedelta(seconds=2))
+        ecar_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/journalctl",
+            command_line="journalctl -u sshd --since today",
+            username="root",
+            integrity_level="Medium",
+        )
+        sshd_pid = sm.allocate_transient_linux_pid(
+            "linux01",
+            event_time + timedelta(seconds=5),
+        )
+
+        assert sudo_pid > 180_000
+        assert ecar_pid > 180_000
+        assert sshd_pid > 180_000
+        assert len({sudo_pid, ecar_pid, sshd_pid}) == 3
+        assert max(sudo_pid, ecar_pid, sshd_pid) - min(sudo_pid, ecar_pid, sshd_pid) < 15_000
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
@@ -204,7 +250,7 @@ class TestSessionManagement:
         )
 
         assert logon_id.startswith("0x")
-        assert int(logon_id, 16) >= 0x10000
+        assert 0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF
         session = sm.get_session(logon_id)
         assert session is not None
         assert session.username == "jdoe"
@@ -262,6 +308,7 @@ class TestSessionManagement:
 
         ids = [sm.create_session(f"user{i}", "WS-01", 3, f"192.168.1.{i}") for i in range(12)]
 
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in ids)
         assert len({int(logon_id, 16) & 0xF for logon_id in ids}) > 1
         assert ids == [f"0x{value:x}" for value in sorted(int(logon_id, 16) for logon_id in ids)]
 
@@ -279,6 +326,21 @@ class TestSessionManagement:
         assert session is not None
         assert session.logon_guid == guid_a
         assert guid_a != "{00000000-0000-0000-0000-000000000000}"
+
+    def test_generated_logon_guids_use_uuid4_morphology(self):
+        """Deterministic LogonGuid values should use normal RFC variant/version nibbles."""
+        sm = StateManager()
+
+        guids = [
+            sm.get_or_create_session_logon_guid(f"0x{value:x}", "WS-01") for value in range(32)
+        ]
+        version_nibbles = {guid[15] for guid in guids}
+        variant_nibbles = {guid[20] for guid in guids}
+
+        assert all(guid.startswith("{") and guid.endswith("}") for guid in guids)
+        assert version_nibbles == {"4"}
+        assert variant_nibbles <= {"8", "9", "a", "b"}
+        assert len(variant_nibbles) > 1
 
     def test_create_session_uses_explicit_start_time_for_luid(self):
         """Explicit session start time should drive LogonID order despite stale state time."""
@@ -317,6 +379,7 @@ class TestSessionManagement:
         earlier = sm.allocate_logon_id("DC-01", datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC))
 
         assert int(earlier, 16) < int(later, 16)
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in (earlier, later))
         assert sm.get_session(earlier) is None
         assert sm.get_session(later) is None
 
@@ -342,7 +405,7 @@ class TestSessionManagement:
 
         logon_id = sm.allocate_logon_id("DC-01", boot + timedelta(days=1_000_000))
 
-        assert int(logon_id, 16) > 0
+        assert 0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF
         assert sm._logon_id_block_offsets == {}
 
     def test_reassign_session_logon_id_rekeys_session_to_event_time(self):
@@ -392,11 +455,12 @@ class TestSessionManagement:
         assert len(ids) == 300
         assert len(set(ids)) == len(ids)
         assert len(sm._logon_id_host_bases) == 300
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in ids)
 
     def test_create_session_probes_unbounded_host_bucket_collision_layers(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """Host bucket collisions should probe new high-order ranges without failing."""
+        """Host bucket collisions should probe alternate offsets without failing."""
         monkeypatch.setattr(state_manager_module, "_stable_seed", lambda _key: 7)
         sm = StateManager()
         sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
@@ -405,6 +469,7 @@ class TestSessionManagement:
 
         assert len(set(ids)) == 3
         assert len(set(sm._logon_id_host_bases.values())) == 3
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in ids)
 
     def test_register_session_marks_external_logon_id_used(self):
         """Externally registered sessions should reserve their LogonID value."""

@@ -34,6 +34,7 @@ Contains the BaselineMixin with methods for:
 import logging
 import math
 import random
+import shlex
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -53,6 +54,7 @@ from evidenceforge.generation.activity.generator import (
     _linux_uid_for_user,
     _ssh_syslog_time,
     _windows_foreground_lifetime,
+    _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.host_activity_profiles import (
@@ -92,6 +94,24 @@ logger = logging.getLogger(__name__)
 
 _HttpGroupKey = tuple[str, int]
 _HttpPlanValue = tuple[_HttpGroupKey, int, bool, int]
+
+
+def _ufw_block_syn_packet_len(src_ip: str) -> int:
+    """Return a stable valid IP total length for a header-only blocked TCP SYN."""
+    rng = random.Random(_stable_seed(f"ufw_syn_packet_len:{src_ip}"))
+    return rng.choices((40, 44, 48, 52, 60), weights=(20, 18, 26, 24, 12), k=1)[0]
+
+
+def _ufw_block_ttl(src_ip: str) -> int:
+    """Return a stable plausible arrival TTL for an inbound scanner source."""
+    rng = random.Random(_stable_seed(f"ufw_arrival_ttl:{src_ip}"))
+    if _is_private_ip(src_ip):
+        initial = rng.choices((64, 128), weights=(65, 35), k=1)[0]
+        hops = rng.randint(1, 8)
+    else:
+        initial = rng.choices((64, 128, 255), weights=(58, 36, 6), k=1)[0]
+        hops = rng.randint(7, 30) if initial == 255 else rng.randint(5, 24)
+    return max(32, initial - hops)
 
 
 def _plan_http_request_groups(
@@ -162,6 +182,16 @@ def _eligible_for_hourly_module_load(proc: Any, time: datetime) -> bool:
         return True
     max_follow_on = proc.start_time + timedelta(seconds=lifetime[1] + 5.0)
     return time <= max_follow_on
+
+
+def _kernel_uptime_stamp(boot_uptime: float, scenario_start: datetime, timestamp: datetime) -> str:
+    """Return source-native kernel monotonic uptime for a syslog timestamp."""
+    event_time = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+    start_time = (
+        scenario_start if scenario_start.tzinfo is not None else scenario_start.replace(tzinfo=UTC)
+    )
+    uptime = boot_uptime + (event_time - start_time).total_seconds()
+    return f"{uptime:.6f}"
 
 
 def _session_logoff_time(
@@ -425,7 +455,9 @@ def _module_matches_process(exe_name: str, module_path: str) -> bool:
     exe = exe_name.lower()
     path = module_path.lower()
     if "google\\chrome" in path:
-        return exe in {"chrome.exe", "msedge.exe"}
+        return exe == "chrome.exe"
+    if "microsoft\\edge" in path:
+        return exe == "msedge.exe"
     if "mozilla firefox" in path:
         return exe == "firefox.exe"
     if "microsoft onedrive" in path:
@@ -713,6 +745,30 @@ def _deterministic_probability_enabled(key: str, probability: float | None) -> b
     if clamped >= 1.0:
         return True
     return (_stable_seed(key) % 10_000) / 10_000.0 < clamped
+
+
+def _cron_shell_command_line(command: str) -> str:
+    """Return a source-native shell command line for cron-executed commands."""
+    return f"/bin/sh -c {shlex.quote(command)}"
+
+
+def _cron_workload_process(
+    command: str,
+    is_rhel_like: bool,
+) -> tuple[str, str, tuple[float, float]] | None:
+    """Resolve the concrete workload process normally spawned by a cron shell."""
+    command_lower = command.lower()
+    if "debian-sa1" in command_lower:
+        return "/usr/lib/sysstat/debian-sa1", "debian-sa1 1 1", (0.05, 0.45)
+    if "logrotate" in command_lower:
+        return "/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf", (0.8, 4.5)
+    if "run-parts" in command_lower:
+        process_path = "/usr/bin/run-parts" if not is_rhel_like else "/bin/run-parts"
+        command_line = "run-parts --report /etc/cron.daily"
+        if is_rhel_like:
+            command_line = "run-parts /etc/cron.daily"
+        return process_path, command_line, (1.0, 6.0)
+    return None
 
 
 def _schedule_applies_to_system(sched: dict[str, Any], system: Any, has_web_role: bool) -> bool:
@@ -1224,12 +1280,20 @@ class BaselineMixin:
                 detail_delay = rng.uniform(0.5, 2.0)
                 for msg in msgs:
                     detail_ts = ts + timedelta(seconds=detail_delay)
+                    detail_pid = (
+                        svc_pid
+                        if svc_pid
+                        else self.state_manager.allocate_transient_linux_pid(
+                            system.hostname,
+                            detail_ts,
+                        )
+                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=detail_ts,
                         app_name=service,
                         message=msg,
-                        pid=svc_pid if svc_pid else rng.randint(10000, 60000),
+                        pid=detail_pid,
                     )
                     detail_delay += rng.uniform(0.2, 1.0)
 
@@ -1259,13 +1323,110 @@ class BaselineMixin:
             if not cmd:
                 return
 
-            self.activity_generator.generate_system_process(
+            cron_parent_pid = sys_pids.get("cron", 0)
+            shell_pid = self.activity_generator.generate_system_process(
                 system=system,
                 time=ts,
-                process_name="/usr/sbin/cron",
-                command_line=cmd,
-                parent_pid=sys_pids.get("cron", 0),
+                process_name="/bin/sh",
+                command_line=_cron_shell_command_line(cmd),
+                parent_pid=cron_parent_pid,
                 username=cron_user,
+                emit_linux_syslog=False,
+            )
+            self.activity_generator.generate_syslog_event(
+                system=system,
+                time=ts + timedelta(milliseconds=rng.randint(10, 120)),
+                app_name="CRON",
+                message=f"({cron_user}) CMD ({cmd})",
+                pid=shell_pid or cron_parent_pid,
+                facility=9,
+                severity=6,
+            )
+            workload = _cron_workload_process(cmd, is_rhel_like)
+            if shell_pid and workload:
+                workload_path, workload_command, lifetime = workload
+                workload_ts = ts + timedelta(milliseconds=rng.randint(60, 350))
+                workload_pid = self.activity_generator.generate_system_process(
+                    system=system,
+                    time=workload_ts,
+                    process_name=workload_path,
+                    command_line=workload_command,
+                    parent_pid=shell_pid,
+                    username=cron_user,
+                    emit_linux_syslog=False,
+                )
+                workload_end = workload_ts + timedelta(seconds=rng.uniform(*lifetime))
+                self.activity_generator.generate_system_process_termination(
+                    system=system,
+                    time=workload_end,
+                    pid=workload_pid,
+                    process_name=workload_path,
+                    parent_pid=shell_pid,
+                    username=cron_user,
+                )
+                shell_end = workload_end + timedelta(milliseconds=rng.randint(20, 220))
+            else:
+                shell_end = ts + timedelta(seconds=rng.uniform(0.15, 1.5))
+            if shell_pid:
+                self.activity_generator.generate_system_process_termination(
+                    system=system,
+                    time=shell_end,
+                    pid=shell_pid,
+                    process_name="/bin/sh",
+                    parent_pid=cron_parent_pid,
+                    username=cron_user,
+                )
+
+    def _emit_anacron_lifecycle(
+        self,
+        system: Any,
+        ts: datetime,
+        rng: random.Random,
+        sys_pids: dict,
+    ) -> None:
+        """Emit one coherent anacron run per host/day instead of random fragments."""
+        if ts < getattr(self, "start_time", ts) or ts >= self.end_time:
+            return
+
+        local_ts = (
+            ts.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+            if getattr(self, "_scenario_tz", None)
+            else ts
+        )
+        run_date = local_ts.date().isoformat()
+        emitted = getattr(self, "_anacron_lifecycle_days", set())
+        key = (system.hostname, run_date)
+        if key in emitted:
+            return
+        emitted.add(key)
+        self._anacron_lifecycle_days = emitted
+
+        pid = sys_pids.get("anacron", rng.randint(10000, 60000))
+        job_name = rng.choice(["cron.daily", "logrotate"])
+        delay_minutes = rng.choice([2, 5, 11])
+        job_start = ts + timedelta(minutes=delay_minutes, seconds=rng.uniform(0.5, 12.0))
+        job_end = job_start + timedelta(seconds=rng.uniform(18.0, 180.0))
+        events = [
+            (ts, f"Anacron 2.3 started on {run_date}"),
+            (
+                ts + timedelta(seconds=rng.uniform(0.3, 2.0)),
+                f"Will run job `{job_name}' in {delay_minutes} min.",
+            ),
+            (job_start, f"Job `{job_name}' started"),
+            (job_end, f"Job `{job_name}' terminated"),
+            (job_end + timedelta(seconds=rng.uniform(0.5, 3.0)), "Normal exit (1 job run)"),
+        ]
+        for event_time, message in events:
+            if event_time >= self.end_time:
+                continue
+            self.activity_generator.generate_syslog_event(
+                system=system,
+                time=event_time,
+                app_name="anacron",
+                message=message,
+                pid=pid,
+                facility=3,
+                severity=6,
             )
 
     def _generate_hour(
@@ -1498,6 +1659,7 @@ class BaselineMixin:
                     dc_hostname=dc.hostname,
                     time=event_time,
                     status="0x12",  # KDC_ERR_CLIENT_REVOKED (disabled account)
+                    emit_connection=True,
                 )
 
             # Pattern 3: Scheduled task failure (~3%/hour)
@@ -1679,6 +1841,7 @@ class BaselineMixin:
                         dc_hostname=dc.hostname,
                         time=event_time,
                         status="0x18",  # KDC_ERR_PREAUTH_FAILED (bad password)
+                        emit_connection=True,
                     )
 
     def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
@@ -3720,6 +3883,54 @@ class BaselineMixin:
                 pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
                 conn_pid = _pids.get(pid_key, -1) if pid_key else -1
 
+                if (
+                    conn.get("service") == "kerberos"
+                    and conn.get("port") == 88
+                    and os_cat == "windows"
+                ):
+                    dc_ips = self._infra_ips.get("dc", [])
+                    if isinstance(dc_ips, str):
+                        dc_ips = [dc_ips]
+                    dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+                    if isinstance(dc_hostnames, str):
+                        dc_hostnames = [dc_hostnames]
+                    dc_hostname_by_ip = {
+                        dc_ip: dc_hostname
+                        for dc_ip, dc_hostname in zip(dc_ips, dc_hostnames, strict=False)
+                    }
+                    dc_hostname = dc_hostname_by_ip.get(dst_ip)
+                    if dc_hostname is None and dc_hostnames and dst_ip in dc_ips:
+                        dc_hostname = rng.choice(dc_hostnames)
+                    if dc_hostname:
+                        machine_principal = f"{system.hostname}$"
+                        tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
+                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
+                        if tgs_time <= tgt_time:
+                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+                        self.activity_generator.generate_kerberos_tgt(
+                            username=machine_principal,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgt_time,
+                        )
+                        service_name = rng.choices(
+                            [
+                                f"host/{dc_hostname}",
+                                f"ldap/{dc_hostname}",
+                                f"cifs/{dc_hostname}",
+                                f"DNS/{dc_hostname}",
+                            ],
+                            weights=[34, 36, 20, 10],
+                            k=1,
+                        )[0]
+                        self.activity_generator.generate_kerberos_service_ticket(
+                            username=machine_principal,
+                            service_name=service_name,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgs_time,
+                        )
+
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
                     dst_ip=dst_ip,
@@ -3914,6 +4125,43 @@ class BaselineMixin:
                             emit_dns=False,
                         )
                     else:
+                        if (
+                            conn.get("service") == "kerberos"
+                            and conn.get("port") == 88
+                            and is_internal_src
+                            and src_sys is not None
+                            and os_cat == "windows"
+                        ):
+                            dc_hostname = system.hostname
+                            machine_principal = f"{src_sys.hostname}$"
+                            tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
+                            tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
+                            if tgs_time <= tgt_time:
+                                tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+                            self.activity_generator.generate_kerberos_tgt(
+                                username=machine_principal,
+                                source_ip=src_ip,
+                                dc_hostname=dc_hostname,
+                                time=tgt_time,
+                            )
+                            service_name = rng.choices(
+                                [
+                                    f"host/{dc_hostname}",
+                                    f"ldap/{dc_hostname}",
+                                    f"cifs/{dc_hostname}",
+                                    f"DNS/{dc_hostname}",
+                                ],
+                                weights=[34, 36, 20, 10],
+                                k=1,
+                            )[0]
+                            self.activity_generator.generate_kerberos_service_ticket(
+                                username=machine_principal,
+                                service_name=service_name,
+                                source_ip=src_ip,
+                                dc_hostname=dc_hostname,
+                                time=tgs_time,
+                            )
+
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,
@@ -4249,6 +4497,9 @@ class BaselineMixin:
                 user_agent=session_ua,
                 request_body_len=req.request_body_len,
                 response_body_len=req.response_body_len,
+                flow_request_body_len=group["request_body_len"] if first_in_group else None,
+                flow_response_body_len=group["response_body_len"] if first_in_group else None,
+                flow_transaction_count=group["request_count"] if first_in_group else 1,
                 status_code=req.status_code,
                 status_msg=_http_status_message(req.status_code),
                 referrer=req.referrer,
@@ -4438,6 +4689,12 @@ class BaselineMixin:
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
+            dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+            if isinstance(dc_hostnames, str):
+                dc_hostnames = [dc_hostnames]
+            dc_hostname_by_ip = {
+                dc_ip: dc_hostname for dc_ip, dc_hostname in zip(dc_ips, dc_hostnames, strict=False)
+            }
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
             if "smb-client" in services and os_cat == "windows":
                 # Include DC SYSVOL/GPO traffic and weight file servers higher
@@ -4536,9 +4793,42 @@ class BaselineMixin:
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    krb_dst_ip = rng.choice(dc_targets)
+                    dc_hostname = dc_hostname_by_ip.get(krb_dst_ip)
+                    if dc_hostname is None and dc_hostnames:
+                        dc_hostname = rng.choice(dc_hostnames)
+                    if dc_hostname:
+                        machine_principal = f"{system.hostname}$"
+                        tgt_time = ts - timedelta(milliseconds=rng.randint(60, 220))
+                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 55))
+                        if tgs_time <= tgt_time:
+                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(12, 48))
+                        self.activity_generator.generate_kerberos_tgt(
+                            username=machine_principal,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgt_time,
+                        )
+                        service_name = rng.choices(
+                            [
+                                f"host/{dc_hostname}",
+                                f"ldap/{dc_hostname}",
+                                f"cifs/{dc_hostname}",
+                                f"DNS/{dc_hostname}",
+                            ],
+                            weights=[34, 36, 20, 10],
+                            k=1,
+                        )[0]
+                        self.activity_generator.generate_kerberos_service_ticket(
+                            username=machine_principal,
+                            service_name=service_name,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgs_time,
+                        )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(dc_targets),
+                        dst_ip=krb_dst_ip,
                         time=ts,
                         dst_port=88,
                         proto="tcp",
@@ -5273,6 +5563,7 @@ class BaselineMixin:
                     cycle_lo, cycle_hi = _dc_kerberos_cycle_range(dc_kerberos_multiplier)
                     num_cycles = rng.randint(cycle_lo, cycle_hi)
                     base_interval = 3600 / (num_cycles + 1)
+                    krb_pid = self._system_pids.get(client.hostname, {}).get("lsass", -1)
                     for i in range(num_cycles):
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
                         offset = max(0, min(3599, offset))
@@ -5285,6 +5576,20 @@ class BaselineMixin:
                             source_ip=client.ip,
                             dc_hostname=dc_hostname,
                             time=ts,
+                        )
+                        self.activity_generator.generate_connection(
+                            src_ip=client.ip,
+                            dst_ip=dc_ips[_dc_idx],
+                            time=ts,
+                            dst_port=88,
+                            proto="tcp",
+                            service="kerberos",
+                            duration=rng.uniform(0.001, 0.04),
+                            orig_bytes=rng.randint(180, 900),
+                            resp_bytes=rng.randint(80, 1500),
+                            source_system=client,
+                            pid=krb_pid,
+                            emit_dns=False,
                         )
                         if rng.random() < 0.22:
                             num_tgs = 0
@@ -5316,6 +5621,20 @@ class BaselineMixin:
                                 source_ip=client.ip,
                                 dc_hostname=dc_hostname,
                                 time=ts2,
+                            )
+                            self.activity_generator.generate_connection(
+                                src_ip=client.ip,
+                                dst_ip=dc_ips[_dc_idx],
+                                time=ts2,
+                                dst_port=88,
+                                proto="tcp",
+                                service="kerberos",
+                                duration=rng.uniform(0.001, 0.05),
+                                orig_bytes=rng.randint(180, 1100),
+                                resp_bytes=rng.randint(80, 2200),
+                                source_system=client,
+                                pid=krb_pid,
+                                emit_dns=False,
                             )
                         if rng.random() < 0.10:
                             ntlm_offset = _machine_account_ntlm_offset_seconds(offset, rng)
@@ -5378,6 +5697,14 @@ class BaselineMixin:
             self._generate_scheduled_tasks(
                 current_hour, system, rng, sys_pids, is_rhel_like, has_web_role
             )
+            if not is_rhel_like and current_hour == self.start_time:
+                anacron_offset = 60 + (_stable_seed(f"anacron_lifecycle:{system.hostname}") % 1800)
+                self._emit_anacron_lifecycle(
+                    system,
+                    current_hour + timedelta(seconds=anacron_offset),
+                    rng,
+                    sys_pids,
+                )
 
             # Use Hawkes process for bursty syslog timing instead of uniform spread
             from evidenceforge.utils.timing import hawkes_timestamps
@@ -5394,6 +5721,7 @@ class BaselineMixin:
             for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
                 uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
+                kernel_uptime = _kernel_uptime_stamp(boot_uptime, scenario_start, ts)
 
                 source_roll = rng.random()
                 if source_roll < 0.25:
@@ -5415,14 +5743,16 @@ class BaselineMixin:
                         )[0]
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
+                        packet_len = _ufw_block_syn_packet_len(src_ip)
+                        ttl = _ufw_block_ttl(src_ip)
                         msg = (
-                            f"[{uptime}.{rng.randint(100000, 999999)}] [UFW BLOCK] "
+                            f"[{kernel_uptime}] [UFW BLOCK] "
                             f"IN=ens160 OUT= SRC={src_ip} DST={system.ip} "
-                            f"LEN={rng.randint(40, 60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40, 255)} "
+                            f"LEN={packet_len} TOS=0x00 PREC=0x00 TTL={ttl} "
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
                         )
-                        # UFW block: connection (→ Zeek conn REJ) + syslog (→ kernel UFW)
+                        # UFW block: connection (→ Zeek conn S0) + syslog (→ kernel UFW)
                         # Both on the same SecurityEvent for cross-source correlation
 
                         self.activity_generator.generate_connection(
@@ -5431,8 +5761,9 @@ class BaselineMixin:
                             time=ts,
                             dst_port=dpt,
                             proto="tcp",
-                            conn_state="REJ",
+                            conn_state="S0",
                             src_port=spt,
+                            packet_overhead_bytes=packet_len,
                         )
                         # Paired syslog via canonical dispatch
                         self.activity_generator.generate_syslog_event(
@@ -5455,8 +5786,8 @@ class BaselineMixin:
                             ) + rng.randint(1, 5)
                             audit_serial = self._audit_serials[system.hostname]
                             msg = (
-                                f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
-                                f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
+                                f"[{kernel_uptime}] audit: type=1400 "
+                                f"audit({int(ts.timestamp())}.{ts.microsecond // 1000:03d}:{audit_serial}): "
                                 f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
                             )
                             self.activity_generator.generate_syslog_event(
@@ -5527,7 +5858,19 @@ class BaselineMixin:
                         source_system=src_sys_obj,
                         conn_state="SF",
                     )
-                    sshd_pid = rng.randint(5000, 60000)
+                    observed_ssh_time = _zeek_conn_observation_time(
+                        ts,
+                        ip,
+                        port,
+                        system.ip,
+                        22,
+                        "tcp",
+                        "ssh",
+                    )
+                    sshd_pid = self.state_manager.allocate_transient_linux_pid(
+                        system.hostname,
+                        observed_ssh_time,
+                    )
                     ssh_roster = self._get_server_ssh_users(system)
                     ssh_usernames = [user.username for user in ssh_roster]
                     if ssh_usernames:
@@ -5558,18 +5901,23 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(10, 50)
+                    _msg_offset = rng.randint(25, 120)
                     ssh_syslog_seed = (
                         system.hostname,
                         ip,
                         port,
                         sshd_pid,
-                        ts.isoformat(),
+                        observed_ssh_time.isoformat(),
                     )
                     login_times: list[datetime] = []
                     for _label in ("connection", "accepted", "pam"):
                         login_times.append(
-                            _ssh_syslog_time(ts, _label, _msg_offset, *ssh_syslog_seed)
+                            _ssh_syslog_time(
+                                observed_ssh_time,
+                                _label,
+                                _msg_offset,
+                                *ssh_syslog_seed,
+                            )
                         )
                         _msg_offset += rng.randint(12, 70)
                     # systemd-logind is observed as a different process from
@@ -5578,7 +5926,12 @@ class BaselineMixin:
                     # sort before auth/PAM under the default syslog delay profile.
                     _msg_offset += rng.randint(420, 760)
                     login_times.append(
-                        _ssh_syslog_time(ts, "logind", _msg_offset, *ssh_syslog_seed)
+                        _ssh_syslog_time(
+                            observed_ssh_time,
+                            "logind",
+                            _msg_offset,
+                            *ssh_syslog_seed,
+                        )
                     )
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
                         system.hostname,
@@ -5626,7 +5979,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.36:
+                elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     snap_name = rng.choice(
@@ -5773,6 +6126,9 @@ class BaselineMixin:
                             system_services=system.services,
                             values={"dns_server": dns_server},
                         )
+                    elif app == "anacron":
+                        self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
+                        continue
                     else:
                         msg = render_extra_syslog_message(
                             entry,
@@ -5798,7 +6154,10 @@ class BaselineMixin:
                     if pid_key and pid_key in sys_pids:
                         pid = sys_pids[pid_key]
                     elif app in _TRANSIENT_APPS:
-                        pid = rng.randint(1000, 60000)
+                        pid = self.state_manager.allocate_transient_linux_pid(
+                            system.hostname,
+                            ts,
+                        )
                     else:
                         # Derive a stable per-host PID for persistent daemons not in sys_pids
                         import hashlib as _hl

@@ -68,6 +68,14 @@ def timestamp():
 class TestHostnameConsistency:
     """DNS query domain, SSL SNI, and proxy hostname must be identical."""
 
+    def test_tunnel_era_background_txt_spf_avoids_documentation_ranges(self):
+        """Benign TXT/SPF collisions should not expose RFC 5737 test networks."""
+        from evidenceforge.generation.engine.storyline import _dns_tunnel_background_txt_record
+
+        answers = [_dns_tunnel_background_txt_record(random.Random(seed))[1] for seed in range(500)]
+
+        assert not any("203.0.113." in answer for answer in answers)
+
     def test_explicit_unregistered_hostname_tracks_rewritten_destination(
         self, activity_gen, timestamp, mock_emitters
     ):

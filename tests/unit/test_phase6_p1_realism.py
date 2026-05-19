@@ -269,7 +269,10 @@ class TestMachineAccountLogon:
             time=ts,
         )
         # machine_logon dispatched via SecurityEvent
-        event = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        event = next(event for event in events if event.event_type == "machine_logon")
         assert event.event_type == "machine_logon"
         assert event.auth.username == "WKS-01$"
         assert event.dst_host.fqdn.startswith("DC-01.")

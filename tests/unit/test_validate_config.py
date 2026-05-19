@@ -1449,6 +1449,7 @@ class TestValidateConfig:
         programs = load_extra_syslog_messages()
         high_volume_apps = {
             "dbus-daemon",
+            "polkitd",
             "rsyslogd",
             "unattended-upgr",
             "systemd-resolved",
@@ -1464,6 +1465,7 @@ class TestValidateConfig:
             "dpkg --status-fd: processing triggers for man-db",
             "Positive Trust Anchors: . IN DS 20326",
             "Balancing is ineffective IRQs are pinned and balanced",
+            "Operator of unix-process:{} successfully authenticated as 'root'",
         }
 
         checked_apps = set()
@@ -1481,6 +1483,11 @@ class TestValidateConfig:
             if app == "irqbalance":
                 assert all("{}" not in message and "{0}" not in message for message in messages)
                 assert all("from CPU" not in message for message in messages)
+            if app == "polkitd":
+                assert any("action {action_id}" in message for message in messages)
+                assert all(
+                    "AuthenticationAgent" in message or "action" in message for message in messages
+                )
             for message in messages:
                 rendered = render_extra_syslog_message(
                     {**entry, "messages": [message]},
@@ -1495,6 +1502,119 @@ class TestValidateConfig:
                     assert "UDP+EDNS0 instead of UDP+EDNS0" not in rendered
 
         assert checked_apps == high_volume_apps
+
+    def test_extra_syslog_linux_maintenance_texture_excludes_schedule_native_cron(self):
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        programs = load_extra_syslog_messages()
+        apps = {entry["app"]: entry for entry in programs}
+
+        assert "cron" not in apps
+        assert "anacron" in apps
+
+        sudo_entry = next(
+            entry
+            for entry in programs
+            if entry["app"] == "sudo" and "sudo_command" in (entry.get("params") or {})
+        )
+        sudo_commands = sudo_entry["params"]["sudo_command"]
+        service_commands = [command for command in sudo_commands if "{service}" in command]
+        non_service_commands = [command for command in sudo_commands if "{service}" not in command]
+
+        assert len(non_service_commands) >= len(service_commands) * 3
+        assert any("list-timers" in command for command in non_service_commands)
+        assert any("apt-get -s upgrade" in command for command in non_service_commands)
+        assert any("vmstat" in command for command in non_service_commands)
+
+        rendered_messages = []
+        for entry in programs:
+            if entry["app"] == "anacron":
+                continue
+            rendered_messages.extend(entry.get("messages", []))
+            rendered_messages.extend(
+                value
+                for values in (entry.get("params") or {}).values()
+                for value in values
+                if isinstance(value, str)
+            )
+        schedule_native_patterns = (
+            "apt.systemd.daily",
+            "cron.daily",
+            "cron.hourly",
+            "debian-sa1",
+            "logrotate /etc/logrotate.conf",
+            "update-motd-reboot-required",
+            "/tmp -xdev -type f -mtime",
+        )
+        assert not any(
+            pattern in message.lower()
+            for message in rendered_messages
+            for pattern in schedule_native_patterns
+        )
+
+    def test_systemd_schedule_contains_sysstat_cron_cadence(self):
+        from evidenceforge.generation.engine.baseline import _load_systemd_schedules
+
+        debian_sa1 = next(
+            schedule
+            for schedule in _load_systemd_schedules()
+            if schedule["service"] == "debian-sa1"
+        )
+
+        assert debian_sa1["type"] == "cron"
+        assert debian_sa1["frequency"] == "30min"
+        assert debian_sa1["cron_user"] == "sysstat"
+        assert "debian-sa1" in debian_sa1["cron_commands"]["debian"]
+
+    def test_extra_syslog_unattended_upgrades_bounds_phased_percentage(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        unattended = next(entry for entry in programs if entry["app"] == "unattended-upgr")
+        percentage_values = unattended["params"]["phased_percentage"]
+
+        assert all(0 <= int(value) <= 100 for value in percentage_values)
+        assert not any(
+            "phased update percentage {}" in message for message in unattended["messages"]
+        )
+
+        message = render_extra_syslog_message(
+            {
+                **unattended,
+                "messages": [
+                    "Package {package_name} kept back for phased update percentage {phased_percentage}"
+                ],
+            },
+            random.Random(5),
+            positional_value=981234,
+        )
+        percentage = int(message.rsplit(" ", 1)[-1])
+
+        assert 0 <= percentage <= 100
+        assert "981234" not in message
+
+    def test_extra_syslog_anacron_uses_date_placeholder_and_no_weekly_pool(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        anacron = next(entry for entry in programs if entry["app"] == "anacron")
+
+        assert "cron.weekly" not in anacron["params"]["job_name"]
+        assert "Anacron 2.3 started on {}" not in anacron["messages"]
+        message = render_extra_syslog_message(
+            {**anacron, "messages": ["Anacron 2.3 started on {anacron_date}"]},
+            random.Random(5),
+            positional_value=123456,
+            values={"anacron_date": "2024-03-18"},
+        )
+
+        assert message == "Anacron 2.3 started on 2024-03-18"
 
     def test_systemd_schedule_filters_by_role_and_service_state(self):
         from types import SimpleNamespace

@@ -363,6 +363,9 @@ class HttpContext:
     user_agent: str = ""
     request_body_len: int = 0
     response_body_len: int = 0
+    flow_request_body_len: int | None = None
+    flow_response_body_len: int | None = None
+    flow_transaction_count: int = 1
     status_code: int = 200
     status_msg: str = "OK"
     referrer: str = ""
@@ -514,6 +517,7 @@ class ProxyContext:
     cache_result: str = "MISS"  # HIT, MISS, NONE, DENIED
     referrer: str = ""  # HTTP Referer header
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
+    proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
 
 
 @dataclass(slots=True)

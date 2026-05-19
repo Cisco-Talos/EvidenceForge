@@ -41,6 +41,7 @@ domain_overrides:
       - ocsp.sectigo.com
       - ocsp.globalsign.com
       - ocsp.int-x3.letsencrypt.org
+      - ocsp.meridianhcs.local
       - r3.o.lencr.org
       - x1.c.lencr.org
     user_agents:
