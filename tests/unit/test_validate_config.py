@@ -1496,6 +1496,33 @@ class TestValidateConfig:
 
         assert checked_apps == high_volume_apps
 
+    def test_extra_syslog_linux_maintenance_texture_includes_cron_and_varied_sudo(self):
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        programs = load_extra_syslog_messages()
+        apps = {entry["app"]: entry for entry in programs}
+
+        assert "cron" in apps
+        assert "anacron" in apps
+
+        sudo_entry = next(
+            entry
+            for entry in programs
+            if entry["app"] == "sudo" and "sudo_command" in (entry.get("params") or {})
+        )
+        sudo_commands = sudo_entry["params"]["sudo_command"]
+        service_commands = [command for command in sudo_commands if "{service}" in command]
+        non_service_commands = [command for command in sudo_commands if "{service}" not in command]
+
+        assert len(non_service_commands) >= len(service_commands) * 3
+        assert any("list-timers" in command for command in non_service_commands)
+        assert any("apt-get -s upgrade" in command for command in non_service_commands)
+        assert any("vmstat" in command for command in non_service_commands)
+
+        cron_messages = apps["cron"]["messages"]
+        assert any("CMD" in message for message in cron_messages)
+        assert not any("cron.hourly" in message.lower() for message in cron_messages)
+
     def test_systemd_schedule_filters_by_role_and_service_state(self):
         from types import SimpleNamespace
 

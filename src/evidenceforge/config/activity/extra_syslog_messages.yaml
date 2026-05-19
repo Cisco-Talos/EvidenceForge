@@ -37,14 +37,46 @@ programs:
 
   - app: rsyslogd
     weight: 1
+    params:
+      action_name:
+        - send_remote
+        - fwd_core
+        - local_file
+        - dyn_file_cache
+      conf_file:
+        - /etc/rsyslog.d/20-forwarding.conf
+        - /etc/rsyslog.d/50-default.conf
+        - /etc/rsyslog.conf
+      module_name:
+        - imjournal
+        - imuxsock
+        - omfwd
+        - omfile
+      queue_name:
+        - fwdRule1
+        - action-remote
+        - main
+        - local-spool
+      relay_target:
+        - logrelay01
+        - siem-forwarder
+        - 10.10.2.30
+      worker_count:
+        - "1"
+        - "2"
+        - "3"
     messages:
       - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {}"
       - '[origin software="rsyslogd"] rsyslogd was HUPed after config reload id {}'
-      - "omfwd: remote syslog target stayed connected, action queue watermark {}"
+      - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {}"
+      - "action '{action_name}' resumed after retry {}, next retry disabled"
+      - "module {module_name}: worker thread pool adjusted to {worker_count}"
+      - "configuration file {conf_file} reloaded, checksum {}"
+      - "main Q: queue {queue_name} has {} messages pending, worker threads {worker_count}"
 
   - app: sudo
     transient: true
-    weight: 2
+    weight: 1
     params:
       sudo_user:
         - admin
@@ -71,28 +103,89 @@ programs:
         - ssh
         - cron
         - app-agent
+        - auditd
         - nginx
         - apache2
         - mysql
+        - php-fpm
         - postgresql
+        - rsyslog
+        - systemd-resolved
       sudo_command:
         - /bin/systemctl status {service}
         - /bin/systemctl restart {service}
         - /usr/bin/journalctl -u {service} -n 50
         - /usr/bin/journalctl -u {service} --since "30 min ago"
+        - /usr/bin/systemctl list-timers --all --no-pager
+        - /usr/bin/systemctl list-units --state=failed --no-pager
+        - /usr/bin/systemd-analyze blame
         - /usr/bin/apt list --upgradable
         - /usr/bin/apt-cache policy openssl
+        - /usr/bin/apt-get -s upgrade
+        - /usr/bin/needrestart -b
         - /usr/bin/tail -n 100 /var/log/auth.log
         - /usr/bin/tail -n 80 /var/log/syslog
         - /usr/bin/grep -i error /var/log/syslog
+        - /usr/bin/grep -i failed /var/log/auth.log
+        - /usr/bin/grep -i oom /var/log/kern.log
+        - /usr/bin/find /etc/systemd/system -maxdepth 2 -type l
+        - /usr/bin/find /var/tmp -maxdepth 1 -mtime +7 -type f
         - /usr/bin/ss -ltnp
+        - /usr/sbin/ss -s
+        - /usr/bin/lsof -i -P -n
+        - /usr/sbin/iptables -L -n -v
         - /usr/bin/lsblk
         - /usr/bin/df -h /var
+        - /usr/bin/free -m
+        - /usr/bin/vmstat 1 5
+        - /usr/bin/iostat -xz 1 3
         - /usr/bin/du -sh /var/log
         - /usr/bin/find /var/log -type f -mtime -1
         - /usr/sbin/service {service} status
     messages:
       - "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+
+  - app: cron
+    weight: 1
+    params:
+      cron_user:
+        - root
+        - sysstat
+      cron_command:
+        - /usr/sbin/logrotate /etc/logrotate.conf
+        - test -x /usr/sbin/anacron || run-parts --report /etc/cron.daily
+        - command -v debian-sa1 > /dev/null && debian-sa1 1 1
+        - /usr/lib/apt/apt.systemd.daily
+        - /usr/bin/find /tmp -xdev -type f -mtime +10 -delete
+        - /usr/bin/test -x /usr/lib/update-notifier/update-motd-reboot-required && /usr/lib/update-notifier/update-motd-reboot-required
+    messages:
+      - "pam_unix(cron:session): session opened for user {cron_user}(uid=0) by (uid=0)"
+      - "({cron_user}) CMD ({cron_command})"
+      - "pam_unix(cron:session): session closed for user {cron_user}"
+
+  - app: anacron
+    distro: ubuntu
+    system_types: [server, workstation]
+    weight: 1
+    params:
+      job_name:
+        - cron.daily
+        - cron.weekly
+        - logrotate
+      delay_minutes:
+        - "2"
+        - "5"
+        - "11"
+        - "17"
+      run_count:
+        - "1"
+        - "2"
+    messages:
+      - "Anacron 2.3 started on {}"
+      - "Will run job `{job_name}' in {delay_minutes} min."
+      - "Job `{job_name}' started"
+      - "Job `{job_name}' terminated"
+      - "Normal exit ({run_count} job run)"
 
   - app: sudo
     transient: true
