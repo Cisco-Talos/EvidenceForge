@@ -41,6 +41,7 @@ from evidenceforge.models import (
     User,
 )
 from evidenceforge.models.scenario import ConnectionEventSpec
+from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
 
 
 def test_service_wrapper_storyline_processes_are_long_lived():
@@ -970,8 +971,10 @@ class TestGenerationEngine:
 
         ground_truth = tmp_path / "GROUND_TRUTH.md"
         manifest = tmp_path / OBSERVATION_MANIFEST_FILENAME
+        target_marker = tmp_path / OUTPUT_TARGET_FILENAME
         assert ground_truth.exists()
         assert manifest.exists()
+        assert target_marker.read_text(encoding="utf-8") == "default\n"
         assert "No malicious activities" in ground_truth.read_text()
         assert "No malicious events were generated" in ground_truth.read_text()
 

@@ -34,6 +34,7 @@ from jinja2.sandbox import SandboxedEnvironment
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
+from evidenceforge.output_targets import OutputTarget, normalize_output_target
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ class LogEmitter(ABC):
         self.format_def = format_def
         self.output_path = output_path
         self.buffer_size = buffer_size
+        self.output_target = OutputTarget.DEFAULT
         self.buffer: list[str] = []
         self.event_count = 0
         # DESIGN DECISION: StrictUndefined intentionally removed (commit 5a4e7db).
@@ -101,6 +103,10 @@ class LogEmitter(ABC):
             self._thread = Thread(target=self._run, daemon=True, name=f"Emitter-{format_def.name}")
             self._thread.start()
             logger.debug(f"Started emitter thread for {format_def.name}")
+
+    def configure_output_target(self, target: str | OutputTarget | None) -> None:
+        """Configure the generated-output target for this emitter."""
+        self.output_target = normalize_output_target(target)
 
     @abstractmethod
     def emit_event(self, event_data: dict[str, Any]) -> None:

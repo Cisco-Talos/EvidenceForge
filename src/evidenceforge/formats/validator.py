@@ -249,6 +249,15 @@ def validate_field(field_def: FieldDefinition, field_value: Any) -> ValidationRe
 # Strict-mode validators — format-specific raw-content checks
 # ---------------------------------------------------------------------------
 
+# RFC3164 syslog header: <PRI>MMM DD HH:MM:SS HOSTNAME APP[PID]:
+_RFC3164_RE = re.compile(
+    r"^<(?P<pri>\d{1,3})>"
+    r"(?P<timestamp>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<app_name>\S+?)(?:\[[^\]]+\])?:\s+"
+    r".*$"
+)
+
 # RFC 5424 syslog header: <PRI>VERSION TIMESTAMP HOSTNAME APP-NAME PROCID MSGID STRUCTURED-DATA
 _RFC5424_RE = re.compile(
     r"^<(?P<pri>\d{1,3})>(?P<version>\d+)\s+"
@@ -344,11 +353,20 @@ def validate_strict(format_name: str, raw: str, fields: dict[str, Any]) -> Valid
 
 
 def _validate_strict_syslog(raw: str, fields: dict[str, Any], result: ValidationResult) -> None:
-    """Require RFC 5424 for generated syslog, allowing parser-marked legacy eval input."""
+    """Require RFC3164 for generated syslog, allowing parser-marked legacy eval input."""
     if not raw.strip():
         return
 
     protocol = fields.get("syslog_protocol")
+    if protocol in (None, "", "rfc3164"):
+        match = _RFC3164_RE.match(raw)
+        if match is None:
+            result.add_error("syslog", "Syslog line does not match BSD/RFC3164")
+            return
+        pri = int(match.group("pri"))
+        if pri > _RFC5424_PRIORITY_MAX:
+            result.add_error("syslog_pri", f"PRI {pri} exceeds maximum {_RFC5424_PRIORITY_MAX}")
+        return
     if protocol == "rfc3164_legacy":
         if not _LEGACY_BSD_SYSLOG_RE.match(raw):
             result.add_error("syslog", "Legacy syslog marker does not match BSD/RFC3164 input")
@@ -357,10 +375,13 @@ def _validate_strict_syslog(raw: str, fields: dict[str, Any], result: Validation
         if not _LEGACY_ISO_SYSLOG_RE.match(raw):
             result.add_error("syslog", "Legacy syslog marker does not match ISO-style input")
         return
+    if protocol != "rfc5424_legacy":
+        result.add_error("syslog", f"Unknown syslog protocol marker: {protocol}")
+        return
 
     match = _RFC5424_RE.match(raw)
     if match is None:
-        result.add_error("syslog", "Syslog line does not match RFC 5424")
+        result.add_error("syslog", "Legacy syslog marker does not match RFC 5424")
         return
 
     pri = int(match.group("pri"))

@@ -65,6 +65,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
+from evidenceforge.generation.activity.network_params import proxy_connect_status_message
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
@@ -1843,6 +1844,27 @@ def _dns_is_internal_name(query: str, ad_domain: str) -> bool:
     return lowered.endswith(f".{domain}") or lowered == domain or lowered.endswith(".local")
 
 
+def _dns_nxdomain_companion_queries(hostname: str | None, ad_domain: str) -> list[str]:
+    """Return realistic low-volume resolver miss probes for DNS companion noise."""
+    suffix_queries: list[str] = []
+    if (
+        hostname
+        and "." in hostname
+        and not hostname.endswith(f".{ad_domain}")
+        and not hostname.endswith(".local")
+    ):
+        suffix_queries.append(f"{hostname}.{ad_domain}")
+    return suffix_queries + [
+        f"wpad.{ad_domain}",
+        "wpad.local",
+        "wpad",
+        f"isatap.{ad_domain}",
+        "isatap",
+        f"oldserver.{ad_domain}",
+        f"printer01.{ad_domain}",
+    ]
+
+
 def _proxy_request_allows_cache_hit(
     *,
     method: str,
@@ -2122,7 +2144,7 @@ def _tls_key_for_certificate_name(
 ) -> tuple[str, int]:
     """Align generated certificate key metadata with RSA/ECC naming conventions."""
     name = cert_name.lower()
-    if any(marker in name for marker in ("rsa", " r", "-r")):
+    if "rsa" in name:
         return "rsa", max(key_length if key_type == "rsa" else 0, 2048)
     if any(marker in name for marker in ("ecdsa", "ecc", " ec ", "-ec")):
         return "ecdsa", 256 if key_type != "ecdsa" else key_length
@@ -4683,7 +4705,8 @@ class ActivityGenerator:
                     severity=4,
                     message=(
                         "pam_unix(login:auth): authentication failure; "
-                        f"logname= uid=0 euid=0 tty=tty1 ruser= rhost= user={effective_username}"
+                        f"logname=LOGIN uid=0 euid=0 tty=/dev/tty1 ruser= rhost=  "
+                        f"user={effective_username}"
                     ),
                 )
 
@@ -5042,8 +5065,8 @@ class ActivityGenerator:
                 event.syslog = None
             else:
                 message = (
-                    f"Received disconnect from {session.source_ip} port {source_port}:11: "
-                    "disconnected by user"
+                    f"Received disconnect from {session.source_ip} port {source_port}:11:  "
+                    "[preauth]"
                 )
                 event.syslog = SyslogContext(
                     app_name="sshd",
@@ -6451,14 +6474,6 @@ class ActivityGenerator:
                 tunnel_status_code = proxy_context.tunnel_status_code
                 if tunnel_status_code is None:
                     tunnel_status_code = proxy_context.status_code
-                connect_status_messages = {
-                    200: "Connection Established",
-                    403: "Forbidden",
-                    407: "Proxy Authentication Required",
-                    502: "Bad Gateway",
-                    503: "Service Unavailable",
-                    504: "Gateway Timeout",
-                }
                 client_http = HttpContext(
                     method="CONNECT",
                     host=proxy_context.host,
@@ -6468,9 +6483,11 @@ class ActivityGenerator:
                     request_body_len=0,
                     response_body_len=0,
                     status_code=tunnel_status_code,
-                    status_msg=connect_status_messages.get(
+                    status_msg=proxy_connect_status_message(
                         tunnel_status_code,
-                        "Connection Established" if tunnel_status_code < 400 else "Proxy Error",
+                        proxy_context.host,
+                        proxy_context.user_agent,
+                        time,
                     ),
                     tags=[],
                 )
@@ -6540,8 +6557,11 @@ class ActivityGenerator:
                 proxy_context.time_taken = rng.randint(20, 1500)
                 proxy_context.tunnel_status_code = proxy_context.status_code
                 client_http.status_code = proxy_context.status_code
-                client_http.status_msg = (
-                    "Forbidden" if proxy_context.status_code == 403 else "Proxy Error"
+                client_http.status_msg = proxy_connect_status_message(
+                    proxy_context.status_code,
+                    proxy_context.host,
+                    proxy_context.user_agent,
+                    time,
                 )
                 client_http.response_body_len = 0
 
@@ -8368,8 +8388,7 @@ class ActivityGenerator:
                     facility=10,
                     severity=6,
                     message=(
-                        f"Connection from {source_ip} port {src_port}"
-                        f' on {target_system.ip} port 22 rdomain ""'
+                        f"Connection from {source_ip} port {src_port} on {target_system.ip} port 22"
                     ),
                 ),
             )
@@ -9376,25 +9395,7 @@ class ActivityGenerator:
         # Occasional resolver search-suffix mistakes/background discovery probes.
         # Keep this low-volume and avoid doubling an already-qualified internal name.
         if rng.random() < 0.05:
-            suffix_queries: list[str] = []
-            if (
-                hostname
-                and "." in hostname
-                and not hostname.endswith(f".{ad_domain}")
-                and not hostname.endswith(".local")
-            ):
-                suffix_queries.append(f"{hostname}.{ad_domain}")
-            nxdomain_queries = [
-                f"wpad.{ad_domain}",
-                "wpad.local",
-                "wpad",
-                f"isatap.{ad_domain}",
-                "isatap",
-                f"_ldap._tcp.Default-First-Site-Name._sites.{ad_domain}",
-                f"oldserver.{ad_domain}",
-                f"printer01.{ad_domain}",
-            ]
-            nxdomain_queries = suffix_queries + nxdomain_queries
+            nxdomain_queries = _dns_nxdomain_companion_queries(hostname, ad_domain)
             nx_query = rng.choice(nxdomain_queries)
             nx_time = dns_time - timedelta(milliseconds=rng.randint(1, 10))
             nx_is_internal = _dns_is_internal_name(nx_query, ad_domain) or nx_query in {

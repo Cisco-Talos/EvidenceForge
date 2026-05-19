@@ -110,6 +110,7 @@ certificate_chains:
         - "CN=Baltimore CyberTrust Root*"
         - "CN=GlobalSign Root CA*"
         - "CN=GlobalSign Root R3*"
+        - "CN=GlobalSign Atlas R3*"
         - "CN=USERTrust RSA Certification Authority*"
         - "CN=Enterprise Root CA*"
       issuer_family: rsa_public_ca

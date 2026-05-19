@@ -22,7 +22,9 @@
 
 """Tests for the Cisco ASA firewall log parser."""
 
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from evidenceforge.evaluation.parsers.cisco_asa import CiscoAsaParser
 
@@ -31,6 +33,7 @@ class TestCanParse:
     def test_matches_cisco_asa_log(self):
         parser = CiscoAsaParser()
         assert parser.can_parse(Path("fw01/cisco_asa.log")) is True
+        assert parser.can_parse(Path("fw01/2026/cisco_asa.log")) is True
 
     def test_rejects_other_files(self):
         parser = CiscoAsaParser()
@@ -288,3 +291,37 @@ class TestMalformedLines:
         parser = CiscoAsaParser()
         records = list(parser.parse_file(log))
         assert len(records) == 0
+
+
+class TestTimestampYear:
+    def test_parent_year_overrides_current_year(self, tmp_path):
+        log = tmp_path / "fw01" / "2024" / "cisco_asa.log"
+        log.parent.mkdir(parents=True)
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection "
+            "100043 for inside:10.0.10.50/54322 (10.0.10.50/54322) to "
+            "outside:8.8.8.8/53 (8.8.8.8/53)\n"
+        )
+
+        records = list(CiscoAsaParser().parse_file(log))
+
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2024
+
+    def test_flat_layout_falls_back_to_scenario_year(self, tmp_path):
+        log = tmp_path / "fw01" / "cisco_asa.log"
+        log.parent.mkdir()
+        log.write_text(
+            "<166>Jun 15 14:23:05 fw01 %ASA-6-302015: Built outbound UDP connection "
+            "100043 for inside:10.0.10.50/54322 (10.0.10.50/54322) to "
+            "outside:8.8.8.8/53 (8.8.8.8/53)\n"
+        )
+        parser = CiscoAsaParser()
+        parser.scenario = SimpleNamespace(
+            time_window=SimpleNamespace(start=datetime(2025, 12, 31, 23, 59, 0))
+        )
+
+        records = list(parser.parse_file(log))
+
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2025

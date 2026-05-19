@@ -42,11 +42,21 @@ from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
+from evidenceforge.generation.emitters.syslog_family import (
+    make_syslog_family_route_key,
+    sanitize_syslog_family_route_key,
+    syslog_family_writer_path,
+)
 from evidenceforge.generation.emitters.windows import (
     _normalize_windows_time_created,
     _subject_domain,
 )
 from evidenceforge.generation.emitters.windows_event import format_windows_system_time
+from evidenceforge.generation.emitters.windows_snare import (
+    WINDOWS_SYSMON_SNARE_FILENAME,
+    render_windows_sysmon_snare_syslog,
+)
+from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import ensure_utc
@@ -1632,6 +1642,7 @@ class SysmonEventEmitter(LogEmitter):
         self._base_dir = output_path.parent if self._direct_file_mode else output_path
         self._direct_file_path = output_path if self._direct_file_mode else None
         self._host_writers: dict[str, _SingleHostWriter] = {}
+        self._snare_writers: dict[str, _SingleHostWriter] = {}
         self._host_writers_lock = Lock()
 
         super().__init__(format_def, output_path, buffer_size, threaded)
@@ -1661,6 +1672,34 @@ class SysmonEventEmitter(LogEmitter):
             if header:
                 writer.write_header(header)
             self._host_writers[safe_host] = writer
+            return writer
+
+    def _get_snare_writer(self, host_fqdn: str, timestamp: datetime) -> _SingleHostWriter:
+        route_key = make_syslog_family_route_key(
+            host_fqdn or "default",
+            timestamp,
+            direct_file_mode=self._direct_file_mode,
+        )
+        safe_route_key = sanitize_syslog_family_route_key(route_key)
+        writer = self._snare_writers.get(safe_route_key)
+        if writer is not None:
+            return writer
+        with self._host_writers_lock:
+            writer = self._snare_writers.get(safe_route_key)
+            if writer is not None:
+                return writer
+            if self._direct_file_path is not None:
+                path = self._direct_file_path.with_name(WINDOWS_SYSMON_SNARE_FILENAME)
+            else:
+                path = syslog_family_writer_path(
+                    base_dir=self._base_dir,
+                    safe_route_key=safe_route_key,
+                    log_filename=WINDOWS_SYSMON_SNARE_FILENAME,
+                    direct_file_path=None,
+                    flat_filename=WINDOWS_SYSMON_SNARE_FILENAME,
+                )
+            writer = _SingleHostWriter(path, self.buffer_size)
+            self._snare_writers[safe_route_key] = writer
             return writer
 
     def _buffer_event(self, rendered: str) -> None:
@@ -1751,9 +1790,14 @@ class SysmonEventEmitter(LogEmitter):
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
         for event in self._event_dicts:
-            rendered = self._render_event(event)
             host_fqdn = event.get("Computer", "")
-            self._get_host_writer(host_fqdn).write(rendered)
+            snare_timestamp = event.get("TimeCreated")
+            if self.output_target == OutputTarget.SOF_ELK and isinstance(snare_timestamp, datetime):
+                snare_rendered = render_windows_sysmon_snare_syslog(event)
+                self._get_snare_writer(host_fqdn, snare_timestamp).write(snare_rendered)
+            elif self.output_target == OutputTarget.DEFAULT:
+                rendered = self._render_event(event)
+                self._get_host_writer(host_fqdn).write(rendered)
 
         self._event_dicts.clear()
 
@@ -1880,6 +1924,8 @@ class SysmonEventEmitter(LogEmitter):
         with self._host_writers_lock:
             for writer in self._host_writers.values():
                 writer.flush()
+            for writer in self._snare_writers.values():
+                writer.flush()
 
     def close(self) -> None:
         if self.threaded:
@@ -1893,10 +1939,14 @@ class SysmonEventEmitter(LogEmitter):
             writer.flush()
             if footer and writer.event_count > 0:
                 writer.write_footer(footer)
+        for writer in self._snare_writers.values():
+            writer.flush()
 
     @property
     def event_count(self) -> int:
-        return sum(w.event_count for w in self._host_writers.values())
+        return sum(w.event_count for w in self._host_writers.values()) + sum(
+            w.event_count for w in self._snare_writers.values()
+        )
 
     @event_count.setter
     def event_count(self, value: int) -> None:

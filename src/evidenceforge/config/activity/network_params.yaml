@@ -124,3 +124,25 @@ dns_tunnel_rcode_weights:
   NXDOMAIN: 5
   SERVFAIL: 2
   REFUSED: 1
+
+proxy_connect_status_messages:
+  200:
+    - "Connection Established"
+  403:
+    - "Forbidden"
+    - "Access Denied"
+  407:
+    - "Proxy Authentication Required"
+    - "Authentication Required"
+  502:
+    - "Bad Gateway"
+    - "Upstream Connection Failed"
+    - "Connection Failed"
+  503:
+    - "Service Unavailable"
+    - "No Healthy Upstream"
+    - "Connection Limit Exceeded"
+  504:
+    - "Gateway Timeout"
+    - "Upstream Timeout"
+    - "Connection Timed Out"

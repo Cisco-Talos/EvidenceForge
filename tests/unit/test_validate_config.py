@@ -660,6 +660,28 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_proxy_connect_status_messages(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "proxy_connect_status_messages": {407: []},
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (proxy_connect_status_messages)"
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_dns_tunnel_rcode_weight_overflow(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 

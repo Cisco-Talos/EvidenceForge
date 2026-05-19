@@ -119,7 +119,7 @@ class ParseabilityScorer(DimensionScorer):
         """Spec conformance: parse errors + strict-mode validation failures.
 
         Counts records where the parser returned errors OR the strict validator
-        (RFC 5424 syslog with legacy fallback, Zeek typed columns, eCAR schema, Windows XML)
+        (RFC3164 syslog with legacy fallback, Zeek typed columns, eCAR schema, Windows XML)
         rejected
         the record. These failures indicate a downstream parser would reject the
         record entirely.

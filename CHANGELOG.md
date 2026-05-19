@@ -4,6 +4,44 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.8.0 (2026-05-19)
+
+This minor release adds target-aware output rendering so a single scenario can generate
+SIEM-neutral default output or SOF-ELK-compatible file layouts without changing scenario YAML.
+The branch includes `feat:` commits, so the version moves from `0.7.2` to `0.8.0` under the
+pre-1.0 semver policy.
+
+**Target-aware rendering**
+
+- Added `eforge generate --target default|sof-elk`, `OUTPUT_TARGET.txt`, explicit per-format
+  target policy, and evaluation support that reads target metadata while keeping missing markers
+  compatible with legacy/default datasets (`5d5d25b`).
+- Added shared syslog-family rendering helpers so default Linux syslog remains flat RFC5424,
+  while the SOF-ELK target can render RFC3164 year-partitioned Linux syslog and Cisco ASA output
+  through one source-native envelope path (`d6b859c`, `5d5d25b`).
+- Added Windows Security and Sysmon Snare-over-RFC3164 rendering for the SOF-ELK target while
+  preserving XML-only output for the default target (`69e053a`, `5d5d25b`).
+
+**Source-native compatibility and validation**
+
+- Tuned Linux SSH/syslog message realism for the target-aware syslog path without bringing in the
+  external parser pipeline (`a6725f6`).
+- Preserved additional source-native fixes from `dev` before release: ECDSA CA key metadata,
+  eCAR login `LogonType`, Active Directory site SRV lookup handling, and proxy CONNECT status
+  text diversification (`2c061b0`, `8d22cde`, `60cec0b`, `b04f293`).
+- Documented the extraction boundary and recorded the full slow-enabled validation pass
+  (`0731212`, `dadb742`).
+
+**Validation**
+
+- Focused target/rendering/eval checks passed: `242 passed`.
+- Full normal suite passed: `uv run pytest --no-cov` completed with `3292 passed`, `37 skipped`.
+- Slow release lane passed: `uv run pytest --include-slow -m slow --no-cov --durations=20`
+  completed with `13 passed`, `1 skipped`, `3306 deselected`.
+- Full slow-enabled suite passed: `uv run pytest --include-slow --no-cov` completed with
+  `3296 passed`, `24 skipped`.
+- Ruff checks passed with `uv run ruff check .` and `uv run ruff format --check .`.
+
 ## v0.7.2 (2026-05-18)
 
 This patch release packages the final automated PR review integration batch after v0.7.1. The branch contains only `fix:`, `test:`, and `docs:` work since the prior version bump, so the version moves from `0.7.1` to `0.7.2` under the pre-1.0 semver policy.
