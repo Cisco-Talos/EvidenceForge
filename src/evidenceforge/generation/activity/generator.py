@@ -2480,6 +2480,7 @@ class ActivityGenerator:
             tuple[str, str, int, str, str], _HttpPersistentConnection
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
+        self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
@@ -2928,6 +2929,123 @@ class ActivityGenerator:
         src_port = _ephemeral_port(rng, os_category)
         self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
         return src_port
+
+    @staticmethod
+    def _kerberos_port_key(source_ip: str, dc_hostname: str) -> tuple[str, str]:
+        """Return the source/DC key used for short Kerberos TCP exchanges."""
+        return (source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."))
+
+    @staticmethod
+    def _is_domain_controller_system(system: Any | None) -> bool:
+        """Return whether a system is a domain controller."""
+        if system is None:
+            return False
+        roles = set(getattr(system, "roles", []) or [])
+        services = set(getattr(system, "services", []) or [])
+        return (
+            "domain_controller" in roles
+            or getattr(system, "type", "") == "domain_controller"
+            or "ad-ds" in services
+        )
+
+    def _dc_system_for_ip(self, ip: str) -> Any | None:
+        """Resolve a domain controller system by IP address."""
+        ip_to_system = getattr(self, "_ip_to_system", {})
+        system = ip_to_system.get(ip)
+        if self._is_domain_controller_system(system):
+            return system
+        dc_systems = getattr(self, "_dc_systems", [])
+        if isinstance(dc_systems, dict):
+            dc_systems = dc_systems.values()
+        for candidate in dc_systems:
+            if getattr(candidate, "ip", "") == ip and self._is_domain_controller_system(candidate):
+                return candidate
+        return None
+
+    def _dc_system_for_hostname(self, dc_hostname: str) -> Any | None:
+        """Resolve a domain controller system by hostname or FQDN."""
+        system = self._system_for_hostname(dc_hostname)
+        if self._is_domain_controller_system(system):
+            return system
+        wanted = dc_hostname.lower().rstrip(".")
+        dc_systems = getattr(self, "_dc_systems", [])
+        if isinstance(dc_systems, dict):
+            dc_systems = dc_systems.values()
+        for candidate in dc_systems:
+            candidate_host = str(getattr(candidate, "hostname", "") or "").lower().rstrip(".")
+            ad_domain = str(getattr(self, "_ad_domain", "") or "").lower().rstrip(".")
+            candidate_fqdn = (
+                f"{candidate_host}.{ad_domain}"
+                if candidate_host and ad_domain and "." not in candidate_host
+                else candidate_host
+            )
+            if wanted in {candidate_host, candidate_fqdn} and self._is_domain_controller_system(
+                candidate
+            ):
+                return candidate
+        return None
+
+    def _find_reserved_kerberos_source_port(
+        self,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        *,
+        window_seconds: float = 2.0,
+    ) -> int | None:
+        """Return a nearby reserved Kerberos source port for this source/DC pair."""
+        if not source_ip or source_ip == "-" or not dc_hostname:
+            return None
+        key = self._kerberos_port_key(source_ip, dc_hostname)
+        current = time.timestamp()
+        reservations = [
+            (seen_at, port)
+            for seen_at, port in self._kerberos_source_port_reservations.get(key, [])
+            if abs(current - seen_at) <= window_seconds
+        ]
+        if not reservations:
+            return None
+        return min(reservations, key=lambda item: abs(current - item[0]))[1]
+
+    def _reserve_kerberos_source_port(
+        self,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        source_port: int | None = None,
+    ) -> int:
+        """Reserve one TCP source port across nearby Kerberos audit and flow events."""
+        if not source_ip or source_ip == "-" or not dc_hostname:
+            return 0
+
+        reserved = self._find_reserved_kerberos_source_port(source_ip, dc_hostname, time)
+        if reserved is not None and source_port is None:
+            source_port = reserved
+        if source_port is None:
+            dc_system = self._dc_system_for_hostname(dc_hostname)
+            dc_ip = str(getattr(dc_system, "ip", "") or "")
+            if dc_ip:
+                source_port = self._allocate_ephemeral_port(
+                    source_ip,
+                    dc_ip,
+                    88,
+                    "tcp",
+                    time,
+                    self._os_for_ip(source_ip),
+                )
+            else:
+                source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
+
+        key = self._kerberos_port_key(source_ip, dc_hostname)
+        current = time.timestamp()
+        recent = [
+            (seen_at, port)
+            for seen_at, port in self._kerberos_source_port_reservations.get(key, [])
+            if abs(current - seen_at) <= 30.0
+        ]
+        recent.append((current, source_port))
+        self._kerberos_source_port_reservations[key] = recent[-16:]
+        return source_port
 
     def _disambiguate_icmp_observation_time(
         self,
@@ -5173,6 +5291,7 @@ class ActivityGenerator:
                     dc_hostname=dc_system.hostname,
                     time=krb_time,
                     status="0x18",  # KDC_ERR_PREAUTH_FAILED
+                    emit_connection=True,
                 )
 
         self._maybe_emit_failed_logon_network_connection(
@@ -6653,6 +6772,7 @@ class ActivityGenerator:
         self,
         *,
         src_ip: str,
+        src_port: int,
         dst_ip: str,
         time: datetime,
         dst_port: int,
@@ -6666,27 +6786,13 @@ class ActivityGenerator:
         if source_system is None:
             return
 
-        ip_to_system = getattr(self, "_ip_to_system", {})
-        dc_system = ip_to_system.get(dst_ip)
+        dc_system = self._dc_system_for_ip(dst_ip)
         if dc_system is None:
-            dc_system = next(
-                (system for system in getattr(self, "_dc_systems", []) if system.ip == dst_ip),
-                None,
-            )
-        if dc_system is None:
-            return
-        dc_roles = set(getattr(dc_system, "roles", []) or [])
-        dc_services = set(getattr(dc_system, "services", []) or [])
-        is_dc = (
-            "domain_controller" in dc_roles
-            or getattr(dc_system, "type", "") == "domain_controller"
-            or "ad-ds" in dc_services
-        )
-        if not is_dc:
             return
 
         dc_hostname = dc_system.hostname
-        if self._has_recent_kerberos_audit(src_ip, dc_hostname, time):
+        reserved_port = self._find_reserved_kerberos_source_port(src_ip, dc_hostname, time)
+        if self._has_recent_kerberos_audit(src_ip, dc_hostname, time) and reserved_port == src_port:
             return
 
         rng = random.Random(
@@ -6705,6 +6811,7 @@ class ActivityGenerator:
             source_ip=src_ip,
             dc_hostname=dc_hostname,
             time=tgt_time,
+            source_port=src_port,
         )
         service_name = rng.choices(
             [
@@ -6722,6 +6829,7 @@ class ActivityGenerator:
             source_ip=src_ip,
             dc_hostname=dc_hostname,
             time=tgs_time,
+            source_port=src_port,
         )
 
     def generate_connection(
@@ -7436,17 +7544,36 @@ class ActivityGenerator:
                 if not http_application_layer_only:
                     http = replace(http, trans_depth=1)
 
+        kerberos_dc_hostname = None
+        if proto == "tcp" and dst_port == 88:
+            kerberos_dc = self._dc_system_for_ip(dst_ip)
+            if kerberos_dc is not None:
+                kerberos_dc_hostname = str(getattr(kerberos_dc, "hostname", "") or "")
+
         if proto == "icmp":
             src_port = 0
             dst_port = 0
         elif src_port is None:
-            # Determine source OS for correct ephemeral port range
-            _src_os = "windows"
-            if resolved_source_system:
-                _src_os = _get_os_category(resolved_source_system.os)
-            src_port = self._allocate_ephemeral_port(src_ip, dst_ip, dst_port, proto, time, _src_os)
+            if kerberos_dc_hostname:
+                src_port = self._find_reserved_kerberos_source_port(
+                    src_ip,
+                    kerberos_dc_hostname,
+                    time,
+                )
+                if src_port is not None:
+                    self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
+            if src_port is None:
+                # Determine source OS for correct ephemeral port range
+                _src_os = "windows"
+                if resolved_source_system:
+                    _src_os = _get_os_category(resolved_source_system.os)
+                src_port = self._allocate_ephemeral_port(
+                    src_ip, dst_ip, dst_port, proto, time, _src_os
+                )
         else:
             self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
+        if kerberos_dc_hostname and src_port is not None and src_port > 0:
+            self._reserve_kerberos_source_port(src_ip, kerberos_dc_hostname, time, src_port)
 
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53:
             dns_pid = self._infer_connection_pid(resolved_source_system, service, dst_port, proto)
@@ -7894,6 +8021,7 @@ class ActivityGenerator:
 
         self._emit_dc_audit_for_kerberos_connection(
             src_ip=src_ip,
+            src_port=src_port,
             dst_ip=dst_ip,
             time=time,
             dst_port=dst_port,
@@ -10852,6 +10980,7 @@ class ActivityGenerator:
         dc_hostname: str,
         time: datetime,
         domain: str = "",
+        source_port: int | None = None,
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
@@ -10862,6 +10991,12 @@ class ActivityGenerator:
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_success_fields
 
         tgt_fields = pick_tgt_success_fields(rng, domain.lower())
+        source_port = self._reserve_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port,
+        )
 
         event = SecurityEvent(
             timestamp=time,
@@ -10880,7 +11015,7 @@ class ActivityGenerator:
                 cert_serial_number=tgt_fields["cert_serial_number"],
                 cert_thumbprint=tgt_fields["cert_thumbprint"],
                 source_ip=f"::ffff:{source_ip}",
-                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
+                source_port=source_port,
             ),
         )
 
@@ -10894,12 +11029,19 @@ class ActivityGenerator:
         dc_hostname: str,
         time: datetime,
         domain: str = "",
+        source_port: int | None = None,
     ) -> None:
         """Generate Kerberos TGT renewal event (4770) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
+        source_port = self._reserve_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port,
+        )
 
         event = SecurityEvent(
             timestamp=time,
@@ -10914,7 +11056,7 @@ class ActivityGenerator:
                 ticket_options=rng.choices(["0x2", "0x60810010"], weights=[80, 20], k=1)[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
-                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
+                source_port=source_port,
             ),
         )
 
@@ -10929,12 +11071,19 @@ class ActivityGenerator:
         dc_hostname: str,
         time: datetime,
         domain: str = "",
+        source_port: int | None = None,
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
 
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
+        source_port = self._reserve_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port,
+        )
 
         event = SecurityEvent(
             timestamp=time,
@@ -10958,7 +11107,7 @@ class ActivityGenerator:
                 )[0],
                 encryption_type=rng.choices(["0x12", "0x11", "0x17"], weights=[70, 15, 15], k=1)[0],
                 source_ip=f"::ffff:{source_ip}",
-                source_port=_ephemeral_port(rng, self._os_for_ip(source_ip)),
+                source_port=source_port,
             ),
         )
 
@@ -11548,6 +11697,8 @@ class ActivityGenerator:
         dc_hostname: str,
         time: datetime,
         status: str = "0x18",
+        source_port: int | None = None,
+        emit_connection: bool = False,
     ) -> None:
         """Generate Kerberos pre-authentication failed event (4771) on DC."""
         rng = _get_rng()
@@ -11560,7 +11711,11 @@ class ActivityGenerator:
         normalized_source_ip = (
             f"::ffff:{source_ip}" if has_source_ip and ":" not in source_ip else source_ip
         )
-        source_port = _ephemeral_port(rng, self._os_for_ip(source_ip)) if has_source_ip else 0
+        source_port = (
+            self._reserve_kerberos_source_port(source_ip, dc_hostname, time, source_port)
+            if has_source_ip
+            else 0
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="kerberos_preauth_failed",
@@ -11579,6 +11734,29 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
+
+        if not emit_connection or not has_source_ip:
+            return
+        dc_system = self._dc_system_for_hostname(dc_hostname)
+        dc_ip = str(getattr(dc_system, "ip", "") or "")
+        if not dc_ip:
+            return
+        source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
+        self.generate_connection(
+            src_ip=source_ip,
+            dst_ip=dc_ip,
+            time=time,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=rng.uniform(0.001, 0.04),
+            orig_bytes=rng.randint(180, 900),
+            resp_bytes=rng.randint(80, 500),
+            src_port=source_port,
+            source_system=source_system,
+            conn_state=rng.choices(["SF", "RSTR"], weights=[82, 18], k=1)[0],
+            emit_dns=False,
+        )
 
     def _get_user_logon_id(
         self,

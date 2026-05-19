@@ -1051,6 +1051,92 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    @classmethod
+    def _normalize_process_reference_order(cls, lines: list[str]) -> list[str]:
+        """Move process-owned telemetry after visible PROCESS/CREATE rows."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        create_ms_by_object_id: dict[str, int] = {}
+        create_ms_by_pid: dict[int, int] = {}
+        for record in records:
+            if (
+                record is None
+                or record.get("object") != "PROCESS"
+                or record.get("action") != "CREATE"
+            ):
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            object_id = record.get("objectID")
+            if object_id:
+                create_ms_by_object_id[str(object_id)] = max(
+                    create_ms_by_object_id.get(str(object_id), 0),
+                    timestamp_ms,
+                )
+            pid = cls._ecar_int(record.get("pid"))
+            if pid > 0:
+                create_ms_by_pid[pid] = max(create_ms_by_pid.get(pid, 0), timestamp_ms)
+
+        def referenced_process_ids(record: dict[str, Any]) -> set[str]:
+            refs: set[str] = set()
+            actor_id = record.get("actorID")
+            if actor_id:
+                refs.add(str(actor_id))
+            if record.get("object") == "PROCESS" and record.get("action") == "OPEN":
+                object_id = record.get("objectID")
+                if object_id:
+                    refs.add(str(object_id))
+            props = record.get("properties") or {}
+            for key in (
+                "target_process_uuid",
+                "target_process_object_id",
+                "source_process_object_id",
+            ):
+                value = props.get(key)
+                if value:
+                    refs.add(str(value))
+            return refs
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS" and record.get("action") == "CREATE":
+                normalized.append(line)
+                continue
+
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            referenced_create_ms = [
+                create_ms_by_object_id[process_id]
+                for process_id in referenced_process_ids(record)
+                if process_id in create_ms_by_object_id
+            ]
+            pid = cls._ecar_int(record.get("pid"))
+            if pid > 0 and pid in create_ms_by_pid:
+                referenced_create_ms.append(create_ms_by_pid[pid])
+            if referenced_create_ms:
+                minimum_ms = max(referenced_create_ms)
+                if timestamp_ms <= minimum_ms:
+                    seed_text = ":".join(
+                        [
+                            str(record.get("id", "")),
+                            str(record.get("object", "")),
+                            str(record.get("action", "")),
+                            str(record.get("objectID", "")),
+                            str(record.get("actorID", "")),
+                        ]
+                    )
+                    stable_delay_ms = 1 + (sum(ord(ch) for ch in seed_text) % 37)
+                    record["timestamp_ms"] = minimum_ms + stable_delay_ms
+                    line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
     @staticmethod
     def _semantic_dedup_key(record: dict[str, Any]) -> str:
         """Return an eCAR semantic identity that ignores generated UUID fields."""
@@ -1087,6 +1173,7 @@ class EcarEmitter(HostMultiplexEmitter):
             for writer in writers:
                 with writer._lock:
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
+                    writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
         super().flush(force=force)

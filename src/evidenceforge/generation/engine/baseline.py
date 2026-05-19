@@ -1659,6 +1659,7 @@ class BaselineMixin:
                     dc_hostname=dc.hostname,
                     time=event_time,
                     status="0x12",  # KDC_ERR_CLIENT_REVOKED (disabled account)
+                    emit_connection=True,
                 )
 
             # Pattern 3: Scheduled task failure (~3%/hour)
@@ -1840,6 +1841,7 @@ class BaselineMixin:
                         dc_hostname=dc.hostname,
                         time=event_time,
                         status="0x18",  # KDC_ERR_PREAUTH_FAILED (bad password)
+                        emit_connection=True,
                     )
 
     def _generate_lateral_movement_noise(self, current_hour: datetime) -> None:
@@ -5561,6 +5563,7 @@ class BaselineMixin:
                     cycle_lo, cycle_hi = _dc_kerberos_cycle_range(dc_kerberos_multiplier)
                     num_cycles = rng.randint(cycle_lo, cycle_hi)
                     base_interval = 3600 / (num_cycles + 1)
+                    krb_pid = self._system_pids.get(client.hostname, {}).get("lsass", -1)
                     for i in range(num_cycles):
                         offset = base_interval * (i + 1) + rng.gauss(0, base_interval * 0.15)
                         offset = max(0, min(3599, offset))
@@ -5573,6 +5576,20 @@ class BaselineMixin:
                             source_ip=client.ip,
                             dc_hostname=dc_hostname,
                             time=ts,
+                        )
+                        self.activity_generator.generate_connection(
+                            src_ip=client.ip,
+                            dst_ip=dc_ips[_dc_idx],
+                            time=ts,
+                            dst_port=88,
+                            proto="tcp",
+                            service="kerberos",
+                            duration=rng.uniform(0.001, 0.04),
+                            orig_bytes=rng.randint(180, 900),
+                            resp_bytes=rng.randint(80, 1500),
+                            source_system=client,
+                            pid=krb_pid,
+                            emit_dns=False,
                         )
                         if rng.random() < 0.22:
                             num_tgs = 0
@@ -5604,6 +5621,20 @@ class BaselineMixin:
                                 source_ip=client.ip,
                                 dc_hostname=dc_hostname,
                                 time=ts2,
+                            )
+                            self.activity_generator.generate_connection(
+                                src_ip=client.ip,
+                                dst_ip=dc_ips[_dc_idx],
+                                time=ts2,
+                                dst_port=88,
+                                proto="tcp",
+                                service="kerberos",
+                                duration=rng.uniform(0.001, 0.05),
+                                orig_bytes=rng.randint(180, 1100),
+                                resp_bytes=rng.randint(80, 2200),
+                                source_system=client,
+                                pid=krb_pid,
+                                emit_dns=False,
                             )
                         if rng.random() < 0.10:
                             ntlm_offset = _machine_account_ntlm_offset_seconds(offset, rng)

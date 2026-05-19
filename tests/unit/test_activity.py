@@ -2623,6 +2623,44 @@ class TestActivityGenerator:
         assert event.kerberos.source_ip == "-"
         assert event.kerberos.source_port == 0
 
+    def test_kerberos_preauth_failed_can_emit_matching_dc_flow(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Optional 4771 wire evidence should reuse the same source port."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WS-01",
+            ip="10.0.0.20",
+            os="Windows 11",
+            type="workstation",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_kerberos_preauth_failed(
+            test_user.username,
+            source.ip,
+            dc.hostname,
+            timestamp,
+            emit_connection=True,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        preauth = next(event for event in events if event.event_type == "kerberos_preauth_failed")
+        connection = next(event for event in events if event.event_type == "connection")
+        assert preauth.kerberos.source_port == connection.network.src_port
+        assert connection.network.dst_port == 88
+
     def test_system_process_create_uses_system_integrity_token_fields(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -4016,6 +4054,8 @@ class TestActivityGenerator:
         assert tgt.timestamp < connection.timestamp
         assert service.timestamp < connection.timestamp
         assert (connection.timestamp - tgt.timestamp).total_seconds() < 1
+        assert tgt.kerberos.source_port == connection.network.src_port
+        assert service.kerberos.source_port == connection.network.src_port
 
     def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters
@@ -4052,6 +4092,14 @@ class TestActivityGenerator:
             dc_hostname=dc.hostname,
             time=timestamp - timedelta(milliseconds=80),
         )
+        audit_events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        audit_ports = {
+            event.kerberos.source_port
+            for event in audit_events
+            if event.event_type in {"kerberos_tgt", "kerberos_service"}
+        }
         mock_emitters["windows_event_security"].emit.reset_mock()
 
         activity_gen.generate_connection(
@@ -4072,6 +4120,8 @@ class TestActivityGenerator:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         assert events == ["connection"]
+        connection = mock_emitters["windows_event_security"].emit.call_args_list[0][0][0]
+        assert audit_ports == {connection.network.src_port}
 
     def test_generate_connection_clamps_http_depth_for_one_request_connections(
         self, activity_gen, state_manager, mock_emitters
