@@ -272,6 +272,101 @@ programs:
       - "resolve transaction /{}"
       - "get-updates transaction /{}"
 
+  - app: fwupd
+    system_types: [workstation]
+    weight: 1
+    params:
+      device:
+        - "UEFI dbx"
+        - "System Firmware"
+        - "Thunderbolt Controller"
+        - "USB-C Dock"
+      metadata_age:
+        - "2"
+        - "6"
+        - "14"
+    messages:
+      - "metadata is {metadata_age} days old, scheduling refresh"
+      - "{device}: firmware version unchanged after LVFS metadata check"
+      - "{device}: no updates available"
+
+  - app: tracker-miner-fs-3
+    system_types: [workstation]
+    distro: ubuntu
+    weight: 1
+    params:
+      indexed_path:
+        - /home/admin/Documents
+        - /home/admin/Downloads
+        - /home/deploy/Documents
+        - /home/ubuntu/Documents
+      file_count:
+        - "12"
+        - "27"
+        - "43"
+        - "68"
+    messages:
+      - "Indexed {file_count} file(s) under {indexed_path}"
+      - "Miner finished crawling {indexed_path}"
+      - "Resetting tracker extract task after idle timeout {}"
+
+  - app: gnome-shell
+    system_types: [workstation]
+    distro: ubuntu
+    weight: 1
+    params:
+      extension_name:
+        - appindicatorsupport@rgcjonas.gmail.com
+        - ubuntu-dock@ubuntu.com
+        - desktop-icons@csoriano
+      monitor_id:
+        - "0"
+        - "1"
+      old_keysym:
+        - Super_L
+        - XF86AudioMute
+        - Print
+      new_keysym:
+        - Super_L
+        - XF86AudioRaiseVolume
+        - Print
+    messages:
+      - "Extension {extension_name} already enabled"
+      - "Window manager warning: Overwriting existing binding of keysym {old_keysym} with keysym {new_keysym}"
+      - "Monitor {monitor_id} configuration unchanged after hotplug event"
+
+  - app: cups-browsed
+    system_types: [workstation]
+    weight: 1
+    params:
+      printer_name:
+        - CORP-PRINT-01
+        - FRONTDESK-MFP
+        - FINANCE-MFP
+      queue_name:
+        - ipp_everywhere
+        - driverless
+    messages:
+      - "Created local queue {printer_name} ({queue_name})"
+      - "Printer {printer_name} was not found by DNS-SD, keeping stale queue for now"
+      - "Browse remote printer {printer_name} at {}"
+
+  - app: avahi-daemon
+    system_types: [workstation]
+    weight: 1
+    params:
+      service_name:
+        - "_ipp._tcp"
+        - "_ipps._tcp"
+        - "_workstation._tcp"
+      interface:
+        - ens160
+        - wlan0
+    messages:
+      - "Registering new address record for {interface}."
+      - "Service \"{service_name}\" successfully established."
+      - "Withdrawing address record for {interface}."
+
   - app: unattended-upgr
     distro: ubuntu
     system_types: [server]

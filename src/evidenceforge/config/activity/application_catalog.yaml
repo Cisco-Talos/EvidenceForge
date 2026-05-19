@@ -762,6 +762,390 @@ applications:
     categories: [query]
     personas: [developer, sysadmin]
 
+  # ===== Workstation-Normal Expansion Apps =====
+  - id: slack
+    display_name: "Slack"
+    platforms:
+      windows:
+        image_path: 'C:\Users\{username}\AppData\Local\slack\Slack.exe'
+        pe_metadata:
+          file_version: "4.38.125"
+          description: "Slack"
+          product: "Slack"
+          company: "Slack Technologies, LLC"
+          original_filename: "Slack.exe"
+        command_templates:
+          - '"C:\Users\{username}\AppData\Local\slack\Slack.exe" --process-start-args'
+          - '"C:\Users\{username}\AppData\Local\slack\Slack.exe" --startup'
+        children:
+          - '"C:\Users\{username}\AppData\Local\slack\Slack.exe" --type=renderer'
+          - '"C:\Users\{username}\AppData\Local\slack\Slack.exe" --type=utility --utility-sub-type=network.mojom.NetworkService'
+        loaded_modules:
+          - path: 'C:\Users\{username}\AppData\Local\slack\app-4.38.125\slack_elf.dll'
+            signature: "Slack Technologies, LLC"
+            pe_metadata:
+              file_version: "4.38.125"
+              description: "Slack ELF"
+              product: "Slack"
+              company: "Slack Technologies, LLC"
+              original_filename: "slack_elf.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winhttp.dll'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, project_manager, help_desk, default]
+    system_types: [workstation]
+
+  - id: zoom
+    display_name: "Zoom Workplace"
+    platforms:
+      windows:
+        image_path: 'C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe'
+        pe_metadata:
+          file_version: "6.0.11.39959"
+          description: "Zoom Meetings"
+          product: "Zoom Workplace"
+          company: "Zoom Video Communications, Inc."
+          original_filename: "Zoom.exe"
+        command_templates:
+          - '"C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe" --url=zoommtg://zoom.us/join?action=join&confno={small_int}'
+          - '"C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe" --background'
+        children:
+          - '"C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe" --type=renderer'
+          - '"C:\Users\{username}\AppData\Roaming\Zoom\bin\CptHost.exe" --host-process'
+        loaded_modules:
+          - path: 'C:\Users\{username}\AppData\Roaming\Zoom\bin\zVideoApp.dll'
+            signature: "Zoom Video Communications, Inc."
+            pe_metadata:
+              file_version: "6.0.11.39959"
+              description: "Zoom Video App"
+              product: "Zoom Workplace"
+              company: "Zoom Video Communications, Inc."
+              original_filename: "zVideoApp.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winmm.dll'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, intern, receptionist, help_desk, default]
+    system_types: [workstation]
+
+  - id: webex
+    display_name: "Cisco Webex"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Cisco Spark\Webex.exe'
+        pe_metadata:
+          file_version: "44.4.0.28421"
+          description: "Cisco Webex"
+          product: "Cisco Webex"
+          company: "Cisco Systems, Inc."
+          original_filename: "Webex.exe"
+        command_templates:
+          - '"C:\Program Files\Cisco Spark\Webex.exe" --url={url}'
+          - '"C:\Program Files\Cisco Spark\Webex.exe" --autostart'
+        children:
+          - '"C:\Program Files\Cisco Spark\CiscoCollabHost.exe" --type=renderer'
+          - '"C:\Program Files\Cisco Spark\CiscoCollabHost.exe" --type=gpu-process'
+        loaded_modules:
+          - path: 'C:\Program Files\Cisco Spark\WebexHost.dll'
+            signature: "Cisco Systems, Inc."
+            pe_metadata:
+              file_version: "44.4.0.28421"
+              description: "Cisco Webex Host"
+              product: "Cisco Webex"
+              company: "Cisco Systems, Inc."
+              original_filename: "WebexHost.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winhttp.dll'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, receptionist, help_desk, default]
+    system_types: [workstation]
+
+  - id: dropbox
+    display_name: "Dropbox"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files (x86)\Dropbox\Client\Dropbox.exe'
+        pe_metadata:
+          file_version: "199.4.6287"
+          description: "Dropbox"
+          product: "Dropbox"
+          company: "Dropbox, Inc."
+          original_filename: "Dropbox.exe"
+        command_templates:
+          - '"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /systemstartup'
+          - '"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /home'
+        children:
+          - '"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /firstrunupdate'
+        loaded_modules:
+          - path: 'C:\Program Files (x86)\Dropbox\Client\Qt6Core.dll'
+            signature: "Dropbox, Inc."
+            pe_metadata:
+              file_version: "6.5.3.0"
+              description: "Qt6 Core"
+              product: "Dropbox"
+              company: "Dropbox, Inc."
+              original_filename: "Qt6Core.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winhttp.dll'
+    categories: [user_app]
+    personas: [developer, analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, intern, help_desk, default]
+    system_types: [workstation]
+
+  - id: google_drive_desktop
+    display_name: "Google Drive for Desktop"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe'
+        pe_metadata:
+          file_version: "97.0.1.0"
+          description: "Google Drive"
+          product: "Google Drive"
+          company: "Google LLC"
+          original_filename: "GoogleDriveFS.exe"
+        command_templates:
+          - '"C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe" --startup'
+          - '"C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe" --user-data-dir="C:\Users\{username}\AppData\Local\Google\DriveFS"'
+        loaded_modules:
+          - path: 'C:\Program Files\Google\Drive File Stream\97.0.1.0\crashpad_handler.exe'
+            signature: "Google LLC"
+            pe_metadata:
+              file_version: "97.0.1.0"
+              description: "Crashpad Handler"
+              product: "Google Drive"
+              company: "Google LLC"
+              original_filename: "crashpad_handler.exe"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winhttp.dll'
+    categories: [user_app]
+    personas: [developer, analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, intern, help_desk, default]
+    system_types: [workstation]
+
+  - id: citrix_workspace
+    display_name: "Citrix Workspace"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files (x86)\Citrix\ICA Client\SelfServicePlugin\SelfService.exe'
+        pe_metadata:
+          file_version: "24.3.0.65"
+          description: "Citrix Workspace"
+          product: "Citrix Workspace"
+          company: "Cloud Software Group, Inc."
+          original_filename: "SelfService.exe"
+        command_templates:
+          - '"C:\Program Files (x86)\Citrix\ICA Client\SelfServicePlugin\SelfService.exe" -showAppPicker'
+          - '"C:\Program Files (x86)\Citrix\ICA Client\SelfServicePlugin\SelfService.exe" -poll'
+        loaded_modules:
+          - path: 'C:\Program Files (x86)\Citrix\ICA Client\wfapi.dll'
+            signature: "Cloud Software Group, Inc."
+            pe_metadata:
+              file_version: "24.3.0.65"
+              description: "Citrix ICA Client API"
+              product: "Citrix Workspace"
+              company: "Cloud Software Group, Inc."
+              original_filename: "wfapi.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+    categories: [user_app]
+    personas: [sysadmin, help_desk, accountant, analyst, legal_counsel, default]
+    system_types: [workstation]
+
+  - id: cisco_secure_client
+    display_name: "Cisco Secure Client"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe'
+        pe_metadata:
+          file_version: "5.1.4.74"
+          description: "Cisco Secure Client User Interface"
+          product: "Cisco Secure Client"
+          company: "Cisco Systems, Inc."
+          original_filename: "vpnui.exe"
+        command_templates:
+          - '"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe" -minimized'
+          - '"C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnui.exe"'
+        loaded_modules:
+          - path: 'C:\Program Files (x86)\Cisco\Cisco AnyConnect Secure Mobility Client\vpnapi.dll'
+            signature: "Cisco Systems, Inc."
+            pe_metadata:
+              file_version: "5.1.4.74"
+              description: "Cisco Secure Client API"
+              product: "Cisco Secure Client"
+              company: "Cisco Systems, Inc."
+              original_filename: "vpnapi.dll"
+          - path: 'C:\Windows\System32\rasapi32.dll'
+          - path: 'C:\Windows\System32\ws2_32.dll'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, help_desk, default]
+    system_types: [workstation]
+
+  - id: globalprotect
+    display_name: "GlobalProtect"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe'
+        pe_metadata:
+          file_version: "6.2.3.123"
+          description: "GlobalProtect Agent"
+          product: "GlobalProtect"
+          company: "Palo Alto Networks, Inc."
+          original_filename: "PanGPA.exe"
+        command_templates:
+          - '"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe"'
+          - '"C:\Program Files\Palo Alto Networks\GlobalProtect\PanGPA.exe" -silent'
+        loaded_modules:
+          - path: 'C:\Program Files\Palo Alto Networks\GlobalProtect\PanGpHip.dll'
+            signature: "Palo Alto Networks, Inc."
+            pe_metadata:
+              file_version: "6.2.3.123"
+              description: "GlobalProtect HIP"
+              product: "GlobalProtect"
+              company: "Palo Alto Networks, Inc."
+              original_filename: "PanGpHip.dll"
+          - path: 'C:\Windows\System32\rasapi32.dll'
+          - path: 'C:\Windows\System32\ws2_32.dll'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, help_desk, default]
+    system_types: [workstation]
+
+  - id: zscaler_client_connector
+    display_name: "Zscaler Client Connector"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Zscaler\ZSATray\ZSATray.exe'
+        pe_metadata:
+          file_version: "4.3.0.190"
+          description: "Zscaler Client Connector"
+          product: "Zscaler Client Connector"
+          company: "Zscaler, Inc."
+          original_filename: "ZSATray.exe"
+        command_templates:
+          - '"C:\Program Files\Zscaler\ZSATray\ZSATray.exe"'
+          - '"C:\Program Files\Zscaler\ZSATray\ZSATray.exe" /minimized'
+        loaded_modules:
+          - path: 'C:\Program Files\Zscaler\ZSATray\ZSACommon.dll'
+            signature: "Zscaler, Inc."
+            pe_metadata:
+              file_version: "4.3.0.190"
+              description: "Zscaler Common Library"
+              product: "Zscaler Client Connector"
+              company: "Zscaler, Inc."
+              original_filename: "ZSACommon.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winhttp.dll'
+    categories: [user_app]
+    personas: [developer, analyst, sysadmin, security_analyst, executive, hr, accountant, sales, marketing, legal_counsel, project_manager, help_desk, default]
+    system_types: [workstation]
+
+  - id: powerbi_desktop
+    display_name: "Microsoft Power BI Desktop"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Microsoft Power BI Desktop\bin\PBIDesktop.exe'
+        pe_metadata:
+          file_version: "2.128.952.0"
+          description: "Microsoft Power BI Desktop"
+          product: "Microsoft Power BI Desktop"
+          company: "Microsoft Corporation"
+          original_filename: "PBIDesktop.exe"
+        command_templates:
+          - '"C:\Program Files\Microsoft Power BI Desktop\bin\PBIDesktop.exe" "{spreadsheet_path}"'
+          - '"C:\Program Files\Microsoft Power BI Desktop\bin\PBIDesktop.exe" /safemode'
+        loaded_modules:
+          - path: 'C:\Program Files\Microsoft Power BI Desktop\bin\Microsoft.Mashup.Container.NetFX45.dll'
+            signature: "Microsoft Corporation"
+          - path: 'C:\Windows\System32\msodbcsql17.dll'
+            signature: "Microsoft Corporation"
+    categories: [user_app, query]
+    personas: [data_analyst, analyst, accountant, executive]
+    system_types: [workstation]
+
+  - id: tableau_desktop
+    display_name: "Tableau Desktop"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\Tableau\Tableau 2024.1\bin\tableau.exe'
+        pe_metadata:
+          file_version: "24.1.1321.0514"
+          description: "Tableau"
+          product: "Tableau Desktop"
+          company: "Tableau Software, LLC"
+          original_filename: "tableau.exe"
+        command_templates:
+          - '"C:\Program Files\Tableau\Tableau 2024.1\bin\tableau.exe" -DConnectPluginsPath="C:\Program Files\Tableau\Drivers"'
+          - '"C:\Program Files\Tableau\Tableau 2024.1\bin\tableau.exe" "{spreadsheet_path}"'
+        loaded_modules:
+          - path: 'C:\Program Files\Tableau\Tableau 2024.1\bin\TableauCommon.dll'
+            signature: "Tableau Software, LLC"
+            pe_metadata:
+              file_version: "24.1.1321.0514"
+              description: "Tableau Common"
+              product: "Tableau Desktop"
+              company: "Tableau Software, LLC"
+              original_filename: "TableauCommon.dll"
+          - path: 'C:\Windows\System32\msodbcsql17.dll'
+            signature: "Microsoft Corporation"
+    categories: [user_app, query]
+    personas: [data_analyst, analyst, accountant, executive]
+    system_types: [workstation]
+
+  - id: postman
+    display_name: "Postman"
+    platforms:
+      windows:
+        image_path: 'C:\Users\{username}\AppData\Local\Postman\Postman.exe'
+        pe_metadata:
+          file_version: "11.2.14"
+          description: "Postman"
+          product: "Postman"
+          company: "Postman, Inc."
+          original_filename: "Postman.exe"
+        command_templates:
+          - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --process-start-args'
+          - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --url={external_api_url}'
+        children:
+          - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --type=renderer'
+          - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --type=utility --utility-sub-type=network.mojom.NetworkService'
+        loaded_modules:
+          - path: 'C:\Users\{username}\AppData\Local\Postman\app-11.2.14\Postman.dll'
+            signature: "Postman, Inc."
+            pe_metadata:
+              file_version: "11.2.14"
+              description: "Postman"
+              product: "Postman"
+              company: "Postman, Inc."
+              original_filename: "Postman.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+          - path: 'C:\Windows\System32\winhttp.dll'
+    categories: [user_app, code]
+    personas: [developer, sysadmin, security_analyst]
+    system_types: [workstation]
+
+  - id: dbeaver
+    display_name: "DBeaver"
+    platforms:
+      windows:
+        image_path: 'C:\Program Files\DBeaver\dbeaver.exe'
+        pe_metadata:
+          file_version: "24.0.5"
+          description: "DBeaver"
+          product: "DBeaver"
+          company: "DBeaver Corp"
+          original_filename: "dbeaver.exe"
+        command_templates:
+          - '"C:\Program Files\DBeaver\dbeaver.exe" -data "C:\Users\{username}\AppData\Roaming\DBeaverData\workspace6"'
+          - '"C:\Program Files\DBeaver\dbeaver.exe" -nosplash'
+        loaded_modules:
+          - path: 'C:\Program Files\DBeaver\plugins\org.jkiss.dbeaver.model.jdbc.dll'
+            signature: "DBeaver Corp"
+            pe_metadata:
+              file_version: "24.0.5"
+              description: "DBeaver JDBC Model"
+              product: "DBeaver"
+              company: "DBeaver Corp"
+              original_filename: "org.jkiss.dbeaver.model.jdbc.dll"
+          - path: 'C:\Windows\System32\ws2_32.dll'
+    categories: [user_app, query]
+    personas: [developer, data_analyst, analyst, sysadmin]
+    system_types: [workstation]
+
   # --- Process-network mapping support entries ---
   # These apps are referenced by process_network_map.yaml for service→exe resolution.
 

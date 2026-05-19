@@ -193,7 +193,15 @@ class TestBaselineLinuxBashHistory:
         assert "ps" in pool_str
 
         # Role-specific pools should exist and be non-empty
-        for role in ("sysadmin", "dba", "webadmin", "developer", "security"):
+        for role in (
+            "sysadmin",
+            "dba",
+            "webadmin",
+            "developer",
+            "security",
+            "help_desk",
+            "data_analyst",
+        ):
             pool = commands.get(role, [])
             assert len(pool) >= 5, f"{role} command pool has only {len(pool)} commands"
 
@@ -204,6 +212,13 @@ class TestBaselineLinuxBashHistory:
         typo_model = commands.get("typo_model", {})
         assert 0 <= typo_model.get("max_rate", -1) <= 1
         assert typo_model.get("short_history_max_typos", -1) <= 1
+
+    def test_stock_workstation_personas_use_dedicated_bash_pools(self):
+        """Help desk and data analyst personas should hit their own expanded pools."""
+        from evidenceforge.generation.activity.bash_commands import _get_role_pool
+
+        assert _get_role_pool("help_desk", "generic") == "help_desk"
+        assert _get_role_pool("data_analyst", "generic") == "data_analyst"
 
     def test_short_history_typo_cap_suppresses_extra_typos(self, monkeypatch):
         """Short bash histories should not accumulate multiple generated typos."""

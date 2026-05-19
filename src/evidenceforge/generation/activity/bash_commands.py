@@ -119,6 +119,12 @@ def _get_role_pool(persona: str, server_role: str) -> str:
     data = load_bash_commands()
     persona_lower = persona.lower() if persona else ""
 
+    # These stock personas now have their own workstation-normal pools.
+    # Keep developer and broad analyst aliases below because their server-role
+    # context still intentionally switches to dba/webadmin pools.
+    if persona_lower in {"help_desk", "data_analyst"} and persona_lower in data:
+        return persona_lower
+
     # Built-in alias mappings that depend on server_role context
     if persona_lower in ("developer",):
         if server_role == "db":

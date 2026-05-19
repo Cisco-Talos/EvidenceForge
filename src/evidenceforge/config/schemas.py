@@ -1484,6 +1484,7 @@ class ScheduledTaskEntry(BaseModel, extra="forbid"):
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
+    system_types: list[str] | None = None
 
 
 class SystemServiceEntry(BaseModel, extra="forbid"):

@@ -133,6 +133,69 @@ schedules:
     start_message: "Starting ua-timer.service - Ubuntu Advantage Timer."
     finish_message: "Finished ua-timer.service - Ubuntu Advantage Timer."
 
+  - service: packagekit-refresh
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 9
+    jitter_minutes: 180
+    distro: debian
+    host_probability: 0.55
+    process_path: "/usr/lib/packagekit/packagekitd"
+    start_message: "Starting packagekit.service - PackageKit Daemon."
+    finish_message: "packagekit.service: Deactivated successfully."
+    timer_message: "packagekit-background.timer: Triggering packagekit.service..."
+    detail_messages:
+      debian:
+        - "refresh-cache transaction completed"
+        - "get-updates transaction completed"
+        - "resolve transaction completed"
+
+  - service: fwupd-refresh
+    type: systemd_timer
+    frequency: weekly
+    typical_day: tuesday
+    typical_hour: 10
+    jitter_minutes: 240
+    distro: all
+    host_probability: 0.42
+    process_path: "/usr/libexec/fwupd/fwupd"
+    start_message: "Starting fwupd-refresh.service - Refresh fwupd metadata and update motd."
+    finish_message: "Finished fwupd-refresh.service - Refresh fwupd metadata and update motd."
+    detail_messages:
+      debian:
+        - "metadata refresh completed for lvfs"
+        - "firmware metadata signature verified"
+      rhel:
+        - "metadata refresh completed for lvfs"
+        - "firmware metadata signature verified"
+
+  - service: tracker-miner-fs
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 14
+    jitter_minutes: 300
+    distro: debian
+    host_probability: 0.45
+    process_path: "/usr/libexec/tracker-miner-fs-3"
+    start_message: "Starting tracker-miner-fs-3.service - Tracker file system data miner."
+    finish_message: "tracker-miner-fs-3.service: Deactivated successfully."
+    detail_messages:
+      debian:
+        - "Indexed filesystem changes under /home"
+        - "Completed incremental index of user documents"
+
+  - service: updatedb
+    type: systemd_timer
+    frequency: daily
+    typical_hour: 5
+    jitter_minutes: 90
+    distro: all
+    host_probability: 0.65
+    process_path: "/usr/bin/updatedb"
+    start_message: "Starting plocate-updatedb.service - Update the plocate database."
+    finish_message: "Finished plocate-updatedb.service - Update the plocate database."
+    timer_message: "plocate-updatedb.timer: Triggering plocate-updatedb.service..."
+
   - service: phpsessionclean
     type: systemd_timer
     frequency: 30min
