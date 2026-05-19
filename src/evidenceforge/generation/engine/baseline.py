@@ -435,7 +435,9 @@ def _module_matches_process(exe_name: str, module_path: str) -> bool:
     exe = exe_name.lower()
     path = module_path.lower()
     if "google\\chrome" in path:
-        return exe in {"chrome.exe", "msedge.exe"}
+        return exe == "chrome.exe"
+    if "microsoft\\edge" in path:
+        return exe == "msedge.exe"
     if "mozilla firefox" in path:
         return exe == "firefox.exe"
     if "microsoft onedrive" in path:

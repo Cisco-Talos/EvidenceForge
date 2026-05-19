@@ -38,6 +38,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
     _materialize_registry_value_for_time,
+    _module_matches_process,
     _windows_scheduled_task_offsets,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -78,6 +79,20 @@ def web_server():
 @pytest.fixture
 def timestamp():
     return datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
+
+
+class TestModuleLoadProcessMatching:
+    """Tests for process-aware Sysmon module-load pool filtering."""
+
+    def test_chrome_and_edge_modules_stay_in_their_own_package_paths(self):
+        """Chromium-family browsers should not swap package DLL ownership."""
+        chrome_module = r"C:\Program Files\Google\Chrome\Application\120.0.6099.225\libegl.dll"
+        edge_module = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_elf.dll"
+
+        assert _module_matches_process("chrome.exe", chrome_module)
+        assert not _module_matches_process("msedge.exe", chrome_module)
+        assert _module_matches_process("msedge.exe", edge_module)
+        assert not _module_matches_process("chrome.exe", edge_module)
 
 
 class TestIdsAlertCorrelation:

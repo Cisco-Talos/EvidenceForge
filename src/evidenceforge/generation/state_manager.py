@@ -46,6 +46,19 @@ from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
 
+_MIN_GENERATED_LOGON_LUID = 0x10000
+_MAX_GENERATED_LOGON_LUID = 0xFFFFFFFF
+_GENERATED_LOGON_LUID_SPAN = _MAX_GENERATED_LOGON_LUID - _MIN_GENERATED_LOGON_LUID + 1
+_HOST_LOGON_BUCKET_SPACE = 0x01000000
+_HOST_LOGON_BUCKET_STEP = 131071
+
+
+def _normalize_generated_logon_luid(value: int) -> int:
+    """Keep generated Windows LogonIDs in the ordinary rendered LUID range."""
+    return _MIN_GENERATED_LOGON_LUID + (
+        (value - _MIN_GENERATED_LOGON_LUID) % _GENERATED_LOGON_LUID_SPAN
+    )
+
 
 class StateManager:
     """Central state manager for log generation.
@@ -108,23 +121,22 @@ class StateManager:
     # ========================================
 
     def _host_logon_base(self, system: str) -> int:
-        """Return a stable host-local LUID range base.
+        """Return a stable host-local LUID phase offset.
 
-        ``GeneratorState.active_sessions`` still keys sessions by LogonID, so
-        each host receives a disjoint high-order range while visible values
-        remain monotonic inside that host's range.
+        ``GeneratorState.active_sessions`` still keys sessions by LogonID, so each host
+        receives a deterministic low-range offset and collision probes handle the rare
+        cross-host overlap while preserving source-native-looking rendered values.
         """
         base = self._logon_id_host_bases.get(system)
         if base is not None:
             return base
 
-        bucket = 0x100000 + _stable_seed(f"logon_luid_host_{system}")
+        bucket = _stable_seed(f"logon_luid_host_{system}") % _HOST_LOGON_BUCKET_SPACE
         salt = 0
         while True:
-            # Use a 32-bit host bucket and leave the low 32 bits for boot-relative
-            # growth during multi-day uptime windows. Collision probes occupy new
-            # high-order layers, avoiding the old fixed 224-host allocation cap.
-            candidate = ((salt << 32) + bucket) << 32
+            candidate = _MIN_GENERATED_LOGON_LUID + (
+                (bucket + (salt * _HOST_LOGON_BUCKET_STEP)) % _HOST_LOGON_BUCKET_SPACE
+            )
             if candidate not in self._logon_id_used_host_bases:
                 self._logon_id_host_bases[system] = candidate
                 self._logon_id_used_host_bases.add(candidate)
@@ -190,8 +202,9 @@ class StateManager:
         candidate += (
             _stable_seed(f"logon_luid_low:{system}:{current_time.isoformat()}:{ordinal}") % 3
         )
+        candidate = _normalize_generated_logon_luid(candidate)
         while candidate in self._used_logon_ids or candidate in self._reserved_logon_ids:
-            candidate += 1
+            candidate = _normalize_generated_logon_luid(candidate + 1)
         self._used_logon_ids.add(candidate)
         return candidate
 

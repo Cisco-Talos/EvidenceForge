@@ -204,7 +204,7 @@ class TestSessionManagement:
         )
 
         assert logon_id.startswith("0x")
-        assert int(logon_id, 16) >= 0x10000
+        assert 0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF
         session = sm.get_session(logon_id)
         assert session is not None
         assert session.username == "jdoe"
@@ -262,6 +262,7 @@ class TestSessionManagement:
 
         ids = [sm.create_session(f"user{i}", "WS-01", 3, f"192.168.1.{i}") for i in range(12)]
 
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in ids)
         assert len({int(logon_id, 16) & 0xF for logon_id in ids}) > 1
         assert ids == [f"0x{value:x}" for value in sorted(int(logon_id, 16) for logon_id in ids)]
 
@@ -317,6 +318,7 @@ class TestSessionManagement:
         earlier = sm.allocate_logon_id("DC-01", datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC))
 
         assert int(earlier, 16) < int(later, 16)
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in (earlier, later))
         assert sm.get_session(earlier) is None
         assert sm.get_session(later) is None
 
@@ -342,7 +344,7 @@ class TestSessionManagement:
 
         logon_id = sm.allocate_logon_id("DC-01", boot + timedelta(days=1_000_000))
 
-        assert int(logon_id, 16) > 0
+        assert 0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF
         assert sm._logon_id_block_offsets == {}
 
     def test_reassign_session_logon_id_rekeys_session_to_event_time(self):
@@ -392,11 +394,12 @@ class TestSessionManagement:
         assert len(ids) == 300
         assert len(set(ids)) == len(ids)
         assert len(sm._logon_id_host_bases) == 300
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in ids)
 
     def test_create_session_probes_unbounded_host_bucket_collision_layers(
         self, monkeypatch: pytest.MonkeyPatch
     ):
-        """Host bucket collisions should probe new high-order ranges without failing."""
+        """Host bucket collisions should probe alternate offsets without failing."""
         monkeypatch.setattr(state_manager_module, "_stable_seed", lambda _key: 7)
         sm = StateManager()
         sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
@@ -405,6 +408,7 @@ class TestSessionManagement:
 
         assert len(set(ids)) == 3
         assert len(set(sm._logon_id_host_bases.values())) == 3
+        assert all(0x10000 <= int(logon_id, 16) <= 0xFFFFFFFF for logon_id in ids)
 
     def test_register_session_marks_external_logon_id_used(self):
         """Externally registered sessions should reserve their LogonID value."""
