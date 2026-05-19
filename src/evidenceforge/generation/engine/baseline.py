@@ -95,6 +95,24 @@ _HttpGroupKey = tuple[str, int]
 _HttpPlanValue = tuple[_HttpGroupKey, int, bool, int]
 
 
+def _ufw_block_syn_packet_len(src_ip: str) -> int:
+    """Return a stable valid IP total length for a header-only blocked TCP SYN."""
+    rng = random.Random(_stable_seed(f"ufw_syn_packet_len:{src_ip}"))
+    return rng.choices((40, 44, 48, 52, 60), weights=(20, 18, 26, 24, 12), k=1)[0]
+
+
+def _ufw_block_ttl(src_ip: str) -> int:
+    """Return a stable plausible arrival TTL for an inbound scanner source."""
+    rng = random.Random(_stable_seed(f"ufw_arrival_ttl:{src_ip}"))
+    if _is_private_ip(src_ip):
+        initial = rng.choices((64, 128), weights=(65, 35), k=1)[0]
+        hops = rng.randint(1, 8)
+    else:
+        initial = rng.choices((64, 128, 255), weights=(58, 36, 6), k=1)[0]
+        hops = rng.randint(7, 30) if initial == 255 else rng.randint(5, 24)
+    return max(32, initial - hops)
+
+
 def _plan_http_request_groups(
     requests: list[Any],
     *,
@@ -5616,14 +5634,16 @@ class BaselineMixin:
                         )[0]
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
+                        packet_len = _ufw_block_syn_packet_len(src_ip)
+                        ttl = _ufw_block_ttl(src_ip)
                         msg = (
                             f"[{kernel_uptime}] [UFW BLOCK] "
                             f"IN=ens160 OUT= SRC={src_ip} DST={system.ip} "
-                            f"LEN={rng.randint(40, 60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40, 255)} "
+                            f"LEN={packet_len} TOS=0x00 PREC=0x00 TTL={ttl} "
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
                         )
-                        # UFW block: connection (→ Zeek conn REJ) + syslog (→ kernel UFW)
+                        # UFW block: connection (→ Zeek conn S0) + syslog (→ kernel UFW)
                         # Both on the same SecurityEvent for cross-source correlation
 
                         self.activity_generator.generate_connection(
@@ -5632,8 +5652,9 @@ class BaselineMixin:
                             time=ts,
                             dst_port=dpt,
                             proto="tcp",
-                            conn_state="REJ",
+                            conn_state="S0",
                             src_port=spt,
+                            packet_overhead_bytes=packet_len,
                         )
                         # Paired syslog via canonical dispatch
                         self.activity_generator.generate_syslog_event(

@@ -6724,6 +6724,7 @@ class ActivityGenerator:
         proxy_bypass: bool = False,
         process_image: str | None = None,
         preserve_dst_ip: bool = False,
+        packet_overhead_bytes: int | None = None,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -6751,6 +6752,8 @@ class ActivityGenerator:
             http: Optional HttpContext override (skips auto-generation)
             preserve_dst_ip: Preserve caller-supplied dst_ip when explicit proxy egress
                 renders an authored hostname+IP pair
+            packet_overhead_bytes: Optional IP packet overhead to preserve source-native
+                packet accounting for canonical firewall/syslog companion events.
 
         Returns:
             Zeek UID (18-character string)
@@ -7787,7 +7790,9 @@ class ActivityGenerator:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
 
-        if proto == "udp":
+        if packet_overhead_bytes is not None:
+            overhead = packet_overhead_bytes
+        elif proto == "udp":
             overhead = rng.choices(_UDP_OVERHEAD_VALUES, weights=_UDP_OVERHEAD_WEIGHTS, k=1)[0]
         elif proto == "icmp":
             overhead = 28
