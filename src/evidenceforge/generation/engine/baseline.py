@@ -1278,6 +1278,58 @@ class BaselineMixin:
                 username=cron_user,
             )
 
+    def _emit_anacron_lifecycle(
+        self,
+        system: Any,
+        ts: datetime,
+        rng: random.Random,
+        sys_pids: dict,
+    ) -> None:
+        """Emit one coherent anacron run per host/day instead of random fragments."""
+        if ts < getattr(self, "start_time", ts) or ts >= self.end_time:
+            return
+
+        local_ts = (
+            ts.replace(tzinfo=UTC).astimezone(self._scenario_tz)
+            if getattr(self, "_scenario_tz", None)
+            else ts
+        )
+        run_date = local_ts.date().isoformat()
+        emitted = getattr(self, "_anacron_lifecycle_days", set())
+        key = (system.hostname, run_date)
+        if key in emitted:
+            return
+        emitted.add(key)
+        self._anacron_lifecycle_days = emitted
+
+        pid = sys_pids.get("anacron", rng.randint(10000, 60000))
+        job_name = rng.choice(["cron.daily", "logrotate"])
+        delay_minutes = rng.choice([2, 5, 11])
+        job_start = ts + timedelta(minutes=delay_minutes, seconds=rng.uniform(0.5, 12.0))
+        job_end = job_start + timedelta(seconds=rng.uniform(18.0, 180.0))
+        events = [
+            (ts, f"Anacron 2.3 started on {run_date}"),
+            (
+                ts + timedelta(seconds=rng.uniform(0.3, 2.0)),
+                f"Will run job `{job_name}' in {delay_minutes} min.",
+            ),
+            (job_start, f"Job `{job_name}' started"),
+            (job_end, f"Job `{job_name}' terminated"),
+            (job_end + timedelta(seconds=rng.uniform(0.5, 3.0)), "Normal exit (1 job run)"),
+        ]
+        for event_time, message in events:
+            if event_time >= self.end_time:
+                continue
+            self.activity_generator.generate_syslog_event(
+                system=system,
+                time=event_time,
+                app_name="anacron",
+                message=message,
+                pid=pid,
+                facility=3,
+                severity=6,
+            )
+
     def _generate_hour(
         self,
         current_hour: datetime,
@@ -5388,6 +5440,14 @@ class BaselineMixin:
             self._generate_scheduled_tasks(
                 current_hour, system, rng, sys_pids, is_rhel_like, has_web_role
             )
+            if not is_rhel_like and current_hour == self.start_time:
+                anacron_offset = 60 + (_stable_seed(f"anacron_lifecycle:{system.hostname}") % 1800)
+                self._emit_anacron_lifecycle(
+                    system,
+                    current_hour + timedelta(seconds=anacron_offset),
+                    rng,
+                    sys_pids,
+                )
 
             # Use Hawkes process for bursty syslog timing instead of uniform spread
             from evidenceforge.utils.timing import hawkes_timestamps
@@ -5784,6 +5844,9 @@ class BaselineMixin:
                             system_services=system.services,
                             values={"dns_server": dns_server},
                         )
+                    elif app == "anacron":
+                        self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
+                        continue
                     else:
                         msg = render_extra_syslog_message(
                             entry,

@@ -1553,6 +1553,26 @@ class TestValidateConfig:
         assert 0 <= percentage <= 100
         assert "981234" not in message
 
+    def test_extra_syslog_anacron_uses_date_placeholder_and_no_weekly_pool(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        anacron = next(entry for entry in programs if entry["app"] == "anacron")
+
+        assert "cron.weekly" not in anacron["params"]["job_name"]
+        assert "Anacron 2.3 started on {}" not in anacron["messages"]
+        message = render_extra_syslog_message(
+            {**anacron, "messages": ["Anacron 2.3 started on {anacron_date}"]},
+            random.Random(5),
+            positional_value=123456,
+            values={"anacron_date": "2024-03-18"},
+        )
+
+        assert message == "Anacron 2.3 started on 2024-03-18"
+
     def test_systemd_schedule_filters_by_role_and_service_state(self):
         from types import SimpleNamespace
 

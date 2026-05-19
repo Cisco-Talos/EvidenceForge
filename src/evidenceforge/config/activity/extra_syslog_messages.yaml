@@ -168,7 +168,6 @@ programs:
     params:
       job_name:
         - cron.daily
-        - cron.weekly
         - logrotate
       delay_minutes:
         - "2"
@@ -179,7 +178,7 @@ programs:
         - "1"
         - "2"
     messages:
-      - "Anacron 2.3 started on {}"
+      - "Anacron 2.3 started on {anacron_date}"
       - "Will run job `{job_name}' in {delay_minutes} min."
       - "Job `{job_name}' started"
       - "Job `{job_name}' terminated"

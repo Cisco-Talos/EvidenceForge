@@ -31,6 +31,7 @@ import pytest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
+    BaselineMixin,
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
     _is_kerberos_member_server,
@@ -79,6 +80,44 @@ def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     assert first_stamp == "2333187.345076"
     assert second_stamp == "2333187.997014"
     assert float(second_stamp) > float(first_stamp)
+
+
+def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
+    """Anacron syslog should be a coherent daily run, not random repeated fragments."""
+    engine = type("FakeEngine", (object,), {})()
+    engine.activity_generator = Mock()
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.end_time = datetime(2024, 3, 18, 18, 0, 0, tzinfo=UTC)
+    engine._scenario_tz = None
+    engine._emit_anacron_lifecycle = BaselineMixin._emit_anacron_lifecycle.__get__(
+        engine,
+        type(engine),
+    )
+    ts = datetime(2024, 3, 18, 12, 16, 58, tzinfo=UTC)
+
+    engine._emit_anacron_lifecycle(
+        linux_system,
+        ts - timedelta(hours=2),
+        random.Random(5),
+        {"anacron": 13517},
+    )
+    engine._emit_anacron_lifecycle(linux_system, ts, random.Random(7), {"anacron": 13517})
+    engine._emit_anacron_lifecycle(
+        linux_system,
+        ts + timedelta(hours=1),
+        random.Random(9),
+        {"anacron": 13517},
+    )
+
+    calls = engine.activity_generator.generate_syslog_event.call_args_list
+    messages = [call.kwargs["message"] for call in calls]
+    times = [call.kwargs["time"] for call in calls]
+
+    assert len(messages) == 5
+    assert messages[0] == "Anacron 2.3 started on 2024-03-18"
+    assert all("cron.weekly" not in message for message in messages)
+    assert messages[-1] == "Normal exit (1 job run)"
+    assert times == sorted(times)
 
 
 @pytest.fixture
