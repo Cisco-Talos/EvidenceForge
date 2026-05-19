@@ -2042,6 +2042,32 @@ def _proxy_http_response_body_len(
     return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
 
 
+def _proxy_action_for_context(
+    *,
+    method: str,
+    url: str,
+    status_code: int,
+    cache_result: str,
+    dst_port: int | None = None,
+    explicit_mode: bool = False,
+) -> str:
+    """Return a source-native proxy policy/action hint for W3C logs."""
+    normalized_cache = (cache_result or "").upper()
+    if normalized_cache == "DENIED" or status_code == 403:
+        return "deny"
+    if normalized_cache == "AUTH_REQUIRED" or status_code == 407:
+        return "auth-required"
+    if normalized_cache == "GATEWAY_ERROR" or status_code in {502, 503, 504}:
+        return "gateway-error"
+    normalized_method = method.upper()
+    normalized_url = url.lower()
+    if normalized_method == "CONNECT":
+        return "tunnel"
+    if dst_port == 443 or normalized_url.startswith("https://"):
+        return "ssl-inspect"
+    return "forward"
+
+
 # Bound the free-form timestamp middle so malformed raw syslog messages cannot trigger
 # repeated long scans/backtracking while preserving Apache timestamp variants with
 # fractional seconds or timezone tokens.
@@ -3111,6 +3137,14 @@ class ActivityGenerator:
             cache_result=cache_result,
             referrer=proxy_referrer,
             proxy_fqdn=self._proxy_fqdn(proxy_sys),
+            proxy_action=_proxy_action_for_context(
+                method=proxy_method,
+                url=url,
+                status_code=status_code,
+                cache_result=cache_result,
+                dst_port=dst_port,
+                explicit_mode=explicit_mode,
+            ),
         )
 
     def _explicit_proxy_client_process_hint(
@@ -7955,6 +7989,13 @@ class ActivityGenerator:
                     cache_result=cache_result,
                     referrer=proxy_referrer,
                     proxy_fqdn=proxy_fqdn,
+                    proxy_action=_proxy_action_for_context(
+                        method=proxy_method,
+                        url=url,
+                        status_code=proxy_status_code,
+                        cache_result=cache_result,
+                        dst_port=dst_port,
+                    ),
                 )
 
         # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out

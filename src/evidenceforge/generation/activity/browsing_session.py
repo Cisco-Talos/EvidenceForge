@@ -29,6 +29,7 @@ from evidenceforge.generation.activity.site_maps import (
     get_site_map,
 )
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
+from evidenceforge.utils.rng import _stable_seed
 
 
 @dataclass
@@ -84,24 +85,39 @@ def _request_size(rng: random.Random, method: str) -> int:
 def _sample_status_code(
     rng: random.Random,
     *,
+    hostname: str,
+    path: str,
     is_page_load: bool,
     method: str,
     content_type: str,
 ) -> int:
     """Sample realistic browser HTTP outcomes for page and asset requests."""
+    method = method.upper()
+    if method == "GET" and is_stable_resource_path(path):
+        if content_type.startswith(("image/", "video/", "font/")) and rng.random() < 0.06:
+            return 206
+        if rng.random() < 0.16:
+            return 304
+        return 200
+    if is_page_load and method == "GET":
+        return 200
+
+    route_rng = random.Random(
+        _stable_seed(
+            "web_route_status:"
+            f"{hostname}:{path}:{method}:{content_type}:{'page' if is_page_load else 'asset'}"
+        )
+    )
     if method == "POST":
-        statuses = [200, 204, 302, 400, 401, 403, 404, 500, 503]
-        weights = [70, 4, 4, 4, 3, 4, 3, 5, 3]
+        statuses = [200, 204, 302, 400, 401, 403, 500, 503]
+        weights = [78, 5, 5, 3, 2, 3, 2, 2]
     elif not is_page_load:
-        statuses = [200, 206, 304, 403, 404, 500, 503]
-        if content_type.startswith(("image/", "video/", "font/")):
-            weights = [70, 8, 12, 2, 4, 2, 2]
-        else:
-            weights = [74, 2, 12, 3, 4, 3, 2]
+        statuses = [200, 204, 301, 302, 304, 403, 404, 500, 503]
+        weights = [82, 2, 2, 3, 5, 2, 2, 1, 1]
     else:
-        statuses = [200, 301, 302, 401, 403, 404, 500, 503]
-        weights = [80, 2, 4, 2, 3, 5, 2, 2]
-    return rng.choices(statuses, weights=weights, k=1)[0]
+        statuses = [200, 301, 302, 401, 403, 500, 503]
+        weights = [88, 3, 4, 1, 2, 1, 1]
+    return route_rng.choices(statuses, weights=weights, k=1)[0]
 
 
 def _response_size_for_status_code(
@@ -316,6 +332,8 @@ def generate_browsing_session(
         page_content_type = normalize_mime_type_for_path(page.path, page.content_type)
         page_status = _sample_status_code(
             rng,
+            hostname=hostname,
+            path=page.path,
             is_page_load=True,
             method="GET",
             content_type=page_content_type,
@@ -356,6 +374,8 @@ def generate_browsing_session(
             sub_content_type = normalize_mime_type_for_path(sub.path, sub.content_type)
             sub_status = _sample_status_code(
                 rng,
+                hostname=sub_hostname,
+                path=sub.path,
                 is_page_load=False,
                 method=sub.method,
                 content_type=sub_content_type,

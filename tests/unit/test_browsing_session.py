@@ -300,6 +300,33 @@ class TestResponseSizes:
         assert 200 in statuses
         assert any(status != 200 for status in statuses)
 
+    def test_static_assets_do_not_randomly_turn_into_server_errors(self):
+        requests = []
+        for seed in range(80):
+            requests.extend(
+                generate_browsing_session(
+                    random.Random(seed),
+                    "portal.customer.example",
+                    [],
+                    require_browser_like_domain=False,
+                )
+            )
+
+        stable_assets = [
+            request
+            for request in requests
+            if not request.is_page_load
+            and request.method == "GET"
+            and (
+                request.path.endswith((".css", ".js", ".png", ".jpg", ".jpeg", ".webp", ".ico"))
+                or "/assets/" in request.path
+                or "/static/" in request.path
+            )
+        ]
+
+        assert stable_assets
+        assert {request.status_code for request in stable_assets} <= {200, 206, 304}
+
     def test_empty_body_statuses_have_zero_response_body(self):
         requests = []
         for seed in range(80):

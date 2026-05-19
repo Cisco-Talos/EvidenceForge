@@ -517,6 +517,7 @@ class ProxyContext:
     cache_result: str = "MISS"  # HIT, MISS, NONE, DENIED
     referrer: str = ""  # HTTP Referer header
     proxy_fqdn: str = ""  # FQDN of proxy system for routing
+    proxy_action: str = ""  # forward, tunnel, tunnel-setup, ssl-inspect, deny, auth-required
 
 
 @dataclass(slots=True)

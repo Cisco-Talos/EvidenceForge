@@ -52,6 +52,30 @@ def _is_https_request(px: Any, net: Any) -> bool:
     return url.lower().startswith("https://") or (net is not None and net.dst_port == 443)
 
 
+def _proxy_action(px: Any, *, setup: bool = False) -> str:
+    """Return a source-native proxy action when the event did not set one."""
+    if setup:
+        return "tunnel-setup"
+    action = str(getattr(px, "proxy_action", "") or "")
+    if action:
+        return action
+    cache_result = str(getattr(px, "cache_result", "") or "").upper()
+    status_code = int(getattr(px, "status_code", 0) or 0)
+    if cache_result == "DENIED" or status_code == 403:
+        return "deny"
+    if cache_result == "AUTH_REQUIRED" or status_code == 407:
+        return "auth-required"
+    if cache_result == "GATEWAY_ERROR" or status_code in {502, 503, 504}:
+        return "gateway-error"
+    method = str(getattr(px, "method", "") or "").upper()
+    url = str(getattr(px, "url", "") or "").lower()
+    if method == "CONNECT":
+        return "tunnel"
+    if url.startswith("https://"):
+        return "ssl-inspect"
+    return "forward"
+
+
 def _connect_setup_fields(px: Any, request_time: datetime) -> dict[str, int | datetime]:
     """Derive CONNECT setup timing and byte fields distinct from inspected requests."""
     seed = _stable_seed(f"proxy-connect:{px.client_ip}:{px.host}:{request_time.timestamp()}")
@@ -143,6 +167,7 @@ class ProxyEmitter(HostMultiplexEmitter):
                     "content_type": None,
                     "cache_result": "NONE",
                     "referrer": None,
+                    "proxy_action": _proxy_action(px, setup=True),
                     "_host_fqdn": px.proxy_fqdn,
                 }
                 self._dispatch(connect_data)
@@ -167,6 +192,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "content_type": px.content_type,
             "cache_result": px.cache_result,
             "referrer": px.referrer or None,
+            "proxy_action": _proxy_action(px),
             "_host_fqdn": px.proxy_fqdn,
         }
         self._dispatch(event_data)
@@ -195,6 +221,7 @@ class ProxyEmitter(HostMultiplexEmitter):
             "content_type": _w3c_extended_field(event_data.get("content_type")),
             "cache_result": _w3c_extended_field(event_data.get("cache_result")),
             "referrer": _w3c_extended_field(event_data.get("referrer")),
+            "proxy_action": _w3c_extended_field(event_data.get("proxy_action")),
         }
         rendered = self._template.render(**context)
         return rendered.strip()

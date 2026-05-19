@@ -2975,6 +2975,7 @@ class StorylineMixin:
                             cache_result="DENIED",
                             referrer=spec.referrer or "",
                             proxy_fqdn=self.activity_generator._proxy_fqdn(proxy_sys),
+                            proxy_action="deny",
                         )
                         self.activity_generator.generate_connection(
                             src_ip=beacon_src_ip,

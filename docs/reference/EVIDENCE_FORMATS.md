@@ -356,12 +356,14 @@ Forward proxy access logs for systems with the `forward_proxy` role. Outbound HT
 The proxy log uses a W3C Extended-style `#Fields` header:
 
 ```text
-#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
+#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result x-proxy-action
 ```
 
 Fields are whitespace-delimited; values with spaces, such as User-Agent strings, are rendered with `+` separators. Missing values are `-`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
+
+**Proxy action field:** The `x-proxy-action` field disambiguates source-native proxy behavior: `tunnel-setup` for CONNECT setup rows, `ssl-inspect` for decrypted HTTPS request rows, `forward` for ordinary forwarded HTTP, and `deny`/`auth-required`/`gateway-error` for proxy-side terminal failures.
 
 **CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
 
@@ -372,5 +374,5 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
 - Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled
-- Cache hit/miss status is probabilistic, not based on actual content caching logic
+- Cache hit/miss status is probabilistic, with stable web-route status generated upstream
 - Limited to HTTP and HTTPS traffic

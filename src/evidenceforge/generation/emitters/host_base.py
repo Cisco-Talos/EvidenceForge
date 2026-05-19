@@ -180,6 +180,10 @@ class HostMultiplexEmitter(LogEmitter):
                 sort_key=self._sort_key,
                 defer_sorted_flush_until_close=self._defer_sorted_flush_until_close,
             )
+            header_template = self.format_def.output.header_template
+            if header_template:
+                header = self._template_env.from_string(header_template).render()
+                writer.write_header(header)
             self._writers[safe_host_fqdn] = writer
             logger.debug(f"Created host writer: {path}")
             return writer
