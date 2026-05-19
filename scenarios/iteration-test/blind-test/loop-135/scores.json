@@ -1,0 +1,36 @@
+{
+  "loop": 135,
+  "eval": {
+    "overall_score": 96.17698864995835,
+    "total_records": 80629,
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 96.1978374473836,
+      "causality": 94.2429740156467,
+      "timing": 92.83392892100387
+    },
+    "acceptance": "passed"
+  },
+  "blind_review": {
+    "threat_hunter": 72,
+    "detection_engineer": 64,
+    "network_forensics": 88,
+    "host_edr_forensics": 62,
+    "average_synthetic_confidence": 71.5
+  },
+  "hard_probes": {
+    "matched_overlapping_flows": 1479,
+    "identical_metric_flows": 188,
+    "ssh_matched_flows": 113,
+    "ssh_exact_0_750_duration_delta": 0,
+    "ssh_same_bytes_exact_0_750_duration_delta": 0,
+    "ssh_unique_duration_deltas": 113
+  },
+  "top_findings": [
+    "Network reviewer found Zeek SSL/X509 timing contradictions: certificate chain depth rows can appear out of order and X.509 rows can precede matching files rows.",
+    "Threat reviewer found proxy vendor updater domains paired with the wrong updater User-Agent and API/registry endpoints logged as text/html.",
+    "Detection reviewer found Sysmon ProcessGuid values with tiny zero-padded suffix counters across every Windows host.",
+    "Host/EDR reviewer found SearchProtocolHost command-line SIDs disconnected from the domain SID base, repeated 1-4 ms eCAR process lifetimes, and missing PE metadata for signed updaters.",
+    "Loop 135 hard probe verified the previous exact +0.750000s SSH cross-sensor duration pattern is gone."
+  ]
+}
