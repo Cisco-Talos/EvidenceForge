@@ -205,6 +205,34 @@ class TestStateManagerInit:
 
         assert 8_000 <= pid < 180_000
 
+    def test_linux_transient_syslog_pids_share_process_namespace(self):
+        """Syslog-only transient PIDs should not come from a separate low random pool."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        event_time = boot_time + timedelta(days=9, hours=4)
+        sm.register_boot_time("linux01", boot_time)
+
+        sudo_pid = sm.allocate_transient_linux_pid("linux01", event_time)
+        sm.set_current_time(event_time + timedelta(seconds=2))
+        ecar_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/journalctl",
+            command_line="journalctl -u sshd --since today",
+            username="root",
+            integrity_level="Medium",
+        )
+        sshd_pid = sm.allocate_transient_linux_pid(
+            "linux01",
+            event_time + timedelta(seconds=5),
+        )
+
+        assert sudo_pid > 180_000
+        assert ecar_pid > 180_000
+        assert sshd_pid > 180_000
+        assert len({sudo_pid, ecar_pid, sshd_pid}) == 3
+        assert max(sudo_pid, ecar_pid, sshd_pid) - min(sudo_pid, ecar_pid, sshd_pid) < 15_000
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""

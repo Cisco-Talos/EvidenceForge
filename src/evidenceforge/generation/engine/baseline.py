@@ -1255,12 +1255,20 @@ class BaselineMixin:
                 detail_delay = rng.uniform(0.5, 2.0)
                 for msg in msgs:
                     detail_ts = ts + timedelta(seconds=detail_delay)
+                    detail_pid = (
+                        svc_pid
+                        if svc_pid
+                        else self.state_manager.allocate_transient_linux_pid(
+                            system.hostname,
+                            detail_ts,
+                        )
+                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=detail_ts,
                         app_name=service,
                         message=msg,
-                        pid=svc_pid if svc_pid else rng.randint(10000, 60000),
+                        pid=detail_pid,
                     )
                     detail_delay += rng.uniform(0.2, 1.0)
 
@@ -5758,7 +5766,10 @@ class BaselineMixin:
                         "tcp",
                         "ssh",
                     )
-                    sshd_pid = rng.randint(5000, 60000)
+                    sshd_pid = self.state_manager.allocate_transient_linux_pid(
+                        system.hostname,
+                        observed_ssh_time,
+                    )
                     ssh_roster = self._get_server_ssh_users(system)
                     ssh_usernames = [user.username for user in ssh_roster]
                     if ssh_usernames:
@@ -6042,7 +6053,10 @@ class BaselineMixin:
                     if pid_key and pid_key in sys_pids:
                         pid = sys_pids[pid_key]
                     elif app in _TRANSIENT_APPS:
-                        pid = rng.randint(1000, 60000)
+                        pid = self.state_manager.allocate_transient_linux_pid(
+                            system.hostname,
+                            ts,
+                        )
                     else:
                         # Derive a stable per-host PID for persistent daemons not in sys_pids
                         import hashlib as _hl

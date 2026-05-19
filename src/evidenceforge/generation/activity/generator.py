@@ -4737,7 +4737,7 @@ class ActivityGenerator:
             sshd_pid = (
                 session.transport_pid
                 if session and session.transport_pid is not None
-                else 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
+                else self.state_manager.allocate_transient_linux_pid(system.hostname, time)
             )
             self.state_manager.update_session_metadata(
                 logon_id,
@@ -5089,7 +5089,7 @@ class ActivityGenerator:
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
-                    pid=_get_rng().randint(5000, 60000),
+                    pid=self.state_manager.allocate_transient_linux_pid(system.hostname, time),
                     facility=10,
                     severity=4,
                     message=(
@@ -5100,7 +5100,7 @@ class ActivityGenerator:
             else:
                 event.syslog = SyslogContext(
                     app_name="login",
-                    pid=_get_rng().randint(5000, 60000),
+                    pid=self.state_manager.allocate_transient_linux_pid(system.hostname, time),
                     facility=10,
                     severity=4,
                     message=(
@@ -5449,7 +5449,7 @@ class ActivityGenerator:
             sshd_pid = (
                 session.transport_pid
                 if session and session.transport_pid is not None
-                else 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
+                else self.state_manager.allocate_transient_linux_pid(system.hostname, time)
             )
             source_port = session.source_port if session else 0
             close_aligned = False
@@ -8814,8 +8814,10 @@ class ActivityGenerator:
             src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
         if sshd_pid is None:
-            sshd_key = logon_id or f"{user.username}_{target_system.hostname}_{time.isoformat()}"
-            sshd_pid = 1000 + (_stable_seed(f"sshd_pid_{sshd_key}") % 59000)
+            sshd_pid = self.state_manager.allocate_transient_linux_pid(
+                target_system.hostname,
+                time,
+            )
         if logon_id:
             self.state_manager.update_session_metadata(
                 logon_id,

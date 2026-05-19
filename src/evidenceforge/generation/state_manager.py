@@ -652,9 +652,29 @@ class StateManager:
                 return True
         return False
 
-    def _allocate_linux_pid(self, system: str, pid_rng: random.Random) -> int:
+    def _initialize_pid_allocator(self, system: str, os_category: str) -> None:
+        """Initialize a per-system PID allocator without creating a process."""
+        if system in self._pid_counters:
+            return
+
+        self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
+        pid_rng = self._pid_rngs[system]
+        if os_category == "windows":
+            start = pid_rng.randint(2000, 6000)
+            self._pid_counters[system] = start - (start % 4)
+            self._pid_os[system] = "windows"
+        else:
+            self._pid_counters[system] = pid_rng.randint(8000, 42000)
+            self._pid_os[system] = "linux"
+
+    def _allocate_linux_pid(
+        self,
+        system: str,
+        pid_rng: random.Random,
+        current_time: datetime | None = None,
+    ) -> int:
         """Allocate a Linux PID without exposing wall-clock elapsed seconds."""
-        current_time = ensure_utc(self.state.current_time)
+        current_time = ensure_utc(current_time or self.state.current_time)
         epoch = self._linux_pid_epoch(system, current_time)
         elapsed_seconds = max(0, int((current_time - epoch).total_seconds()))
         block = elapsed_seconds // 300
@@ -683,6 +703,20 @@ class StateManager:
         used.add(pid)
         allocations.append((current_time, pid))
         return pid
+
+    def allocate_transient_linux_pid(self, system: str, event_time: datetime) -> int:
+        """Allocate a Linux PID for syslog-only transient process observations.
+
+        Syslog records such as ``sudo[pid]`` and per-session ``sshd[pid]`` can
+        describe short-lived processes that are not emitted as canonical eCAR
+        process-create events. They still belong to the same host PID namespace
+        as canonical process evidence, so this method shares the Linux allocator
+        and used-ID ledger without registering a durable RunningProcess.
+        """
+        with self._lock:
+            self._initialize_pid_allocator(system, "linux")
+            pid_rng = self._pid_rngs[system]
+            return self._allocate_linux_pid(system, pid_rng, event_time)
 
     def create_process(
         self,
@@ -726,22 +760,9 @@ class StateManager:
 
             # Allocate PID for this system — OS-aware allocation (Phase 6.0)
             if system not in self._pid_counters:
-                self._pid_rngs[system] = random.Random(_stable_seed(f"pid_alloc_{system}"))
-                pid_rng = self._pid_rngs[system]
                 # Detect OS from image path: backslash = Windows, forward slash = Linux
                 is_windows = "\\" in image
-                if is_windows:
-                    # Windows: PIDs are multiples of 4, start in realistic range
-                    start = pid_rng.randint(2000, 6000)
-                    start = start - (start % 4)  # Align to multiple of 4
-                    self._pid_counters[system] = start
-                    self._pid_os[system] = "windows"
-                else:
-                    # Linux: scenario-visible process activity happens on an
-                    # already-running host, so use the same lived-in PID
-                    # namespace syslog exposes rather than a fresh low counter.
-                    self._pid_counters[system] = pid_rng.randint(8000, 42000)
-                    self._pid_os[system] = "linux"
+                self._initialize_pid_allocator(system, "windows" if is_windows else "linux")
 
             # Increment with OS-aware gaps
             if system not in self._pid_rngs:
