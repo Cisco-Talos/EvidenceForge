@@ -242,6 +242,27 @@ class SysmonEventEmitter(LogEmitter):
             "Microsoft Corporation",
             "whoami.exe",
         ),
+        "runas.exe": (
+            "10.0.19041.1",
+            "RunAs Command",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "runas.exe",
+        ),
+        "msra.exe": (
+            "10.0.19041.1",
+            "Windows Remote Assistance",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "msra.exe",
+        ),
+        "curl.exe": (
+            "8.4.0",
+            "The curl executable",
+            "The curl executable",
+            "Microsoft Corporation",
+            "curl.exe",
+        ),
         "notepad.exe": (
             "10.0.19041.1",
             "Notepad",
@@ -794,10 +815,10 @@ class SysmonEventEmitter(LogEmitter):
 
         seed = f"{hostname}:{pid}:{timestamp.isoformat()}:{boot_seed}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        token_noise = int(h[:2], 16) & 0xFC
-        token_id = (((pid & 0xFFFF) << 8) | token_noise) & 0xFFFFFFFFFFFF
-        token_word = token_id & 0xFFFF
-        token_tail = (token_id >> 16) & 0xFFFFFFFFFFFF
+        token_word = int(h[:4], 16)
+        if token_word == (pid & 0xFFFF):
+            token_word ^= 0x5A5A
+        token_tail = int(h[4:16], 16) | 0x100000000000
 
         return (
             f"{{{machine_prefix}-{time_low:04x}-{time_high:04x}-"

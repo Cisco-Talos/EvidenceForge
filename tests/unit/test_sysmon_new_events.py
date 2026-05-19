@@ -843,6 +843,21 @@ class TestProcessCreateMetadata:
         assert content.count('<Data Name="FileVersion">10.0.19041.1</Data>') == 2
         assert "10.0.20348.1" not in content
 
+    def test_common_windows_admin_binaries_have_process_metadata(self):
+        host = _win_host()
+
+        for image in (
+            r"C:\Windows\System32\runas.exe",
+            r"C:\Windows\System32\msra.exe",
+            r"C:\Windows\System32\curl.exe",
+        ):
+            fv, desc, prod, company, orig = SysmonEventEmitter._get_pe_metadata(image, host)
+            assert fv != "-"
+            assert desc != "-"
+            assert prod != "-"
+            assert company == "Microsoft Corporation"
+            assert orig.lower() == image.rsplit("\\", 1)[-1].lower()
+
     def test_os_binary_hashes_follow_host_file_version(self):
         """The same OS binary path on different Windows builds should not share hashes."""
         workstation = _win_host()
@@ -1475,7 +1490,7 @@ class TestProcessGuidBootTime:
         assert guid_a.split("-")[1] == f"{unix_ts & 0xFFFF:04x}"
         assert guid_a.split("-")[2] == f"{(unix_ts >> 16) & 0xFFFF:04x}"
         assert guid_a.split("-")[1] != "000c"
-        assert guid_a.strip("{}").split("-")[4].startswith("000000")
+        assert not guid_a.strip("{}").split("-")[4].startswith("000000")
 
     def test_guid_deterministic_with_boot_time(self, emitter):
         emitter._host_boot_times = {

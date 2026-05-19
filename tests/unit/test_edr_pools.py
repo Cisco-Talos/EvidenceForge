@@ -211,6 +211,27 @@ class TestTemplateMaterialization:
         assert value.startswith(r"Interfaces\{")
         assert value.endswith(r"}\DhcpIPAddress")
 
+    def test_materializes_userassist_runpath_values(self):
+        import random
+
+        key, value_name, details = materialize_edr_template_group(
+            (
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
+                "{userassist_value}",
+                "{userassist_binary}",
+            ),
+            random.Random(17),
+            "alice.smith",
+        )
+
+        assert "UserAssist" in key
+        assert value_name.startswith("HRZR_EHACNGU:")
+        assert not value_name.removeprefix("HRZR_EHACNGU").isdigit()
+        assert "\\" in value_name
+        detail_bytes = details.split()
+        assert len(detail_bytes) >= 32
+        assert all(len(byte) == 2 for byte in detail_bytes)
+
     def test_materializes_host_ip_context(self):
         import random
 

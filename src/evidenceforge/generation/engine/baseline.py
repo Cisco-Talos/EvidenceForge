@@ -971,12 +971,62 @@ class BaselineMixin:
     ) -> dict[str, Any]:
         """Create source-local polkit agent state for one host."""
         params = entry.get("params") or {}
-        process_paths = params.get("process_path") or ["/usr/bin/systemctl"]
+        process_paths = params.get("agent_process_path") or [
+            "/usr/libexec/polkit-gnome-authentication-agent-1",
+            "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
+            "/usr/libexec/kf5/polkit-kde-authentication-agent-1",
+        ]
         return {
             "session_id": rng.choice(self._polkit_session_pool(hostname, rng)),
             "bus_id": self._next_dbus_bus_id(hostname, rng),
             "process_path": rng.choice(process_paths),
         }
+
+    @staticmethod
+    def _polkit_action_process_paths() -> dict[str, tuple[str, ...]]:
+        """Return source-native process candidates for common polkit action families."""
+        return {
+            "org.freedesktop.systemd1.manage-units": (
+                "/usr/bin/systemctl",
+                "/usr/bin/systemctl",
+                "/usr/bin/loginctl",
+            ),
+            "org.freedesktop.login1.reboot": (
+                "/usr/bin/systemctl",
+                "/usr/bin/loginctl",
+            ),
+            "org.freedesktop.packagekit.system-update": (
+                "/usr/lib/packagekit/packagekitd",
+                "/usr/bin/pkcon",
+            ),
+            "org.freedesktop.NetworkManager.settings.modify.system": (
+                "/usr/bin/nmcli",
+                "/usr/sbin/NetworkManager",
+            ),
+            "org.freedesktop.timedate1.set-timezone": ("/usr/bin/timedatectl",),
+        }
+
+    def _polkit_action_profile(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+    ) -> tuple[str, str]:
+        """Choose a coherent action/process pair for a polkit authorization message."""
+        params = entry.get("params") or {}
+        allowed = {str(item) for item in params.get("action_id", [])}
+        profiles = [
+            (action, process)
+            for action, processes in self._polkit_action_process_paths().items()
+            if not allowed or action in allowed
+            for process in processes
+        ]
+        if not profiles:
+            action = rng.choice(
+                params.get("action_id") or ["org.freedesktop.systemd1.manage-units"]
+            )
+            process = rng.choice(params.get("process_path") or ["/usr/bin/systemctl"])
+            return str(action), str(process)
+        return rng.choice(profiles)
 
     def _render_polkit_syslog_message(
         self,
@@ -1005,9 +1055,13 @@ class BaselineMixin:
                 host_agents.append(agent)
 
         process_id = self.state_manager.allocate_transient_linux_pid(hostname, timestamp)
+        action_id, action_process_path = self._polkit_action_profile(entry, rng)
         values = {
+            "action_id": action_id,
             "bus_id": agent["bus_id"],
-            "process_path": agent["process_path"],
+            "process_path": action_process_path
+            if "action {action_id}" in template
+            else agent["process_path"],
         }
         positional = agent["session_id"] if "unix-session:{0}" in template else process_id
         return render_extra_syslog_message(

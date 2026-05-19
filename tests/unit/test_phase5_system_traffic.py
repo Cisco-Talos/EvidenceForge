@@ -139,6 +139,56 @@ def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_mana
     assert min(process_ids) >= 300
 
 
+def test_polkit_action_messages_pair_action_with_source_native_program(linux_system, state_manager):
+    """Polkit authorization rows should not mix unrelated actions and binaries."""
+    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
+    rng = random.Random(19)
+    timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    allowed_paths = {
+        "org.freedesktop.systemd1.manage-units": {
+            "/usr/bin/systemctl",
+            "/usr/bin/loginctl",
+        },
+        "org.freedesktop.login1.reboot": {
+            "/usr/bin/systemctl",
+            "/usr/bin/loginctl",
+        },
+        "org.freedesktop.packagekit.system-update": {
+            "/usr/lib/packagekit/packagekitd",
+            "/usr/bin/pkcon",
+        },
+        "org.freedesktop.NetworkManager.settings.modify.system": {
+            "/usr/bin/nmcli",
+            "/usr/sbin/NetworkManager",
+        },
+        "org.freedesktop.timedate1.set-timezone": {
+            "/usr/bin/timedatectl",
+        },
+    }
+
+    messages = [
+        engine._render_polkit_syslog_message(
+            {**entry, "messages": [message]},
+            rng,
+            system=linux_system,
+            timestamp=timestamp + timedelta(seconds=idx),
+        )
+        for idx, message in enumerate(entry["messages"])
+        if "action {action_id}" in message
+    ]
+
+    assert messages
+    for message in messages:
+        action = re.search(r"action ([^ ]+)", message).group(1)
+        path = re.search(r"\[([^]]+)\]", message)
+        if path is not None:
+            assert path.group(1) in allowed_paths[action]
+
+
 def test_dbus_bus_state_stays_source_native(linux_system):
     """D-Bus bus suffixes should stay in a realistic low integer regime."""
     engine = type("FakeEngine", (BaselineMixin,), {})()
