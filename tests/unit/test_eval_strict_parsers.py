@@ -30,12 +30,11 @@ from evidenceforge.formats.validator import STRICT_FORMATS, validate_strict
 
 
 class TestStrictSyslog:
-    def test_rfc5424_without_legacy_marker_is_invalid(self):
-        """Generated syslog strict mode requires RFC3164."""
+    def test_generated_rfc5424_with_parser_marker_is_valid(self):
+        """Generated default syslog strict mode accepts RFC5424."""
         raw = "<86>1 2026-03-18T12:00:00.000000Z PROXY-01 sudo 50424 - - message"
-        result = validate_strict("syslog", raw, {})
-        assert not result.valid
-        assert any("rfc3164" in e.lower() for e in result.errors)
+        result = validate_strict("syslog", raw, {"syslog_protocol": "rfc5424"})
+        assert result.valid, result.errors
 
     def test_valid_rfc3164_with_pri(self):
         """RFC3164 with PRI < 192 is valid generated syslog."""

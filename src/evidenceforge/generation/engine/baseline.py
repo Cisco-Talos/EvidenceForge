@@ -5626,7 +5626,7 @@ class BaselineMixin:
                             pid=sshd_pid,
                             facility=10,
                         )
-                elif source_roll < 0.36:
+                elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
                     snap_name = rng.choice(

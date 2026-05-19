@@ -67,7 +67,7 @@ programs:
         - "3"
     messages:
       - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {}"
-      - '[origin software="rsyslogd"] rsyslogd was HUPed after config reload id {}'
+      - "configuration reload completed after SIGHUP, reload id {}"
       - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {}"
       - "action '{action_name}' resumed after retry {}, next retry disabled"
       - "module {module_name}: worker thread pool adjusted to {worker_count}"
@@ -159,9 +159,7 @@ programs:
         - /usr/bin/find /tmp -xdev -type f -mtime +10 -delete
         - /usr/bin/test -x /usr/lib/update-notifier/update-motd-reboot-required && /usr/lib/update-notifier/update-motd-reboot-required
     messages:
-      - "pam_unix(cron:session): session opened for user {cron_user}(uid=0) by (uid=0)"
       - "({cron_user}) CMD ({cron_command})"
-      - "pam_unix(cron:session): session closed for user {cron_user}"
 
   - app: anacron
     distro: ubuntu
