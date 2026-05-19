@@ -37,6 +37,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
 - [x] Extract license-neutral output target rendering and evaluation support from the SOF-ELK external parser branch while leaving parser pipeline code/docs/tests out of dev.
+- [x] Run the full slow-enabled pytest suite on the output-target extraction branch — `uv run pytest --include-slow --no-cov` passed with `3296 passed, 24 skipped`; no regressions or fixes were needed.
 - [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier flushes to write year-partitioned syslog files, while preserving final sort/logind normalization at close.
 - [ ] **P2** Revisit proxy access log realism and parser compatibility; consider switching `proxy_access.log` from W3C Extended format to Apache/Nginx combined-style output with absolute URLs and CONNECT targets.
 - [x] Prepare `dev` → `main` PR for final PR-review integration batch — inspected `main..dev`, applied the required v0.7.2 patch version/changelog bump, ran release checks, pushed `dev`, and opened the PR into `main`.
