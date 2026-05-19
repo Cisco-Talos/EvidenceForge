@@ -642,6 +642,9 @@ class TestSyslogContext:
         event = syslog.emit.call_args[0][0]
         assert event.syslog is not None
         assert event.syslog.app_name == "login"
+        assert "logname=LOGIN" in event.syslog.message
+        assert "tty=/dev/tty1" in event.syslog.message
+        assert "rhost=  user=alice" in event.syslog.message
         assert "from -" not in event.syslog.message
         zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
         assert not any(
@@ -670,6 +673,9 @@ class TestSyslogContext:
         event = syslog.emit.call_args[0][0]
         assert event.syslog is not None
         assert event.syslog.app_name == "login"
+        assert "logname=LOGIN" in event.syslog.message
+        assert "tty=/dev/tty1" in event.syslog.message
+        assert "rhost=  user=alice" in event.syslog.message
         assert "from 10.0.10.2" not in event.syslog.message
 
     def test_generate_syslog_event_helper(

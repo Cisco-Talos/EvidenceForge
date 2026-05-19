@@ -245,6 +245,7 @@ class TestLogoffLinux:
         )
         assert event.timestamp == close_time + expected_delta
         assert "Received disconnect from 10.0.10.50 port 51111" in event.syslog.message
+        assert event.syslog.message.endswith(":11:  [preauth]")
 
     def test_ssh_logoff_suppresses_syslog_when_far_from_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters

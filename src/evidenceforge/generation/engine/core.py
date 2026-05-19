@@ -43,6 +43,11 @@ from evidenceforge.generation.ground_truth import GroundTruthGenerator
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.world_model import WorldModel, WorldPlanner
 from evidenceforge.models.scenario import Scenario, System, User
+from evidenceforge.output_targets import (
+    OutputTarget,
+    normalize_output_target,
+    write_output_target_marker,
+)
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.time import parse_duration, resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
@@ -73,6 +78,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         output_dir: Path,
         progress_callback: Callable[[str, dict], None] | None = None,
         ground_truth_dir: Path | None = None,
+        output_target: str | OutputTarget | None = None,
     ):
         """Initialize generation engine.
 
@@ -82,10 +88,12 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             progress_callback: Optional callback for progress reporting.
                 Called with (event_type: str, data: dict) at key milestones.
             ground_truth_dir: Directory for GROUND_TRUTH.md. Defaults to output_dir.
+            output_target: Render/layout target for generated output.
         """
         self.scenario = scenario
         self.output_dir = output_dir
         self.ground_truth_dir = ground_truth_dir or output_dir
+        self.output_target = normalize_output_target(output_target)
         self.progress_callback = progress_callback
         self.state_manager = StateManager()
         self.emitters: dict = {}
@@ -497,6 +505,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             self.scenario,
             source_evidence_status,
         )
+        write_output_target_marker(self.ground_truth_dir, self.output_target)
         logger.info(f"Ground truth documentation generated: {output_path}")
 
     def _get_next_event_record_id(self) -> int:

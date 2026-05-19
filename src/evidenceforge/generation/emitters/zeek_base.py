@@ -440,8 +440,23 @@ class SensorMultiplexEmitter(LogEmitter):
         self._buffer_size = buffer_size
         super().__init__(format_def, output_path, buffer_size, threaded)
 
+    def _safe_writer_key(self, sensor_hostname: str) -> str:
+        """Return the writer key for a routed sensor value."""
+        return sanitize_path_component(sensor_hostname)
+
+    def _writer_path_for_key(self, safe_writer_key: str) -> Path:
+        """Return the output path for a writer key."""
+        if safe_writer_key:
+            return self._base_dir / safe_writer_key / self._log_filename
+        if self._direct_file_path:
+            # Direct file mode (test/simple usage): output_path was a file
+            return self._direct_file_path
+        # No sensors configured -> flat output using format name
+        flat_name = self._flat_filename or self._log_filename
+        return self._base_dir / flat_name
+
     def _get_writer(self, sensor_hostname: str) -> _SingleZeekWriter:
-        safe_sensor = sanitize_path_component(sensor_hostname)
+        safe_sensor = self._safe_writer_key(sensor_hostname)
         writer = self._writers.get(safe_sensor)
         if writer is not None:
             return writer
@@ -449,15 +464,7 @@ class SensorMultiplexEmitter(LogEmitter):
             writer = self._writers.get(safe_sensor)
             if writer is not None:
                 return writer
-            if safe_sensor:
-                path = self._base_dir / safe_sensor / self._log_filename
-            elif self._direct_file_path:
-                # Direct file mode (test/simple usage): output_path was a file
-                path = self._direct_file_path
-            else:
-                # No sensors configured → flat output using format name
-                flat_name = self._flat_filename or self._log_filename
-                path = self._base_dir / flat_name
+            path = self._writer_path_for_key(safe_sensor)
             writer = _SingleZeekWriter(
                 path,
                 self._buffer_size,

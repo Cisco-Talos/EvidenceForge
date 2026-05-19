@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-05-16
+**Last Updated:** 2026-05-17
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -36,6 +36,10 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Extract license-neutral output target rendering and evaluation support from the SOF-ELK external parser branch while leaving parser pipeline code/docs/tests out of dev.
+- [x] Run the full slow-enabled pytest suite on the output-target extraction branch — `uv run pytest --include-slow --no-cov` passed with `3296 passed, 24 skipped`; no regressions or fixes were needed.
+- [ ] **P1** Reduce syslog memory pressure in long scenarios by allowing barrier flushes to write year-partitioned syslog files, while preserving final sort/logind normalization at close.
+- [ ] **P2** Revisit proxy access log realism and parser compatibility; consider switching `proxy_access.log` from W3C Extended format to Apache/Nginx combined-style output with absolute URLs and CONNECT targets.
 - [x] Prepare `dev` → `main` PR for final PR-review integration batch — inspected `main..dev`, applied the required v0.7.2 patch version/changelog bump, ran release checks, pushed `dev`, and opened the PR into `main`.
 - [x] Run slow comprehensive pytest suite after final PR integration — `uv run pytest -v --include-slow --no-cov` passed on current `dev` with `3265 passed, 24 skipped`; no regressions or follow-up fixes were needed.
 - [x] Move coverage to the release lane — default/local and feature-PR tests now run without coverage, final `dev` → `main` readiness keeps explicit coverage and slow comprehensive gates, CI/docs/agent guidance are updated, workflow YAML parses, Ruff checks pass, and `uv run pytest --no-cov` passed in 34.74s.

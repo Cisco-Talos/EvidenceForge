@@ -28,6 +28,7 @@ host's FQDN. Each host gets its own subdirectory:
     base_dir/<host-fqdn>/windows_event_security.xml
     base_dir/<host-fqdn>/ecar.json
     base_dir/<host-fqdn>/syslog.log
+    base_dir/<host-fqdn>/<year>/syslog.log  # target-specific syslog layouts
 """
 
 import logging
@@ -148,8 +149,21 @@ class HostMultiplexEmitter(LogEmitter):
         self._buffer_size = buffer_size
         super().__init__(format_def, output_path, buffer_size, threaded)
 
+    def _safe_writer_key(self, host_fqdn: str) -> str:
+        """Return the writer key for a routed host value."""
+        return sanitize_path_component(host_fqdn)
+
+    def _writer_path_for_key(self, safe_writer_key: str) -> Path:
+        """Return the output path for a writer key."""
+        if safe_writer_key and not self._direct_file_mode:
+            return self._base_dir / safe_writer_key / self._log_filename
+        if self._direct_file_path:
+            return self._direct_file_path
+        flat_name = self._flat_filename or self._log_filename
+        return self._base_dir / flat_name
+
     def _get_writer(self, host_fqdn: str) -> _SingleHostWriter:
-        safe_host_fqdn = sanitize_path_component(host_fqdn)
+        safe_host_fqdn = self._safe_writer_key(host_fqdn)
         writer = self._writers.get(safe_host_fqdn)
         if writer is not None:
             return writer
@@ -157,13 +171,7 @@ class HostMultiplexEmitter(LogEmitter):
             writer = self._writers.get(safe_host_fqdn)
             if writer is not None:
                 return writer
-            if safe_host_fqdn and not self._direct_file_mode:
-                path = self._base_dir / safe_host_fqdn / self._log_filename
-            elif self._direct_file_path:
-                path = self._direct_file_path
-            else:
-                flat_name = self._flat_filename or self._log_filename
-                path = self._base_dir / flat_name
+            path = self._writer_path_for_key(safe_host_fqdn)
             sort = self._sort_flat_file
             writer = _SingleHostWriter(
                 path,

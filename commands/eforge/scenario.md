@@ -18,6 +18,11 @@ The goal is a scenario that produces data useful for threat hunting training —
 
 The engine now supports up to 9 log formats including Cisco ASA firewall logs (`cisco_asa`) with explicit firewall policy rules for allow/deny decisions.
 
+Scenario YAML should name canonical log formats only. Target-specific renderings
+such as SOF-ELK Snare Windows events or year-partitioned RFC3164 syslog are
+selected at generation time with `eforge generate --target default|sof-elk`, not
+encoded in the scenario.
+
 ## How This Works
 
 EvidenceForge uses a two-phase approach:

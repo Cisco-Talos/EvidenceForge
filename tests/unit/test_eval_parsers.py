@@ -118,7 +118,68 @@ class TestWindowsEventParser:
 
         parser = WindowsEventParser()
         assert parser.can_parse(Path("windows_event_security.xml"))
+        assert parser.can_parse(Path("windows_event_security_snare.log"))
         assert not parser.can_parse(Path("zeek_conn.json"))
+
+    def test_parses_snare_security_as_canonical_windows(self, tmp_path):
+        from evidenceforge.evaluation.parsers.windows import WindowsEventParser
+
+        log_dir = tmp_path / "win-01.example.test" / "2026"
+        log_dir.mkdir(parents=True)
+        log = log_dir / "windows_event_security_snare.log"
+        log.write_text(
+            "<86>Jun 15 14:23:05 win-01.example.test "
+            "win-01.example.test\tMSWinEventLog\t0\tSecurity\t101\t"
+            "Mon Jun 15 14:23:05 2026\t4624\t"
+            "Microsoft-Windows-Security-Auditing\talice\tN/A\tSuccess Audit\t"
+            "win-01.example.test\tLogon\tAn account was successfully logged on.:  "
+            "Account Name: alice  Logon ID: 0x46a3f  \n",
+            encoding="utf-8",
+        )
+
+        records = list(WindowsEventParser().parse_file(log))
+
+        assert len(records) == 1
+        assert records[0].source_format == "windows_event_security"
+        assert records[0].fields["EventID"] == 4624
+        assert records[0].fields["Channel"] == "Security"
+        assert records[0].timestamp.year == 2026
+        assert records[0].parse_errors == []
+
+
+class TestSysmonEventParser:
+    def test_can_parse_xml_and_snare_files(self):
+        from evidenceforge.evaluation.parsers.windows import SysmonEventParser
+
+        parser = SysmonEventParser()
+        assert parser.can_parse(Path("windows_event_sysmon.xml"))
+        assert parser.can_parse(Path("windows_event_sysmon_snare.log"))
+        assert not parser.can_parse(Path("windows_event_security.xml"))
+
+    def test_parses_snare_sysmon_as_canonical_sysmon(self, tmp_path):
+        from evidenceforge.evaluation.parsers.windows import SysmonEventParser
+
+        log_dir = tmp_path / "win-01.example.test" / "2026"
+        log_dir.mkdir(parents=True)
+        log = log_dir / "windows_event_sysmon_snare.log"
+        log.write_text(
+            "<14>Jun 15 14:23:06 win-01.example.test "
+            "win-01.example.test\tMSWinEventLog\t0\t"
+            "Microsoft-Windows-Sysmon/Operational\t101\t"
+            "Mon Jun 15 14:23:06 2026\t1\tMicrosoft-Windows-Sysmon\talice\tN/A\t"
+            "Information\twin-01.example.test\tProcess Create\tProcess Create:  "
+            "Image: C:\\Windows\\System32\\cmd.exe  ProcessId: 4321  \n",
+            encoding="utf-8",
+        )
+
+        records = list(SysmonEventParser().parse_file(log))
+
+        assert len(records) == 1
+        assert records[0].source_format == "windows_event_sysmon"
+        assert records[0].fields["EventID"] == 1
+        assert records[0].fields["Image"] == "C:\\Windows\\System32\\cmd.exe"
+        assert records[0].timestamp.year == 2026
+        assert records[0].parse_errors == []
 
 
 class TestZeekConnParser:
@@ -200,7 +261,7 @@ class TestSyslogParser:
         assert first.fields["pid"] == 12345
         assert first.fields["facility"] == 10
         assert first.fields["severity"] == 6
-        assert first.fields["syslog_protocol"] == "rfc5424"
+        assert first.fields["syslog_protocol"] == "rfc5424_legacy"
         assert "Accepted publickey" in first.fields["message"]
 
     def test_extracts_timestamps(self):
@@ -257,6 +318,32 @@ class TestSyslogParser:
         assert records[0].timestamp is not None
         assert records[0].timestamp.year == 2024
         assert records[0].fields["syslog_protocol"] == "rfc3164_legacy"
+
+    def test_parent_year_overrides_scenario_for_generated_rfc3164(self, tmp_path):
+        """Generated syslog uses the parent YYYY directory for BSD timestamps."""
+        from types import SimpleNamespace
+
+        from evidenceforge.evaluation.parsers.syslog import SyslogParser
+
+        log_dir = tmp_path / "host" / "2026"
+        log_dir.mkdir(parents=True)
+        log = log_dir / "syslog.log"
+        log.write_text(
+            "<86>Mar 18 12:00:00 host sshd[1]: Connected from 10.0.0.1\n",
+            encoding="utf-8",
+        )
+        scenario = SimpleNamespace(
+            time_window=SimpleNamespace(
+                start=__import__("datetime").datetime(2024, 3, 1, 0, 0, 0, tzinfo=UTC)
+            )
+        )
+        parser = SyslogParser()
+        parser.scenario = scenario
+        records = list(parser.parse_file(log))
+
+        assert records[0].timestamp is not None
+        assert records[0].timestamp.year == 2026
+        assert records[0].fields["syslog_protocol"] == "rfc3164"
 
     def test_mtime_fallback_when_no_scenario(self, tmp_path):
         """Without a scenario, year falls back to mtime."""
@@ -459,5 +546,5 @@ class TestParserDiscovery:
     def test_all_parsers_registered(self):
         from evidenceforge.evaluation.parsers import _PARSER_CLASSES
 
-        # 7 original + 12 new Zeek parsers + cisco_asa + proxy_access
-        assert len(_PARSER_CLASSES) == 21
+        # Original parsers + Sysmon + 12 Zeek parsers + cisco_asa + proxy_access
+        assert len(_PARSER_CLASSES) == 22

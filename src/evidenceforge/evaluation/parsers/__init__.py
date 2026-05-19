@@ -56,6 +56,7 @@ class LogParser(ABC):
     # Optional: set by the evaluation engine before parse_file is called so
     # parsers that need scenario metadata (e.g. time_window year) can read it.
     scenario: Any = None
+    output_target: Any = None
 
     @abstractmethod
     def parse_file(self, path: Path) -> Iterator[ParsedRecord]:
@@ -99,7 +100,7 @@ def _is_safe_path(path: Path, root: Path) -> bool:
     return True
 
 
-def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
+def discover_log_files(output_dir: Path, output_target: Any = None) -> dict[str, list[Path]]:
     """Discover log files in an output directory and map to format parsers.
 
     Scans both top-level files and per-sensor subdirectories (e.g., zeek-fw01/).
@@ -155,6 +156,7 @@ def discover_log_files(output_dir: Path) -> dict[str, list[Path]]:
         if format_name == "bash_history":
             continue  # Already handled above
         parser = parser_cls()
+        parser.output_target = output_target
         for candidate in candidates:
             if parser.can_parse(candidate):
                 result.setdefault(format_name, []).append(candidate)
@@ -170,7 +172,10 @@ from evidenceforge.evaluation.parsers.proxy import ProxyAccessParser  # noqa: E4
 from evidenceforge.evaluation.parsers.snort import SnortAlertParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.syslog import SyslogParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.web import WebAccessParser  # noqa: E402,F401
-from evidenceforge.evaluation.parsers.windows import WindowsEventParser  # noqa: E402,F401
+from evidenceforge.evaluation.parsers.windows import (  # noqa: E402
+    SysmonEventParser,  # noqa: F401
+    WindowsEventParser,  # noqa: F401
+)
 from evidenceforge.evaluation.parsers.zeek import ZeekConnParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_dhcp import ZeekDhcpParser  # noqa: E402,F401
 from evidenceforge.evaluation.parsers.zeek_dns import ZeekDnsParser  # noqa: E402,F401

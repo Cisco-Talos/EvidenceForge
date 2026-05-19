@@ -37,6 +37,7 @@ from evidenceforge.cli.commands import (
     app,
 )
 from evidenceforge.events.observation_manifest import OBSERVATION_MANIFEST_FILENAME
+from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 
 runner = CliRunner()
 
@@ -108,6 +109,46 @@ name: test
         assert result.exit_code == EXIT_SUCCESS
         assert "✓" in result.stdout or "complete" in result.stdout.lower()
         assert mock_engine.generate.called
+        assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.DEFAULT
+
+    @patch("evidenceforge.cli.commands.GenerationEngine")
+    def test_generate_accepts_sof_elk_target(self, mock_engine_class, scenarios_dir, tmp_path):
+        """--target sof-elk is passed to the generation engine."""
+        mock_engine = Mock()
+        mock_engine_class.return_value = mock_engine
+
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--target",
+                "sof-elk",
+            ],
+        )
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert mock_engine_class.call_args.kwargs["output_target"] == OutputTarget.SOF_ELK
+        assert (tmp_path / OUTPUT_TARGET_FILENAME).read_text(encoding="utf-8") == "sof-elk\n"
+
+    def test_generate_invalid_target_fails_clearly(self, scenarios_dir, tmp_path):
+        """Invalid --target values should fail before generation starts."""
+        result = runner.invoke(
+            app,
+            [
+                "generate",
+                str(scenarios_dir / "minimal.yaml"),
+                "--output",
+                str(tmp_path),
+                "--target",
+                "splunk",
+            ],
+        )
+
+        assert result.exit_code == EXIT_INPUT_ERROR
+        assert "invalid output target" in result.stdout
 
     @patch("evidenceforge.cli.commands.GenerationEngine")
     def test_generate_verbose_mode(self, mock_engine_class, scenarios_dir, tmp_path):
