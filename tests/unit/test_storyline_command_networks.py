@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.generation.activity.generator import _zeek_conn_observation_time
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.models.scenario import System, User
 
@@ -356,21 +357,30 @@ class TestStorylineScpCorrelation:
         )
 
         syslog_times = [event["time"] for event in engine.activity_generator.syslog_events]
+        observed_transfer_time = _zeek_conn_observation_time(
+            transfer_time,
+            source.ip,
+            40117,
+            target.ip,
+            22,
+            "tcp",
+            "ssh",
+        )
         assert len(syslog_times) == 3
         assert syslog_times[0] < syslog_times[1] < syslog_times[2]
         assert (
             timedelta(milliseconds=80)
-            < syslog_times[0] - transfer_time
+            < syslog_times[0] - observed_transfer_time
             < timedelta(milliseconds=81)
         )
         assert (
             timedelta(milliseconds=350)
-            < syslog_times[1] - transfer_time
+            < syslog_times[1] - observed_transfer_time
             < timedelta(milliseconds=351)
         )
         assert (
             timedelta(milliseconds=900)
-            < syslog_times[2] - transfer_time
+            < syslog_times[2] - observed_transfer_time
             < timedelta(milliseconds=901)
         )
         assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3

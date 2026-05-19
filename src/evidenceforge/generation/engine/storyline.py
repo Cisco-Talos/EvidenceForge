@@ -45,7 +45,10 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
-from evidenceforge.generation.activity.generator import _ssh_syslog_time
+from evidenceforge.generation.activity.generator import (
+    _ssh_syslog_time,
+    _zeek_conn_observation_time,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     is_stable_resource_path,
@@ -3828,9 +3831,18 @@ class StorylineMixin:
             sshd_pid,
             transfer_time.isoformat(),
         )
+        observed_transfer_time = _zeek_conn_observation_time(
+            transfer_time,
+            source_system.ip,
+            source_port,
+            target_system.ip,
+            22,
+            "tcp",
+            "ssh",
+        )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=_ssh_syslog_time(transfer_time, "connection", 80, *ssh_syslog_seed),
+            time=_ssh_syslog_time(observed_transfer_time, "connection", 80, *ssh_syslog_seed),
             app_name="sshd",
             message=(
                 f"Connection from {source_system.ip} port {source_port} "
@@ -3841,7 +3853,7 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=_ssh_syslog_time(transfer_time, "accepted", 350, *ssh_syslog_seed),
+            time=_ssh_syslog_time(observed_transfer_time, "accepted", 350, *ssh_syslog_seed),
             app_name="sshd",
             message=f"Accepted publickey for {target_user} from {source_system.ip} port {source_port} ssh2",
             pid=sshd_pid,
@@ -3849,7 +3861,7 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=_ssh_syslog_time(transfer_time, "pam", 900, *ssh_syslog_seed),
+            time=_ssh_syslog_time(observed_transfer_time, "pam", 900, *ssh_syslog_seed),
             app_name="sshd",
             message=(
                 f"pam_unix(sshd:session): session opened for user "

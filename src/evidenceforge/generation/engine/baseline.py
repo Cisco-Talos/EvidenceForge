@@ -53,6 +53,7 @@ from evidenceforge.generation.activity.generator import (
     _linux_uid_for_user,
     _ssh_syslog_time,
     _windows_foreground_lifetime,
+    _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.host_activity_profiles import (
@@ -5603,6 +5604,15 @@ class BaselineMixin:
                         source_system=src_sys_obj,
                         conn_state="SF",
                     )
+                    observed_ssh_time = _zeek_conn_observation_time(
+                        ts,
+                        ip,
+                        port,
+                        system.ip,
+                        22,
+                        "tcp",
+                        "ssh",
+                    )
                     sshd_pid = rng.randint(5000, 60000)
                     ssh_roster = self._get_server_ssh_users(system)
                     ssh_usernames = [user.username for user in ssh_roster]
@@ -5634,18 +5644,23 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(10, 50)
+                    _msg_offset = rng.randint(25, 120)
                     ssh_syslog_seed = (
                         system.hostname,
                         ip,
                         port,
                         sshd_pid,
-                        ts.isoformat(),
+                        observed_ssh_time.isoformat(),
                     )
                     login_times: list[datetime] = []
                     for _label in ("connection", "accepted", "pam"):
                         login_times.append(
-                            _ssh_syslog_time(ts, _label, _msg_offset, *ssh_syslog_seed)
+                            _ssh_syslog_time(
+                                observed_ssh_time,
+                                _label,
+                                _msg_offset,
+                                *ssh_syslog_seed,
+                            )
                         )
                         _msg_offset += rng.randint(12, 70)
                     # systemd-logind is observed as a different process from
@@ -5654,7 +5669,12 @@ class BaselineMixin:
                     # sort before auth/PAM under the default syslog delay profile.
                     _msg_offset += rng.randint(420, 760)
                     login_times.append(
-                        _ssh_syslog_time(ts, "logind", _msg_offset, *ssh_syslog_seed)
+                        _ssh_syslog_time(
+                            observed_ssh_time,
+                            "logind",
+                            _msg_offset,
+                            *ssh_syslog_seed,
+                        )
                     )
                     ssh_sid = self.state_manager.next_linux_logind_session_id(
                         system.hostname,

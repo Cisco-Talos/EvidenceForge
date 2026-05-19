@@ -857,6 +857,30 @@ def _ssh_syslog_time(
     return base_time - delta if before else base_time + delta
 
 
+def _zeek_conn_observation_time(
+    base_time: datetime,
+    src_ip: str,
+    src_port: int,
+    dst_ip: str,
+    dst_port: int,
+    proto: str,
+    service: str,
+) -> datetime:
+    """Return the source-native Zeek connection start time for a canonical flow."""
+    return base_time + sample_timing_delta(
+        "source.zeek_conn_start",
+        seed_parts=(
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            proto,
+            service,
+            base_time,
+        ),
+    )
+
+
 def _session_started_by(session: Any, time: datetime) -> bool:
     """Return whether a session exists at the given activity time."""
     session_start = session.start_time
@@ -7434,17 +7458,14 @@ class ActivityGenerator:
         if proto == "tcp" and duration and duration > 10.0 and rng.random() < 0.03:
             missed_bytes = rng.randint(500, 50000)
 
-        time = time + sample_timing_delta(
-            "source.zeek_conn_start",
-            seed_parts=(
-                src_ip,
-                src_port,
-                dst_ip,
-                dst_port,
-                proto,
-                service or "",
-                time,
-            ),
+        time = _zeek_conn_observation_time(
+            time,
+            src_ip,
+            src_port,
+            dst_ip,
+            dst_port,
+            proto,
+            service or "",
         )
         if proto == "icmp":
             time = self._disambiguate_icmp_observation_time(

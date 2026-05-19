@@ -46,6 +46,7 @@ from evidenceforge.generation.activity.generator import (
     _jitter_default_connection_duration,
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
+    _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.generation.activity.tls_realism import (
@@ -3867,6 +3868,37 @@ class TestActivityGenerator:
         assert event.network.dst_ip == dst_ip
         assert event.network.dst_port == dst_port
         assert event.network.service == "ssl"
+
+    def test_generate_connection_uses_source_native_zeek_start_time(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Zeek connection timestamps should include shared source start latency."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.5",
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            src_port=51111,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=12.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.timestamp == _zeek_conn_observation_time(
+            timestamp,
+            "10.0.10.5",
+            51111,
+            "10.0.20.10",
+            22,
+            "tcp",
+            "ssh",
+        )
 
     def test_generate_connection_clamps_http_depth_for_one_request_connections(
         self, activity_gen, state_manager, mock_emitters
