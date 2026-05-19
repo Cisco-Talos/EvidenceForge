@@ -1469,9 +1469,13 @@ class TestProcessGuidBootTime:
         creation = datetime(2024, 4, 1, 10, 0, tzinfo=UTC)
         guid_a = emitter._generate_process_guid("HOST-A", 1234, creation)
         guid_b = emitter._generate_process_guid("HOST-B", 1234, creation)
+        unix_ts = int(creation.timestamp())
         assert guid_a != guid_b
         assert guid_a.split("-")[1] == guid_b.split("-")[1]
+        assert guid_a.split("-")[1] == f"{unix_ts & 0xFFFF:04x}"
+        assert guid_a.split("-")[2] == f"{(unix_ts >> 16) & 0xFFFF:04x}"
         assert guid_a.split("-")[1] != "000c"
+        assert guid_a.strip("{}").split("-")[4].startswith("000000")
 
     def test_guid_deterministic_with_boot_time(self, emitter):
         emitter._host_boot_times = {

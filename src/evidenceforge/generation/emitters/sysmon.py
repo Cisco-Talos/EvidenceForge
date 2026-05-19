@@ -104,6 +104,15 @@ _DNS_STATUS_MAP: dict[str, str] = {
     "REFUSED": "9005",
 }
 
+_PROCESS_GUID_FIELDS: tuple[str, ...] = (
+    "ProcessGuid",
+    "ParentProcessGuid",
+    "SourceProcessGuid",
+    "TargetProcessGuid",
+    "SourceProcessGUID",
+    "TargetProcessGUID",
+)
+
 
 def _format_sysmon_utc_time(timestamp: datetime) -> str:
     """Return Sysmon EventData UtcTime from the rendered source timestamp."""
@@ -662,11 +671,11 @@ class SysmonEventEmitter(LogEmitter):
     def _get_stable_process_guid(
         self, hostname: str, pid: int, fallback_timestamp: datetime
     ) -> str:
-        """Generate ProcessGuid using the process creation time for stability.
+        """Generate ProcessGuid using the rendered process-create time.
 
-        Real Sysmon keyed ProcessGuid on the process start time, so the same
-        PID produces the same GUID across Events 1, 3, 5, 7, 11, 12/13, 22.
-        Falls back to the event timestamp when the process isn't in StateManager.
+        Sysmon encodes the visible Event 1 time in the ProcessGuid. Use the
+        deterministic process-create source offset so Event 1 and all follow-on
+        events share the same source-native identifier.
         """
         ts = fallback_timestamp
         sm = getattr(self, "_state_manager", None)
@@ -674,7 +683,15 @@ class SysmonEventEmitter(LogEmitter):
             proc = sm.get_process(hostname, pid)
             if proc is not None and proc.start_time <= fallback_timestamp:
                 ts = proc.start_time
-        return self._generate_process_guid(hostname, pid, ts)
+        rendered_create_time = ts + self._source_offset(
+            "process_create",
+            hostname,
+            pid,
+            ts,
+            minimum_ms=3,
+            maximum_ms=85,
+        )
+        return self._generate_process_guid(hostname, pid, rendered_create_time)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
@@ -758,37 +775,34 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_process_guid(self, hostname: str, pid: int, timestamp: datetime) -> str:
         """Generate a deterministic Sysmon ProcessGuid from host+pid+time.
 
-        Real Sysmon ProcessGUID format: {machine_guid}-HHHH-HHHH-SSSS-XXXXXXXXXXXX}
-        where HHHHHHHH is the hex Unix timestamp of the process creation time
-        and SSSS is a PID-based sequence number.
-
-        The first DWORD is a stable machine-specific value (same for all
-        processes on a given host), matching real Sysmon behavior.
-
-        The timestamp segments use the process creation timestamp so the GUID
-        does not expose synthetic boot-relative low counters. Host boot time is
-        still included in the stable hash material for per-host uniqueness.
+        Sysmon ProcessGuid values are source-specific correlation IDs, not RFC
+        UUIDs. They expose a stable machine prefix, the process creation time
+        as low/high 16-bit Unix-time words, and a zero-heavy process token
+        suffix. Keep the value deterministic without rendering a UUID-like
+        random tail.
         """
-        # Machine-specific first DWORD (stable across all processes on this host)
         machine_prefix = hashlib.md5(
             f"sysmon_machine_{hostname}".encode(), usedforsecurity=False
         ).hexdigest()[:8]
 
-        # Second/third segments: source-native-looking process creation time.
         unix_ts = int(timestamp.timestamp())
         boot_time = getattr(self, "_host_boot_times", {}).get(hostname)
-        hex_ts = f"{unix_ts:08x}"
-
         boot_seed = int(boot_time.timestamp()) if boot_time else 0
-        seed = f"{hostname}:{pid}:{unix_ts}:{boot_seed}"
-        h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        # Third segment: source-native-looking deterministic sequence. Avoid
-        # directly exposing the PID in the GUID shape while preserving stable
-        # per-process correlation across Sysmon event types.
-        seq = h[:4]
 
-        # Remaining segments: deterministic filler for uniqueness
-        return f"{{{machine_prefix}-{hex_ts[:4]}-{hex_ts[4:]}-{seq}-{h[20:32]}}}"
+        time_low = unix_ts & 0xFFFF
+        time_high = (unix_ts >> 16) & 0xFFFF
+
+        seed = f"{hostname}:{pid}:{timestamp.isoformat()}:{boot_seed}"
+        h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
+        token_noise = int(h[:2], 16) & 0xFC
+        token_id = (((pid & 0xFFFF) << 8) | token_noise) & 0xFFFFFFFFFFFF
+        token_word = token_id & 0xFFFF
+        token_tail = (token_id >> 16) & 0xFFFFFFFFFFFF
+
+        return (
+            f"{{{machine_prefix}-{time_low:04x}-{time_high:04x}-"
+            f"{token_word:04x}-{token_tail:012x}}}"
+        )
 
     @classmethod
     def _generate_hashes(
@@ -822,11 +836,13 @@ class SysmonEventEmitter(LogEmitter):
     def _generate_logon_guid(hostname: str, logon_id: str) -> str:
         """Generate one stable Sysmon LogonGuid per host/logon session."""
         normalized = logon_id or "0x0"
-        digest = hashlib.md5(
-            f"sysmon_logon_guid:{hostname}:{normalized}".encode(),
-            usedforsecurity=False,
-        ).hexdigest()
-        return f"{{{digest[:8]}-{digest[8:12]}-{digest[12:16]}-{digest[16:20]}-{digest[20:32]}}}"
+        digest = bytearray(
+            hashlib.sha256(f"sysmon_logon_guid:{hostname}:{normalized}".encode()).digest()[:16]
+        )
+        digest[6] = (digest[6] & 0x0F) | 0x40
+        digest[8] = (digest[8] & 0x3F) | 0x80
+        hexed = digest.hex()
+        return f"{{{hexed[:8]}-{hexed[8:12]}-{hexed[12:16]}-{hexed[16:20]}-{hexed[20:32]}}}"
 
     def _resolve_logon_guid(self, hostname: str, logon_id: str, auth: Any | None) -> str:
         """Resolve the canonical Windows LogonGuid for Sysmon process telemetry."""
@@ -870,7 +886,7 @@ class SysmonEventEmitter(LogEmitter):
             if parent_proc is not None and parent_proc.start_time <= child_start
             else self._host_boot_times.get(host.hostname, child_start - timedelta(days=7))
         )
-        parent_guid = self._generate_process_guid(
+        parent_guid = self._get_stable_process_guid(
             host.hostname,
             proc.parent_pid,
             _parent_ts,
@@ -1789,6 +1805,8 @@ class SysmonEventEmitter(LogEmitter):
             self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
+        self._sync_process_guids_to_event1_times()
+
         for event in self._event_dicts:
             host_fqdn = event.get("Computer", "")
             snare_timestamp = event.get("TimeCreated")
@@ -1861,6 +1879,42 @@ class SysmonEventEmitter(LogEmitter):
                     changed = True
             if not changed:
                 break
+
+    def _sync_process_guids_to_event1_times(self) -> None:
+        """Rewrite ProcessGuid references after final Event 1 timestamp shifts."""
+        replacements: dict[tuple[str, str], str] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 1:
+                continue
+            ts = event.get("TimeCreated")
+            guid = event.get("ProcessGuid")
+            pid = event.get("ProcessId")
+            computer = str(event.get("Computer", ""))
+            if not isinstance(ts, datetime) or not guid:
+                continue
+            try:
+                pid_int = int(pid)
+            except (TypeError, ValueError):
+                continue
+            hostname = computer.split(".", 1)[0] if computer else ""
+            new_guid = self._generate_process_guid(hostname, pid_int, ts)
+            old_guid = str(guid)
+            if new_guid != old_guid:
+                replacements[(computer, old_guid)] = new_guid
+                event["ProcessGuid"] = new_guid
+
+        if not replacements:
+            return
+
+        for event in self._event_dicts:
+            computer = str(event.get("Computer", ""))
+            for field in _PROCESS_GUID_FIELDS:
+                guid = event.get(field)
+                if not guid:
+                    continue
+                replacement = replacements.get((computer, str(guid)))
+                if replacement is not None:
+                    event[field] = replacement
 
     def _shift_followons_after_process_create(self) -> None:
         """Prevent same-ProcessGuid Sysmon follow-ons from preceding Event 1."""
