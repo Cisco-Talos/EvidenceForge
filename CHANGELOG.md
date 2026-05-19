@@ -4,6 +4,37 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.8.1 (2026-05-19)
+
+This patch release packages the post-v0.8.0 realism and skill-guidance fixes on `dev`.
+The branch contains only `fix:` and `docs:` commits since v0.8.0, so the version moves
+from `0.8.0` to `0.8.1` under the pre-1.0 semver policy.
+
+**Source-native host and network realism**
+
+- Improved Linux maintenance/syslog texture, RFC5424 eval compatibility, syslog kernel timing,
+  anacron lifecycle behavior, Zeek HTTP accounting, Zeek sensor accounting, and SSH/Zeek
+  observation timing (`8cd071b`, `74f6a29`, `db5d550`, `508cb3d`, `8a51954`, `c88a40a`,
+  `72b144a`).
+- Tightened Windows audit invariants, endpoint identifiers, browser launch URLs, session
+  normalization, non-Windows eCAR failed-session typing, Linux SSH evidence, transient PID
+  allocation, and Windows GUID rendering (`1862d37`, `15623a4`, `97969d0`, `698f921`,
+  `bc43b8c`, `20e26ca`, `3322297`, `2713026`).
+
+**Scenario and skill guidance**
+
+- Added staged archive provenance, sensor realism, web/proxy response stability, UFW block-flow
+  semantics, endpoint consistency, reduced high-signal realism fingerprints, assessment-loop
+  records, and clarified the eforge scenario bundle layout for Codex/Claude skills (`5ec52ef`,
+  `dc2cdc2`, `16114bc`, `56f6044`, `4064ba0`, `66e53c8`, `33c2624`).
+
+**Validation**
+
+- Full slow-enabled suite passed on current `dev`: `uv run pytest --include-slow --no-cov`
+  completed with `3369 passed`, `2 skipped`.
+- Skill installer/Codex skill validation passed for the scenario bundle layout update.
+- Ruff checks and format checks passed before release preparation.
+
 ## v0.8.0 (2026-05-19)
 
 This minor release adds target-aware output rendering so a single scenario can generate
