@@ -118,6 +118,10 @@ def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
     """Return an OS-native session label for non-Windows eCAR sessions."""
     if event.event_type == "ssh_session":
         return "ssh"
+    if event.event_type == "failed_logon":
+        source_ip = str(getattr(event.auth, "source_ip", "") or "")
+        if source_ip and source_ip != "-":
+            return "remote"
     logon_type = getattr(event.auth, "logon_type", 0)
     if logon_type == 10:
         return "ssh"
@@ -328,6 +332,8 @@ class EcarEmitter(HostMultiplexEmitter):
         if getattr(host, "os_category", "") == "windows":
             event_data["status_code"] = event.auth.failure_status
             event_data["sub_status"] = event.auth.failure_substatus
+        else:
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 

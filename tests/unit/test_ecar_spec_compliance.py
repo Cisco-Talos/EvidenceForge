@@ -500,6 +500,7 @@ class TestSessionOutcomeRendering:
         rendered = emitter.emit_event.call_args[0][0]
         assert rendered["outcome"] == "failure"
         assert rendered["failure_reason"] == "bad_password"
+        assert rendered["session_type"] == "remote"
         assert "status_code" not in rendered
         assert "sub_status" not in rendered
 
