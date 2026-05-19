@@ -32,6 +32,7 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     FileTransferContext,
+    HttpContext,
     NetworkContext,
     OcspContext,
     SslContext,
@@ -41,6 +42,7 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
@@ -415,6 +417,101 @@ class TestSslUidCorrelation:
                 assert files_row["conn_uids"] == [conn_row["uid"]]
                 assert files_row["ts"] > conn_row["ts"]
 
+    def test_ocsp_timestamp_stays_inside_http_file_and_connection_lifetime(self):
+        """OCSP analyzer rows should not outlive their linked HTTP file transfer."""
+        conn_fmt = load_format("zeek_conn")
+        http_fmt = load_format("zeek_http")
+        files_fmt = load_format("zeek_files")
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            http_emitter = ZeekHttpEmitter(http_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            ocsp_emitter = ZeekOcspEmitter(ocsp_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            event = SecurityEvent(
+                timestamp=event_time,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CMySpecificUID123",
+                    duration=0.75,
+                    conn_state="SF",
+                    history="ShADadfF",
+                    orig_bytes=320,
+                    resp_bytes=1500,
+                    orig_pkts=5,
+                    orig_ip_bytes=520,
+                    resp_pkts=8,
+                    resp_ip_bytes=1820,
+                ),
+                http=HttpContext(
+                    method="GET",
+                    host="ocsp.example.com",
+                    uri="/status/abcdef123456",
+                    user_agent="Microsoft-CryptoAPI/10.0",
+                    response_body_len=1200,
+                    status_code=200,
+                    status_msg="OK",
+                    resp_fuids=["Focsp12345678901"],
+                    resp_mime_types=["application/ocsp-response"],
+                    tags=["ocsp"],
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Focsp12345678901",
+                    source="HTTP",
+                    mime_type="application/ocsp-response",
+                    duration=0.012,
+                    local_orig=False,
+                    is_orig=False,
+                    seen_bytes=1200,
+                    total_bytes=1200,
+                ),
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="good",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                ),
+            )
+            event._sensor_hostnames_by_format = {
+                "zeek_conn": ["core", "dmz"],
+                "zeek_http": ["core", "dmz"],
+                "zeek_files": ["core", "dmz"],
+                "zeek_ocsp": ["core", "dmz"],
+            }
+
+            conn_emitter.emit(event)
+            http_emitter.emit(event)
+            files_emitter.emit(event)
+            ocsp_emitter.emit(event)
+            conn_emitter.close()
+            http_emitter.close()
+            files_emitter.close()
+            ocsp_emitter.close()
+
+            for sensor in ("core", "dmz"):
+                conn_row = json.loads((out_dir / sensor / "conn.json").read_text())
+                http_row = json.loads((out_dir / sensor / "http.json").read_text())
+                files_row = json.loads((out_dir / sensor / "files.json").read_text())
+                ocsp_row = json.loads((out_dir / sensor / "ocsp.json").read_text())
+                assert files_row["fuid"] == ocsp_row["id"]
+                assert files_row["conn_uids"] == [conn_row["uid"]]
+                assert http_row["resp_fuids"] == [ocsp_row["id"]]
+                assert http_row["ts"] < files_row["ts"] <= ocsp_row["ts"]
+                assert ocsp_row["ts"] <= files_row["ts"] + files_row["duration"]
+                assert ocsp_row["ts"] <= conn_row["ts"] + conn_row["duration"]
+                assert "conn_uids" not in ocsp_row
+
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
         x509_fmt = load_format("zeek_x509")
@@ -628,7 +725,7 @@ class TestSslUidCorrelation:
         assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000) + 0.001
         assert ssl_offset_us % 1000 != 0
         assert ssl_ts < x509_ts <= conn_ts + ((ssl_window.max_ms + x509_window.max_ms) / 1000)
-        assert x509_ts < ocsp_ts < conn_ts + 6.1
+        assert conn_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
         assert "revoketime" not in ocsp_row
         assert "revokereason" not in ocsp_row
@@ -638,6 +735,7 @@ class TestSslUidCorrelation:
         files_by_fuid = {row["fuid"]: row for row in file_rows}
         ocsp_file_row = files_by_fuid[ocsp_row["id"]]
         assert ocsp_file_row["conn_uids"] == ["CMySpecificUID123"]
+        assert ocsp_file_row["ts"] <= ocsp_ts <= ocsp_file_row["ts"] + ocsp_file_row["duration"]
         assert files_by_fuid["Fabcdef1234567890"]["source"] == "SSL"
         assert ocsp_file_row["tx_hosts"] == ["8.8.8.8"]
         assert ocsp_file_row["rx_hosts"] == ["10.0.0.1"]
