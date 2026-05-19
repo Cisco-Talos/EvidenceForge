@@ -1115,11 +1115,28 @@ class StorylineMixin:
         self._record_last_storyline_process(system, pid, service_file_name)
         return pid, service_file_name
 
-    def _record_storyline_logon(self, actor: User, system: System, logon_id: str) -> None:
+    def _record_storyline_logon(
+        self,
+        actor: User,
+        system: System,
+        logon_id: str,
+        source_ip: str | None = None,
+    ) -> None:
         """Record the latest storyline-created session by actor and target host."""
         if not hasattr(self, "_last_storyline_logon_by_actor_system"):
             self._last_storyline_logon_by_actor_system: dict[tuple[str, str], str] = {}
         self._last_storyline_logon_by_actor_system[(actor.username, system.hostname)] = logon_id
+        if source_ip is None and hasattr(self, "state_manager"):
+            get_session = getattr(self.state_manager, "get_session", None)
+            if callable(get_session):
+                session = get_session(logon_id)
+                source_ip = getattr(session, "source_ip", "") if session is not None else None
+        if source_ip:
+            if not hasattr(self, "_last_storyline_logon_source_by_actor_system"):
+                self._last_storyline_logon_source_by_actor_system: dict[tuple[str, str], str] = {}
+            self._last_storyline_logon_source_by_actor_system[(actor.username, system.hostname)] = (
+                source_ip
+            )
 
     def _last_storyline_logon_for_actor_system(
         self,
@@ -1135,6 +1152,187 @@ class StorylineMixin:
         if session is None or session.system != system.hostname:
             return None
         return logon_id
+
+    def _last_storyline_logon_source_for_actor_system(
+        self,
+        actor: User,
+        system: System,
+    ) -> str | None:
+        """Return the latest storyline network-logon source for this actor/host."""
+        if self._last_storyline_logon_for_actor_system(actor, system) is None:
+            return None
+        sources = getattr(self, "_last_storyline_logon_source_by_actor_system", {})
+        return sources.get((actor.username, system.hostname))
+
+    @staticmethod
+    def _extract_compress_archive_destination(command_line: str) -> str | None:
+        """Extract a PowerShell Compress-Archive destination path."""
+        if "compress-archive" not in command_line.lower():
+            return None
+        match = re.search(
+            r"-DestinationPath\s+(?:\"([^\"]+)\"|'([^']+)'|([^\s;]+))",
+            command_line,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        destination = next(group for group in match.groups() if group)
+        destination = destination.strip().strip("\"'").rstrip(");,")
+        return destination or None
+
+    @staticmethod
+    def _smb_filename_for_staged_archive(system: System, archive_path: str) -> str:
+        """Return a Zeek files.log filename for a staged archive read over SMB."""
+        if archive_path.startswith("\\\\"):
+            return archive_path
+        drive_match = re.match(r"^([A-Za-z]):[\\/](.+)$", archive_path)
+        if drive_match:
+            drive = drive_match.group(1).upper()
+            rest = drive_match.group(2).replace("/", "\\")
+            return f"\\\\{system.hostname}\\{drive}$\\{rest}"
+        normalized = archive_path.replace("/", "\\")
+        normalized = normalized.lstrip("\\")
+        return f"\\\\{system.hostname}\\{normalized}"
+
+    def _record_storyline_staged_archive(
+        self,
+        *,
+        actor: User,
+        system: System,
+        archive_path: str,
+        source_ip: str,
+        staged_at: datetime,
+    ) -> None:
+        """Remember an archive staged on a server by a remote source host."""
+        if not source_ip or not archive_path:
+            return
+        if not hasattr(self, "_storyline_staged_archives"):
+            self._storyline_staged_archives: list[SimpleNamespace] = []
+        self._storyline_staged_archives.append(
+            SimpleNamespace(
+                actor=actor,
+                staging_host=system.hostname,
+                staging_ip=system.ip,
+                source_ip=source_ip,
+                archive_path=archive_path,
+                smb_filename=self._smb_filename_for_staged_archive(system, archive_path),
+                staged_at=staged_at,
+                consumed=False,
+            )
+        )
+
+    def _matching_storyline_staged_archive_for_exfil(
+        self,
+        *,
+        source_ip: str,
+        exfil_time: datetime,
+    ) -> SimpleNamespace | None:
+        """Find the most recent unconsumed staged archive for this exfil source."""
+        archives = getattr(self, "_storyline_staged_archives", [])
+        horizon = timedelta(hours=6)
+        candidates = [
+            archive
+            for archive in archives
+            if not archive.consumed
+            and archive.source_ip == source_ip
+            and archive.staged_at <= exfil_time
+            and exfil_time - archive.staged_at <= horizon
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda archive: archive.staged_at)
+
+    def _emit_storyline_archive_transfer_before_exfil(
+        self,
+        *,
+        source_ip: str,
+        exfil_time: datetime,
+        upload_bytes: int,
+        rng: random.Random,
+    ) -> None:
+        """Emit the SMB read that moves a staged archive to the upload host."""
+        if upload_bytes < 1_000_000:
+            return
+        archive = self._matching_storyline_staged_archive_for_exfil(
+            source_ip=source_ip,
+            exfil_time=exfil_time,
+        )
+        if archive is None:
+            return
+        target_system = self._system_for_ip(archive.staging_ip)
+        if target_system is None:
+            return
+        source_system = self._system_for_ip(source_ip)
+        transfer_bytes = max(
+            32_768,
+            upload_bytes - rng.randint(4096, max(4096, min(upload_bytes // 180, 2_000_000))),
+        )
+        throughput = rng.uniform(18_000_000, 85_000_000)
+        duration = max(3.0, min(180.0, transfer_bytes / throughput + rng.uniform(0.5, 6.0)))
+        gap_seconds = rng.uniform(20.0, 180.0)
+        transfer_time = exfil_time - timedelta(seconds=duration + gap_seconds)
+        earliest = archive.staged_at + timedelta(seconds=rng.uniform(20.0, 180.0))
+        if transfer_time < earliest:
+            latest = exfil_time - timedelta(seconds=duration + 5.0)
+            if latest <= earliest:
+                return
+            span = (latest - earliest).total_seconds()
+            transfer_time = earliest + timedelta(seconds=rng.uniform(0.0, span))
+
+        from evidenceforge.events.contexts import FileTransferContext
+        from evidenceforge.generation.activity.generator import _file_transfer_hashes
+        from evidenceforge.utils.ids import generate_zeek_uid
+
+        analyzers = ["MD5", "SHA1"]
+        fuid = generate_zeek_uid("F")
+        hashes = _file_transfer_hashes(
+            f"smb:{archive.source_ip}:{archive.staging_ip}:{archive.archive_path}:{transfer_bytes}",
+            analyzers,
+        )
+        self.activity_generator.generate_connection(
+            src_ip=archive.source_ip,
+            dst_ip=archive.staging_ip,
+            time=transfer_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=duration,
+            orig_bytes=rng.randint(35_000, 180_000),
+            resp_bytes=transfer_bytes,
+            conn_state="SF",
+            emit_dns=False,
+            source_system=source_system,
+            file_transfer=FileTransferContext(
+                fuid=fuid,
+                source="SMB",
+                depth=0,
+                filename=archive.smb_filename,
+                analyzers=analyzers,
+                mime_type="application/zip",
+                duration=max(0.0, duration * rng.uniform(0.72, 0.98)),
+                local_orig=True,
+                is_orig=False,
+                seen_bytes=transfer_bytes,
+                total_bytes=transfer_bytes,
+                missing_bytes=0,
+                overflow_bytes=0,
+                timedout=False,
+                **hashes,
+            ),
+        )
+        if (
+            target_system.roles
+            and "file_server" in [role.lower() for role in target_system.roles]
+            and hasattr(self, "_emit_smb_logon_pair")
+        ):
+            self._emit_smb_logon_pair(
+                archive.actor,
+                target_system,
+                archive.source_ip,
+                transfer_time,
+                rng,
+            )
+        archive.consumed = True
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
         """Return the last live storyline process for the same source host."""
@@ -1495,7 +1693,7 @@ class StorylineMixin:
                 session.storyline_protected = True
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
-            self._record_storyline_logon(actor, system, logon_id)
+            self._record_storyline_logon(actor, system, logon_id, source_ip=source_ip)
 
         elif spec.type == "failed_logon":
             _attacker_ips = ["45.33.32.156", "185.220.101.34", "91.219.236.174"]
@@ -1668,6 +1866,21 @@ class StorylineMixin:
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
+            archive_destination = self._extract_compress_archive_destination(command_line)
+            if archive_destination:
+                staging_source_ip = self._last_storyline_logon_source_for_actor_system(
+                    actor,
+                    system,
+                )
+                if staging_source_ip and staging_source_ip != system.ip:
+                    self._record_storyline_staged_archive(
+                        actor=process_actor,
+                        system=system,
+                        archive_path=archive_destination,
+                        source_ip=staging_source_ip,
+                        staged_at=time,
+                    )
+                    malicious_event["staged_archive"] = archive_destination
             task_name = _extract_schtasks_option(command_line, "tn")
             if task_name and "/create" in command_line.lower():
                 self._record_storyline_scheduled_task_command(system, task_name, command_line)
@@ -2003,6 +2216,13 @@ class StorylineMixin:
                 conn_hostname = ""  # suppress — raw IP
                 emit_dns = False
             s_conn_state = spec.conn_state or "SF"
+            if _is_exfil_connection_spec(spec):
+                self._emit_storyline_archive_transfer_before_exfil(
+                    source_ip=source_ip,
+                    exfil_time=time,
+                    upload_bytes=s_ob,
+                    rng=rng,
+                )
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=effective_dst_ip,
@@ -2075,7 +2295,12 @@ class StorylineMixin:
                 )
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:
-                self._record_storyline_logon(actor, target, result.session.logon_id)
+                self._record_storyline_logon(
+                    actor,
+                    target,
+                    result.session.logon_id,
+                    source_ip=result.session.source_ip,
+                )
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
             result_source_ip = (

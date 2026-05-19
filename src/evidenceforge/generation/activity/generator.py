@@ -3273,6 +3273,29 @@ class ActivityGenerator:
             return image, f'"{image}" {target_url}'
         return None
 
+    def _claim_top_level_browser_launch_target(
+        self,
+        *,
+        system: System,
+        username: str,
+        image: str,
+        hostname: str,
+        uri: str,
+    ) -> bool:
+        """Return whether an exact browser launch target should create a process."""
+        if not hasattr(self, "_top_level_browser_launch_targets"):
+            self._top_level_browser_launch_targets: dict[tuple[str, str, str, str, str], int] = {}
+        key = (
+            system.hostname,
+            username,
+            image.lower(),
+            (hostname or "").strip().lower().rstrip("."),
+            self._browser_launch_uri(uri).lower(),
+        )
+        previous = self._top_level_browser_launch_targets.get(key, 0)
+        self._top_level_browser_launch_targets[key] = previous + 1
+        return previous == 0
+
     def _select_explicit_proxy_client_session(
         self,
         source_system: System,
@@ -3355,6 +3378,14 @@ class ActivityGenerator:
             proxy_uri = parsed_url.path or "/"
             if not self._browser_target_allows_top_level_launch(proxy_context.host, proxy_uri):
                 return -1, None
+            if not self._claim_top_level_browser_launch_target(
+                system=source_system,
+                username=user.username,
+                image=image,
+                hostname=proxy_context.host,
+                uri=proxy_uri,
+            ):
+                return -1, None
 
         process_rng = random.Random(
             _stable_seed(
@@ -3428,7 +3459,6 @@ class ActivityGenerator:
             proc
             for proc in self.state_manager.get_processes_on_system(source_system.hostname)
             if proc.username == user.username
-            and proc.logon_id == session.logon_id
             and proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
@@ -3444,6 +3474,14 @@ class ActivityGenerator:
             return proc.pid, proc.image
 
         if not self._browser_target_allows_top_level_launch(http.host, http.uri):
+            return -1, None
+        if not self._claim_top_level_browser_launch_target(
+            system=source_system,
+            username=user.username,
+            image=image,
+            hostname=http.host,
+            uri=http.uri,
+        ):
             return -1, None
 
         process_rng = random.Random(
@@ -5473,13 +5511,11 @@ class ActivityGenerator:
             return None
 
         requested_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
-        preferred_key = (system.hostname, username, logon_id)
+        preferred_key = (system.hostname, username, "")
         preferred_exe = self._preferred_browser_by_session.get(preferred_key)
         candidates: list[RunningProcess] = []
         for proc in self.state_manager.get_processes_on_system(system.hostname):
             if proc.username != username:
-                continue
-            if proc.logon_id and proc.logon_id != logon_id:
                 continue
             if not self._is_pid_active_at(system, proc.pid, time):
                 continue

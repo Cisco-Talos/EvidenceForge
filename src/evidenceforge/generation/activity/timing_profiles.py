@@ -163,15 +163,15 @@ def network_sensor_observation_timing() -> NetworkSensorObservationTiming:
 
     skew_min, skew_max = _safe_int_range(
         profile.get("clock_skew_us"),
-        fallback_min=-4_000,
-        fallback_max=4_000,
+        fallback_min=-18_000,
+        fallback_max=22_000,
         minimum=-_MAX_SENSOR_TIMING_US,
         maximum=_MAX_SENSOR_TIMING_US,
     )
     delay_min, delay_max = _safe_int_range(
         profile.get("path_delay_us"),
-        fallback_min=250,
-        fallback_max=8_000,
+        fallback_min=1_200,
+        fallback_max=58_000,
         minimum=0,
         maximum=_MAX_SENSOR_TIMING_US,
     )

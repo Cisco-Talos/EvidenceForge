@@ -218,14 +218,39 @@ programs:
   - app: polkitd
     weight: 2
     params:
-      auth_subject:
-        - unix-process
-        - unix-session
-        - system-bus-name
+      action_id:
+        - org.freedesktop.systemd1.manage-units
+        - org.freedesktop.login1.reboot
+        - org.freedesktop.packagekit.system-update
+        - org.freedesktop.NetworkManager.settings.modify.system
+        - org.freedesktop.timedate1.set-timezone
+      auth_user:
+        - root
+        - admin
+        - deploy
+      bus_id:
+        - "42"
+        - "118"
+        - "203"
+        - "417"
+      monotonic_start:
+        - "0"
+        - "1000"
+        - "2000"
+      process_path:
+        - /usr/bin/systemctl
+        - /usr/lib/packagekit/packagekitd
+        - /usr/bin/nmcli
+        - /usr/bin/timedatectl
+      subject_user:
+        - root
+        - deploy
+        - admin
     messages:
-      - "Registered Authentication Agent for {auth_subject}:{0} (system bus name :1.{0})"
-      - "Unregistered Authentication Agent for {auth_subject}:{0} (system bus name :1.{0})"
-      - "Operator of unix-process:{} successfully authenticated as 'root'"
+      - "Registered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id} [{process_path}], object path /org/freedesktop/PolicyKit1/AuthenticationAgent, locale en_US.UTF-8)"
+      - "Unregistered Authentication Agent for unix-session:{0} (system bus name :1.{bus_id}, object path /org/freedesktop/PolicyKit1/AuthenticationAgent)"
+      - "Operator of unix-process:{0}:{monotonic_start} successfully authenticated as unix-user:{auth_user} to gain TEMPORARY authorization for action {action_id} for system-bus-name::1.{bus_id} [{process_path}] (owned by unix-user:{subject_user})"
+      - "Subject unix-process:{0}:{monotonic_start} is authorized for action {action_id}"
 
   - app: multipathd
     system_types: [server]

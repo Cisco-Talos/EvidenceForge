@@ -1449,6 +1449,7 @@ class TestValidateConfig:
         programs = load_extra_syslog_messages()
         high_volume_apps = {
             "dbus-daemon",
+            "polkitd",
             "rsyslogd",
             "unattended-upgr",
             "systemd-resolved",
@@ -1464,6 +1465,7 @@ class TestValidateConfig:
             "dpkg --status-fd: processing triggers for man-db",
             "Positive Trust Anchors: . IN DS 20326",
             "Balancing is ineffective IRQs are pinned and balanced",
+            "Operator of unix-process:{} successfully authenticated as 'root'",
         }
 
         checked_apps = set()
@@ -1481,6 +1483,11 @@ class TestValidateConfig:
             if app == "irqbalance":
                 assert all("{}" not in message and "{0}" not in message for message in messages)
                 assert all("from CPU" not in message for message in messages)
+            if app == "polkitd":
+                assert any("action {action_id}" in message for message in messages)
+                assert all(
+                    "AuthenticationAgent" in message or "action" in message for message in messages
+                )
             for message in messages:
                 rendered = render_extra_syslog_message(
                     {**entry, "messages": [message]},

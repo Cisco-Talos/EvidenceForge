@@ -168,7 +168,7 @@ class TestPerSensorDirectoryRouting:
                 assert core[field] == dmz[field]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
-            assert abs(core["ts"] - dmz["ts"]) <= 0.005
+            assert abs(core["ts"] - dmz["ts"]) <= 0.16
             assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert core["orig_pkts"] == dmz["orig_pkts"] == 52
@@ -327,9 +327,9 @@ class TestPerSensorDirectoryRouting:
 
             assert any(offset < 0 for offset in offsets)
             assert any(offset > 0 for offset in offsets)
-            assert max(offsets) - min(offsets) > 0.0005
+            assert max(offsets) - min(offsets) > 0.005
             assert len(set(offsets)) > 30
-            assert max(abs(offset) for offset in offsets) <= 0.015
+            assert max(abs(offset) for offset in offsets) <= 0.16
 
     def test_second_sensor_observation_skips_huge_numeric_jitter(self):
         """Huge raw numeric counters should not crash multi-sensor Zeek jitter."""
