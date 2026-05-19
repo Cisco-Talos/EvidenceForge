@@ -1,0 +1,43 @@
+{
+  "generatedAt": "2026-05-19T23:24:38.621Z",
+  "checkedDirectories": [
+    "zeek-core",
+    "zeek-dmz"
+  ],
+  "totals": {
+    "ocspRows": 69,
+    "missingFile": 0,
+    "missingConn": 0,
+    "missingHttp": 0,
+    "beforeHttp": 0,
+    "beforeFile": 0,
+    "afterFileEnd": 0,
+    "afterConnEnd": 0
+  },
+  "byDirectory": [
+    {
+      "dir": "zeek-core",
+      "ocspRows": 1,
+      "missingFile": 0,
+      "missingConn": 0,
+      "missingHttp": 0,
+      "beforeHttp": 0,
+      "beforeFile": 0,
+      "afterFileEnd": 0,
+      "afterConnEnd": 0,
+      "examples": []
+    },
+    {
+      "dir": "zeek-dmz",
+      "ocspRows": 68,
+      "missingFile": 0,
+      "missingConn": 0,
+      "missingHttp": 0,
+      "beforeHttp": 0,
+      "beforeFile": 0,
+      "afterFileEnd": 0,
+      "afterConnEnd": 0,
+      "examples": []
+    }
+  ]
+}
