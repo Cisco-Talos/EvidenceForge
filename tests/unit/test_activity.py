@@ -3957,6 +3957,8 @@ class TestActivityGenerator:
                 uri="/",
                 user_agent="Mozilla/5.0",
                 response_body_len=4096,
+                flow_response_body_len=12_288,
+                flow_transaction_count=2,
                 trans_depth=1,
             ),
             emit_dns=False,
@@ -3997,6 +3999,44 @@ class TestActivityGenerator:
         assert second_event.network.src_port == first_event.network.src_port
         assert second_event.network.application_layer_only is True
         assert second_event.http.trans_depth == 2
+
+    def test_generate_connection_derives_plain_http_bytes_from_http_context(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Single plain-HTTP transactions should not keep unrelated oversized conn bytes."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=4_900,
+            resp_bytes=44_000,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/favicon.ico",
+                user_agent="Mozilla/5.0",
+                response_body_len=0,
+                status_code=304,
+                status_msg="Not Modified",
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+
+        assert event.network.conn_state == "SF"
+        assert event.network.orig_bytes < 1_200
+        assert 120 <= event.network.resp_bytes < 900
+        assert event.network.resp_bytes > event.http.response_body_len
 
     def test_generate_connection_does_not_reuse_http_uid_after_parent_close(self, state_manager):
         """A late HTTP request should start a new flow instead of overrunning conn.log."""

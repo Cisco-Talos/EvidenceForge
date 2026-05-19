@@ -363,6 +363,9 @@ class HttpContext:
     user_agent: str = ""
     request_body_len: int = 0
     response_body_len: int = 0
+    flow_request_body_len: int | None = None
+    flow_response_body_len: int | None = None
+    flow_transaction_count: int = 1
     status_code: int = 200
     status_msg: str = "OK"
     referrer: str = ""

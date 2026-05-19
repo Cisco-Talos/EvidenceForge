@@ -495,6 +495,105 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     )
 
 
+def _http_context_flow_body_len(http: HttpContext, side: str) -> int:
+    """Return the HTTP body bytes represented by the parent TCP flow."""
+    if side == "request":
+        value = http.flow_request_body_len
+        fallback = http.request_body_len
+    else:
+        value = http.flow_response_body_len
+        fallback = http.response_body_len
+    if value is None:
+        value = fallback
+    return max(0, value or 0)
+
+
+def _http_context_flow_transaction_count(http: HttpContext) -> int:
+    """Return the number of HTTP transactions represented by the parent TCP flow."""
+    return max(1, http.flow_transaction_count or 1)
+
+
+def _http_request_header_len(http: HttpContext, transaction_count: int) -> int:
+    """Approximate source-native HTTP request header bytes for conn.log payload accounting."""
+    method = (http.method or "GET").upper()
+    version = http.version or "1.1"
+    uri = http.uri or "/"
+    host = http.host or "-"
+    user_agent = http.user_agent or ""
+    body_len = _http_context_flow_body_len(http, "request")
+    seed = _stable_seed(
+        f"http_request_headers:{method}:{host}:{uri}:{user_agent}:{transaction_count}:{body_len}"
+    )
+    accept = "*/*" if not user_agent else "text/html,application/xhtml+xml,*/*;q=0.8"
+    header_lines = [
+        f"{method} {uri} HTTP/{version}",
+        f"Host: {host}",
+        f"Accept: {accept}",
+        "Accept-Encoding: gzip, deflate, br",
+        "Connection: keep-alive" if transaction_count > 1 else "Connection: close",
+    ]
+    if user_agent:
+        header_lines.append(f"User-Agent: {user_agent}")
+    if http.referrer:
+        header_lines.append(f"Referer: {http.referrer}")
+    if http.status_code == 304:
+        header_lines.append(f'If-None-Match: W/"{seed & 0xFFFFFFFF:x}"')
+    if body_len > 0:
+        header_lines.append(f"Content-Length: {body_len}")
+        header_lines.append("Content-Type: application/x-www-form-urlencoded")
+    base_len = sum(len(line.encode("utf-8")) + 2 for line in header_lines) + 2
+    per_transaction_extra = 24 + (seed % 97)
+    return (base_len + per_transaction_extra) * transaction_count
+
+
+def _http_response_header_len(http: HttpContext, transaction_count: int) -> int:
+    """Approximate source-native HTTP response header bytes for conn.log payload accounting."""
+    method = (http.method or "GET").upper()
+    status_code = int(http.status_code or 0)
+    status_msg = http.status_msg or "OK"
+    host = http.host or "-"
+    uri = http.uri or "/"
+    body_len = _http_context_flow_body_len(http, "response")
+    seed = _stable_seed(
+        f"http_response_headers:{method}:{status_code}:{status_msg}:{host}:{uri}:"
+        f"{transaction_count}:{body_len}"
+    )
+    content_type = http.resp_mime_types[0] if http.resp_mime_types else "text/html"
+    header_lines = [
+        f"HTTP/{http.version or '1.1'} {status_code} {status_msg}",
+        "Server: nginx",
+        f"Content-Length: {0 if method == 'HEAD' else body_len}",
+        "Connection: keep-alive" if transaction_count > 1 else "Connection: close",
+    ]
+    if method != "HEAD" and status_code not in {204, 304}:
+        header_lines.append(f"Content-Type: {content_type}")
+    if status_code in {301, 302}:
+        header_lines.append(f"Location: https://{host}{uri if uri.startswith('/') else '/'}")
+    if status_code == 304:
+        header_lines.append(f'ETag: W/"{seed & 0xFFFFFFFF:x}"')
+        header_lines.append("Cache-Control: max-age=300")
+    if 200 <= status_code < 300:
+        header_lines.append(f"Date: {seed % 28 + 1:02d} May 2026 12:00:00 GMT")
+    base_len = sum(len(line.encode("utf-8")) + 2 for line in header_lines) + 2
+    per_transaction_extra = 16 + (seed % 83)
+    return (base_len + per_transaction_extra) * transaction_count
+
+
+def _http_flow_payload_bytes(http: HttpContext) -> tuple[int, int]:
+    """Return TCP payload byte counts implied by source-native HTTP metadata."""
+    transaction_count = _http_context_flow_transaction_count(http)
+    request_bytes = _http_context_flow_body_len(http, "request") + _http_request_header_len(
+        http,
+        transaction_count,
+    )
+    response_body_len = _http_context_flow_body_len(http, "response")
+    response_header_len = _http_response_header_len(http, transaction_count)
+    response_bytes = response_header_len
+    if (http.method or "GET").upper() != "HEAD":
+        response_bytes += response_body_len
+    return request_bytes, response_bytes
+
+
 def _network_effect_context_for_process(
     process_name: str,
     command_line: str,
@@ -6516,6 +6615,9 @@ class ActivityGenerator:
                         resp_bytes=resp_bytes,
                         http=http,
                     ),
+                    flow_request_body_len=http.flow_request_body_len,
+                    flow_response_body_len=http.flow_response_body_len,
+                    flow_transaction_count=http.flow_transaction_count,
                     status_code=proxy_context.status_code,
                     status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
                     referrer=http.referrer,
@@ -8028,20 +8130,26 @@ class ActivityGenerator:
 
         if event.network.protocol == "tcp" and event.network.conn_state == "SF":
             if event.http is not None:
-                request_overhead = rng.randint(180, 620)
-                response_overhead = rng.randint(180, 900)
-                if event.http.status_code in {204, 304} or event.http.method == "HEAD":
-                    response_overhead = rng.randint(90, 360)
-                event.network.orig_bytes = max(
-                    event.network.orig_bytes or 0,
-                    (event.http.request_body_len or 0) + request_overhead,
-                    rng.randint(180, 520),
-                )
-                event.network.resp_bytes = max(
-                    event.network.resp_bytes or 0,
-                    (event.http.response_body_len or 0) + response_overhead,
-                    rng.randint(90, 450),
-                )
+                method = (event.http.method or "GET").upper()
+                if event.network.service == "http" and method != "CONNECT":
+                    event.network.orig_bytes, event.network.resp_bytes = _http_flow_payload_bytes(
+                        event.http
+                    )
+                else:
+                    request_overhead = rng.randint(180, 620)
+                    response_overhead = rng.randint(180, 900)
+                    if event.http.status_code in {204, 304} or method == "HEAD":
+                        response_overhead = rng.randint(90, 360)
+                    event.network.orig_bytes = max(
+                        event.network.orig_bytes or 0,
+                        (event.http.request_body_len or 0) + request_overhead,
+                        rng.randint(180, 520),
+                    )
+                    event.network.resp_bytes = max(
+                        event.network.resp_bytes or 0,
+                        (event.http.response_body_len or 0) + response_overhead,
+                        rng.randint(90, 450),
+                    )
             if event.network.service == "ssl":
                 event.network.orig_bytes = max(event.network.orig_bytes or 0, rng.randint(180, 900))
                 event.network.resp_bytes = max(
