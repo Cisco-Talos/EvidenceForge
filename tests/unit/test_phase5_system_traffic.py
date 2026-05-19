@@ -34,6 +34,7 @@ from evidenceforge.generation.engine.baseline import (
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
     _is_kerberos_member_server,
+    _kernel_uptime_stamp,
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
     _pick_dc_kerberos_service,
@@ -64,6 +65,20 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
+    """Kernel bracket timestamps should be monotonic within a host boot stream."""
+    scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    first = scenario_start + timedelta(seconds=387.345076)
+    second = scenario_start + timedelta(seconds=387.997014)
+
+    first_stamp = _kernel_uptime_stamp(2332800.0, scenario_start, first)
+    second_stamp = _kernel_uptime_stamp(2332800.0, scenario_start, second)
+
+    assert first_stamp == "2333187.345076"
+    assert second_stamp == "2333187.997014"
+    assert float(second_stamp) > float(first_stamp)
 
 
 @pytest.fixture

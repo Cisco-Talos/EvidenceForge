@@ -1523,6 +1523,36 @@ class TestValidateConfig:
         assert any("CMD" in message for message in cron_messages)
         assert not any("cron.hourly" in message.lower() for message in cron_messages)
 
+    def test_extra_syslog_unattended_upgrades_bounds_phased_percentage(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        unattended = next(entry for entry in programs if entry["app"] == "unattended-upgr")
+        percentage_values = unattended["params"]["phased_percentage"]
+
+        assert all(0 <= int(value) <= 100 for value in percentage_values)
+        assert not any(
+            "phased update percentage {}" in message for message in unattended["messages"]
+        )
+
+        message = render_extra_syslog_message(
+            {
+                **unattended,
+                "messages": [
+                    "Package {package_name} kept back for phased update percentage {phased_percentage}"
+                ],
+            },
+            random.Random(5),
+            positional_value=981234,
+        )
+        percentage = int(message.rsplit(" ", 1)[-1])
+
+        assert 0 <= percentage <= 100
+        assert "981234" not in message
+
     def test_systemd_schedule_filters_by_role_and_service_state(self):
         from types import SimpleNamespace
 

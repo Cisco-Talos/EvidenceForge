@@ -280,11 +280,21 @@ programs:
         - libc6
         - python3-apt
         - tzdata
+      phased_percentage:
+        - "10"
+        - "20"
+        - "30"
+        - "40"
+        - "50"
+        - "60"
+        - "70"
+        - "80"
+        - "90"
     messages:
       - "Allowed origins are: {origin_set}"
       - "Checking for unattended upgrades from {origin_set}"
       - "No packages found that can be upgraded unattended (run {})"
-      - "Package {package_name} kept back for phased update percentage {}"
+      - "Package {package_name} kept back for phased update percentage {phased_percentage}"
       - "dpkg --status-fd: processing triggers for man-db ({package_name})"
 
   - app: systemd-resolved

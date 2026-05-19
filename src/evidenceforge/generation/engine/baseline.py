@@ -164,6 +164,16 @@ def _eligible_for_hourly_module_load(proc: Any, time: datetime) -> bool:
     return time <= max_follow_on
 
 
+def _kernel_uptime_stamp(boot_uptime: float, scenario_start: datetime, timestamp: datetime) -> str:
+    """Return source-native kernel monotonic uptime for a syslog timestamp."""
+    event_time = timestamp if timestamp.tzinfo is not None else timestamp.replace(tzinfo=UTC)
+    start_time = (
+        scenario_start if scenario_start.tzinfo is not None else scenario_start.replace(tzinfo=UTC)
+    )
+    uptime = boot_uptime + (event_time - start_time).total_seconds()
+    return f"{uptime:.6f}"
+
+
 def _session_logoff_time(
     session: Any,
     current_hour: datetime,
@@ -5394,6 +5404,7 @@ class BaselineMixin:
             for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
                 uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
+                kernel_uptime = _kernel_uptime_stamp(boot_uptime, scenario_start, ts)
 
                 source_roll = rng.random()
                 if source_roll < 0.25:
@@ -5416,7 +5427,7 @@ class BaselineMixin:
                         spt = rng.randint(1024, 65535)
                         dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
                         msg = (
-                            f"[{uptime}.{rng.randint(100000, 999999)}] [UFW BLOCK] "
+                            f"[{kernel_uptime}] [UFW BLOCK] "
                             f"IN=ens160 OUT= SRC={src_ip} DST={system.ip} "
                             f"LEN={rng.randint(40, 60)} TOS=0x00 PREC=0x00 TTL={rng.randint(40, 255)} "
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
@@ -5455,8 +5466,8 @@ class BaselineMixin:
                             ) + rng.randint(1, 5)
                             audit_serial = self._audit_serials[system.hostname]
                             msg = (
-                                f"[{uptime}.{rng.randint(100000, 999999)}] audit: type=1400 "
-                                f"audit({int(ts.timestamp())}.{rng.randint(100, 999)}:{audit_serial}): "
+                                f"[{kernel_uptime}] audit: type=1400 "
+                                f"audit({int(ts.timestamp())}.{ts.microsecond // 1000:03d}:{audit_serial}): "
                                 f'apparmor="ALLOWED" operation="open" profile="usr.sbin.mysqld"'
                             )
                             self.activity_generator.generate_syslog_event(
