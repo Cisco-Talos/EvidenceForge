@@ -171,6 +171,34 @@ def _jitter_numeric_observation(
         )
 
 
+def _jitter_duration_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+    magnitude: float,
+    *,
+    max_delta_seconds: float,
+) -> None:
+    """Apply bounded duration jitter for explicitly lossy sensor observations."""
+    value = render_data.get("duration")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return
+    if value <= 0:
+        return
+    fraction = _sensor_variation_fraction(hostname, uid, "duration", magnitude)
+    try:
+        raw_delta = value * fraction
+        delta = max(-max_delta_seconds, min(max_delta_seconds, raw_delta))
+        if abs(delta) < 0.000001:
+            delta = 0.000001 if raw_delta >= 0 else -0.000001
+        render_data["duration"] = max(0.000001, value + delta)
+    except OverflowError:
+        logger.debug(
+            "Skipping Zeek sensor duration jitter for out-of-range value on %s",
+            hostname,
+        )
+
+
 def _jitter_payload_counter_with_floor(
     render_data: dict[str, Any],
     field: str,
@@ -241,26 +269,37 @@ def _apply_sensor_observation_variance(
     original_observation = {field: render_data.get(field) for field in clone_fields}
     # A downstream/DMZ tap may account for a few bytes Zeek could not attribute
     # cleanly. Keep this sparse and small so it reads as capture imperfection.
+    missed = render_data.get("missed_bytes") or 0
+    lossy_observation = isinstance(missed, int) and missed > 0
     added_missed_bytes = False
     if "missed_bytes" in render_data:
-        missed = render_data.get("missed_bytes") or 0
         if isinstance(missed, int):
             seed = _stable_seed(f"zeek_sensor_missed:{hostname}:{original_uid}")
             if seed % 11 == 0:
                 render_data["missed_bytes"] = missed + 16 + (seed % 496)
                 added_missed_bytes = True
-    if added_missed_bytes:
-        for field in ("orig_pkts", "resp_pkts"):
-            _jitter_numeric_observation(
-                render_data,
-                field,
-                hostname,
-                original_uid,
-                0.018,
-                minimum=1,
-            )
+                lossy_observation = True
+    if not lossy_observation:
+        _enforce_http_body_invariants(render_data)
+        _enforce_ip_byte_invariants(render_data)
+        return
+    for field in ("orig_pkts", "resp_pkts"):
+        _jitter_numeric_observation(
+            render_data,
+            field,
+            hostname,
+            original_uid,
+            0.018 if added_missed_bytes else 0.012,
+            minimum=1,
+        )
     if not render_data.get("_lock_duration"):
-        _jitter_numeric_observation(render_data, "duration", hostname, original_uid, 0.027)
+        _jitter_duration_observation(
+            render_data,
+            hostname,
+            original_uid,
+            0.002,
+            max_delta_seconds=2.0,
+        )
     for field in ("orig_pkts", "resp_pkts"):
         _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035, minimum=1)
     _jitter_payload_counter_with_floor(

@@ -406,8 +406,8 @@ class TestMultiSensorFanOut:
             assert uid1.startswith("C")
             assert uid2.startswith("C")
 
-    def test_secondary_sensor_varies_observation_counters(self):
-        """Multi-sensor conn rows should not be byte-for-byte clones with only UID/ts changed."""
+    def test_lossy_secondary_sensor_varies_observation_counters(self):
+        """Explicit capture loss may vary counters without impossible packet accounting."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
             conn_emitter = ZeekEmitter(
@@ -434,6 +434,7 @@ class TestMultiSensorFanOut:
                     resp_pkts=12,
                     orig_ip_bytes=2800,
                     resp_ip_bytes=9000,
+                    missed_bytes=128,
                     ip_proto=6,
                 ),
                 _sensor_hostnames_by_format={"zeek_conn": ["core", "dmz"]},
