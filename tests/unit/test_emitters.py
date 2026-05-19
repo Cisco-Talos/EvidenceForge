@@ -963,6 +963,63 @@ class TestWindowsEventEmitter:
         assert max(gaps[:24]) < timedelta(milliseconds=1)
         assert min(gaps[25:]) >= timedelta(seconds=1)
 
+    def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
+        """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        tgs_time = datetime(2024, 1, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        tgt_time = tgs_time + timedelta(milliseconds=50)
+        tgs = {
+            "EventID": 4769,
+            "TimeCreated": tgs_time,
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice@CORP.LOCAL",
+            "IpAddress": "::ffff:10.0.0.25",
+        }
+        tgt = {
+            "EventID": 4768,
+            "TimeCreated": tgt_time,
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice",
+            "IpAddress": "::ffff:10.0.0.25",
+        }
+        emitter._event_dicts = [tgs, tgt]
+
+        emitter._shift_kerberos_tgts_before_service_tickets()
+
+        assert tgt["TimeCreated"] < tgs["TimeCreated"]
+
+    def test_spooled_kerberos_tgt_shifted_before_visible_service_ticket(
+        self,
+        format_def,
+        temp_output,
+    ):
+        """Spooled Windows rows should keep visible TGT before TGS after final sort."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        tgs_time = datetime(2024, 1, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4769,
+                "TimeCreated": tgs_time,
+                "Computer": "DC-01.corp.local",
+                "TargetUserName": "alice@CORP.LOCAL",
+                "IpAddress": "::ffff:10.0.0.25",
+            },
+            {
+                "EventID": 4768,
+                "TimeCreated": tgs_time + timedelta(milliseconds=50),
+                "Computer": "DC-01.corp.local",
+                "TargetUserName": "alice",
+                "IpAddress": "::ffff:10.0.0.25",
+            },
+        ]
+        emitter._spool_event_dicts_unlocked()
+
+        emitter._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        assert [event["EventID"] for event in events] == [4768, 4769]
+        assert events[0]["TimeCreated"] < events[1]["TimeCreated"]
+
     def test_windows_events_defer_rendering_until_close(self, format_def, temp_output):
         """Windows events should render in one final chronological RecordID pass."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=3)

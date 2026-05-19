@@ -836,6 +836,36 @@ def _extract_schtasks_option(command_line: str, option: str) -> str:
     return (match.group("quoted") or match.group("bare") or "").strip()
 
 
+def _extract_sc_create_service_start_type(command_line: str) -> tuple[str, str] | None:
+    """Extract service name and native start type from an sc.exe create command."""
+    if not command_line:
+        return None
+    match = re.search(
+        r'\bsc(?:\.exe)?\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?',
+        command_line,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    service_name = match.group(1)
+    service_start_type = "3"
+    start_match = re.search(
+        r"\bstart=\s*(delayed-auto|auto|demand|disabled|boot|system)\b",
+        command_line,
+        flags=re.IGNORECASE,
+    )
+    if start_match is not None:
+        service_start_type = {
+            "boot": "0",
+            "system": "1",
+            "auto": "2",
+            "delayed-auto": "2",
+            "demand": "3",
+            "disabled": "4",
+        }[start_match.group(1).lower()]
+    return service_name, service_start_type
+
+
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
 
@@ -995,6 +1025,36 @@ class StorylineMixin:
         """Return the most recent schtasks.exe command for a host/task pair."""
         commands = getattr(self, "_storyline_scheduled_task_commands", {})
         return commands.get(self._scheduled_task_lookup_key(system, task_name), "")
+
+    @staticmethod
+    def _service_lookup_key(system: System, service_name: str) -> tuple[str, str]:
+        """Return a normalized lookup key for host-local service metadata."""
+        return (system.hostname.lower(), service_name.lower())
+
+    def _record_storyline_service_create_command(
+        self,
+        system: System,
+        command_line: str,
+    ) -> None:
+        """Remember an sc.exe create command so the later 4697 fields match it."""
+        parsed = _extract_sc_create_service_start_type(command_line)
+        if parsed is None:
+            return
+        service_name, service_start_type = parsed
+        if not hasattr(self, "_storyline_service_start_types"):
+            self._storyline_service_start_types: dict[tuple[str, str], str] = {}
+        self._storyline_service_start_types[self._service_lookup_key(system, service_name)] = (
+            service_start_type
+        )
+
+    def _recent_storyline_service_start_type(
+        self,
+        system: System,
+        service_name: str,
+    ) -> str:
+        """Return a service start type inferred from a preceding sc.exe command."""
+        start_types = getattr(self, "_storyline_service_start_types", {})
+        return start_types.get(self._service_lookup_key(system, service_name), "3")
 
     def _ensure_storyline_service_process_for_beacon(
         self,
@@ -1608,6 +1668,7 @@ class StorylineMixin:
             task_name = _extract_schtasks_option(command_line, "tn")
             if task_name and "/create" in command_line.lower():
                 self._record_storyline_scheduled_task_command(system, task_name, command_line)
+            self._record_storyline_service_create_command(system, command_line)
 
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
@@ -2143,6 +2204,10 @@ class StorylineMixin:
                 time=time,
                 service_name=spec.service_name,
                 service_file_name=spec.service_file_name,
+                service_start_type=self._recent_storyline_service_start_type(
+                    system,
+                    spec.service_name,
+                ),
                 service_account=spec.service_account,
             )
             self._record_storyline_service_install(

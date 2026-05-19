@@ -177,6 +177,7 @@ class _FakeActivityGenerator:
         self.connections: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
+        self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
         self.bash_commands: list[dict] = []
@@ -231,6 +232,9 @@ class _FakeActivityGenerator:
 
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
+
+    def generate_service_installed(self, **kwargs: Any) -> None:
+        self.service_installs.append(kwargs)
 
     def generate_dhcp_lease(self, **kwargs: Any) -> None:
         self.dhcp_leases.append(kwargs)
@@ -482,6 +486,58 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.processes[0]["ensure_file_event"] is False
+
+    def test_service_installed_reuses_sc_create_start_type(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        base_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\sc.exe",
+                command_line=(
+                    r"sc.exe create DeviceSyncSvc binPath= "
+                    r"C:\Windows\System32\DeviceSyncSvc.exe obj= LocalSystem start= auto"
+                ),
+            ),
+            actor=actor,
+            system=source,
+            time=base_time,
+            activity="create service",
+            explicit_types={"process", "service_installed"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="service_installed",
+                service_name="DeviceSyncSvc",
+                service_file_name=r"C:\Windows\System32\DeviceSyncSvc.exe",
+                service_account="LocalSystem",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=2),
+            activity="service audit",
+            explicit_types={"process", "service_installed"},
+        )
+
+        assert engine.activity_generator.service_installs[0]["service_start_type"] == "2"
 
     def test_process_url_network_reuses_storyline_authored_domain_ip(self):
         source = System(
