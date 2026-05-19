@@ -34,6 +34,7 @@ from enum import StrEnum
 from pathlib import Path
 
 OUTPUT_TARGET_FILENAME = "OUTPUT_TARGET.txt"
+MAX_OUTPUT_TARGET_MARKER_BYTES = 512
 
 
 class OutputTarget(StrEnum):
@@ -123,7 +124,7 @@ def normalize_output_target(value: str | OutputTarget | None) -> OutputTarget:
         return OutputTarget(normalized)
     except ValueError as exc:
         valid = ", ".join(target.value for target in OutputTarget)
-        raise ValueError(f"invalid output target {value!r}; expected one of: {valid}") from exc
+        raise ValueError(f"invalid output target value; expected one of: {valid}") from exc
 
 
 def write_output_target_marker(root_dir: Path, target: str | OutputTarget | None) -> Path:
@@ -151,6 +152,17 @@ def read_output_target_marker(path: Path) -> OutputTarget:
     for marker in candidates:
         if not marker.exists():
             continue
+        if marker.is_symlink():
+            raise ValueError("invalid output target marker: symlinks are not allowed")
+        resolved_marker = marker.resolve()
+        if not resolved_marker.is_relative_to(path):
+            raise ValueError("invalid output target marker: marker must stay under output directory")
+        marker_size = marker.stat().st_size
+        if marker_size > MAX_OUTPUT_TARGET_MARKER_BYTES:
+            raise ValueError(
+                "invalid output target marker: file is too large"
+                f" ({marker_size} bytes > {MAX_OUTPUT_TARGET_MARKER_BYTES} bytes)"
+            )
         value = marker.read_text(encoding="utf-8").strip()
         return normalize_output_target(value or None)
     return OutputTarget.DEFAULT
