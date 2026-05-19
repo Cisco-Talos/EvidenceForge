@@ -530,7 +530,8 @@ class TestSslUidCorrelation:
             rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
 
         for leaf_row, intermediate_row in zip(rows[0::2], rows[1::2], strict=True):
-            gaps.append(round(intermediate_row["ts"] - leaf_row["ts"], 3))
+            gaps.append(round(intermediate_row["ts"] - leaf_row["ts"], 6))
+        assert any(gap != 0.001 for gap in gaps)
         assert len(set(gaps)) > 1
 
     def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):

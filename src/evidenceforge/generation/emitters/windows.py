@@ -59,6 +59,7 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -66,6 +67,7 @@ from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.windows_ids import normalize_windows_id_value
 
 win_logger = logging.getLogger(__name__)
+_SOURCE_TIMING = SourceTimingPlanner()
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
@@ -705,10 +707,16 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, proc.pid, event.timestamp),
+            not_before=event.timestamp,
+        )
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -765,10 +773,16 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, proc.pid, event.timestamp),
+            not_before=event.timestamp,
+        )
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1028,7 +1042,8 @@ class WindowsEventEmitter(LogEmitter):
                 image = "System"
             else:
                 return
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.windows_wfp_connection",
             seed_parts=(
                 host.hostname,
@@ -1039,6 +1054,7 @@ class WindowsEventEmitter(LogEmitter):
                 net.dst_port,
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
 
         event_data = {

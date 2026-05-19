@@ -61,6 +61,26 @@ relationships:
     position: after
     min_ms: 25
     max_ms: 420
+  source.windows_security_process_create:
+    class: source_latency
+    position: after
+    min_ms: 0
+    max_ms: 25
+  source.sysmon_process_create:
+    class: source_latency
+    position: after
+    min_ms: 3
+    max_ms: 85
+  source.ecar_process_create:
+    class: source_latency
+    position: after
+    min_ms: 12
+    max_ms: 250
+  source.ecar_dependent_after_process_create:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 35
   source.ecar_flow:
     class: source_latency
     position: after
@@ -77,6 +97,11 @@ relationships:
     min_ms: 35
     max_ms: 250
   source.zeek_conn_start:
+    class: same_observation
+    position: after
+    min_ms: 0
+    max_ms: 0
+  network.connection_start_jitter:
     class: same_observation
     position: after
     min_ms: 0
@@ -106,6 +131,11 @@ relationships:
     position: after
     min_ms: 120
     max_ms: 650
+  source.zeek_file_analyzer:
+    class: same_observation
+    position: after
+    min_ms: 25
+    max_ms: 250
   network.tls_completed_min_duration:
     class: same_observation
     position: after

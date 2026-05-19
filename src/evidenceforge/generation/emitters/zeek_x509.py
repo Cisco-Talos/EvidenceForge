@@ -22,12 +22,26 @@
 
 """Zeek x509.log emitter."""
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.tls_realism import certificate_analyzer_delay_ms
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.emitters.zeek_files import _bounded_in_connection_timestamp
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.utils.rng import _stable_seed
+
+_SOURCE_TIMING = SourceTimingPlanner()
+
+
+def _certificate_chain_gap(event: SecurityEvent, x509: Any, position: int) -> timedelta:
+    """Return deterministic non-uniform spacing between x509 chain rows."""
+    seed = _stable_seed(
+        "zeek-x509-chain-gap:"
+        f"{getattr(event.network, 'zeek_uid', '')}:"
+        f"{getattr(x509, 'fuid', '')}:{position}:{event.timestamp.isoformat()}"
+    )
+    return timedelta(milliseconds=1 + (seed % 9), microseconds=97 + ((seed >> 8) % 811))
 
 
 class ZeekX509Emitter(SensorMultiplexEmitter):
@@ -51,16 +65,13 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        previous_timestamp: datetime | None = None
         for position, x509 in enumerate(certificates):
-            self._emit_certificate(
+            previous_timestamp = self._emit_certificate(
                 event,
                 x509,
-                analyzer_delay_ms=certificate_analyzer_delay_ms(
-                    zeek_uid=event.network.zeek_uid if event.network is not None else "",
-                    event_timestamp=event.timestamp,
-                    fuid=x509.fuid,
-                    position=position,
-                ),
+                position=position,
+                chain_not_before=previous_timestamp,
             )
 
     def _emit_certificate(
@@ -68,8 +79,9 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         event: SecurityEvent,
         x509: Any,
         *,
-        analyzer_delay_ms: int,
-    ) -> None:
+        position: int,
+        chain_not_before: datetime | None,
+    ) -> datetime:
         x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
             self.format_def.name if self.format_def else "zeek_x509", []
         )
@@ -77,12 +89,73 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
         targets = sensor_hostnames or self._sensor_hostnames
         new_targets = targets
-        timestamp = self._offset_timestamp(event.timestamp, analyzer_delay_ms)
+        timestamp = event.timestamp
         if event.network is not None:
+            conn_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    event.network.zeek_uid,
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
+            within = None
+            if event.network.duration is not None and event.network.duration > 0:
+                latest = conn_ts + timedelta(seconds=max(0.0, event.network.duration - 0.000001))
+                within = (conn_ts, latest)
+            ssl_timestamp = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_ssl_analyzer",
+                seed_parts=(
+                    event.network.zeek_uid,
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.timestamp,
+                ),
+                not_before=conn_ts,
+                within=within,
+            )
+            chain_gap = _certificate_chain_gap(event, x509, position)
+            lower_bound = ssl_timestamp + chain_gap
+            if chain_not_before is not None:
+                lower_bound = max(lower_bound, chain_not_before + chain_gap)
+            if within is not None and lower_bound > within[1]:
+                lower_bound = within[1]
+            preferred = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_x509_analyzer",
+                seed_parts=(
+                    event.network.zeek_uid,
+                    x509.fuid,
+                    position,
+                    event.timestamp,
+                ),
+                not_before=lower_bound,
+                within=within,
+            )
             timestamp = _bounded_in_connection_timestamp(
-                event.timestamp,
+                conn_ts,
                 event.network.duration,
-                timestamp,
+                preferred,
+            )
+        else:
+            lower_bound = (
+                event.timestamp
+                if chain_not_before is None
+                else chain_not_before + _certificate_chain_gap(event, x509, position)
+            )
+            timestamp = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_x509_analyzer",
+                seed_parts=(x509.fuid, position, event.timestamp),
+                not_before=lower_bound,
             )
         event_data: dict[str, Any] = {
             "ts": timestamp,
@@ -114,6 +187,7 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         if event._nat_swaps_by_sensor:
             event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
+        return timestamp
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = ["san_dns", "basic_constraints_ca"]

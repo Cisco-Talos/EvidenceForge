@@ -97,6 +97,8 @@ The core architectural principle is that **two emitters cannot disagree about sh
 
 A single `SecurityEvent` object carries all the data for one logical security event. When a user logs into a Linux system, ActivityGenerator creates one SecurityEvent with AuthContext + SyslogContext, and the EventDispatcher routes it to every relevant emitter. The syslog emitter renders from SyslogContext ("Accepted password for alice from ..."), and the eCAR emitter renders from AuthContext as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
 
+`SecurityEvent.timestamp` is canonical world time. Source-native timestamps are planned separately by `SourceTimingPlanner` (`src/evidenceforge/generation/source_timing.py`) and stored on `SecurityEvent.source_timing` during dispatch. Migrated emitters ask the planner for a source time with explicit bounds instead of adding independent jitter locally. Causally related rows are constrained (`A < B` within one source stream), equal canonical timestamps are ordered only when a relationship requires it, and independent events may still share source timestamps. Across different source families there is no global total order; each source is responsible for preserving its own causal order with stable, explainable offsets.
+
 ```
             ActivityGenerator
                    │
@@ -159,6 +161,7 @@ SecurityEvent
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command)
 ├── ... (27 context types total)
+├── source_timing: SourceTimingPlan (planned source-native timestamps)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```
 
@@ -414,8 +417,13 @@ ActivityGenerator.generate_connection()
 - `CausalExpansionEngine` — evaluates all matching rules, sorts by timing (before-events first), returns ordered list
 
 The timing profile file is overlay-aware. Causal prerequisites, source latency,
-teardown margins, and Windows/Sysmon same-timestamp collision spacing are data-driven
-so tuning can happen at the relationship class without hardcoding one global delay.
+teardown margins, source-observation profiles, and Windows/Sysmon same-timestamp
+collision spacing are data-driven so tuning can happen at the relationship class
+without hardcoding one global delay. Source timing profiles are sampled through
+`SourceTimingPlanner`, which clamps sampled source latency to relationship bounds
+before emitters render. Network sensor rows add stable per-sensor clock skew,
+path delay, and bounded capture noise so two Zeek sensors may see the same flow
+at slightly different times while keeping each sensor stream internally causal.
 
 **Currently registered rules:**
 

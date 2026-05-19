@@ -223,6 +223,64 @@ def test_expired_linux_curl_is_not_valid_for_later_network_attribution() -> None
     )
 
 
+def test_future_process_is_not_valid_for_network_attribution() -> None:
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    proc = _process(
+        r"C:\Program Files\Mozilla Firefox\firefox.exe",
+        r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.test',
+        start + timedelta(seconds=30),
+    )
+    system = System(
+        hostname="WS-01",
+        ip="10.10.1.20",
+        os="Windows 11",
+        type="workstation",
+    )
+    generator = ActivityGenerator(StateManager(), {})
+
+    assert generator._foreground_process_expired_for_attribution(system, proc, start)
+
+
+def test_reserved_kerberos_port_skips_active_connection_tuple() -> None:
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    generator = ActivityGenerator(StateManager(), {})
+    source_ip = "10.10.1.31"
+    dc_ip = "10.10.2.10"
+    dc_hostname = "DC-01"
+    source_port = 54613
+
+    generator._reserve_kerberos_source_port(source_ip, dc_hostname, start, source_port)
+    generator._remember_connection_tuple(
+        source_ip,
+        source_port,
+        dc_ip,
+        88,
+        "tcp",
+        start,
+        duration=7.0,
+    )
+
+    assert (
+        generator._find_reserved_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            start + timedelta(seconds=1),
+            dst_ip=dc_ip,
+        )
+        is None
+    )
+    assert (
+        generator._find_reserved_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            start + timedelta(seconds=8),
+            dst_ip=dc_ip,
+            window_seconds=10.0,
+        )
+        == source_port
+    )
+
+
 def test_interactive_windows_shells_are_not_forced_to_short_lifetimes() -> None:
     assert _windows_foreground_lifetime(r"C:\Windows\System32\cmd.exe", "cmd.exe /k") is None
     assert (

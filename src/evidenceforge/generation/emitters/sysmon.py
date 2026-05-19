@@ -39,7 +39,6 @@ from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.syslog_family import (
@@ -56,6 +55,7 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -65,6 +65,8 @@ from evidenceforge.utils.windows_ids import (
     normalize_windows_id_value,
     windows_id_randint,
 )
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -683,13 +685,11 @@ class SysmonEventEmitter(LogEmitter):
             proc = sm.get_process(hostname, pid)
             if proc is not None and proc.start_time <= fallback_timestamp:
                 ts = proc.start_time
-        rendered_create_time = ts + self._source_offset(
-            "process_create",
-            hostname,
-            pid,
-            ts,
-            minimum_ms=3,
-            maximum_ms=85,
+        rendered_create_time = _SOURCE_TIMING.source_time(
+            SecurityEvent(timestamp=ts, event_type="process_create"),
+            "source.sysmon_process_create",
+            seed_parts=(hostname, pid, ts),
+            not_before=ts,
         )
         return self._generate_process_guid(hostname, pid, rendered_create_time)
 
@@ -861,13 +861,11 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
-        render_time = event.timestamp + self._source_offset(
-            "process_create",
-            host.hostname,
-            proc.pid,
-            event.timestamp,
-            minimum_ms=3,
-            maximum_ms=85,
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.sysmon_process_create",
+            seed_parts=(host.hostname, proc.pid, event.timestamp),
+            not_before=event.timestamp,
         )
 
         utc_time = _format_sysmon_utc_time(render_time)
@@ -1333,7 +1331,8 @@ class SysmonEventEmitter(LogEmitter):
         net = event.network
         proc = event.process
 
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.sysmon_network_connection",
             seed_parts=(
                 host.hostname,
@@ -1344,6 +1343,7 @@ class SysmonEventEmitter(LogEmitter):
                 net.dst_port if net else 0,
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -1577,7 +1577,8 @@ class SysmonEventEmitter(LogEmitter):
         host = event.src_host
         dns = event.dns
 
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.sysmon_dns_query",
             seed_parts=(
                 host.hostname,
@@ -1585,6 +1586,7 @@ class SysmonEventEmitter(LogEmitter):
                 dns.query_type if dns else "",
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 

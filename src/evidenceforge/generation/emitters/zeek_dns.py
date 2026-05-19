@@ -26,9 +26,10 @@ from datetime import timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 
 class ZeekDnsEmitter(SensorMultiplexEmitter):
@@ -57,7 +58,26 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
         """Render DnsContext + NetworkContext to Zeek dns.log NDJSON."""
         net = event.network
         dns = event.dns
-        offset = sample_timing_delta(
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
+        conn_lifetime = net.duration if net.duration is not None else dns.rtt
+        within = None
+        if conn_lifetime is not None and conn_lifetime > 0:
+            latest = conn_ts + timedelta(seconds=max(0.0, conn_lifetime - 0.000001))
+            within = (conn_ts, latest)
+        event_ts = _SOURCE_TIMING.source_time(
+            event,
             "source.zeek_dns_query",
             seed_parts=(
                 net.zeek_uid,
@@ -67,18 +87,9 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
                 net.dst_port,
                 event.timestamp,
             ),
-        ).total_seconds()
-        conn_lifetime = net.duration if net.duration is not None else dns.rtt
-        if conn_lifetime is not None and conn_lifetime > 0:
-            max_inside_conn = max(0.0, conn_lifetime - 0.000001)
-            if offset > max_inside_conn:
-                seed = _stable_seed(
-                    f"zeek_dns_offset:{net.zeek_uid}:{net.src_ip}:{net.src_port}:"
-                    f"{net.dst_ip}:{net.dst_port}:{event.timestamp}"
-                )
-                fraction = 0.08 + (seed % 720) / 1000.0
-                offset = min(max_inside_conn, conn_lifetime * fraction)
-        event_ts = event.timestamp + timedelta(seconds=max(0.0, offset))
+            not_before=conn_ts,
+            within=within,
+        )
         event_data: dict[str, Any] = {
             "ts": event_ts,
             "uid": net.zeek_uid,

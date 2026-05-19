@@ -878,9 +878,9 @@ def _zeek_conn_observation_time(
     proto: str,
     service: str,
 ) -> datetime:
-    """Return the source-native Zeek connection start time for a canonical flow."""
+    """Return a deterministic canonical spacing time for same-scheduled flows."""
     return base_time + sample_timing_delta(
-        "source.zeek_conn_start",
+        "network.connection_start_jitter",
         seed_parts=(
             src_ip,
             src_port,
@@ -2892,11 +2892,13 @@ class ActivityGenerator:
         dst_port: int,
         proto: str,
         time: datetime,
+        duration: float | None = None,
     ) -> None:
         """Track recently allocated 5-tuples to avoid synthetic exact repeats."""
         if proto == "icmp":
             return
         ts_epoch = time.timestamp()
+        active_until = ts_epoch + max(0.0, duration or 0.0)
         if len(self._recent_connection_tuples) > 100_000:
             cutoff = ts_epoch - 86_400
             self._recent_connection_tuples = {
@@ -2904,7 +2906,11 @@ class ActivityGenerator:
                 for key, seen_at in self._recent_connection_tuples.items()
                 if seen_at >= cutoff
             }
-        self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
+        key = (src_ip, src_port, dst_ip, dst_port, proto)
+        self._recent_connection_tuples[key] = max(
+            active_until,
+            self._recent_connection_tuples.get(key, ts_epoch),
+        )
 
     def _allocate_ephemeral_port(
         self,
@@ -2991,6 +2997,10 @@ class ActivityGenerator:
         dc_hostname: str,
         time: datetime,
         *,
+        dst_ip: str | None = None,
+        dst_port: int = 88,
+        proto: str = "tcp",
+        exclude_active_tuple: bool = True,
         window_seconds: float = 2.0,
     ) -> int | None:
         """Return a nearby reserved Kerberos source port for this source/DC pair."""
@@ -3003,6 +3013,19 @@ class ActivityGenerator:
             for seen_at, port in self._kerberos_source_port_reservations.get(key, [])
             if abs(current - seen_at) <= window_seconds
         ]
+        if dst_ip and exclude_active_tuple:
+            reservations = [
+                (seen_at, port)
+                for seen_at, port in reservations
+                if self._recent_connection_tuples.get(
+                    (source_ip, port, dst_ip, dst_port, proto),
+                    self._recent_connection_tuples.get(
+                        (source_ip.removeprefix("::ffff:"), port, dst_ip, dst_port, proto),
+                        0.0,
+                    ),
+                )
+                <= current
+            ]
         if not reservations:
             return None
         return min(reservations, key=lambda item: abs(current - item[0]))[1]
@@ -3018,12 +3041,17 @@ class ActivityGenerator:
         if not source_ip or source_ip == "-" or not dc_hostname:
             return 0
 
-        reserved = self._find_reserved_kerberos_source_port(source_ip, dc_hostname, time)
+        dc_system = self._dc_system_for_hostname(dc_hostname)
+        dc_ip = str(getattr(dc_system, "ip", "") or "")
+        reserved = self._find_reserved_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            time,
+            dst_ip=dc_ip or None,
+        )
         if reserved is not None and source_port is None:
             source_port = reserved
         if source_port is None:
-            dc_system = self._dc_system_for_hostname(dc_hostname)
-            dc_ip = str(getattr(dc_system, "ip", "") or "")
             if dc_ip:
                 source_port = self._allocate_ephemeral_port(
                     source_ip,
@@ -5863,9 +5891,11 @@ class ActivityGenerator:
         proc: Any,
         time: datetime,
     ) -> bool:
-        """Return whether a bounded foreground process is too old for new effects."""
+        """Return whether a foreground process is not active for new effects."""
         if proc is None or proc.start_time is None:
             return False
+        if time < proc.start_time:
+            return True
         lifetime = self._foreground_process_lifetime_for_attribution(system, proc)
         if lifetime is None:
             return False
@@ -6791,7 +6821,13 @@ class ActivityGenerator:
             return
 
         dc_hostname = dc_system.hostname
-        reserved_port = self._find_reserved_kerberos_source_port(src_ip, dc_hostname, time)
+        reserved_port = self._find_reserved_kerberos_source_port(
+            src_ip,
+            dc_hostname,
+            time,
+            dst_ip=dst_ip,
+            exclude_active_tuple=False,
+        )
         if self._has_recent_kerberos_audit(src_ip, dc_hostname, time) and reserved_port == src_port:
             return
 
@@ -7559,6 +7595,7 @@ class ActivityGenerator:
                     src_ip,
                     kerberos_dc_hostname,
                     time,
+                    dst_ip=dst_ip,
                 )
                 if src_port is not None:
                     self._remember_connection_tuple(src_ip, src_port, dst_ip, dst_port, proto, time)
@@ -7603,8 +7640,19 @@ class ActivityGenerator:
                 and resolved_process.start_time
                 and time < resolved_process.start_time
             ):
-                time = resolved_process.start_time + timedelta(milliseconds=1)
-            if (
+                logger.debug(
+                    "Dropping future connection PID attribution: "
+                    "host=%s pid=%s process_start=%s connection_time=%s dst=%s:%s",
+                    resolved_source_system.hostname,
+                    pid,
+                    resolved_process.start_time,
+                    time,
+                    dst_ip,
+                    dst_port,
+                )
+                pid = -1
+                resolved_process = None
+            elif (
                 resolved_process
                 and resolved_process.start_time
                 and self._foreground_process_expired_for_attribution(
@@ -7980,6 +8028,16 @@ class ActivityGenerator:
                 dst_ip,
                 dst_port,
                 time,
+            )
+        else:
+            self._remember_connection_tuple(
+                src_ip,
+                src_port,
+                dst_ip,
+                dst_port,
+                proto,
+                time,
+                duration=duration,
             )
 
         if pid > 0 and resolved_source_system:
@@ -11549,7 +11607,7 @@ class ActivityGenerator:
         )
 
         observed_connection_time = time + sample_timing_delta(
-            "source.zeek_conn_start",
+            "network.connection_start_jitter",
             seed_parts=(
                 source_ip,
                 src_port,

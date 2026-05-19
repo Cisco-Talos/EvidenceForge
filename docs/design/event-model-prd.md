@@ -5,6 +5,7 @@
 > **Scope:** Architectural refactor of the generation engine to use a canonical event model for cross-log consistency by construction.
 > **Results:** All 12 generate_* methods migrated. A/B eval: 82.3→83.7 (+1.4). Expert panel: 6 tells fixed, 0 regressions.
 > **2026-04 Addendum:** Phase 8.5 added `WorldModel` / `WorldPlanner` above `ActivityGenerator`. The canonical event model and dispatcher remain the rendering backbone, but planner-owned session bootstrap now means session IDs may be allocated before `ActivityGenerator.generate_logon()` emits the corresponding host/network evidence.
+> **2026-05 Addendum:** Source-native render timestamps are now planned by `SourceTimingPlanner`. `SecurityEvent.timestamp` remains canonical world time; emitters use planned source times with explicit causal bounds for migrated timing surfaces.
 
 ## 1. Overview
 
@@ -196,6 +197,7 @@ class SecurityEvent:
     file: FileContext | None = None
     registry: RegistryContext | None = None
     ids: IdsContext | None = None
+    source_timing: SourceTimingPlan | None = None  # Planned source-native timestamps
 
 @dataclass(slots=True)
 class RawLogEntry:
@@ -209,6 +211,13 @@ class RawLogEntry:
     target_emitter: str              # Emitter dict key (e.g., "syslog", "zeek_conn", "windows_event_security")
     data: dict[str, Any]             # Raw field dict, passed directly to emitter's emit_raw()
 ```
+
+`SourceTimingPlan` is internal render metadata. It records the canonical timestamp and
+deterministic source timestamps keyed by source profile/seed. Emitters must treat the
+canonical timestamp as the truth of when the activity happened and use source times only
+for source-native observation/rendering. The ordering guarantee is per source stream:
+declared causal edges render in order using deterministic epsilon spacing, while unrelated
+events are not forced into a global total order and may share equal timestamps.
 
 ### 3.3 Event Type Catalog
 
@@ -267,6 +276,7 @@ class EventDispatcher:
         """Route a structured event to StateManager + matching emitters."""
         self.state_manager.apply(event)
         for emitter in self._get_matching_emitters(event):
+            event = self.source_timing_planner.plan_event(event)
             emitter.emit(event)
 
     def dispatch_raw(self, entry: RawLogEntry) -> None:

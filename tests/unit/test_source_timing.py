@@ -1,0 +1,235 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+# SPDX-License-Identifier: MIT
+
+"""Tests for source-aware timing planning."""
+
+import json
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext, ProcessContext
+from evidenceforge.formats import load_format
+from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+
+
+def _base_time() -> datetime:
+    return datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+
+def _network_context(duration: float = 0.05) -> NetworkContext:
+    return NetworkContext(
+        src_ip="10.0.0.20",
+        src_port=49152,
+        dst_ip="10.0.0.53",
+        dst_port=53,
+        protocol="udp",
+        service="dns",
+        zeek_uid="CsourceTiming01",
+        duration=duration,
+        conn_state="SF",
+        history="Dd",
+        orig_bytes=64,
+        resp_bytes=128,
+        orig_pkts=1,
+        resp_pkts=1,
+        orig_ip_bytes=92,
+        resp_ip_bytes=156,
+        ip_proto=17,
+    )
+
+
+def _host_context() -> HostContext:
+    return HostContext(
+        hostname="WIN-TEST-01",
+        ip="10.0.0.20",
+        fqdn="WIN-TEST-01.corp.local",
+        os="Windows 11",
+        os_category="windows",
+        system_type="workstation",
+        domain="corp.local",
+        netbios_domain="CORP",
+    )
+
+
+def _process_context(start_time: datetime) -> ProcessContext:
+    return ProcessContext(
+        pid=4242,
+        parent_pid=888,
+        image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        command_line="powershell.exe -NoProfile",
+        username=r"CORP\alice",
+        logon_id="0x12345",
+        parent_image=r"C:\Windows\explorer.exe",
+        start_time=start_time,
+    )
+
+
+def test_source_time_is_deterministic() -> None:
+    """The same event/source/seed should produce the same planned source time."""
+    planner = SourceTimingPlanner()
+    event = SecurityEvent(
+        timestamp=_base_time(), event_type="connection", network=_network_context()
+    )
+
+    first = planner.source_time(
+        event,
+        "source.zeek_dns_query",
+        seed_parts=("uid", "query", event.timestamp),
+    )
+    second = planner.source_time(
+        event,
+        "source.zeek_dns_query",
+        seed_parts=("uid", "query", event.timestamp),
+    )
+
+    assert first == second
+
+
+def test_source_time_clamps_to_declared_bounds() -> None:
+    """A sampled source delay should not escape an explicit causal window."""
+    planner = SourceTimingPlanner()
+    event = SecurityEvent(
+        timestamp=_base_time(), event_type="connection", network=_network_context()
+    )
+    latest = event.timestamp + timedelta(microseconds=1)
+
+    planned = planner.source_time(
+        event,
+        "source.zeek_conn_start",
+        seed_parts=("clamped", event.timestamp),
+        within=(event.timestamp, latest),
+    )
+
+    assert event.timestamp <= planned <= latest
+
+
+def test_equal_canonical_timestamps_can_be_ordered_by_causal_edge() -> None:
+    """Equal world times stay orderable when a source relationship requires it."""
+    planner = SourceTimingPlanner()
+    base = _base_time()
+    before = SecurityEvent(timestamp=base, event_type="kerberos_tgt")
+    after = SecurityEvent(timestamp=base, event_type="kerberos_service")
+
+    before_ts, after_ts = planner.ordered_pair(
+        before, after, "source.windows_security_process_create"
+    )
+
+    assert before_ts < after_ts
+
+
+def test_independent_equal_canonical_timestamps_may_share_source_time() -> None:
+    """Independent events are not forced into a global total order."""
+    planner = SourceTimingPlanner()
+    base = _base_time()
+    first = SecurityEvent(timestamp=base, event_type="independent_one")
+    second = SecurityEvent(timestamp=base, event_type="independent_two")
+
+    first_ts = planner.source_time(first, "source.unprofiled_zero", seed_parts=("same",))
+    second_ts = planner.source_time(second, "source.unprofiled_zero", seed_parts=("same",))
+
+    assert first_ts == second_ts
+
+
+def test_sensor_observation_time_is_stable_by_sensor_and_path() -> None:
+    """Per-sensor Zeek timing should be stable but not mechanically identical."""
+    planner = SourceTimingPlanner()
+    event = SecurityEvent(
+        timestamp=_base_time(), event_type="connection", network=_network_context()
+    )
+    route_key = "10.0.0.20:49152>10.0.0.53:53"
+
+    core_first = planner.sensor_observation_time(
+        event, "zeek-core-01", route_key, "source.zeek_conn_start"
+    )
+    core_second = planner.sensor_observation_time(
+        event, "zeek-core-01", route_key, "source.zeek_conn_start"
+    )
+    dmz = planner.sensor_observation_time(event, "zeek-dmz-01", route_key, "source.zeek_conn_start")
+
+    assert core_first == core_second
+    assert dmz != core_first
+
+
+def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None:
+    """eCAR dependent records should render after the planned PROCESS/CREATE time."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    base = _base_time()
+    host = _host_context()
+    proc = _process_context(base)
+    process_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+    )
+    dependent_event = SecurityEvent(
+        timestamp=base,
+        event_type="file_create",
+        src_host=host,
+        process=proc,
+    )
+
+    process_time = emitter._process_create_timestamp(process_event, proc)
+    dependent_time = emitter._after_process_create_timestamp(dependent_event, proc)
+
+    assert dependent_time > process_time
+
+
+def test_zeek_dns_timestamp_stays_inside_rendered_conn_lifetime(tmp_path: Path) -> None:
+    """Zeek analyzer rows should be bounded by the rendered parent conn row."""
+    event = SecurityEvent(
+        timestamp=_base_time(),
+        event_type="connection",
+        network=_network_context(duration=0.05),
+        dns=DnsContext(
+            query="updates.example.com",
+            query_type="A",
+            response_ip="10.0.0.53",
+            answers=["10.0.0.53"],
+            TTLs=[60.0],
+            rtt=0.02,
+        ),
+    )
+    conn_path = tmp_path / "conn.json"
+    dns_path = tmp_path / "dns.json"
+    conn_emitter = ZeekEmitter(load_format("zeek_conn"), conn_path, threaded=False)
+    dns_emitter = ZeekDnsEmitter(load_format("zeek_dns"), dns_path, threaded=False)
+
+    conn_emitter.emit(event)
+    dns_emitter.emit(event)
+    conn_emitter.close()
+    dns_emitter.close()
+
+    conn_row = json.loads(conn_path.read_text().splitlines()[0])
+    dns_row = json.loads(dns_path.read_text().splitlines()[0])
+
+    assert conn_row["ts"] <= dns_row["ts"] <= conn_row["ts"] + event.network.duration
+
+
+def test_migrated_emitters_do_not_use_local_timing_helpers() -> None:
+    """Guard the first migrated timing surfaces against local jitter regressions."""
+    repo_root = Path(__file__).parents[2]
+    migrated_files = [
+        repo_root / "src/evidenceforge/generation/emitters/ecar.py",
+        repo_root / "src/evidenceforge/generation/emitters/zeek_dns.py",
+        repo_root / "src/evidenceforge/generation/emitters/zeek_http.py",
+        repo_root / "src/evidenceforge/generation/emitters/zeek_ssl.py",
+        repo_root / "src/evidenceforge/generation/emitters/zeek_x509.py",
+        repo_root / "src/evidenceforge/generation/emitters/zeek_files.py",
+    ]
+    forbidden = (
+        "sample_timing_delta",
+        "sample_packet_timing_delta",
+        "ssl_analyzer_delay",
+        "certificate_analyzer_delay_ms",
+        "zeek-file-delay",
+        "def _source_offset",
+    )
+
+    for path in migrated_files:
+        text = path.read_text(encoding="utf-8")
+        assert not any(marker in text for marker in forbidden), path
