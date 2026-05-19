@@ -1000,7 +1000,21 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
     command = command_line.lower()
     if any(pattern in command for pattern in ("tail -f", "watch ", "--follow", " -f ")):
         return None
-    if exe_name in {"cat", "ls", "pwd", "whoami", "id", "uname", "hostname", "df", "free"}:
+    if exe_name in {
+        "cat",
+        "date",
+        "ls",
+        "pwd",
+        "true",
+        "whoami",
+        "id",
+        "uname",
+        "hostname",
+        "df",
+        "free",
+    }:
+        return (0.05, 0.8)
+    if exe_name in {"sleep", "test"}:
         return (0.2, 2.0)
     if exe_name in {"grep", "head", "tail", "wc", "env", "printenv", "ss", "ip", "ps"}:
         return (0.5, 4.0)
@@ -9444,6 +9458,8 @@ class ActivityGenerator:
         parent_pid: int = 4,
         username: str = "SYSTEM",
         syslog_message: str | None = None,
+        *,
+        emit_linux_syslog: bool = True,
     ) -> int:
         """Generate a system process creation event (no user session required).
 
@@ -9458,6 +9474,7 @@ class ActivityGenerator:
             parent_pid: Parent process PID
             username: System account name (SYSTEM, root, etc.)
             syslog_message: Custom syslog message (overrides auto-generated message)
+            emit_linux_syslog: Whether to attach a Linux syslog record to this process event.
 
         Returns:
             PID of the new process
@@ -9563,7 +9580,7 @@ class ActivityGenerator:
         )
 
         # Attach SyslogContext for Linux hosts
-        if event.src_host and event.src_host.os_category == "linux":
+        if emit_linux_syslog and event.src_host and event.src_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
             if syslog_message:

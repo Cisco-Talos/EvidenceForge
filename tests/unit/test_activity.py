@@ -44,6 +44,7 @@ from evidenceforge.generation.activity.generator import (
     _extract_image_from_command,
     _http_context_from_process_command,
     _jitter_default_connection_duration,
+    _linux_foreground_lifetime,
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
     _zeek_conn_observation_time,
@@ -55,6 +56,14 @@ from evidenceforge.generation.activity.tls_realism import (
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+
+
+def test_linux_trivial_command_lifetime_is_subsecond():
+    """Instant Linux utilities should not look like multi-second process telemetry."""
+    lifetime = _linux_foreground_lifetime("/usr/bin/date", "date -u")
+
+    assert lifetime is not None
+    assert lifetime[1] <= 0.8
 
 
 class TestApacheRawSyslogNormalization:

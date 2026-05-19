@@ -32,6 +32,7 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
+    _cron_shell_command_line,
     _dc_kerberos_cycle_range,
     _dc_kerberos_tgs_range,
     _is_kerberos_member_server,
@@ -118,6 +119,57 @@ def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
     assert all("cron.weekly" not in message for message in messages)
     assert messages[-1] == "Normal exit (1 job run)"
     assert times == sorted(times)
+
+
+def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
+    """Cron schedules should not render shell syntax as the cron daemon image."""
+    engine = type("FakeEngine", (object,), {})()
+    engine.state_manager = Mock()
+    engine.activity_generator = Mock()
+    engine.activity_generator.generate_system_process.side_effect = [41200, 41201]
+    engine._emit_scheduled_event = BaselineMixin._emit_scheduled_event.__get__(
+        engine,
+        type(engine),
+    )
+    ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    sched = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "cron_user": "sysstat",
+        "cron_commands": {
+            "debian": "command -v debian-sa1 > /dev/null && debian-sa1 1 1",
+        },
+    }
+
+    engine._emit_scheduled_event(
+        sched,
+        linux_system,
+        ts,
+        random.Random(3),
+        {"cron": 1337},
+        False,
+    )
+
+    process_calls = engine.activity_generator.generate_system_process.call_args_list
+    assert process_calls[0].kwargs["process_name"] == "/bin/sh"
+    assert process_calls[0].kwargs["command_line"] == _cron_shell_command_line(
+        "command -v debian-sa1 > /dev/null && debian-sa1 1 1"
+    )
+    assert process_calls[0].kwargs["parent_pid"] == 1337
+    assert process_calls[0].kwargs["username"] == "sysstat"
+    assert process_calls[0].kwargs["emit_linux_syslog"] is False
+    assert process_calls[1].kwargs["process_name"] == "/usr/lib/sysstat/debian-sa1"
+    assert process_calls[1].kwargs["command_line"] == "debian-sa1 1 1"
+    assert process_calls[1].kwargs["parent_pid"] == 41200
+    assert process_calls[1].kwargs["emit_linux_syslog"] is False
+    syslog_call = engine.activity_generator.generate_syslog_event.call_args
+    assert syslog_call.kwargs["app_name"] == "CRON"
+    assert syslog_call.kwargs["pid"] == 41200
+    assert syslog_call.kwargs["message"] == (
+        "(sysstat) CMD (command -v debian-sa1 > /dev/null && debian-sa1 1 1)"
+    )
+    term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
+    assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
 
 
 @pytest.fixture

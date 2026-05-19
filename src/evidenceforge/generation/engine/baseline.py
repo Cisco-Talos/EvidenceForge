@@ -34,6 +34,7 @@ Contains the BaselineMixin with methods for:
 import logging
 import math
 import random
+import shlex
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -746,6 +747,30 @@ def _deterministic_probability_enabled(key: str, probability: float | None) -> b
     return (_stable_seed(key) % 10_000) / 10_000.0 < clamped
 
 
+def _cron_shell_command_line(command: str) -> str:
+    """Return a source-native shell command line for cron-executed commands."""
+    return f"/bin/sh -c {shlex.quote(command)}"
+
+
+def _cron_workload_process(
+    command: str,
+    is_rhel_like: bool,
+) -> tuple[str, str, tuple[float, float]] | None:
+    """Resolve the concrete workload process normally spawned by a cron shell."""
+    command_lower = command.lower()
+    if "debian-sa1" in command_lower:
+        return "/usr/lib/sysstat/debian-sa1", "debian-sa1 1 1", (0.05, 0.45)
+    if "logrotate" in command_lower:
+        return "/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf", (0.8, 4.5)
+    if "run-parts" in command_lower:
+        process_path = "/usr/bin/run-parts" if not is_rhel_like else "/bin/run-parts"
+        command_line = "run-parts --report /etc/cron.daily"
+        if is_rhel_like:
+            command_line = "run-parts /etc/cron.daily"
+        return process_path, command_line, (1.0, 6.0)
+    return None
+
+
 def _schedule_applies_to_system(sched: dict[str, Any], system: Any, has_web_role: bool) -> bool:
     """Return whether a Linux schedule matches host role and service/package state."""
     roles = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
@@ -1298,14 +1323,59 @@ class BaselineMixin:
             if not cmd:
                 return
 
-            self.activity_generator.generate_system_process(
+            cron_parent_pid = sys_pids.get("cron", 0)
+            shell_pid = self.activity_generator.generate_system_process(
                 system=system,
                 time=ts,
-                process_name="/usr/sbin/cron",
-                command_line=cmd,
-                parent_pid=sys_pids.get("cron", 0),
+                process_name="/bin/sh",
+                command_line=_cron_shell_command_line(cmd),
+                parent_pid=cron_parent_pid,
                 username=cron_user,
+                emit_linux_syslog=False,
             )
+            self.activity_generator.generate_syslog_event(
+                system=system,
+                time=ts + timedelta(milliseconds=rng.randint(10, 120)),
+                app_name="CRON",
+                message=f"({cron_user}) CMD ({cmd})",
+                pid=shell_pid or cron_parent_pid,
+                facility=9,
+                severity=6,
+            )
+            workload = _cron_workload_process(cmd, is_rhel_like)
+            if shell_pid and workload:
+                workload_path, workload_command, lifetime = workload
+                workload_ts = ts + timedelta(milliseconds=rng.randint(60, 350))
+                workload_pid = self.activity_generator.generate_system_process(
+                    system=system,
+                    time=workload_ts,
+                    process_name=workload_path,
+                    command_line=workload_command,
+                    parent_pid=shell_pid,
+                    username=cron_user,
+                    emit_linux_syslog=False,
+                )
+                workload_end = workload_ts + timedelta(seconds=rng.uniform(*lifetime))
+                self.activity_generator.generate_system_process_termination(
+                    system=system,
+                    time=workload_end,
+                    pid=workload_pid,
+                    process_name=workload_path,
+                    parent_pid=shell_pid,
+                    username=cron_user,
+                )
+                shell_end = workload_end + timedelta(milliseconds=rng.randint(20, 220))
+            else:
+                shell_end = ts + timedelta(seconds=rng.uniform(0.15, 1.5))
+            if shell_pid:
+                self.activity_generator.generate_system_process_termination(
+                    system=system,
+                    time=shell_end,
+                    pid=shell_pid,
+                    process_name="/bin/sh",
+                    parent_pid=cron_parent_pid,
+                    username=cron_user,
+                )
 
     def _emit_anacron_lifecycle(
         self,
