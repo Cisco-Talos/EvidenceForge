@@ -645,6 +645,145 @@ class TestSslUidCorrelation:
         assert "id.orig_h" not in ocsp_file_row
         assert ocsp_file_row["mime_type"] == "application/ocsp-response"
 
+    def test_tls_certificate_files_and_x509_share_ordered_timeline(self):
+        """SSL certificate files and x509 rows should follow one ordered chain timeline."""
+        ssl_fmt = load_format("zeek_ssl")
+        x509_fmt = load_format("zeek_x509")
+        files_fmt = load_format("zeek_files")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+            leaf = X509Context(
+                fuid="Fleafordered1234",
+                fingerprint="a" * 40,
+                certificate_serial="01",
+                certificate_subject="CN=www.example.com",
+                certificate_issuer="CN=Example Intermediate CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+            )
+            intermediate = X509Context(
+                fuid="Fintordered12345",
+                fingerprint="b" * 40,
+                certificate_serial="02",
+                certificate_subject="CN=Example Intermediate CA",
+                certificate_issuer="CN=Example Root CA",
+                certificate_not_valid_before=1600000000.0,
+                certificate_not_valid_after=1900000000.0,
+                basic_constraints_ca=True,
+            )
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="COrderedTlsUID1",
+                    duration=3.0,
+                ),
+                ssl=SslContext(
+                    version="TLSv12",
+                    cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    cert_chain_fuids=[leaf.fuid, intermediate.fuid],
+                ),
+                x509=leaf,
+                x509_chain=[leaf, intermediate],
+            )
+
+            ssl_emitter.emit(event)
+            files_emitter.emit(event)
+            x509_emitter.emit(event)
+            ssl_emitter.close()
+            files_emitter.close()
+            x509_emitter.close()
+
+            ssl_row = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])
+            file_rows = [
+                json.loads(line) for line in (out_dir / "files.json").read_text().splitlines()
+            ]
+            x509_rows = [
+                json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()
+            ]
+
+        files_by_fuid = {row["fuid"]: row for row in file_rows}
+        x509_by_id = {row["id"]: row for row in x509_rows}
+        assert ssl_row["cert_chain_fuids"] == [leaf.fuid, intermediate.fuid]
+        assert files_by_fuid[leaf.fuid]["depth"] == 0
+        assert files_by_fuid[intermediate.fuid]["depth"] == 1
+        assert files_by_fuid[leaf.fuid]["ts"] < files_by_fuid[intermediate.fuid]["ts"]
+        assert x509_by_id[leaf.fuid]["ts"] > files_by_fuid[leaf.fuid]["ts"]
+        assert x509_by_id[intermediate.fuid]["ts"] > files_by_fuid[intermediate.fuid]["ts"]
+        assert x509_by_id[leaf.fuid]["ts"] < x509_by_id[intermediate.fuid]["ts"]
+
+    def test_tls_certificate_file_depth_spacing_is_not_constant(self):
+        """TLS certificate file depth gaps should be ordered and non-uniform."""
+        files_fmt = load_format("zeek_files")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        gaps: list[float] = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+            for idx in range(24):
+                leaf = X509Context(
+                    fuid=f"Ffileleaf{idx:08d}",
+                    fingerprint=f"{idx:040x}"[-40:],
+                    certificate_serial="01",
+                    certificate_subject=f"CN=leaf{idx}.example.com",
+                    certificate_issuer="CN=Example Intermediate CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                )
+                intermediate = X509Context(
+                    fuid=f"Ffileint{idx:09d}",
+                    fingerprint=f"{idx + 10_000:040x}"[-40:],
+                    certificate_serial="02",
+                    certificate_subject="CN=Example Intermediate CA",
+                    certificate_issuer="CN=Example Root CA",
+                    certificate_not_valid_before=1600000000.0,
+                    certificate_not_valid_after=1900000000.0,
+                    basic_constraints_ca=True,
+                )
+                event = SecurityEvent(
+                    timestamp=base_ts + timedelta(seconds=idx),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=52000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        service="ssl",
+                        conn_state="SF",
+                        zeek_uid=f"CFileChain{idx:05d}",
+                        duration=3.0,
+                    ),
+                    x509=leaf,
+                    x509_chain=[leaf, intermediate],
+                )
+                files_emitter.emit(event)
+            files_emitter.close()
+
+            rows = [json.loads(line) for line in (out_dir / "files.json").read_text().splitlines()]
+
+        for leaf_row, intermediate_row in zip(rows[0::2], rows[1::2], strict=True):
+            assert leaf_row["depth"] == 0
+            assert intermediate_row["depth"] == 1
+            gap = round(intermediate_row["ts"] - leaf_row["ts"], 6)
+            assert gap > 0
+            gaps.append(gap)
+        assert 0.001 not in gaps
+        assert len(set(gaps)) > 10
+
     def test_x509_timestamp_stays_inside_parent_connection(self):
         """x509 analyzer rows should not outlive their owning connection interval."""
         x509_fmt = load_format("zeek_x509")

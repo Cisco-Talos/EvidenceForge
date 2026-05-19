@@ -31,6 +31,7 @@ from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.utils.rng import _stable_seed
 
 _SOURCE_TIMING = SourceTimingPlanner()
 
@@ -96,55 +97,17 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
             self.emit_event(event_data)
 
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        previous_cert_ts: datetime | None = None
         for depth, cert in enumerate(certificates):
             size = certificate_file_size(cert)
             cert_hashes = _certificate_file_hashes(cert.fingerprint)
-            conn_ts = _SOURCE_TIMING.source_time(
+            cert_ts = _tls_certificate_file_timestamp(
                 event,
-                "source.zeek_conn_start",
-                seed_parts=(
-                    net.zeek_uid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
-                not_before=event.timestamp,
+                cert,
+                depth,
+                previous_file_timestamp=previous_cert_ts,
             )
-            within = None
-            if net.duration is not None and net.duration > 0:
-                latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
-                within = (conn_ts, latest)
-            ssl_ts = _SOURCE_TIMING.source_time(
-                event,
-                "source.zeek_ssl_analyzer",
-                seed_parts=(
-                    net.zeek_uid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
-                not_before=conn_ts,
-                within=within,
-            )
-            lower_bound = ssl_ts + timedelta(milliseconds=1 + depth)
-            if within is not None and lower_bound > within[1]:
-                lower_bound = within[1]
-            preferred_cert_ts = _SOURCE_TIMING.source_time(
-                event,
-                "source.zeek_file_analyzer",
-                seed_parts=(net.zeek_uid, cert.fuid, depth, event.timestamp),
-                not_before=lower_bound,
-                within=within,
-            )
-            cert_ts = _bounded_in_connection_timestamp(
-                conn_ts,
-                net.duration,
-                preferred_cert_ts,
-            )
+            previous_cert_ts = cert_ts
             event_data = {
                 "ts": cert_ts,
                 "fuid": cert.fuid,
@@ -214,6 +177,152 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
         "sha1": fingerprint,
         "sha256": hashlib.sha256(seed.encode()).hexdigest(),
     }
+
+
+def _tls_connection_analysis_times(
+    event: SecurityEvent,
+) -> tuple[datetime, tuple[datetime, datetime] | None, datetime]:
+    """Return conn bounds and the owning ssl.log analyzer timestamp."""
+    net = event.network
+    if net is None:
+        return event.timestamp, None, event.timestamp
+    conn_ts = _SOURCE_TIMING.source_time(
+        event,
+        "source.zeek_conn_start",
+        seed_parts=(
+            net.zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        ),
+        not_before=event.timestamp,
+    )
+    within = None
+    if net.duration is not None and net.duration > 0:
+        latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
+        within = (conn_ts, latest)
+    ssl_ts = _SOURCE_TIMING.source_time(
+        event,
+        "source.zeek_ssl_analyzer",
+        seed_parts=(
+            net.zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        ),
+        not_before=conn_ts,
+        within=within,
+    )
+    return conn_ts, within, ssl_ts
+
+
+def _tls_certificate_gap(event: SecurityEvent, fuid: str, position: int, label: str) -> timedelta:
+    """Return deterministic non-uniform spacing for certificate analyzer rows."""
+    seed = _stable_seed(
+        "zeek-tls-cert-gap:"
+        f"{label}:{getattr(event.network, 'zeek_uid', '')}:{fuid}:"
+        f"{position}:{event.timestamp.isoformat()}"
+    )
+    return timedelta(milliseconds=2 + (seed % 23), microseconds=103 + ((seed >> 8) % 853))
+
+
+def _constrained_tls_timestamp(
+    event: SecurityEvent,
+    source_key: str,
+    seed_parts: tuple[Any, ...],
+    lower_bound: datetime,
+    conn_ts: datetime,
+    within: tuple[datetime, datetime] | None,
+) -> datetime:
+    """Return a bounded source timestamp without violating TLS row ordering."""
+    net = event.network
+    if within is not None and lower_bound > within[1]:
+        lower_bound = within[1]
+    preferred = _SOURCE_TIMING.source_time(
+        event,
+        source_key,
+        seed_parts=seed_parts,
+        not_before=lower_bound,
+        within=within,
+    )
+    timestamp = _bounded_in_connection_timestamp(
+        conn_ts,
+        net.duration if net is not None else None,
+        preferred,
+    )
+    return lower_bound if timestamp < lower_bound else timestamp
+
+
+def _tls_certificate_file_timestamp(
+    event: SecurityEvent,
+    cert: Any,
+    position: int,
+    *,
+    previous_file_timestamp: datetime | None,
+) -> datetime:
+    """Return the source-native files.log timestamp for one TLS certificate."""
+    net = event.network
+    if net is None:
+        lower_bound = (
+            event.timestamp
+            if previous_file_timestamp is None
+            else previous_file_timestamp + _tls_certificate_gap(event, cert.fuid, position, "file")
+        )
+        return _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_file_analyzer",
+            seed_parts=("tls-cert-file", cert.fuid, position, event.timestamp),
+            not_before=lower_bound,
+        )
+    conn_ts, within, ssl_ts = _tls_connection_analysis_times(event)
+    gap = _tls_certificate_gap(event, cert.fuid, position, "file")
+    lower_bound = ssl_ts + gap
+    if previous_file_timestamp is not None:
+        lower_bound = max(lower_bound, previous_file_timestamp + gap)
+    return _constrained_tls_timestamp(
+        event,
+        "source.zeek_file_analyzer",
+        (net.zeek_uid, "tls-cert-file", cert.fuid, position, event.timestamp),
+        lower_bound,
+        conn_ts,
+        within,
+    )
+
+
+def _tls_certificate_x509_timestamp(
+    event: SecurityEvent,
+    cert: Any,
+    position: int,
+    *,
+    file_timestamp: datetime,
+    previous_x509_timestamp: datetime | None,
+) -> datetime:
+    """Return the source-native x509.log timestamp after its files.log object."""
+    net = event.network
+    gap = _tls_certificate_gap(event, cert.fuid, position, "x509")
+    lower_bound = file_timestamp + gap
+    if previous_x509_timestamp is not None:
+        lower_bound = max(lower_bound, previous_x509_timestamp + gap)
+    if net is None:
+        return _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_x509_analyzer",
+            seed_parts=("tls-cert-x509", cert.fuid, position, event.timestamp),
+            not_before=lower_bound,
+        )
+    conn_ts, within, _ssl_ts = _tls_connection_analysis_times(event)
+    return _constrained_tls_timestamp(
+        event,
+        "source.zeek_x509_analyzer",
+        (net.zeek_uid, "tls-cert-x509", cert.fuid, position, event.timestamp),
+        lower_bound,
+        conn_ts,
+        within,
+    )
 
 
 def _file_transfer_analyzer_timestamp(

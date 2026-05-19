@@ -4466,6 +4466,7 @@ class TestActivityGenerator:
             for idx, cert in enumerate(event.x509_chain)
         )
         assert event.network.duration >= (max_cert_delay_ms / 1000.0)
+        assert event.network.duration >= 1.05 + (0.075 * len(event.x509_chain))
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters

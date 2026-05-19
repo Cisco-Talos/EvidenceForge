@@ -4369,6 +4369,9 @@ class ActivityGenerator:
             for idx, cert in enumerate(event.x509_chain)
         )
         min_duration = (max_cert_delay / 1000.0) + 0.005
+        # Reserve room for files.log and x509.log chain rows before the conn
+        # emitter applies its own source-native TLS duration floor.
+        min_duration = max(min_duration, 1.05 + (0.075 * len(event.x509_chain)))
         if net.duration is None or net.duration < min_duration:
             net.duration = min_duration
 
