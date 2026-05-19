@@ -3141,6 +3141,54 @@ class ActivityGenerator:
             host = f"{host}:{dst_port}"
         return f"{scheme}://{host}{path}"
 
+    @staticmethod
+    def _browser_launch_uri(uri: str) -> str:
+        """Return the navigation URI a browser process would show at launch."""
+        path = uri or "/"
+        if path.startswith(("http://", "https://")):
+            parsed = urlsplit(path)
+            path = parsed.path or "/"
+        if not path.startswith("/"):
+            path = f"/{path}"
+
+        clean_path = path.split("?", 1)[0].split("#", 1)[0].lower()
+        basename = clean_path.rsplit("/", 1)[-1]
+        suffix = f".{basename.rsplit('.', 1)[-1]}" if "." in basename else ""
+        static_prefixes = (
+            "/assets/",
+            "/asset/",
+            "/static/",
+            "/media/",
+            "/images/",
+            "/img/",
+            "/css/",
+            "/js/",
+            "/fonts/",
+        )
+        static_names = {"/favicon.ico", "/robots.txt", "/sitemap.xml", "/index.html", "/index.htm"}
+        static_suffixes = {
+            ".avif",
+            ".css",
+            ".gif",
+            ".ico",
+            ".jpeg",
+            ".jpg",
+            ".js",
+            ".map",
+            ".png",
+            ".svg",
+            ".webp",
+            ".woff",
+            ".woff2",
+        }
+        if (
+            clean_path in static_names
+            or clean_path.startswith(static_prefixes)
+            or suffix in static_suffixes
+        ):
+            return "/"
+        return uri or "/"
+
     def _browser_http_client_process_hint(
         self,
         *,
@@ -3154,7 +3202,8 @@ class ActivityGenerator:
         if not ua:
             return None
 
-        target_url = self._http_target_url(hostname=hostname, uri=uri, dst_port=dst_port)
+        launch_uri = self._browser_launch_uri(uri)
+        target_url = self._http_target_url(hostname=hostname, uri=launch_uri, dst_port=dst_port)
         if "firefox/" in ua:
             image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
             return image, f'"{image}" -osint -url {target_url}'
@@ -3336,7 +3385,8 @@ class ActivityGenerator:
         process_rng = random.Random(
             _stable_seed(
                 "browser_http_client_process:"
-                f"{source_system.hostname}:{user.username}:{image}:{http.host}:{http.uri}"
+                f"{source_system.hostname}:{user.username}:{image}:"
+                f"{http.host}:{self._browser_launch_uri(http.uri)}"
             )
         )
         lead_seconds = process_rng.uniform(0.4, 8.0)
@@ -8468,8 +8518,9 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            conn_delay_ms = rng.randint(70, 160)
-            pam_delay_ms = conn_delay_ms + rng.randint(45, 110)
+            conn_delay_ms = rng.randint(25, 120)
+            accepted_delay_ms = conn_delay_ms + rng.randint(35, 95)
+            pam_delay_ms = accepted_delay_ms + rng.randint(45, 110)
             logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
             ssh_syslog_seed = (
                 target_system.hostname,
@@ -8486,7 +8537,6 @@ class ActivityGenerator:
                     "connection",
                     conn_delay_ms,
                     *ssh_syslog_seed,
-                    before=True,
                 ),
                 event_type="syslog",
                 src_host=event.dst_host,
@@ -8509,7 +8559,7 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             accepted_event = SecurityEvent(
-                timestamp=_ssh_syslog_time(time, "accepted", 0, *ssh_syslog_seed),
+                timestamp=_ssh_syslog_time(time, "accepted", accepted_delay_ms, *ssh_syslog_seed),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(

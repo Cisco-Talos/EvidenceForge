@@ -477,9 +477,10 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert times[0] < base_time < times[2]
-        assert timedelta(milliseconds=70) <= base_time - times[0] <= timedelta(milliseconds=160)
-        assert timedelta(milliseconds=115) <= times[2] - base_time <= timedelta(milliseconds=270)
+        assert base_time < times[0] < times[1] < times[2]
+        assert timedelta(milliseconds=25) <= times[0] - base_time <= timedelta(milliseconds=120)
+        assert timedelta(milliseconds=60) <= times[1] - base_time <= timedelta(milliseconds=215)
+        assert timedelta(milliseconds=105) <= times[2] - base_time <= timedelta(milliseconds=325)
         assert times[2] - times[0] != timedelta(seconds=1)
         assert len({timestamp.microsecond % 1000 for timestamp in times}) == len(times)
 
