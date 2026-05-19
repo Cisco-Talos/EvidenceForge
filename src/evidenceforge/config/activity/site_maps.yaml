@@ -629,6 +629,273 @@ domains:
           - {path: "/y18.svg", type: "image/svg+xml"}
           - {path: "/favicon.ico", type: "image/x-icon"}
 
+  # Workstation-normal SaaS and collaboration surfaces.
+  id.atlassian.com:
+    cdn_domains: ["wac-cdn.atlassian.com"]
+    pages:
+      - path: "/login"
+        nav_targets: ["/oauth2/authorize", "/login"]
+        subresources:
+          - {host: "wac-cdn.atlassian.com", path: "/assets/login.{hex16}.js", type: "application/javascript"}
+          - {host: "wac-cdn.atlassian.com", path: "/assets/login.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  company.atlassian.net:
+    cdn_domains: ["wac-cdn.atlassian.com"]
+    pages:
+      - path: "/jira/your-work"
+        nav_targets: ["/browse/PROJ-{hex8}", "/wiki/spaces/ENG", "/jira/dashboards"]
+        subresources:
+          - {host: "wac-cdn.atlassian.com", path: "/jira-spa/{hex16}.js", type: "application/javascript"}
+          - {host: "wac-cdn.atlassian.com", path: "/jira-spa/{hex8}.css", type: "text/css"}
+          - {path: "/rest/api/3/myself", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+      - path: "/wiki/spaces/ENG"
+        nav_targets: ["/jira/your-work", "/wiki/spaces/ENG/pages/{hex8}"]
+        subresources:
+          - {host: "wac-cdn.atlassian.com", path: "/confluence/{hex16}.js", type: "application/javascript"}
+          - {path: "/wiki/rest/api/space/ENG/content", type: "application/json"}
+
+  company.service-now.com:
+    cdn_domains: ["static.service-now.com"]
+    pages:
+      - path: "/now/nav/ui/classic/params/target/home.do"
+        nav_targets: ["/sp?id=sc_home", "/incident_list.do", "/kb_view.do"]
+        subresources:
+          - {host: "static.service-now.com", path: "/scripts/sn-common-{hex16}.js", type: "application/javascript"}
+          - {host: "static.service-now.com", path: "/styles/heisenberg-{hex8}.css", type: "text/css"}
+          - {path: "/api/now/table/incident?sysparm_limit=20", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  login.service-now.com:
+    cdn_domains: ["static.service-now.com"]
+    pages:
+      - path: "/login.do"
+        nav_targets: ["/oauth_token.do"]
+        subresources:
+          - {host: "static.service-now.com", path: "/scripts/login-{hex8}.js", type: "application/javascript"}
+          - {host: "static.service-now.com", path: "/styles/login-{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  wd5.myworkday.com:
+    cdn_domains: ["wd3.myworkdaycdn.com"]
+    pages:
+      - path: "/company/d/home.htmld"
+        nav_targets: ["/company/d/task/2998$1234.htmld", "/company/d/reports.htmld"]
+        subresources:
+          - {host: "wd3.myworkdaycdn.com", path: "/wday/{hex16}/client-min.js", type: "application/javascript"}
+          - {host: "wd3.myworkdaycdn.com", path: "/wday/{hex8}/workday.css", type: "text/css"}
+          - {path: "/ccx/service/company/userInfo", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  impl.workday.com:
+    cdn_domains: ["wd3.myworkdaycdn.com"]
+    pages:
+      - path: "/impl/tenant/home.htmld"
+        nav_targets: ["/impl/tenant/report/{hex8}.htmld", "/impl/tenant/tasks.htmld"]
+        subresources:
+          - {host: "wd3.myworkdaycdn.com", path: "/impl/{hex16}/client-min.js", type: "application/javascript"}
+          - {host: "wd3.myworkdaycdn.com", path: "/impl/{hex8}/workday.css", type: "text/css"}
+          - {path: "/ccx/service/customreport2/company/{hex8}", type: "application/json", method: "POST"}
+
+  company.okta.com:
+    cdn_domains: []
+    pages:
+      - path: "/app/UserHome"
+        nav_targets: ["/oauth2/v1/authorize", "/enduser/settings"]
+        subresources:
+          - {path: "/assets/js/enduser.{hex16}.js", type: "application/javascript"}
+          - {path: "/assets/css/enduser.{hex8}.css", type: "text/css"}
+          - {path: "/api/v1/users/me", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  login.okta.com:
+    cdn_domains: []
+    pages:
+      - path: "/oauth2/default/v1/authorize"
+        nav_targets: ["/login/login.htm"]
+        subresources:
+          - {path: "/assets/js/login.{hex16}.js", type: "application/javascript"}
+          - {path: "/assets/css/login.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  api-17.duosecurity.com:
+    cdn_domains: []
+    pages:
+      - path: "/frame/web/v1/auth"
+        nav_targets: ["/frame/status"]
+        subresources:
+          - {path: "/frame/static/js/prompt.{hex16}.js", type: "application/javascript"}
+          - {path: "/frame/static/css/prompt.{hex8}.css", type: "text/css"}
+          - {path: "/frame/status", type: "application/json"}
+
+  acrobat.adobe.com:
+    cdn_domains: ["assets.adobedtm.com"]
+    pages:
+      - path: "/link/home"
+        nav_targets: ["/link/recent", "/link/tools", "/link/document/{hex16}"]
+        subresources:
+          - {host: "assets.adobedtm.com", path: "/launch-{hex16}.min.js", type: "application/javascript"}
+          - {path: "/dc/static/{hex8}/viewer.css", type: "text/css"}
+          - {path: "/api/files/recent", type: "application/json"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  auth.services.adobe.com:
+    cdn_domains: ["assets.adobedtm.com"]
+    pages:
+      - path: "/ims/authorize/v2"
+        nav_targets: ["/ims/token/v3"]
+        subresources:
+          - {host: "assets.adobedtm.com", path: "/ims-login-{hex8}.js", type: "application/javascript"}
+          - {path: "/ims/static/login.css", type: "text/css"}
+
+  www.dropbox.com:
+    cdn_domains: ["dl.dropboxusercontent.com"]
+    pages:
+      - path: "/home"
+        nav_targets: ["/recents", "/shared", "/preview/{hex16}"]
+        subresources:
+          - {path: "/static/metaserver/static/js/core.{hex16}.js", type: "application/javascript"}
+          - {path: "/static/metaserver/static/css/spectrum.{hex8}.css", type: "text/css"}
+          - {host: "dl.dropboxusercontent.com", path: "/static/images/icons/{hex8}.svg", type: "image/svg+xml"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  webex.com:
+    cdn_domains: ["globalpage-prod.webex.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/signin", "/downloads.html", "/solutions/enterprise"]
+        subresources:
+          - {host: "globalpage-prod.webex.com", path: "/assets/webex.{hex16}.js", type: "application/javascript"}
+          - {host: "globalpage-prod.webex.com", path: "/assets/webex.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  signin.webex.com:
+    cdn_domains: ["globalpage-prod.webex.com"]
+    pages:
+      - path: "/signin"
+        nav_targets: ["/oauth2/v1/authorize"]
+        subresources:
+          - {host: "globalpage-prod.webex.com", path: "/signin/{hex16}/login.js", type: "application/javascript"}
+          - {host: "globalpage-prod.webex.com", path: "/signin/{hex8}/login.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  meetings.webex.com:
+    cdn_domains: ["globalpage-prod.webex.com"]
+    pages:
+      - path: "/meet/{hex8}"
+        nav_targets: ["/webappng/sites/meetings/dashboard"]
+        subresources:
+          - {host: "globalpage-prod.webex.com", path: "/meetings/{hex16}/app.js", type: "application/javascript"}
+          - {host: "globalpage-prod.webex.com", path: "/meetings/{hex8}/style.css", type: "text/css"}
+          - {path: "/api/v1/meetings/{hex8}", type: "application/json"}
+
+  customer.cloud.com:
+    cdn_domains: []
+    pages:
+      - path: "/Citrix/StoreWeb/"
+        nav_targets: ["/Citrix/StoreWeb/#/favorites", "/Citrix/StoreWeb/#/desktops"]
+        subresources:
+          - {path: "/Citrix/StoreWeb/scripts/ctxs.core.{hex16}.js", type: "application/javascript"}
+          - {path: "/Citrix/StoreWeb/css/ctxs.large-ui.{hex8}.css", type: "text/css"}
+          - {path: "/Citrix/StoreWeb/resources/v2", type: "application/json", method: "POST"}
+
+  accounts.cloud.com:
+    cdn_domains: []
+    pages:
+      - path: "/core/login"
+        nav_targets: ["/oauth/authorize"]
+        subresources:
+          - {path: "/core/assets/login.{hex16}.js", type: "application/javascript"}
+          - {path: "/core/assets/login.{hex8}.css", type: "text/css"}
+
+  www.citrix.com:
+    cdn_domains: ["downloads.cloud.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/downloads/workspace-app/windows/", "/products/citrix-workspace/"]
+        subresources:
+          - {path: "/assets/js/citrix.{hex16}.js", type: "application/javascript"}
+          - {path: "/assets/css/citrix.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  app.powerbi.com:
+    cdn_domains: ["content.powerapps.com"]
+    pages:
+      - path: "/home"
+        nav_targets: ["/groups/me/list", "/groups/me/reports/{hex8}/ReportSection"]
+        subresources:
+          - {host: "content.powerapps.com", path: "/resource/powerbiportal.{hex16}.js", type: "application/javascript"}
+          - {host: "content.powerapps.com", path: "/resource/powerbiportal.{hex8}.css", type: "text/css"}
+          - {path: "/metadata/cluster", type: "application/json"}
+
+  wabi-us-east2-api.analysis.windows.net:
+    cdn_domains: ["content.powerapps.com"]
+    pages:
+      - path: "/powerbi/metadata/models"
+        nav_targets: ["/public/reports/{hex8}/querydata"]
+        subresources:
+          - {host: "content.powerapps.com", path: "/scripts/queryvisuals.{hex16}.js", type: "application/javascript"}
+          - {path: "/explore/querydata?synchronous=true", type: "application/json", method: "POST"}
+
+  online.tableau.com:
+    cdn_domains: ["cdn.tableau.com"]
+    pages:
+      - path: "/#/site/company/home"
+        nav_targets: ["/#/site/company/workbooks", "/#/site/company/views"]
+        subresources:
+          - {host: "cdn.tableau.com", path: "/javascripts/api/tableau.embedding.{hex8}.js", type: "application/javascript"}
+          - {host: "cdn.tableau.com", path: "/css/tableau.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  prod-useast-a.online.tableau.com:
+    cdn_domains: ["cdn.tableau.com"]
+    pages:
+      - path: "/vizql/w/{hex8}/v/{hex8}/bootstrapSession/sessions/{hex16}"
+        nav_targets: ["/#/site/company/workbooks"]
+        subresources:
+          - {host: "cdn.tableau.com", path: "/vizql/{hex16}/bootstrap.js", type: "application/javascript"}
+          - {path: "/vizql/w/{hex8}/v/{hex8}/sessions/{hex16}/commands/tabsrv/render-tooltip-server", type: "application/json", method: "POST"}
+
+  public.tableau.com:
+    cdn_domains: ["cdn.tableau.com"]
+    pages:
+      - path: "/"
+        nav_targets: ["/views/{hex8}/Dashboard", "/app/discover"]
+        subresources:
+          - {host: "cdn.tableau.com", path: "/javascripts/api/tableau.embedding.3.latest.min.js", type: "application/javascript"}
+          - {host: "cdn.tableau.com", path: "/css/tableau-public.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  postman.com:
+    cdn_domains: ["go.pstmn.io"]
+    pages:
+      - path: "/"
+        nav_targets: ["/product/workspaces/", "/explore/collections", "/api-platform/"]
+        subresources:
+          - {host: "go.pstmn.io", path: "/static/{hex16}/postman.js", type: "application/javascript"}
+          - {host: "go.pstmn.io", path: "/static/{hex8}/postman.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
+  identity.getpostman.com:
+    cdn_domains: ["go.pstmn.io"]
+    pages:
+      - path: "/login"
+        nav_targets: ["/oauth2/authorize"]
+        subresources:
+          - {host: "go.pstmn.io", path: "/identity/{hex16}/login.js", type: "application/javascript"}
+          - {host: "go.pstmn.io", path: "/identity/{hex8}/login.css", type: "text/css"}
+
+  dbeaver.io:
+    cdn_domains: []
+    pages:
+      - path: "/"
+        nav_targets: ["/download/", "/product/dbeaver-ultimate/", "/docs/"]
+        subresources:
+          - {path: "/wp-content/themes/dbeaver/assets/js/app.{hex8}.js", type: "application/javascript"}
+          - {path: "/wp-content/themes/dbeaver/assets/css/style.{hex8}.css", type: "text/css"}
+          - {path: "/favicon.ico", type: "image/x-icon"}
+
 # ─── Tier 2: Tag-based synthesis templates ────────────────────────────
 tags:
   saas:

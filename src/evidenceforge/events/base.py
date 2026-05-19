@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evidenceforge.events.contexts import (
     AccountManagementContext,
@@ -66,6 +66,9 @@ from evidenceforge.events.contexts import (
     WeirdContext,
     X509Context,
 )
+
+if TYPE_CHECKING:
+    from evidenceforge.generation.source_timing import SourceTimingPlan
 
 
 @dataclass
@@ -144,6 +147,10 @@ class SecurityEvent:
     # storyline/red-herring context. Unlike storyline_origin, this does not
     # change timestamp normalization or source-native rendering behavior.
     storyline_cluster_id: str | None = None
+
+    # Planned source-native observation times keyed by source family/profile.
+    # SecurityEvent.timestamp remains canonical world time.
+    source_timing: SourceTimingPlan | None = None
 
     # Sensor routing metadata (not a context — set by dispatcher)
     # Maps format_name → list of sensor hostnames that produce that format

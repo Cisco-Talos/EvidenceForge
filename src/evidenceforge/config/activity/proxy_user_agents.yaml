@@ -54,6 +54,56 @@ domain_overrides:
     user_agents:
       - "Windows-Device-Management/10.0"
       - "Microsoft-WNS/10.0"
+  adobe_update_windows:
+    os_keywords: ["windows"]
+    hosts:
+      - armmf.adobe.com
+      - swupmf.adobe.com
+      - ccmdl.adobe.com
+    user_agents:
+      - "AdobeARM/1.0"
+      - "Adobe Application Manager 2.0"
+  dropbox_update_windows:
+    os_keywords: ["windows"]
+    hosts:
+      - desktop.dropbox.com
+    user_agents:
+      - "DropboxUpdate/199.4.6287"
+  google_drive_desktop:
+    os_keywords: ["windows"]
+    hosts:
+      - clients6.google.com
+      - clients4.google.com
+    user_agents:
+      - "GoogleDriveFS/97.0.1.0 Windows"
+  enterprise_vpn_clients:
+    os_keywords: ["windows"]
+    hosts:
+      - secure-client-updates.cisco.com
+      - updates.paloaltonetworks.com
+      - config.zscaler.net
+      - gateway.zscaler.net
+    user_agents:
+      - "Cisco Secure Client/5.1.4 Windows"
+      - "GlobalProtect/6.2.3 Windows"
+      - "Zscaler Client Connector/4.3.0"
+  workstation_oem_updaters:
+    os_keywords: ["windows"]
+    hosts:
+      - download.lenovo.com
+      - hpia.hpcloud.hp.com
+      - dellupdater.dell.com
+    user_agents:
+      - "Lenovo System Update"
+      - "HP Image Assistant"
+      - "Dell Command Update/5.1"
+  duo_device_health:
+    os_keywords: ["windows"]
+    hosts:
+      - dl.duosecurity.com
+      - api-17.duosecurity.com
+    user_agents:
+      - "Duo Device Health/5.6.0"
 
 workstation:
   windows:

@@ -28,14 +28,11 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.network import _is_private_ip
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
-from evidenceforge.generation.activity.tls_realism import (
-    certificate_analyzer_delay_ms,
-    certificate_file_size,
-    ssl_analyzer_delay_ms,
-)
+from evidenceforge.generation.activity.tls_realism import certificate_file_size
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 
 class ZeekFilesEmitter(SensorMultiplexEmitter):
@@ -65,11 +62,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         sensor_hostnames = event._sensor_hostnames_by_format.get(self.format_def.name, [])
         if ft is not None:
             file_ts, file_duration = _bounded_file_transfer_observation(
-                event.timestamp,
-                net.duration,
-                net.zeek_uid,
-                ft.fuid,
-                ft.duration,
+                event,
                 min_start=_related_http_analyzer_timestamp(event),
             )
             event_data: dict[str, Any] = {
@@ -106,26 +99,51 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
         for depth, cert in enumerate(certificates):
             size = certificate_file_size(cert)
             cert_hashes = _certificate_file_hashes(cert.fingerprint)
-            analyzer_delay_ms = certificate_analyzer_delay_ms(
-                zeek_uid=net.zeek_uid,
-                event_timestamp=event.timestamp,
-                fuid=cert.fuid,
-                position=depth,
+            conn_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_conn_start",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
+            within = None
+            if net.duration is not None and net.duration > 0:
+                latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
+                within = (conn_ts, latest)
+            ssl_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_ssl_analyzer",
+                seed_parts=(
+                    net.zeek_uid,
+                    net.src_ip,
+                    net.src_port,
+                    net.dst_ip,
+                    net.dst_port,
+                    event.timestamp,
+                ),
+                not_before=conn_ts,
+                within=within,
+            )
+            lower_bound = ssl_ts + timedelta(milliseconds=1 + depth)
+            if within is not None and lower_bound > within[1]:
+                lower_bound = within[1]
+            preferred_cert_ts = _SOURCE_TIMING.source_time(
+                event,
+                "source.zeek_file_analyzer",
+                seed_parts=(net.zeek_uid, cert.fuid, depth, event.timestamp),
+                not_before=lower_bound,
+                within=within,
             )
             cert_ts = _bounded_in_connection_timestamp(
-                event.timestamp,
+                conn_ts,
                 net.duration,
-                self._offset_timestamp(
-                    event.timestamp,
-                    max(
-                        analyzer_delay_ms,
-                        ssl_analyzer_delay_ms(
-                            zeek_uid=net.zeek_uid,
-                            event_timestamp=event.timestamp,
-                        )
-                        + 1,
-                    ),
-                ),
+                preferred_cert_ts,
             )
             event_data = {
                 "ts": cert_ts,
@@ -198,22 +216,46 @@ def _certificate_file_hashes(fingerprint: str) -> dict[str, str | None]:
     }
 
 
-def _file_transfer_analyzer_timestamp(ts: datetime, zeek_uid: str, fuid: str) -> datetime:
+def _file_transfer_analyzer_timestamp(
+    event: SecurityEvent,
+    zeek_uid: str,
+    fuid: str,
+    conn_ts: datetime,
+) -> datetime:
     """Return a deterministic files.log analysis time after the conn start."""
-    delay_ms = 25 + (_stable_seed(f"zeek-file-delay:{zeek_uid}:{fuid}") % 225)
-    return ts + timedelta(milliseconds=delay_ms)
+    return _SOURCE_TIMING.source_time(
+        event,
+        "source.zeek_file_analyzer",
+        seed_parts=(zeek_uid, fuid, event.timestamp),
+        not_before=conn_ts + timedelta(milliseconds=1),
+    )
 
 
 def _bounded_file_transfer_observation(
-    conn_ts: datetime,
-    conn_duration: float | None,
-    zeek_uid: str,
-    fuid: str,
-    file_duration: float,
+    event: SecurityEvent,
     min_start: datetime | None = None,
 ) -> tuple[datetime, float]:
     """Keep files.log observation timing inside the owning conn.log interval."""
-    file_ts = _file_transfer_analyzer_timestamp(conn_ts, zeek_uid, fuid)
+    net = event.network
+    ft = event.file_transfer
+    if net is None or ft is None:
+        return event.timestamp, 0.0
+    conn_ts = _SOURCE_TIMING.source_time(
+        event,
+        "source.zeek_conn_start",
+        seed_parts=(
+            net.zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        ),
+        not_before=event.timestamp,
+    )
+    conn_duration = net.duration
+    file_duration = ft.duration
+    file_ts = _file_transfer_analyzer_timestamp(event, net.zeek_uid, ft.fuid, conn_ts)
     if min_start is not None and file_ts < min_start:
         file_ts = min_start
     if conn_duration is None or conn_duration <= 0:
@@ -259,18 +301,29 @@ def _related_http_analyzer_timestamp(event: SecurityEvent) -> datetime | None:
     http = event.http
     if net is None or ft is None or http is None or ft.fuid not in http.resp_fuids:
         return None
-    return (
-        event.timestamp
-        + sample_timing_delta(
-            "source.zeek_http_request",
-            seed_parts=(
-                net.zeek_uid,
-                net.src_ip,
-                net.src_port,
-                net.dst_ip,
-                net.dst_port,
-                event.timestamp,
-            ),
-        )
-        + timedelta(milliseconds=1)
+    conn_ts = _SOURCE_TIMING.source_time(
+        event,
+        "source.zeek_conn_start",
+        seed_parts=(
+            net.zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        ),
+        not_before=event.timestamp,
     )
+    return _SOURCE_TIMING.source_time(
+        event,
+        "source.zeek_http_request",
+        seed_parts=(
+            net.zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        ),
+        not_before=conn_ts,
+    ) + timedelta(milliseconds=1)

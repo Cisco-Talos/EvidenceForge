@@ -30,8 +30,8 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed
 from evidenceforge.utils.windows_ids import align_windows_id
 
@@ -74,6 +74,8 @@ _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
     "%%2307": "account_disabled",
     "%%2313": "bad_password",
 }
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 _SERVICE_PRINCIPAL_NAMES = {
     "system",
@@ -348,7 +350,8 @@ class EcarEmitter(HostMultiplexEmitter):
         """Return the eCAR render timestamp for a user-session observation."""
         auth = event.auth
         edr = event.edr
-        return event.timestamp + sample_timing_delta(
+        return _SOURCE_TIMING.source_time(
+            event,
             "source.ecar_session",
             seed_parts=(
                 lifecycle,
@@ -536,7 +539,13 @@ class EcarEmitter(HostMultiplexEmitter):
 
         # OUTBOUND FLOW on source host (if source is internal/known)
         if event.src_host:
-            event_ts = event.timestamp + sample_timing_delta(
+            not_before = (
+                self._after_process_create_timestamp(event, source_proc)
+                if source_proc is not None
+                else None
+            )
+            event_ts = _SOURCE_TIMING.source_time(
+                event,
                 "source.ecar_flow",
                 seed_parts=(
                     "outbound",
@@ -548,9 +557,8 @@ class EcarEmitter(HostMultiplexEmitter):
                     net.dst_port,
                     event.timestamp,
                 ),
+                not_before=not_before,
             )
-            if source_proc is not None:
-                event_ts = max(event_ts, self._after_process_create_timestamp(event, source_proc))
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.src_host.hostname,
@@ -590,7 +598,8 @@ class EcarEmitter(HostMultiplexEmitter):
         if event.dst_host:
             listener_observed = self._inbound_listener_observed(event)
             inbound_pid = self._resolve_inbound_service_pid(event) if listener_observed else -1
-            event_ts = event.timestamp + sample_timing_delta(
+            event_ts = _SOURCE_TIMING.source_time(
+                event,
                 "source.ecar_flow",
                 seed_parts=(
                     "inbound",
@@ -626,6 +635,23 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["connection_state"] = net.conn_state
             else:
                 inbound_proc = self._lookup_running_process(event.dst_host, inbound_pid)
+                if inbound_proc is not None:
+                    event_ts = _SOURCE_TIMING.source_time(
+                        event,
+                        "source.ecar_flow",
+                        seed_parts=(
+                            "inbound",
+                            event.dst_host.hostname,
+                            net.initiating_pid,
+                            net.src_ip,
+                            net.src_port,
+                            net.dst_ip,
+                            net.dst_port,
+                            event.timestamp,
+                        ),
+                        not_before=self._after_process_create_timestamp(event, inbound_proc),
+                    )
+                    event_data["timestamp"] = event_ts
                 principal = self._flow_principal_for_process(
                     event,
                     event.dst_host,
@@ -728,15 +754,17 @@ class EcarEmitter(HostMultiplexEmitter):
             if auth and auth.source_port
             else -1
         )
-        event_ts = self._after_process_create_timestamp(event, proc) + sample_timing_delta(
+        event_ts = _SOURCE_TIMING.source_time(
+            event,
             "source.ecar_remote_thread",
             seed_parts=(
-                host.hostname,
-                proc.pid,
+                self._host_name(host),
+                proc.pid if proc is not None else -1,
                 target_pid,
                 remote_thread.new_thread_id if remote_thread else 0,
                 event.timestamp,
             ),
+            not_before=self._after_process_create_timestamp(event, proc),
         )
         event_data = {
             "timestamp": event_ts,
@@ -803,25 +831,6 @@ class EcarEmitter(HostMultiplexEmitter):
         }
         self.emit_event(event_data)
 
-    @staticmethod
-    def _source_offset(
-        event_type: str,
-        hostname: str,
-        pid: int,
-        timestamp: datetime,
-        *,
-        minimum_ms: int,
-        maximum_ms: int,
-    ) -> timedelta:
-        """Deterministic EDR collection latency for cross-source events."""
-        from evidenceforge.utils.rng import _stable_seed
-
-        span = maximum_ms - minimum_ms
-        offset = minimum_ms + (
-            _stable_seed(f"ecar:{event_type}:{hostname}:{pid}:{timestamp}") % span
-        )
-        return timedelta(milliseconds=offset)
-
     def _process_create_timestamp(
         self,
         event: SecurityEvent,
@@ -833,13 +842,11 @@ class EcarEmitter(HostMultiplexEmitter):
         host = event.src_host
         hostname = host.hostname if host is not None else ""
         start_time = proc.start_time or event.timestamp
-        return start_time + self._source_offset(
-            "process_create",
-            hostname,
-            proc.pid,
-            start_time,
-            minimum_ms=12,
-            maximum_ms=250,
+        return _SOURCE_TIMING.source_time(
+            event,
+            "source.ecar_process_create",
+            seed_parts=(hostname, proc.pid, start_time),
+            not_before=start_time,
         )
 
     def _after_process_create_timestamp(
@@ -851,15 +858,16 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc is None or proc.start_time is None:
             return event.timestamp
         process_create_ts = self._process_create_timestamp(event, proc)
-        if event.timestamp > process_create_ts:
-            return event.timestamp
-        return process_create_ts + self._source_offset(
-            "dependent_after_process_create",
-            self._host_name(event.src_host),
-            proc.pid,
-            event.timestamp,
-            minimum_ms=1,
-            maximum_ms=35,
+        return _SOURCE_TIMING.source_time(
+            event,
+            "source.ecar_dependent_after_process_create",
+            seed_parts=(
+                event.event_type,
+                self._host_name(event.src_host),
+                proc.pid,
+                event.timestamp,
+            ),
+            not_before=process_create_ts + timedelta(milliseconds=1),
         )
 
     def _render_service_installed(self, event: SecurityEvent) -> None:

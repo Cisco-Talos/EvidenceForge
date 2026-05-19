@@ -621,6 +621,482 @@ domains:
     content_type: "application/json"
     methods: ["GET", "POST", "GET", "GET"]
 
+  # --- Workstation-normal SaaS / identity / collaboration ---
+  id.atlassian.com:
+    paths:
+      - "/login"
+      - "/gateway/api/session"
+      - "/oauth2/authorize"
+      - "/rest/notifications/latest"
+    content_type: "application/json"
+    methods: ["GET", "POST", "GET", "GET"]
+
+  company.atlassian.net:
+    paths:
+      - "/jira/your-work"
+      - "/browse/PROJ-{hex8}"
+      - "/rest/api/3/search?jql=assignee=currentUser()"
+      - "/wiki/spaces/ENG/pages/{hex8}/Runbook"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  api.atlassian.com:
+    paths:
+      - "/ex/jira/{tenant_id}/rest/api/3/myself"
+      - "/ex/jira/{tenant_id}/rest/api/3/search"
+      - "/gateway/api/emoji/{hex8}"
+    content_type: "application/json"
+    methods: ["GET", "POST", "GET"]
+
+  company.service-now.com:
+    paths:
+      - "/now/nav/ui/classic/params/target/home.do"
+      - "/api/now/table/incident?sysparm_limit=20"
+      - "/sp?id=ticket&table=incident&sys_id={hex16}"
+      - "/scripts/js_includes_doctype.jsx"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  login.service-now.com:
+    paths:
+      - "/login.do"
+      - "/oauth_token.do"
+      - "/api/now/ui/session"
+    content_type: "application/json"
+    methods: ["GET", "POST", "GET"]
+
+  wd5.myworkday.com:
+    paths:
+      - "/company/d/home.htmld"
+      - "/company/d/task/2998$1234.htmld"
+      - "/wday/authgwy/company/login.htmld"
+      - "/company/inst/1$15/rel-task/{hex8}.htmld"
+    content_type: "text/html"
+    methods: ["GET", "POST", "GET", "GET"]
+
+  impl.workday.com:
+    paths:
+      - "/impl/tenant/home.htmld"
+      - "/impl/tenant/report/{hex8}.htmld"
+      - "/ccx/service/customreport2/company/{hex8}"
+    content_type: "text/html"
+    methods: ["GET", "GET", "POST"]
+
+  company.okta.com:
+    paths:
+      - "/app/UserHome"
+      - "/api/v1/users/me"
+      - "/oauth2/v1/authorize"
+      - "/login/sessionCookieRedirect"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  login.okta.com:
+    paths:
+      - "/oauth2/default/v1/authorize"
+      - "/oauth2/default/v1/token"
+      - "/api/v1/authn"
+    content_type: "application/json"
+    methods: ["GET", "POST", "POST"]
+
+  api-17.duosecurity.com:
+    paths:
+      - "/frame/web/v1/auth"
+      - "/frame/status"
+      - "/auth/v2/preauth"
+      - "/push/v2/status"
+    content_type: "application/json"
+    methods: ["GET", "GET", "POST", "GET"]
+
+  acrobat.adobe.com:
+    paths:
+      - "/link/home"
+      - "/api/files/recent"
+      - "/api/documentcloud/search"
+      - "/dc/assets/{hex8}/viewer.html"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  auth.services.adobe.com:
+    paths:
+      - "/ims/authorize/v2"
+      - "/ims/token/v3"
+      - "/ims/profile/v1"
+    content_type: "application/json"
+    methods: ["GET", "POST", "GET"]
+
+  cc-api-data.adobe.io:
+    paths:
+      - "/ingest/v1/events"
+      - "/cloud-content/v1/assets"
+      - "/libraries/v1/sync"
+    content_type: "application/json"
+    methods: ["POST", "GET", "GET"]
+
+  www.dropbox.com:
+    paths:
+      - "/home"
+      - "/h"
+      - "/preview/{hex16}"
+      - "/2/files/list_folder"
+      - "/2/sharing/list_shared_links"
+    content_type: "text/html"
+    methods: ["GET", "GET", "GET", "POST", "POST"]
+
+  api.dropboxapi.com:
+    paths:
+      - "/2/users/get_current_account"
+      - "/2/files/list_folder"
+      - "/2/files/get_metadata"
+      - "/2/sharing/list_folders"
+    content_type: "application/json"
+    methods: ["POST"]
+
+  content.dropboxapi.com:
+    paths:
+      - "/2/files/download"
+      - "/2/files/upload_session/start"
+      - "/2/files/upload_session/append_v2"
+    content_type: "application/octet-stream"
+    methods: ["POST"]
+
+  webex.com:
+    paths:
+      - "/"
+      - "/signin"
+      - "/downloads.html"
+      - "/solutions/enterprise"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  signin.webex.com:
+    paths:
+      - "/signin"
+      - "/wbxappapi/v1/session"
+      - "/oauth2/v1/authorize"
+      - "/oauth2/v1/token"
+    content_type: "application/json"
+    methods: ["GET", "GET", "GET", "POST"]
+
+  meetings.webex.com:
+    paths:
+      - "/meet/{hex8}"
+      - "/webappng/sites/meetings/dashboard"
+      - "/api/v1/meetings/{hex8}"
+      - "/wbxmjsasset/{hex8}/app.js"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  webexapis.com:
+    paths:
+      - "/v1/people/me"
+      - "/v1/meetings"
+      - "/v1/messages"
+      - "/v1/rooms"
+    content_type: "application/json"
+    methods: ["GET", "GET", "POST", "GET"]
+
+  customer.cloud.com:
+    paths:
+      - "/Citrix/StoreWeb/"
+      - "/Citrix/StoreWeb/resources/v2"
+      - "/logon/LogonPoint/tmindex.html"
+      - "/vpn/index.html"
+    content_type: "text/html"
+    methods: ["GET", "POST", "GET", "GET"]
+
+  accounts.cloud.com:
+    paths:
+      - "/core/login"
+      - "/oauth/authorize"
+      - "/oauth/token"
+      - "/core/api/user"
+    content_type: "application/json"
+    methods: ["GET", "GET", "POST", "GET"]
+
+  www.citrix.com:
+    paths:
+      - "/"
+      - "/downloads/workspace-app/windows/"
+      - "/products/citrix-workspace/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  app.powerbi.com:
+    paths:
+      - "/home"
+      - "/groups/me/reports/{hex8}/ReportSection"
+      - "/metadata/cluster"
+      - "/13.0.0.0/scripts/powerbiportal.dependencies.js"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  wabi-us-east2-api.analysis.windows.net:
+    paths:
+      - "/powerbi/metadata/models"
+      - "/public/reports/{hex8}/querydata"
+      - "/explore/querydata?synchronous=true"
+    content_type: "application/json"
+    methods: ["GET", "POST", "POST"]
+
+  online.tableau.com:
+    paths:
+      - "/#/site/company/home"
+      - "/#/site/company/workbooks"
+      - "/vizql/w/{hex8}/v/{hex8}/bootstrapSession/sessions/{hex16}"
+    content_type: "text/html"
+    methods: ["GET", "GET", "POST"]
+
+  prod-useast-a.online.tableau.com:
+    paths:
+      - "/vizql/w/{hex8}/v/{hex8}/bootstrapSession/sessions/{hex16}"
+      - "/vizql/w/{hex8}/v/{hex8}/sessions/{hex16}/commands/tabsrv/render-tooltip-server"
+      - "/auth/refresh"
+    content_type: "application/json"
+    methods: ["POST", "POST", "GET"]
+
+  public.tableau.com:
+    paths:
+      - "/"
+      - "/views/{hex8}/Dashboard"
+      - "/javascripts/api/tableau.embedding.3.latest.min.js"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  postman.com:
+    paths:
+      - "/"
+      - "/product/workspaces/"
+      - "/explore/collections"
+      - "/api-platform/"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  identity.getpostman.com:
+    paths:
+      - "/login"
+      - "/oauth2/authorize"
+      - "/oauth2/token"
+      - "/api/user"
+    content_type: "application/json"
+    methods: ["GET", "GET", "POST", "GET"]
+
+  api.getpostman.com:
+    paths:
+      - "/me"
+      - "/workspaces"
+      - "/collections/{hex8}"
+      - "/monitors"
+    content_type: "application/json"
+    methods: ["GET"]
+
+  dbeaver.io:
+    paths:
+      - "/"
+      - "/download/"
+      - "/product/dbeaver-ultimate/"
+      - "/files/dbeaver-ce-latest-x86_64-setup.exe"
+    content_type: "text/html"
+    methods: ["GET"]
+
+  # --- Workstation software updates / management agents ---
+  clients6.google.com:
+    domain_class: telemetry
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/drive/v2internal/about"
+      - "/sync/drivefs/config"
+      - "/cr/report"
+    content_type: "application/json"
+    methods: ["GET", "POST", "POST"]
+
+  clients4.google.com:
+    domain_class: telemetry
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/chrome-sync/command"
+      - "/drive/v2internal/files"
+      - "/cr/report"
+    content_type: "application/json"
+    methods: ["POST", "GET", "POST"]
+
+  dl.duosecurity.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/duo-win-login/releases/{hex8}/DuoWindowsLogon64.msi"
+      - "/duo/device-health/{hex8}/DuoDeviceHealth-latest.msi"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
+  armmf.adobe.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/arm-manifests/win/AcrobatDC/reader/current_version.xml"
+      - "/arm-manifests/win/AcrobatDC/updates/{hex8}.xml"
+    content_type: "text/plain"
+    methods: ["GET"]
+
+  swupmf.adobe.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/swupmf/win/AcrobatDC/{hex8}/manifest.xml"
+      - "/swupmf/win/CreativeCloud/{hex8}/manifest.xml"
+    content_type: "text/plain"
+    methods: ["GET"]
+
+  ccmdl.adobe.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/AdobeProducts/APRO/{hex8}/win64/AcroRdrDCUpd.msp"
+      - "/AdobeProducts/KCCC/{hex8}/win64/CreativeCloudSet-Up.exe"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
+  desktop.dropbox.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/windows/DropboxUpdate/{hex8}/manifest.json"
+      - "/windows/DropboxUpdate/{hex8}/DropboxUpdate.exe"
+    content_types:
+      - "application/json"
+      - "application/octet-stream"
+    methods: ["GET"]
+
+  downloads.cloud.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/workspace/windows/CitrixWorkspaceApp.exe"
+      - "/workspace/windows/{hex8}/manifest.json"
+    content_types:
+      - "application/octet-stream"
+      - "application/json"
+    methods: ["GET"]
+
+  receiver.citrix.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/windows/CitrixWorkspaceApp.exe"
+      - "/windows/updates/{hex8}/receiver.json"
+    content_types:
+      - "application/octet-stream"
+      - "application/json"
+    methods: ["GET"]
+
+  secure-client-updates.cisco.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/secureclient/win/{hex8}/manifest.json"
+      - "/secureclient/win/{hex8}/cisco-secure-client-win.msi"
+    content_types:
+      - "application/json"
+      - "application/octet-stream"
+    methods: ["GET"]
+
+  updates.paloaltonetworks.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/globalprotect/manifest.xml"
+      - "/globalprotect/GlobalProtect64-{hex8}.msi"
+    content_types:
+      - "text/plain"
+      - "application/octet-stream"
+    methods: ["GET"]
+
+  config.zscaler.net:
+    domain_class: telemetry
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/zsapi/v1/config"
+      - "/zsapi/v1/pac"
+      - "/zsapi/v1/health"
+    content_type: "application/json"
+    methods: ["GET", "GET", "POST"]
+
+  gateway.zscaler.net:
+    domain_class: telemetry
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/zscaler/clientconnector/keepalive"
+      - "/zscaler/tunnel/status"
+    content_type: "application/json"
+    methods: ["POST", "GET"]
+
+  dl.pstmn.io:
+    domain_class: software_update
+    referrer_policy: none
+    paths:
+      - "/download/latest/win64"
+      - "/update/win32/x64/{hex8}/RELEASES"
+    content_types:
+      - "application/octet-stream"
+      - "text/plain"
+    methods: ["GET"]
+
+  update.dbeaver.io:
+    domain_class: software_update
+    referrer_policy: none
+    paths:
+      - "/update/latest/win32/x86_64/plugins/content.xml"
+      - "/files/dbeaver-ce-latest-x86_64-setup.exe"
+    content_types:
+      - "text/plain"
+      - "application/octet-stream"
+    methods: ["GET"]
+
+  download.lenovo.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/pccbbs/thinkvantage_en/system_update_{hex8}.xml"
+      - "/pccbbs/mobiles/{hex8}.cab"
+    content_types:
+      - "text/plain"
+      - "application/octet-stream"
+    methods: ["GET"]
+
+  hpia.hpcloud.hp.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/ref/platformList.cab"
+      - "/ref/{hex8}/sp{hex8}.exe"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
+  dellupdater.dell.com:
+    domain_class: software_update
+    os: windows
+    referrer_policy: none
+    paths:
+      - "/Catalog/CatalogPC.cab"
+      - "/FOLDER{hex8}/M/{hex8}/Dell-Command-Update.exe"
+    content_type: "application/octet-stream"
+    methods: ["GET"]
+
   # --- Other ---
   stackoverflow.com:
     paths:

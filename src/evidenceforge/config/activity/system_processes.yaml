@@ -45,6 +45,46 @@ scheduled_tasks:
     command_templates:
       - "wsqmcons.exe"
     parent: svchost_local_system
+  - image: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"
+    system_types: [workstation]
+    command_templates:
+      - "GoogleUpdate.exe /ua /installsource scheduler"
+      - "GoogleUpdate.exe /c"
+    parent: taskhostw
+  - image: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"
+    system_types: [workstation]
+    command_templates:
+      - "AdobeARM.exe /Update"
+      - "AdobeARM.exe /NOUAC"
+    parent: taskhostw
+  - image: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"
+    system_types: [workstation]
+    command_templates:
+      - "DropboxUpdate.exe /ua /installsource scheduler"
+      - "DropboxUpdate.exe /c"
+    parent: taskhostw
+  - image: "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe"
+    system_types: [workstation]
+    command_templates:
+      - "ZoomUpdate.exe --mode=silent"
+      - "ZoomUpdate.exe --check"
+    parent: taskhostw
+  - image: "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe"
+    system_types: [workstation]
+    command_templates:
+      - "OneDriveStandaloneUpdater.exe /silent"
+    parent: taskhostw
+  - image: "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe"
+    system_types: [workstation]
+    command_templates:
+      - "dcu-cli.exe /scan -silent"
+      - "dcu-cli.exe /applyUpdates -silent"
+    parent: taskhostw
+  - image: "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"
+    system_types: [workstation]
+    command_templates:
+      - "HPImageAssistant.exe /Operation:Analyze /Silent"
+    parent: taskhostw
 
 system_services:
   all:
@@ -106,6 +146,52 @@ system_services:
       parent: services
 
   workstation:
+    - image: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"
+      command_templates:
+        - "vpnagent.exe"
+      parent: services
+      loaded_modules:
+        - path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnapi.dll"
+          signature: "Cisco Systems, Inc."
+          pe_metadata:
+            file_version: "5.1.4.74"
+            description: "Cisco Secure Client API"
+            product: "Cisco Secure Client"
+            company: "Cisco Systems, Inc."
+            original_filename: "vpnapi.dll"
+    - image: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"
+      command_templates:
+        - "PanGPS.exe"
+      parent: services
+      loaded_modules:
+        - path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGpHip.dll"
+          signature: "Palo Alto Networks, Inc."
+    - image: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"
+      command_templates:
+        - "ZSAService.exe"
+      parent: services
+      loaded_modules:
+        - path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSACommon.dll"
+          signature: "Zscaler, Inc."
+    - image: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.exe"
+      command_templates:
+        - "ZSATunnel.exe"
+      parent: services
+      loaded_modules:
+        - path: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.dll"
+          signature: "Zscaler, Inc."
+    - image: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe"
+      command_templates:
+        - "GoogleUpdater.exe -Embedding"
+      parent: services
+    - image: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe"
+      command_templates:
+        - "AdobeARMservice.exe"
+      parent: services
+    - image: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"
+      command_templates:
+        - "DropboxUpdate.exe /svc"
+      parent: services
     - image: "C:\\Windows\\System32\\SearchProtocolHost.exe"
       command_templates:
         - "SearchProtocolHost.exe {search_pipe_args}"
@@ -306,10 +392,23 @@ system_binaries:
     - {exe: "cleanmgr.exe",             path: "C:\\Windows\\System32\\cleanmgr.exe"}
     - {exe: "wsqmcons.exe",             path: "C:\\Windows\\System32\\wsqmcons.exe"}
     - {exe: "CompatTelRunner.exe",       path: "C:\\Windows\\System32\\CompatTelRunner.exe"}
+    - {exe: "GoogleUpdate.exe",          path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdate.exe"}
+    - {exe: "GoogleUpdater.exe",         path: "C:\\Program Files (x86)\\Google\\Update\\GoogleUpdater.exe"}
+    - {exe: "AdobeARM.exe",              path: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARM.exe"}
+    - {exe: "AdobeARMservice.exe",       path: "C:\\Program Files (x86)\\Common Files\\Adobe\\ARM\\1.0\\AdobeARMservice.exe"}
+    - {exe: "DropboxUpdate.exe",         path: "C:\\Program Files (x86)\\Dropbox\\Update\\DropboxUpdate.exe"}
+    - {exe: "ZoomUpdate.exe",            path: "C:\\Program Files\\Zoom\\bin\\ZoomUpdate.exe"}
+    - {exe: "OneDriveStandaloneUpdater.exe", path: "C:\\Program Files\\Microsoft OneDrive\\OneDriveStandaloneUpdater.exe"}
+    - {exe: "dcu-cli.exe",               path: "C:\\Program Files\\Dell\\CommandUpdate\\dcu-cli.exe"}
+    - {exe: "HPImageAssistant.exe",      path: "C:\\Program Files\\HP\\HP Image Assistant\\HPImageAssistant.exe"}
 
     # --- Windows Defender / security ---
     - {exe: "MsMpEng.exe",              path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MsMpEng.exe"}
     - {exe: "MpCmdRun.exe",             path: "C:\\ProgramData\\Microsoft\\Windows Defender\\Platform\\MpCmdRun.exe"}
+    - {exe: "vpnagent.exe",              path: "C:\\Program Files (x86)\\Cisco\\Cisco AnyConnect Secure Mobility Client\\vpnagent.exe"}
+    - {exe: "PanGPS.exe",                path: "C:\\Program Files\\Palo Alto Networks\\GlobalProtect\\PanGPS.exe"}
+    - {exe: "ZSAService.exe",            path: "C:\\Program Files\\Zscaler\\ZSAService\\ZSAService.exe"}
+    - {exe: "ZSATunnel.exe",             path: "C:\\Program Files\\Zscaler\\ZSATunnel\\ZSATunnel.exe"}
 
     # --- Active Directory / domain controller ---
     - {exe: "dns.exe",                   path: "C:\\Windows\\System32\\dns.exe"}
@@ -385,6 +484,10 @@ system_binaries:
 
     # --- Legacy / built-in browser ---
     - {exe: "iexplore.exe",             path: "C:\\Program Files\\Internet Explorer\\iexplore.exe"}
+
+    # --- Collaboration helper processes ---
+    - {exe: "CptHost.exe",               path: "C:\\Users\\{username}\\AppData\\Roaming\\Zoom\\bin\\CptHost.exe"}
+    - {exe: "CiscoCollabHost.exe",       path: "C:\\Program Files\\Cisco Spark\\CiscoCollabHost.exe"}
 
   linux:
     # --- Shells ---

@@ -297,9 +297,14 @@ class TestHttpRenderTiming:
         base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         deltas = [timedelta(milliseconds=450), timedelta(milliseconds=1)]
 
+        def fake_source_time(event, source_key, **_kwargs):
+            if source_key == "source.zeek_conn_start":
+                return event.timestamp
+            return event.timestamp + deltas.pop(0)
+
         monkeypatch.setattr(
-            "evidenceforge.generation.emitters.zeek_http.sample_packet_timing_delta",
-            lambda *_args, **_kwargs: deltas.pop(0),
+            "evidenceforge.generation.emitters.zeek_http._SOURCE_TIMING.source_time",
+            fake_source_time,
         )
 
         def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
@@ -330,3 +335,53 @@ class TestHttpRenderTiming:
         rows = [json.loads(line) for line in output.read_text().splitlines()]
         assert [row["trans_depth"] for row in rows] == [1, 2]
         assert rows[1]["ts"] > rows[0]["ts"]
+
+    def test_application_layer_transaction_stays_inside_first_parent_lifetime(
+        self, tmp_path, monkeypatch
+    ):
+        """Repeated same-UID transactions reuse the first observed parent-flow bounds."""
+        fmt = load_format("zeek_http")
+        output = tmp_path / "http.json"
+        emitter = ZeekHttpEmitter(fmt, output, buffer_size=1)
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        def fake_source_time(event, source_key, **_kwargs):
+            if source_key == "source.zeek_conn_start":
+                return event.timestamp
+            return event.timestamp + timedelta(milliseconds=250)
+
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.zeek_http._SOURCE_TIMING.source_time",
+            fake_source_time,
+        )
+
+        def make_event(timestamp: datetime, trans_depth: int, uri: str) -> SecurityEvent:
+            return SecurityEvent(
+                timestamp=timestamp,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="93.184.216.34",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="ChttpTiming1234",
+                    duration=0.5,
+                    application_layer_only=trans_depth > 1,
+                ),
+                http=HttpContext(
+                    method="GET",
+                    host="example.com",
+                    uri=uri,
+                    trans_depth=trans_depth,
+                ),
+            )
+
+        emitter.emit(make_event(base_ts, 1, "/"))
+        emitter.emit(make_event(base_ts + timedelta(milliseconds=400), 2, "/app.js"))
+        emitter.close()
+
+        rows = [json.loads(line) for line in output.read_text().splitlines()]
+        parent_end = base_ts.timestamp() + 0.5
+        assert rows[1]["ts"] <= parent_end

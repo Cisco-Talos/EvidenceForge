@@ -146,13 +146,41 @@ def _resolve_host_placeholders(value: str, host: Any | None = None) -> str:
     return resolved.replace("{host_local_search_sid}", _host_local_search_sid(host))
 
 
+def _normalize_system_type(value: str | None) -> str:
+    """Normalize scenario system types for config filtering."""
+    return str(value or "").lower().replace("-", "_")
+
+
+def _host_type_for_filter(host: Any | None) -> str:
+    """Return the host type used for scheduled-task filtering."""
+    return _normalize_system_type(
+        getattr(host, "system_type", getattr(host, "type", "")) if host is not None else ""
+    )
+
+
+def _scheduled_task_allowed(entry: dict[str, Any], host: Any | None) -> bool:
+    """Return whether a scheduled task is valid for the target host type."""
+    allowed_types = entry.get("system_types")
+    if not allowed_types:
+        return True
+
+    host_type = _host_type_for_filter(host)
+    if not host_type:
+        return True
+
+    normalized_allowed = {_normalize_system_type(value) for value in allowed_types}
+    return "all" in normalized_allowed or host_type in normalized_allowed
+
+
 def pick_scheduled_task(rng: random.Random, host: Any | None = None) -> tuple[str, str, str]:
     """Pick a random scheduled task.
 
     Returns (image_path, command_line, parent_key).
     """
     data = load_system_processes()
-    tasks = data.get("scheduled_tasks", [])
+    tasks = [
+        entry for entry in data.get("scheduled_tasks", []) if _scheduled_task_allowed(entry, host)
+    ]
     if not tasks:
         return (r"C:\Windows\System32\taskhostw.exe", "taskhostw.exe /Run", "svchost_local_system")
 
