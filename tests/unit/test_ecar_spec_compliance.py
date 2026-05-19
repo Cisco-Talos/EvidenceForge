@@ -122,6 +122,35 @@ class TestPidAlwaysPresent:
         record = json.loads(emitter._render_event(row))
         assert record["properties"]["logon_type"] == "7"
 
+    def test_linux_ssh_login_renders_session_type_not_windows_logon_type(self, emitter, ts):
+        """Linux eCAR sessions should use OS-native session semantics."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="ssh_session",
+            dst_host=HostContext(
+                hostname="LINUX-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            auth=AuthContext(username="alice", logon_id="0x123", logon_type=10),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        assert row["object"] == "USER_SESSION"
+        assert row["action"] == "LOGIN"
+        assert "logon_type" not in row
+        assert row["session_type"] == "ssh"
+
+        record = json.loads(emitter._render_event(row))
+        assert "logon_type" not in record["properties"]
+        assert record["properties"]["session_type"] == "ssh"
+
     def test_user_session_logon_type_is_declared_ecar_property(self, emitter, ts, caplog):
         """Rendered eCAR login logon_type should be accepted by format validation."""
         record = json.loads(

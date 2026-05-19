@@ -150,16 +150,17 @@ relationships:
 network_sensor_observation:
   # Default assumes security infrastructure with good time sync and local tap
   # placement. These bounds apply when multiple Zeek sensors observe the same
-  # packet/flow and should stay in the low-millisecond range.
+  # packet/flow and should stay in the low-millisecond range without making
+  # dual-sensor rows look mechanically cloned.
   default_profile: well_synced
   profiles:
     well_synced:
       clock_skew_us:
-        min: -1500
-        max: 1500
+        min: -4000
+        max: 4000
       path_delay_us:
-        min: 50
-        max: 2000
+        min: 250
+        max: 8000
 
 windows_event_time:
   collision_spacing:

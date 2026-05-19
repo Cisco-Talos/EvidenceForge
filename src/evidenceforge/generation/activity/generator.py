@@ -66,6 +66,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.network_params import proxy_connect_status_message
+from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
     pick_proxy_domain_user_agent,
@@ -3213,6 +3214,36 @@ class ActivityGenerator:
             return "/"
         return uri or "/"
 
+    @staticmethod
+    def _browser_target_allows_top_level_launch(hostname: str, uri: str = "/") -> bool:
+        """Return whether a URL is plausible as a new user-visible browser launch."""
+        host = (hostname or "").strip().lower().rstrip(".")
+        if not host:
+            return True
+        if not is_browser_like_proxy_domain(host):
+            return False
+
+        label = host.split(".", 1)[0]
+        resource_labels = {
+            "asset",
+            "assets",
+            "avatars",
+            "cdn",
+            "crl",
+            "github-releases",
+            "img",
+            "images",
+            "media",
+            "objects",
+            "ocsp",
+            "static",
+        }
+        if label in resource_labels:
+            return False
+        if host.endswith(".githubusercontent.com") and label in {"avatars", "objects"}:
+            return False
+        return True
+
     def _browser_http_client_process_hint(
         self,
         *,
@@ -3319,6 +3350,12 @@ class ActivityGenerator:
             )
             return proc.pid, proc.image
 
+        if image_lower.endswith(tuple(_WINDOWS_BROWSER_EXES)):
+            parsed_url = urlsplit(proxy_context.url or "")
+            proxy_uri = parsed_url.path or "/"
+            if not self._browser_target_allows_top_level_launch(proxy_context.host, proxy_uri):
+                return -1, None
+
         process_rng = random.Random(
             _stable_seed(
                 "explicit_proxy_client_process:"
@@ -3405,6 +3442,9 @@ class ActivityGenerator:
                 time,
             )
             return proc.pid, proc.image
+
+        if not self._browser_target_allows_top_level_launch(http.host, http.uri):
+            return -1, None
 
         process_rng = random.Random(
             _stable_seed(

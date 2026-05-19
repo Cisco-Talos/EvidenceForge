@@ -378,6 +378,76 @@ class TestConnectionPidPropagation:
         assert event.process.command_line.endswith("--single-argument http://WEB-EXT-01/")
         assert "/assets/img/content" not in event.process.command_line
 
+    def test_browser_resource_hostname_does_not_create_top_level_process(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """OCSP/CDN-style resource hosts should not spawn a new browser process."""
+        user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.org")
+        activity_gen._users_by_username = {user.username: user}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=win_system.hostname,
+            logon_type=2,
+            source_ip=win_system.ip,
+        )
+        explorer_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            user.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.explorer_pid = explorer_pid
+        activity_gen._ip_to_system = {win_system.ip: win_system}
+
+        resource_http = HttpContext(
+            method="GET",
+            host="objects.githubusercontent.com",
+            uri="/",
+            version="1.1",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            request_body_len=0,
+            response_body_len=4096,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/octet-stream"],
+            tags=[],
+        )
+
+        activity_gen.generate_connection(
+            src_ip=win_system.ip,
+            dst_ip="185.199.108.133",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=0.5,
+            orig_bytes=400,
+            resp_bytes=4096,
+            conn_state="SF",
+            source_system=win_system,
+            http=resource_http,
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.network.initiating_pid == -1
+        assert event.process is None
+        process_images = {
+            process.image.lower() for process in state_manager.get_processes_on_system("WKS-01")
+        }
+        assert not any(
+            image.endswith(("chrome.exe", "firefox.exe", "msedge.exe")) for image in process_images
+        )
+
     def test_browser_http_flow_without_interactive_session_clears_svchost_attribution(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters
     ):

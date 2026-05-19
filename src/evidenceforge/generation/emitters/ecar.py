@@ -114,6 +114,22 @@ def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
     return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
 
 
+def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
+    """Return an OS-native session label for non-Windows eCAR sessions."""
+    if event.event_type == "ssh_session":
+        return "ssh"
+    logon_type = getattr(event.auth, "logon_type", 0)
+    if logon_type == 10:
+        return "ssh"
+    if logon_type == 5:
+        return "service"
+    if logon_type == 3:
+        return "remote"
+    if logon_type in {2, 7, 11}:
+        return "local"
+    return "session"
+
+
 def _ecar_probability_enabled(key: str, probability: float) -> bool:
     """Return whether a stable per-record probability gate is enabled."""
     clamped = max(0.0, min(1.0, float(probability)))
@@ -267,9 +283,12 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "success",
-            "logon_type": event.auth.logon_type,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") == "windows":
+            event_data["logon_type"] = event.auth.logon_type
+        else:
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -284,6 +303,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") != "windows":
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -1061,6 +1082,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "failure_reason",
         "outcome",
         "logon_type",
+        "session_type",
         "session_lifecycle",
         "status_code",
         "sub_status",

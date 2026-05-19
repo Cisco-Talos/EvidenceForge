@@ -200,7 +200,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
-| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); failed attempts include failure_reason/status fields and do not imply an established session. |
+| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); Windows successful logons include `logon_type`, while non-Windows sessions use OS-native `session_type` values such as `ssh`, `remote`, `local`, or `service`. Failed attempts include failure_reason/status fields and do not imply an established session. |
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
 
 **Known Limitations:**

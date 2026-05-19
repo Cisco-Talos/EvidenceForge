@@ -329,7 +329,7 @@ class TestPerSensorDirectoryRouting:
             assert any(offset > 0 for offset in offsets)
             assert max(offsets) - min(offsets) > 0.0005
             assert len(set(offsets)) > 30
-            assert max(abs(offset) for offset in offsets) <= 0.005
+            assert max(abs(offset) for offset in offsets) <= 0.015
 
     def test_second_sensor_observation_skips_huge_numeric_jitter(self):
         """Huge raw numeric counters should not crash multi-sensor Zeek jitter."""
@@ -447,6 +447,49 @@ class TestPerSensorDirectoryRouting:
 
             for sensor in ("core", "dmz"):
                 row = json.loads((base / sensor / "conn.json").read_text().splitlines()[0])
+                assert row["orig_bytes"] >= 1024
+                assert row["resp_bytes"] >= 65536
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_conn_observation_varies_http_backed_payload_counters(self):
+        """Independent Zeek sensors should not clone HTTP-backed conn byte counters."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHttpClone12",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "duration": 0.25,
+                    "orig_bytes": 1400,
+                    "resp_bytes": 70_000,
+                    "orig_pkts": 8,
+                    "resp_pkts": 60,
+                    "orig_ip_bytes": 1720,
+                    "resp_ip_bytes": 72_400,
+                    "conn_state": "SF",
+                    "_http_request_body_len": 1024,
+                    "_http_response_body_len": 65536,
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert dmz["orig_bytes"] != core["orig_bytes"]
+            assert dmz["resp_bytes"] != core["resp_bytes"]
+            for row in (core, dmz):
                 assert row["orig_bytes"] >= 1024
                 assert row["resp_bytes"] >= 65536
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])

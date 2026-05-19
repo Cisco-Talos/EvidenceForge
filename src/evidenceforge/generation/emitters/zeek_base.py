@@ -171,6 +171,40 @@ def _jitter_numeric_observation(
         )
 
 
+def _jitter_payload_counter_with_floor(
+    render_data: dict[str, Any],
+    field: str,
+    floor_field: str,
+    hostname: str,
+    uid: Any,
+    magnitude: float,
+) -> None:
+    """Apply per-sensor byte jitter while preserving source-owned body floors."""
+    value = render_data.get(field)
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return
+    floor = render_data.get(floor_field)
+    minimum = floor if isinstance(floor, int) and floor >= 0 else 0
+    before = value
+    _jitter_numeric_observation(
+        render_data,
+        field,
+        hostname,
+        uid,
+        magnitude,
+        minimum=minimum,
+    )
+    after = render_data.get(field)
+    if after != before:
+        return
+    if before > 10**18 or minimum > 10**18:
+        return
+
+    seed = _stable_seed(f"zeek_sensor_payload_floor:{hostname}:{uid}:{field}")
+    upper_extra = max(8, min(512, int(round(max(before, minimum, 1) * magnitude))))
+    render_data[field] = max(minimum, before + 1 + (seed % upper_extra))
+
+
 def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
     """Return whether a flow's byte counters should stay identical across sensors."""
     proto = str(render_data.get("proto") or "").lower()
@@ -229,24 +263,22 @@ def _apply_sensor_observation_variance(
         _jitter_numeric_observation(render_data, "duration", hostname, original_uid, 0.027)
     for field in ("orig_pkts", "resp_pkts"):
         _jitter_numeric_observation(render_data, field, hostname, original_uid, 0.035, minimum=1)
-    if render_data.get("_http_request_body_len") is None:
-        _jitter_numeric_observation(
-            render_data,
-            "orig_bytes",
-            hostname,
-            original_uid,
-            0.012,
-            minimum=0,
-        )
-    if render_data.get("_http_response_body_len") is None:
-        _jitter_numeric_observation(
-            render_data,
-            "resp_bytes",
-            hostname,
-            original_uid,
-            0.012,
-            minimum=0,
-        )
+    _jitter_payload_counter_with_floor(
+        render_data,
+        "orig_bytes",
+        "_http_request_body_len",
+        hostname,
+        original_uid,
+        0.012,
+    )
+    _jitter_payload_counter_with_floor(
+        render_data,
+        "resp_bytes",
+        "_http_response_body_len",
+        hostname,
+        original_uid,
+        0.012,
+    )
     for field in ("orig_ip_bytes", "resp_ip_bytes"):
         _jitter_numeric_observation(
             render_data,

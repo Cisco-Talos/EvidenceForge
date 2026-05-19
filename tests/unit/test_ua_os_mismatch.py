@@ -289,6 +289,14 @@ class TestProxyUriOsFiltering:
         assert "Darwin" not in update_ua
         assert "Windows-Update-Agent" not in update_ua
 
+        internal_ocsp_ua = pick_proxy_user_agent(
+            random.Random(42),
+            source,
+            hostname="ocsp.meridianhcs.local",
+        )
+
+        assert internal_ocsp_ua == "Microsoft-CryptoAPI/10.0"
+
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
         """Domain-specific proxy UA rules should override inherited browser session UAs."""
         from evidenceforge.events.contexts import HttpContext
