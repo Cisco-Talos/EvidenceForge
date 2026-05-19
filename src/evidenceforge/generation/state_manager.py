@@ -624,8 +624,8 @@ class StateManager:
         if block <= 0:
             return 0
 
-        block_width = 2048
-        jitter = _stable_seed(f"linux_pid_block_jitter:{system}:{block}") % 128
+        block_width = 96
+        jitter = _stable_seed(f"linux_pid_block_jitter:{system}:{block}") % 32
         return (block * block_width) + jitter
 
     @staticmethod

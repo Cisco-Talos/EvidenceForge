@@ -1905,9 +1905,9 @@ def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
     if alias is not None:
         image, command_line = alias
         if index + 1 < len(parts):
-            command_line = f"{command_line} {_shell_display_join(parts[index + 1 :])}"
+            command_line = f"{command_line} {_shell_display_join(parts[index + 1 :], executable)}"
         return image, command_line
-    command_line = _shell_display_join(parts[index:])
+    command_line = _shell_display_join(parts[index:], executable)
     if parts[index].startswith("/"):
         return parts[index], command_line
     mapped = _LINUX_COMMAND_IMAGE_OVERRIDES.get(executable)
@@ -1916,15 +1916,34 @@ def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
     return None
 
 
-def _shell_display_join(parts: list[str]) -> str:
+def _shell_display_join(parts: list[str], executable: str | None = None) -> str:
     """Render shell argv for telemetry without quoting expandable glob tokens."""
     rendered: list[str] = []
-    for part in parts:
+    sql_query_index = _mysql_sql_query_arg_index(parts, executable)
+    for index, part in enumerate(parts):
+        if sql_query_index is not None and index == sql_query_index:
+            rendered.append(shlex.quote(part))
+            continue
         if any(marker in part for marker in ("*", "?", "[")):
             rendered.append(part)
         else:
             rendered.append(shlex.quote(part))
     return " ".join(rendered)
+
+
+def _mysql_sql_query_arg_index(parts: list[str], executable: str | None) -> int | None:
+    """Return the mysql -e SQL argument index, if this argv contains one."""
+    if not parts:
+        return None
+    command = (executable or parts[0].rsplit("/", 1)[-1]).lower()
+    if command != "mysql":
+        return None
+    for index, part in enumerate(parts[:-1]):
+        if part == "-e":
+            return index + 1
+        if part.startswith("-e") and len(part) > 2:
+            return index
+    return None
 
 
 def _strip_linux_shell_redirections(parts: list[str]) -> list[str]:
@@ -3306,6 +3325,22 @@ class ActivityGenerator:
         return uri or "/"
 
     @staticmethod
+    def _browser_navigation_target(
+        *,
+        hostname: str,
+        uri: str,
+        dst_port: int,
+    ) -> tuple[str, int]:
+        """Normalize proxy CONNECT targets into a browser-visible navigation target."""
+        raw_uri = (uri or "").strip()
+        host = (hostname or "").strip().lower().rstrip(".")
+        if raw_uri and not raw_uri.startswith(("/", "http://", "https://")):
+            target, separator, port = raw_uri.rpartition(":")
+            if separator and port.isdigit() and target.strip().lower().rstrip(".") == host:
+                return "/", int(port)
+        return uri, dst_port
+
+    @staticmethod
     def _browser_target_allows_top_level_launch(hostname: str, uri: str = "/") -> bool:
         """Return whether a URL is plausible as a new user-visible browser launch."""
         host = (hostname or "").strip().lower().rstrip(".")
@@ -3348,8 +3383,17 @@ class ActivityGenerator:
         if not ua:
             return None
 
-        launch_uri = self._browser_launch_uri(uri)
-        target_url = self._http_target_url(hostname=hostname, uri=launch_uri, dst_port=dst_port)
+        target_uri, target_port = self._browser_navigation_target(
+            hostname=hostname,
+            uri=uri,
+            dst_port=dst_port,
+        )
+        launch_uri = self._browser_launch_uri(target_uri)
+        target_url = self._http_target_url(
+            hostname=hostname,
+            uri=launch_uri,
+            dst_port=target_port,
+        )
         if "firefox/" in ua:
             image = r"C:\Program Files\Mozilla Firefox\firefox.exe"
             return image, f'"{image}" -osint -url {target_url}'
@@ -3704,7 +3748,14 @@ class ActivityGenerator:
                         time,
                     )
                     return
-                if not self._windows_proxy_pid_should_be_replaced(current):
+                expected_exe = ntpath.basename(expected_image).lower()
+                current_exe = ntpath.basename(current.image or "").lower()
+                mismatched_browser = (
+                    expected_exe in _WINDOWS_BROWSER_EXES and current_exe in _WINDOWS_BROWSER_EXES
+                )
+                if not mismatched_browser and not self._windows_proxy_pid_should_be_replaced(
+                    current
+                ):
                     return
 
         client_pid, client_image = self._ensure_browser_http_client_process(
@@ -3771,6 +3822,10 @@ class ActivityGenerator:
         expected_image = hint[0]
         if candidate_image.lower() == expected_image.lower():
             return candidate_image
+        expected_exe = ntpath.basename(expected_image).lower()
+        candidate_exe = ntpath.basename(candidate_image).lower()
+        if expected_exe in _WINDOWS_BROWSER_EXES and candidate_exe in _WINDOWS_BROWSER_EXES:
+            return None
         if self._windows_proxy_pid_should_be_replaced(running):
             return None
         return candidate_image

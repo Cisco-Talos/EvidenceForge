@@ -1204,6 +1204,36 @@ class TestTidAlwaysPresent:
         assert row["tid"] > 0
         assert row["tid"] % 4 == 0
 
+    def test_linux_process_create_uses_pid_as_main_thread_id(self, emitter, ts):
+        """Linux eCAR PROCESS/CREATE should use the PID as the main thread ID."""
+        host = HostContext(
+            hostname="APP-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+            fqdn="app-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                process=ProcessContext(
+                    pid=14233,
+                    parent_pid=900,
+                    image="/usr/bin/mysql",
+                    command_line="mysql -u root",
+                    username="root",
+                ),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        assert row["tid"] == 14233
+
 
 class TestPpidOnlyOnProcess:
     def test_ppid_on_process_create(self, emitter, ts):

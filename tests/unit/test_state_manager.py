@@ -187,6 +187,24 @@ class TestStateManagerInit:
         assert offset > 0
         assert sm._linux_pid_block_offsets == {}
 
+    def test_linux_visible_pids_stay_in_lived_in_desktop_range_after_days(self):
+        """Long collection windows should not create obvious million-range PID bands."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+        sm.set_current_time(boot_time + timedelta(days=3, hours=2))
+
+        pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/mysql",
+            command_line="mysql -u root",
+            username="root",
+            integrity_level="Medium",
+        )
+
+        assert 8_000 <= pid < 180_000
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""

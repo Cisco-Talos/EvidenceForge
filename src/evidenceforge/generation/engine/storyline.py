@@ -586,11 +586,43 @@ def _dns_tunnel_background_txt_record(rng: random.Random) -> tuple[str, str, int
     selector = rng.choice(("selector1", "selector2", "s1", "mail", "k1", "mta"))
     style = rng.choices(("spf", "dkim", "dmarc", "verify"), weights=[38, 32, 20, 10], k=1)[0]
     if style == "spf":
-        answer = rng.choice(
-            (
+        domain_spf: dict[str, tuple[str, ...]] = {
+            "duo.com": (
+                "v=spf1 include:spf.protection.outlook.com include:_spf.salesforce.com -all",
+                "v=spf1 include:_spf.duosecurity.com include:sendgrid.net ~all",
+            ),
+            "github.com": (
+                "v=spf1 include:_spf.google.com include:spf.protection.outlook.com ~all",
+                "v=spf1 include:servers.mcsv.net include:mail.zendesk.com ~all",
+            ),
+            "meridianhcs.com": (
+                "v=spf1 include:spf.protection.outlook.com include:sendgrid.net -all",
+                "v=spf1 include:amazonses.com include:mailgun.org ~all",
+            ),
+            "microsoft.com": (
                 "v=spf1 include:spf.protection.outlook.com -all",
-                "v=spf1 include:sendgrid.net include:_spf.google.com ~all",
-                "v=spf1 ip4:203.0.113.0/24 include:amazonses.com -all",
+                "v=spf1 include:_spf-a.microsoft.com include:_spf-b.microsoft.com -all",
+            ),
+            "okta.com": (
+                "v=spf1 include:spf.protection.outlook.com include:sendgrid.net -all",
+                "v=spf1 include:_spf.salesforce.com include:amazonses.com ~all",
+            ),
+            "sendgrid.net": (
+                "v=spf1 include:sendgrid.net -all",
+                "v=spf1 include:_spf.google.com include:spf.protection.outlook.com ~all",
+            ),
+            "zoom.us": (
+                "v=spf1 include:spf.protection.outlook.com include:amazonses.com ~all",
+                "v=spf1 include:_spf.google.com include:sendgrid.net ~all",
+            ),
+        }
+        answer = rng.choice(
+            domain_spf.get(
+                domain,
+                (
+                    "v=spf1 include:spf.protection.outlook.com -all",
+                    "v=spf1 include:sendgrid.net include:_spf.google.com ~all",
+                ),
             )
         )
         return domain, answer, rng.choice((300, 600, 1800, 3600))

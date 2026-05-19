@@ -270,6 +270,8 @@ class EcarEmitter(HostMultiplexEmitter):
         """Return a plausible source thread ID for process-owned eCAR events."""
         if pid <= 0:
             return -1
+        if os_category == "linux":
+            return pid
         bucket_ms = int(timestamp.timestamp() * 1000)
         tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
         if os_category == "windows":
