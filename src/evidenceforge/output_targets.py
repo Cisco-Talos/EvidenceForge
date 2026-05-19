@@ -50,7 +50,6 @@ class TargetFormatPolicy:
     format_name: str
     default_variant: str
     sof_elk_variant: str
-    third_party_parser_support: bool = True
     notes: str = ""
 
     @property
@@ -89,8 +88,7 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "ecar",
         "json",
         "json",
-        third_party_parser_support=False,
-        notes="No stable third-party standard parser target.",
+        notes="Target-invariant EvidenceForge JSON.",
     ),
     "syslog": TargetFormatPolicy(
         "syslog",
@@ -101,8 +99,7 @@ FORMAT_TARGET_POLICIES: dict[str, TargetFormatPolicy] = {
         "bash_history",
         "bash_history",
         "bash_history",
-        third_party_parser_support=False,
-        notes="Shell history has no stable third-party parser contract.",
+        notes="Target-invariant shell history text.",
     ),
     "snort_alert": TargetFormatPolicy("snort_alert", "fast_alert", "fast_alert"),
     "cisco_asa": TargetFormatPolicy(
@@ -168,13 +165,4 @@ def target_dependent_formats() -> frozenset[str]:
     """Return canonical formats whose generated file shape depends on target."""
     return frozenset(
         name for name, policy in FORMAT_TARGET_POLICIES.items() if policy.target_dependent
-    )
-
-
-def external_parser_unsupported_formats() -> frozenset[str]:
-    """Return formats intentionally outside the third-party parser validation lane."""
-    return frozenset(
-        name
-        for name, policy in FORMAT_TARGET_POLICIES.items()
-        if not policy.third_party_parser_support
     )

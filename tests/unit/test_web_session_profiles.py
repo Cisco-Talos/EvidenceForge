@@ -42,6 +42,19 @@ def test_external_profile_selection_excludes_internal_health_checks():
         assert name != "health_check"
 
 
+def test_health_check_profile_is_server_scoped():
+    profile = load_web_session_profiles()["visitor_classes"]["health_check"]
+
+    assert profile["source_type_any"] == ["server", "domain_controller"]
+    assert "monitoring" in profile["source_role_any"]
+
+
+def test_internal_human_browser_profile_is_workstation_scoped():
+    profile = load_web_session_profiles()["visitor_classes"]["human_browser"]
+
+    assert profile["source_type_any"] == ["workstation"]
+
+
 def test_user_agent_honors_source_os_pool():
     profile = load_web_session_profiles()["visitor_classes"]["human_browser"]
     ua = pick_web_user_agent(random.Random(1), profile, source_os="linux")
@@ -56,3 +69,40 @@ def test_profile_request_and_bounds_are_safe():
 
     assert request["status"] in {403, 404}
     assert 1 <= lo <= hi
+
+
+def test_pick_web_user_agent_escapes_control_characters(monkeypatch):
+    from evidenceforge.generation.activity import web_session_profiles
+
+    def load_invalid_profiles():
+        return {"user_agent_pools": {"browser_any": ["BadUA\nForged"]}}
+
+    monkeypatch.setattr(web_session_profiles, "load_web_session_profiles", load_invalid_profiles)
+
+    user_agent = web_session_profiles.pick_web_user_agent(random.Random(0), {})
+
+    assert user_agent == r"BadUA\nForged"
+    assert "\n" not in user_agent
+
+
+def test_pick_profile_request_sanitizes_log_fields_and_status():
+    from evidenceforge.generation.activity import web_session_profiles
+
+    profile = {
+        "requests": [
+            {
+                "path": "/ok\nforged",
+                "method": "GET\nPOST",
+                "status": "not-an-int",
+                "type": "text/html\nforged",
+                "weight": 1,
+            }
+        ]
+    }
+
+    request = web_session_profiles.pick_profile_request(random.Random(0), profile)
+
+    assert request["path"] == r"/ok\nforged"
+    assert request["method"] == "GET"
+    assert request["status"] == 200
+    assert request["type"] == "text/html"

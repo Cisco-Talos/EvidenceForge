@@ -12,9 +12,14 @@ All models use extra="forbid" so misspelled fields are caught as errors.
 
 from __future__ import annotations
 
+import re
 from typing import Any, ClassVar, Literal, Self
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
+
+TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
 
 # --- DNS Registry ---
 
@@ -38,6 +43,67 @@ class DnsEntry(BaseModel, extra="forbid"):
     def tags_non_empty(cls, v: list[str]) -> list[str]:
         if not v:
             raise ValueError("tags must not be empty")
+        return v
+
+
+class PublicDnsAnswerProfile(BaseModel, extra="forbid"):
+    """A public DNS provider-style answer profile."""
+
+    name: str
+    weight: int
+    match_suffixes: list[str] = Field(default_factory=list)
+    answer_sets: list[list[str]]
+    soa_rnames: list[str] = Field(default_factory=list)
+
+    @field_validator("weight")
+    @classmethod
+    def weight_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("weight must be non-negative")
+        return v
+
+    @field_validator("match_suffixes", "soa_rnames")
+    @classmethod
+    def optional_strings_non_empty(cls, v: list[str], info) -> list[str]:
+        if any(not item for item in v):
+            raise ValueError(f"{info.field_name} entries must be non-empty")
+        if info.field_name == "soa_rnames":
+            for item in v:
+                validate_public_dns_answer_template(item)
+        return v
+
+    @field_validator("answer_sets")
+    @classmethod
+    def answer_sets_non_empty(cls, v: list[list[str]]) -> list[list[str]]:
+        if not v:
+            raise ValueError("answer_sets must not be empty")
+        for answer_set in v:
+            if not answer_set:
+                raise ValueError("answer_sets entries must not be empty")
+            if any(not answer for answer in answer_set):
+                raise ValueError("answer strings must be non-empty")
+            for answer in answer_set:
+                validate_public_dns_answer_template(answer)
+        return v
+
+
+class PublicDnsProfilesConfig(BaseModel, extra="forbid"):
+    """Root schema for public_dns_profiles.yaml."""
+
+    nameserver_profiles: list[PublicDnsAnswerProfile]
+    mail_profiles: list[PublicDnsAnswerProfile]
+
+    @field_validator("nameserver_profiles", "mail_profiles")
+    @classmethod
+    def profiles_non_empty(
+        cls,
+        v: list[PublicDnsAnswerProfile],
+        info,
+    ) -> list[PublicDnsAnswerProfile]:
+        if not v:
+            raise ValueError(f"{info.field_name} must not be empty")
+        if sum(profile.weight for profile in v) <= 0:
+            raise ValueError(f"{info.field_name} must include at least one positive weight")
         return v
 
 
@@ -107,6 +173,7 @@ class ApplicationEntry(BaseModel, extra="forbid"):
     categories: list[str]
     personas: list[str]
     system_types: list[str] | None = None
+    selection_weight: int = Field(default=10, gt=0)
 
 
 # --- Persona ---
@@ -146,6 +213,12 @@ class SystemdScheduleEntry(BaseModel, extra="forbid"):
     typical_day: str | None = None
     # Optional role filter
     role: str | None = None
+    roles: list[str] | None = None
+    exclude_roles: list[str] | None = None
+    services_any: list[str] | None = None
+    host_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    slot_skip_probability: float | None = Field(default=None, ge=0.0, le=1.0)
+    slot_jitter_seconds: int | None = Field(default=None, ge=0, le=1800)
     # Optional fields for cron type
     cron_user: str | None = None
     cron_commands: dict[str, str] | None = None
@@ -159,8 +232,11 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
 
     app: str
     messages: list[str]
+    params: dict[str, list[str]] | None = None
     distro: str | None = None
     roles: list[str] | None = None
+    exclude_roles: list[str] | None = None
+    system_types: list[str] | None = None
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
 
@@ -200,6 +276,28 @@ class TlsSanConfig(BaseModel, extra="forbid"):
     """SAN generation settings in tls_realism.yaml."""
 
     multi_label_public_suffixes: list[str]
+    profile_weights: dict[str, int] = Field(default_factory=dict)
+    _VALID_PROFILE_KEYS: ClassVar[set[str]] = {
+        "apex_exact",
+        "apex_www",
+        "apex_wildcard",
+        "subdomain_exact",
+        "subdomain_parent",
+        "subdomain_wildcard",
+        "subdomain_sibling",
+    }
+
+    @field_validator("profile_weights")
+    @classmethod
+    def profile_weights_valid(cls, v: dict[str, int]) -> dict[str, int]:
+        unknown = set(v) - cls._VALID_PROFILE_KEYS
+        if unknown:
+            raise ValueError(f"unknown SAN profile weights: {sorted(unknown)}")
+        if any(weight < 0 for weight in v.values()):
+            raise ValueError("SAN profile weights must be non-negative")
+        if v and sum(v.values()) <= 0:
+            raise ValueError("SAN profile weights must have a positive total")
+        return v
 
 
 class TlsSerialLength(BaseModel, extra="forbid"):
@@ -220,6 +318,8 @@ class TlsSerialLength(BaseModel, extra="forbid"):
     def weight_positive(cls, v: int) -> int:
         if v <= 0:
             raise ValueError("weight must be positive")
+        if v > TLS_SERIAL_LENGTH_MAX_WEIGHT:
+            raise ValueError(f"weight must be <= {TLS_SERIAL_LENGTH_MAX_WEIGHT}")
         return v
 
 
@@ -772,6 +872,8 @@ class SmbFileTransferConfig(BaseModel, extra="forbid"):
 
 # --- Auth Noise ---
 
+_AUTH_NOISE_ACCOUNT_NAME_RE = re.compile(r"^[a-zA-Z0-9._$-]+$")
+
 
 class AuthNoiseIntervalRange(BaseModel, extra="forbid"):
     """A weighted interval range for auth-noise recurrence."""
@@ -805,10 +907,16 @@ class ScheduledStaleCredentialsConfig(BaseModel, extra="forbid"):
 
     @field_validator("account_base_names")
     @classmethod
-    def account_base_names_non_empty(cls, v: list[str]) -> list[str]:
+    def account_base_names_match_usernames(cls, v: list[str]) -> list[str]:
         for name in v:
-            if not name or not name.strip():
+            stripped_name = name.strip() if isinstance(name, str) else ""
+            if not stripped_name:
                 raise ValueError("account_base_names entries must be non-empty")
+            if _AUTH_NOISE_ACCOUNT_NAME_RE.fullmatch(stripped_name) is None:
+                raise ValueError(
+                    "account_base_names entries must match scenario username syntax "
+                    "^[a-zA-Z0-9._$-]+$"
+                )
         return v
 
     @model_validator(mode="after")
@@ -878,7 +986,7 @@ class DnsTunnelTtlEntry(BaseModel, extra="forbid"):
     """A weighted DNS tunnel response TTL choice in network_params.yaml."""
 
     value: int = Field(ge=0, le=3600)
-    weight: float = Field(gt=0)
+    weight: float = Field(gt=0, allow_inf_nan=False)
 
 
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
@@ -1171,11 +1279,21 @@ class RegistryNoiseConfig(BaseModel, extra="forbid"):
     dhcp_interface_values: DhcpInterfaceRegistryNoiseConfig
 
 
+class EcarFlowIdentityConfig(BaseModel, extra="forbid"):
+    """eCAR FLOW principal-attribution probability policy."""
+
+    user_process_probability: float = Field(ge=0.0, le=1.0)
+    service_process_probability: float = Field(ge=0.0, le=1.0)
+    root_process_probability: float = Field(ge=0.0, le=1.0)
+    inbound_listener_probability: float = Field(ge=0.0, le=1.0)
+
+
 class EndpointNoiseConfig(BaseModel, extra="forbid"):
     """Root schema for endpoint_noise.yaml."""
 
     windows_scheduled_processes: WindowsScheduledProcessNoiseConfig
     registry_noise: RegistryNoiseConfig
+    ecar_flow_identity: EcarFlowIdentityConfig
 
 
 # --- Observation Profiles ---

@@ -17,8 +17,8 @@ You are helping the user generate synthetic security log datasets from an Eviden
 If the user has a scenario file ready:
 
 ```bash
-eforge validate <scenario-file>
-eforge generate <scenario-file> --verbose --force
+eforge validate scenarios/<slug>/scenario.yaml
+eforge generate scenarios/<slug>/scenario.yaml --verbose --force
 ```
 
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
@@ -46,7 +46,8 @@ Generates log files from a validated scenario.
 eforge generate <scenario.yaml> [options]
 
 Options:
-  --output, -o <dir>     Override output directory (default: from scenario's output.destination)
+  --output, -o <dir>     Override the bundle root for generated sidecars and data.
+                         By default, current eforge writes beside the scenario file.
   --config, -c <file>    Path to config.yaml
   --formats, -F <list>   Comma-separated format filter. Only generates formats present in both
                          this list and the scenario's output.logs. Supports group names (zeek,
@@ -55,7 +56,7 @@ Options:
                          `eforge generate scenario.yaml --formats zeek_conn,zeek_dns` to
                          generate only Zeek connection and DNS logs.
   --target <name>        Output target: default or sof-elk. The default target is SIEM-neutral.
-                         Use sof-elk when generating data for SOF-ELK external parser validation.
+                         Use sof-elk when generating SOF-ELK-compatible file layouts.
   --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
@@ -82,10 +83,14 @@ Before running generation:
 ### 2. Run Generation
 
 ```bash
-eforge generate <scenario-file> --verbose --force
+eforge generate scenarios/<slug>/scenario.yaml --verbose --force
 ```
 
 Always use `--verbose` so you can see progress and diagnose issues. Always use `--force` to skip the interactive overwrite prompt — without it, re-running a scenario will block waiting for user input.
+
+For the canonical skill-created layout, the scenario file is `scenarios/<slug>/scenario.yaml` and generation writes to the same scenario root. If the user has a legacy flat scenario file directly under `scenarios/`, recommend moving it into the bundle root before generating. Use `--output <dir>` only when the user explicitly requests a nonstandard bundle root.
+
+The output target never changes the directory path. `--target default|sof-elk` changes source-native file rendering inside the bundle and writes `OUTPUT_TARGET.txt`; it must not create target-named directories.
 
 **Warm-up phase:** Generation begins with a warm-up period (default 8 hours, minimum 1 hour, configurable via `time_window.warmup`). During warm-up, the engine runs baseline generation to pre-populate DNS cache, process trees, active sessions, and other internal state — but warm-up events are **not** written to output files. This ensures the first minutes of output look like a running system rather than a cold start. Progress output distinguishes the warm-up phase from real generation.
 
@@ -95,6 +100,7 @@ Generation writes log files to a `data/` subdirectory alongside the scenario fil
 scenarios/<scenario-name>/
   scenario.yaml          ← input
   ENVIRONMENT.md         ← created by /eforge scenario
+  artifacts/             ← optional authored collateral, not eval input
   GROUND_TRUTH.md        ← generated answer key (empty for benign baseline-only runs)
   OBSERVATION_MANIFEST.json ← generated source-observation sidecar
   OUTPUT_TARGET.txt      ← "default" or "sof-elk"
@@ -120,8 +126,9 @@ If generated output (`data/`, `GROUND_TRUTH.md`, or `OBSERVATION_MANIFEST.json`)
 After successful generation:
 - List the generated files and their sizes
 - Check that expected formats were produced
-- Note that `GROUND_TRUTH.md` and `OBSERVATION_MANIFEST.json` were generated alongside the scenario file. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
+- Note that `GROUND_TRUTH.md`, `OBSERVATION_MANIFEST.json`, `OUTPUT_TARGET.txt`, and `data/` were generated under `scenarios/<slug>/`. For baseline-only runs, `GROUND_TRUTH.md` explicitly says no malicious events were generated.
 - `ENVIRONMENT.md` (created by `/eforge scenario`) is already in the same directory — no copying needed
+- Optional `artifacts/` contents are exercise collateral created by `/eforge scenario`, not generated log output
 - Note that the causal expansion engine auto-generates prerequisite events (DNS lookups before connections, Kerberos TGT/TGS before logons, audit events from command patterns, etc.) — these appear in the logs but are not explicitly listed in the scenario YAML
 - Summarize the output for the user
 

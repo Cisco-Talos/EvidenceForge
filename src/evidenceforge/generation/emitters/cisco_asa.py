@@ -57,7 +57,7 @@ from evidenceforge.output_targets import OutputTarget
 # ASA facility: local4 (20)
 _ASA_FACILITY = 20
 
-_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs", "TCP FINs", "TCP FINs", "TCP Reset-O", "TCP Reset-I")
+_TCP_SUCCESS_TEARDOWN_REASONS = ("TCP FINs",)
 _TCP_PARTIAL_TEARDOWN_REASONS = ("Conn-timeout", "TCP Reset-O", "TCP Reset-I")
 
 
@@ -65,7 +65,7 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
     """Emitter for Cisco ASA firewall syslog format.
 
     Default target writes flat per-sensor files. SOF-ELK target writes
-    per-sensor/year files so Logstash can infer BSD syslog years.
+    per-sensor/year files so BSD-syslog archive consumers can infer years.
 
     Handles all connection events visible to firewall sensors. Unlike Snort
     (which requires IdsContext), the ASA emitter renders every connection it
@@ -353,7 +353,11 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Handle all connection events with network context."""
-        return event.event_type in self._supported_types and event.network is not None
+        return (
+            event.event_type in self._supported_types
+            and event.network is not None
+            and not event.network.application_layer_only
+        )
 
     def emit(self, event: SecurityEvent) -> None:
         """Render ASA syslog records from a connection event.
@@ -449,18 +453,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             msg_id = 302020
             icmp_type = net.dst_port if net.dst_port else 8  # Default echo request
             if direction == "inbound":
-                foreign_ip = net.src_ip
-                global_ip = net.dst_ip
-                local_ip = net.dst_ip
+                foreign_iface, foreign_ip = src_iface, net.src_ip
+                global_iface, global_ip = dst_iface, net.dst_ip
+                local_iface, local_ip = dst_iface, net.dst_ip
             else:
-                foreign_ip = net.dst_ip
-                global_ip = net.src_ip
-                local_ip = net.src_ip
+                foreign_iface, foreign_ip = dst_iface, net.dst_ip
+                global_iface, global_ip = src_iface, net.src_ip
+                local_iface, local_ip = src_iface, net.src_ip
             message = (
                 f"Built {direction} ICMP connection for faddr "
-                f"{foreign_ip}/{icmp_type} "
-                f"gaddr {global_ip}/0 "
-                f"laddr {local_ip}/0"
+                f"{foreign_iface}:{foreign_ip}/{icmp_type} "
+                f"gaddr {global_iface}:{global_ip}/0 "
+                f"laddr {local_iface}:{local_ip}/0"
             )
         else:
             msg_id = 302013 if protocol == "tcp" else 302015
@@ -529,18 +533,18 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
             icmp_type = net.dst_port if net.dst_port else 8
             direction = "inbound" if src_iface == "outside" else "outbound"
             if direction == "inbound":
-                foreign_ip = net.src_ip
-                global_ip = net.dst_ip
-                local_ip = net.dst_ip
+                foreign_iface, foreign_ip = src_iface, net.src_ip
+                global_iface, global_ip = dst_iface, net.dst_ip
+                local_iface, local_ip = dst_iface, net.dst_ip
             else:
-                foreign_ip = net.dst_ip
-                global_ip = net.src_ip
-                local_ip = net.src_ip
+                foreign_iface, foreign_ip = dst_iface, net.dst_ip
+                global_iface, global_ip = src_iface, net.src_ip
+                local_iface, local_ip = src_iface, net.src_ip
             message = (
                 f"Teardown ICMP connection for faddr "
-                f"{foreign_ip}/{icmp_type} "
-                f"gaddr {global_ip}/0 "
-                f"laddr {local_ip}/0"
+                f"{foreign_iface}:{foreign_ip}/{icmp_type} "
+                f"gaddr {global_iface}:{global_ip}/0 "
+                f"laddr {local_iface}:{local_ip}/0"
             )
         else:
             msg_id = 302014 if protocol == "tcp" else 302016

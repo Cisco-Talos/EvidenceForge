@@ -131,7 +131,7 @@ class TestProxyParserRegistration:
         record = parser._parse_line(
             "2024-07-15 10:00:00 10.0.0.1 jsmith GET http://example.com/ HTTP/1.1 "
             "200 1024 350 42 example.com Mozilla/5.0+(Windows+NT+10.0) "
-            "https://intranet.example.com/ text/html MISS",
+            "https://intranet.example.com/ text/html MISS forward",
             1,
         )
 
@@ -143,6 +143,7 @@ class TestProxyParserRegistration:
         assert record.fields["referrer"] == "https://intranet.example.com/"
         assert record.fields["content_type"] == "text/html"
         assert record.fields["cache_result"] == "MISS"
+        assert record.fields["proxy_action"] == "forward"
 
 
 class TestCanParseFlatPaths:

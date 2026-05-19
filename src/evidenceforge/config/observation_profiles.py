@@ -37,7 +37,15 @@ def observation_profile_names() -> set[str]:
     profiles = load_observation_profiles().get("profiles", {})
     if not isinstance(profiles, dict):
         return set()
-    return set(profiles)
+    return {name for name, profile in profiles.items() if isinstance(profile, dict)}
+
+
+def observation_profile_exists(name: str) -> bool:
+    """Return True when a named observation profile is configured as a mapping."""
+    profiles = load_observation_profiles().get("profiles", {})
+    if not isinstance(profiles, dict):
+        return False
+    return isinstance(profiles.get(name), dict)
 
 
 def get_observation_profile(name: str) -> dict[str, Any]:

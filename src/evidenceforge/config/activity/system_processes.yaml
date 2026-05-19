@@ -28,7 +28,7 @@ scheduled_tasks:
       - "usoclient.exe StartInteractiveScan"
       - "usoclient.exe ResumeUpdate"
     parent: svchost_wusvcs
-  - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
+  - image: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"
     command_templates:
       - "TiWorker.exe -Embedding"
     parent: svchost_netsvcs
@@ -76,26 +76,10 @@ system_services:
         - "conhost.exe 0x4"
         - "\\??\\C:\\Windows\\system32\\conhost.exe 0xffffffff -ForceV1"
       parent: csrss_s0
-    - image: "C:\\Windows\\System32\\RuntimeBroker.exe"
-      command_templates:
-        - "RuntimeBroker.exe -Embedding"
-      parent: svchost_dcom
-      loaded_modules:
-        - path: "C:\\Windows\\System32\\combase.dll"
-        - path: "C:\\Windows\\System32\\ole32.dll"
-        - path: "C:\\Windows\\System32\\twinapi.appcore.dll"
     - image: "C:\\Windows\\System32\\spoolsv.exe"
       command_templates:
         - "spoolsv.exe"
       parent: services
-    - image: "C:\\Windows\\System32\\sihost.exe"
-      command_templates:
-        - "sihost.exe"
-      parent: svchost_netsvcs
-    - image: "C:\\Windows\\System32\\backgroundTaskHost.exe"
-      command_templates:
-        - "backgroundTaskHost.exe"
-      parent: svchost_local_system
 
   domain_controller:
     - image: "C:\\Windows\\System32\\dfsr.exe"
@@ -105,10 +89,6 @@ system_services:
     - image: "C:\\Windows\\System32\\dns.exe"
       command_templates:
         - "dns.exe"
-      parent: services
-    - image: "C:\\Windows\\System32\\ntdsutil.exe"
-      command_templates:
-        - "ntdsutil.exe"
       parent: services
     - image: "C:\\Windows\\System32\\ismserv.exe"
       command_templates:
@@ -126,10 +106,6 @@ system_services:
       parent: services
 
   workstation:
-    - image: "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.CBS_cw5n1h2txyewy\\SearchHost.exe"
-      command_templates:
-        - "SearchHost.exe"
-      parent: svchost_netsvcs
     - image: "C:\\Windows\\System32\\SearchProtocolHost.exe"
       command_templates:
         - "SearchProtocolHost.exe {search_pipe_args}"
@@ -138,7 +114,7 @@ system_services:
           - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-18 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-18 1"
           - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-19 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-19 1"
           - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-20 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-20 1"
-          - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-21-397955417-626881126-188441444-1001 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-21-397955417-626881126-188441444-1001 1"
+          - "Global\\UsGthrFltPipeMssGthrPipe_{host_local_search_sid} Global\\UsGthrCtrlFltPipeMssGthrPipe_{host_local_search_sid} 1"
       parent: search_indexer
     - image: "C:\\Windows\\System32\\SearchFilterHost.exe"
       command_templates:
@@ -326,7 +302,7 @@ system_binaries:
 
     # --- Windows Update and telemetry ---
     - {exe: "usoclient.exe",             path: "C:\\Windows\\System32\\usoclient.exe"}
-    - {exe: "TiWorker.exe",             path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_10.0.19041.3636_none_7c91d6e7c9f7f1f5\\TiWorker.exe"}
+    - {exe: "TiWorker.exe",             path: "C:\\Windows\\WinSxS\\amd64_microsoft-windows-servicingstack_31bf3856ad364e35_{servicing_stack_version}_none_7c91d6e7c9f7f1f5\\TiWorker.exe"}
     - {exe: "cleanmgr.exe",             path: "C:\\Windows\\System32\\cleanmgr.exe"}
     - {exe: "wsqmcons.exe",             path: "C:\\Windows\\System32\\wsqmcons.exe"}
     - {exe: "CompatTelRunner.exe",       path: "C:\\Windows\\System32\\CompatTelRunner.exe"}

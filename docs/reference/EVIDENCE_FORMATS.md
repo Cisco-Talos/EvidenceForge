@@ -142,7 +142,7 @@ only and `eforge eval` maps both variants back to the canonical
 | 10 | ProcessAccess | Credential Access | Version 3. Detects credential dumping (e.g., mimikatz accessing lsass.exe). Includes GrantedAccess mask, CallTrace. Baseline generates benign noise (3-8/hr) from Defender, CSRSS, Services.exe. Correlated with eCAR PROCESS/OPEN. |
 
 **Known Limitations:**
-- ProcessGuid is deterministic from (hostname, PID, process creation time), so Events 1/3/5/7/8/10/11/12/13/22 agree for the same known process — not a real Windows GUID
+- ProcessGuid is deterministic from (hostname, PID, process creation time), so Events 1/3/5/7/8/10/11/12/13/22 agree for the same known process. The rendered shape follows Sysmon-style machine/time/token morphology rather than RFC UUID version bits.
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
 - Implemented events focus on the project evidence model: 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22.
@@ -200,7 +200,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
-| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); failed attempts include failure_reason/status fields and do not imply an established session. |
+| USER_SESSION | LOGIN, LOGOUT | Logon/logoff events. LOGIN includes outcome (`success` or `failure`); Windows successful logons include `logon_type`, while non-Windows sessions use OS-native `session_type` values such as `ssh`, `remote`, `local`, or `service`. Failed attempts include failure_reason/status fields and do not imply an established session. |
 | SERVICE | CREATE | Service installation. Correlated with Windows 4697. Includes service_name, image_path (binary path), service_account in properties. |
 
 **Known Limitations:**
@@ -356,12 +356,14 @@ Forward proxy access logs for systems with the `forward_proxy` role. Outbound HT
 The proxy log uses a W3C Extended-style `#Fields` header:
 
 ```text
-#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result
+#Fields: date time c-ip cs-username cs-method cs-uri cs-version sc-status sc-bytes cs-bytes time-taken cs-host cs(User-Agent) cs(Referer) rs(Content-Type) s-cache-result x-proxy-action
 ```
 
 Fields are whitespace-delimited; values with spaces, such as User-Agent strings, are rendered with `+` separators. Missing values are `-`.
 
 **Referrer field:** The W3C Extended format output includes a `cs(Referer)` field, linking subresource requests back to the page that triggered them.
+
+**Proxy action field:** The `x-proxy-action` field disambiguates source-native proxy behavior: `tunnel-setup` for CONNECT setup rows, `ssl-inspect` for decrypted HTTPS request rows, `forward` for ordinary forwarded HTTP, and `deny`/`auth-required`/`gateway-error` for proxy-side terminal failures.
 
 **CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
 
@@ -372,5 +374,5 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 **Known Limitations:**
 - Only generated for systems with the `forward_proxy` role declared
 - Non-intercepting tunnel-only HTTPS proxy behavior is not yet modeled
-- Cache hit/miss status is probabilistic, not based on actual content caching logic
+- Cache hit/miss status is probabilistic, with stable web-route status generated upstream
 - Limited to HTTP and HTTPS traffic

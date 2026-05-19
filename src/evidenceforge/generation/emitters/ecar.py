@@ -29,9 +29,11 @@ from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
+from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.windows_ids import align_windows_id
 
 _ECAR_SORT_PRIORITY = {
     ("USER_SESSION", "LOGIN"): 0,
@@ -73,6 +75,23 @@ _ECAR_FAILURE_REASON_BY_WINDOWS_CODE = {
     "%%2313": "bad_password",
 }
 
+_SERVICE_PRINCIPAL_NAMES = {
+    "system",
+    "local service",
+    "network service",
+    "nt authority\\system",
+    "nt authority\\local service",
+    "nt authority\\network service",
+    "apache",
+    "mysql",
+    "nginx",
+    "postgres",
+    "postfix",
+    "squid",
+    "sshd",
+    "www-data",
+}
+
 
 def _ecar_sort_key(line: str) -> tuple[int, int, str]:
     """Extract timestamp_ms for chronological per-host eCAR output sorting."""
@@ -93,6 +112,49 @@ def _ecar_failed_logon_reason(auth: Any, os_category: str) -> str:
         return _ECAR_FAILURE_REASON_BY_SUBSTATUS[substatus]
     reason = str(getattr(auth, "failure_reason", "") or "")
     return _ECAR_FAILURE_REASON_BY_WINDOWS_CODE.get(reason, "authentication_failure")
+
+
+def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
+    """Return an OS-native session label for non-Windows eCAR sessions."""
+    if event.event_type == "ssh_session":
+        return "ssh"
+    if event.event_type == "failed_logon":
+        source_ip = str(getattr(event.auth, "source_ip", "") or "")
+        if source_ip and source_ip != "-":
+            return "remote"
+    logon_type = getattr(event.auth, "logon_type", 0)
+    if logon_type == 10:
+        return "ssh"
+    if logon_type == 5:
+        return "service"
+    if logon_type == 3:
+        return "remote"
+    if logon_type in {2, 7, 11}:
+        return "local"
+    return "session"
+
+
+def _ecar_probability_enabled(key: str, probability: float) -> bool:
+    """Return whether a stable per-record probability gate is enabled."""
+    clamped = max(0.0, min(1.0, float(probability)))
+    if clamped <= 0.0:
+        return False
+    if clamped >= 1.0:
+        return True
+    return (_stable_seed(key) % 10_000) / 10_000.0 < clamped
+
+
+def _flow_principal_probability(username: str, direction: str) -> float:
+    """Return the configured probability for FLOW principal attribution."""
+    cfg = ecar_flow_identity_config()
+    normalized = username.strip().lower()
+    if direction == "INBOUND":
+        return float(cfg.get("inbound_listener_probability", 0.36))
+    if normalized == "root":
+        return float(cfg.get("root_process_probability", 0.42))
+    if normalized in _SERVICE_PRINCIPAL_NAMES:
+        return float(cfg.get("service_process_probability", 0.48))
+    return float(cfg.get("user_process_probability", 0.88))
 
 
 class EcarEmitter(HostMultiplexEmitter):
@@ -139,6 +201,12 @@ class EcarEmitter(HostMultiplexEmitter):
         connection before it reached the endpoint, so the EDR wouldn't see it.
         """
         if event.firewall is not None and event.firewall.action == "deny":
+            return False
+        if (
+            event.event_type == "connection"
+            and event.network is not None
+            and event.network.application_layer_only
+        ):
             return False
         return event.event_type in self._supported_types
 
@@ -192,12 +260,23 @@ class EcarEmitter(HostMultiplexEmitter):
                 event_data["tid"] = event.edr.tid
 
     @staticmethod
-    def _stable_tid(hostname: str, pid: int, timestamp: datetime, salt: str) -> int:
+    def _stable_tid(
+        hostname: str,
+        pid: int,
+        timestamp: datetime,
+        salt: str,
+        os_category: str = "",
+    ) -> int:
         """Return a plausible source thread ID for process-owned eCAR events."""
         if pid <= 0:
             return -1
+        if os_category == "linux":
+            return pid
         bucket_ms = int(timestamp.timestamp() * 1000)
-        return 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
+        tid = 1000 + (_stable_seed(f"ecar_tid:{hostname}:{pid}:{bucket_ms}:{salt}") % 60000)
+        if os_category == "windows":
+            return align_windows_id(tid)
+        return tid
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
@@ -210,9 +289,12 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "src_ip": event.auth.source_ip,
             "outcome": "success",
-            "logon_type": event.auth.logon_type,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") == "windows":
+            event_data["logon_type"] = event.auth.logon_type
+        else:
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -227,6 +309,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if getattr(host, "os_category", "") != "windows":
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -250,6 +334,8 @@ class EcarEmitter(HostMultiplexEmitter):
         if getattr(host, "os_category", "") == "windows":
             event_data["status_code"] = event.auth.failure_status
             event_data["sub_status"] = event.auth.failure_substatus
+        else:
+            event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)
         self.emit_event(event_data)
 
@@ -300,7 +386,13 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), proc.pid, event_ts, "process_create"),
+            self._stable_tid(
+                self._host_name(host),
+                proc.pid,
+                event_ts,
+                "process_create",
+                getattr(host, "os_category", ""),
+            ),
         )
         self.emit_event(event_data)
 
@@ -321,7 +413,13 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), proc.pid, event.timestamp, "process_terminate"),
+            self._stable_tid(
+                self._host_name(host),
+                proc.pid,
+                event.timestamp,
+                "process_terminate",
+                getattr(host, "os_category", ""),
+            ),
         )
         self.emit_event(event_data)
 
@@ -348,7 +446,13 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "file"),
+            self._stable_tid(
+                self._host_name(host),
+                event_data["pid"],
+                event.timestamp,
+                "file",
+                getattr(host, "os_category", ""),
+            ),
         )
         self.emit_event(event_data)
 
@@ -370,7 +474,13 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "registry"),
+            self._stable_tid(
+                self._host_name(host),
+                event_data["pid"],
+                event.timestamp,
+                "registry",
+                getattr(host, "os_category", ""),
+            ),
         )
         self.emit_event(event_data)
 
@@ -398,7 +508,13 @@ class EcarEmitter(HostMultiplexEmitter):
         self._apply_edr_context(event_data, event)
         event_data.setdefault(
             "tid",
-            self._stable_tid(self._host_name(host), event_data["pid"], event.timestamp, "module"),
+            self._stable_tid(
+                self._host_name(host),
+                event_data["pid"],
+                event.timestamp,
+                "module",
+                getattr(host, "os_category", ""),
+            ),
         )
         self.emit_event(event_data)
 
@@ -449,6 +565,14 @@ class EcarEmitter(HostMultiplexEmitter):
                 "protocol": net.protocol,
                 "_host_fqdn": self._host_fqdn(event.src_host),
             }
+            principal = self._flow_principal_for_process(
+                event,
+                event.src_host,
+                source_proc,
+                "OUTBOUND",
+            )
+            if principal:
+                event_data["principal"] = principal
             self._apply_edr_context(event_data, event)
             self.emit_event(event_data)
 
@@ -490,8 +614,41 @@ class EcarEmitter(HostMultiplexEmitter):
             if not listener_observed:
                 event_data["outcome"] = "failure"
                 event_data["connection_state"] = net.conn_state
+            else:
+                inbound_proc = self._lookup_running_process(event.dst_host, inbound_pid)
+                principal = self._flow_principal_for_process(
+                    event,
+                    event.dst_host,
+                    inbound_proc,
+                    "INBOUND",
+                )
+                if principal:
+                    event_data["principal"] = principal
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    def _flow_principal_for_process(
+        self,
+        event: SecurityEvent,
+        host: HostContext | None,
+        process: Any | None,
+        direction: str,
+    ) -> str:
+        """Return a source-native mixed FLOW principal attribution value."""
+        if host is None or process is None:
+            return ""
+        username = str(getattr(process, "username", "") or "").strip()
+        if not username or username == "-":
+            return ""
+        pid = int(getattr(process, "pid", -1) or -1)
+        net = event.network
+        probability = _flow_principal_probability(username, direction)
+        key = (
+            f"ecar_flow_principal:{direction}:{host.hostname}:{pid}:"
+            f"{net.src_ip}:{net.src_port}:{net.dst_ip}:{net.dst_port}:"
+            f"{int(event.timestamp.timestamp() * 1000)}"
+        )
+        return username if _ecar_probability_enabled(key, probability) else ""
 
     def _lookup_running_process(self, host: HostContext, pid: int) -> Any | None:
         """Read a process from attached state when a connection only carries a PID."""
@@ -769,6 +926,14 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(line)
         return normalized
 
+    @staticmethod
+    def _ecar_int(value: Any, default: int = -1) -> int:
+        """Return an integer eCAR field value or a deterministic fallback."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
     @classmethod
     def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
         """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
@@ -779,50 +944,84 @@ class EcarEmitter(HostMultiplexEmitter):
             except json.JSONDecodeError:
                 records.append(None)
 
-        changed = True
-        while changed:
-            changed = False
-            create_times: dict[str, int] = {}
-            create_times_by_pid: dict[int, int] = {}
-            for record in records:
-                if (
-                    record is None
-                    or record.get("object") != "PROCESS"
-                    or record.get("action") != "CREATE"
-                ):
+        create_indexes = [
+            index
+            for index, record in enumerate(records)
+            if record is not None
+            and record.get("object") == "PROCESS"
+            and record.get("action") == "CREATE"
+        ]
+        index_by_object_id: dict[str, int] = {}
+        index_by_pid: dict[int, int] = {}
+        for index in create_indexes:
+            record = records[index]
+            if record is None:
+                continue
+            object_id = record.get("objectID")
+            if object_id:
+                index_by_object_id[str(object_id)] = index
+            pid = cls._ecar_int(record.get("pid"))
+            if pid > 0:
+                current_index = index_by_pid.get(pid)
+                if current_index is None:
+                    index_by_pid[pid] = index
                     continue
-                object_id = record.get("objectID")
-                if object_id:
-                    create_times[str(object_id)] = int(record.get("timestamp_ms", 0))
-                try:
-                    pid = int(record.get("pid", -1))
-                except (TypeError, ValueError):
-                    pid = -1
-                if pid > 0:
-                    create_times_by_pid[pid] = max(
-                        create_times_by_pid.get(pid, 0),
-                        int(record.get("timestamp_ms", 0)),
-                    )
+                current_record = records[current_index]
+                current_ms = (
+                    cls._ecar_int(current_record.get("timestamp_ms"), 0)
+                    if current_record is not None
+                    else 0
+                )
+                if cls._ecar_int(record.get("timestamp_ms"), 0) >= current_ms:
+                    index_by_pid[pid] = index
 
-            for record in records:
-                if (
-                    record is None
-                    or record.get("object") != "PROCESS"
-                    or record.get("action") != "CREATE"
-                ):
+        parent_by_index: dict[int, int] = {}
+        for index in create_indexes:
+            record = records[index]
+            if record is None:
+                continue
+            parent_index: int | None = None
+            parent_id = record.get("actorID")
+            if parent_id:
+                parent_index = index_by_object_id.get(str(parent_id))
+            if parent_index is None:
+                pid = cls._ecar_int(record.get("pid"))
+                parent_pid = cls._ecar_int(record.get("ppid"))
+                if parent_pid > 0 and parent_pid != pid:
+                    parent_index = index_by_pid.get(parent_pid)
+            if parent_index is not None and parent_index != index:
+                parent_by_index[index] = parent_index
+
+        cyclic_indexes: set[int] = set()
+        for index in parent_by_index:
+            seen: set[int] = set()
+            current = index
+            while current in parent_by_index:
+                if current in seen:
+                    cyclic_indexes.update(seen)
+                    break
+                seen.add(current)
+                current = parent_by_index[current]
+        parent_by_index = {
+            index: parent_index
+            for index, parent_index in parent_by_index.items()
+            if index not in cyclic_indexes and parent_index not in cyclic_indexes
+        }
+
+        for _ in range(len(parent_by_index)):
+            changed = False
+            for index, parent_index in parent_by_index.items():
+                record = records[index]
+                parent = records[parent_index]
+                if record is None or parent is None:
                     continue
-                parent_id = record.get("actorID")
-                parent_ms = create_times.get(str(parent_id)) if parent_id else None
-                if parent_ms is None:
-                    try:
-                        parent_pid = int(record.get("ppid", -1))
-                    except (TypeError, ValueError):
-                        parent_pid = -1
-                    parent_ms = create_times_by_pid.get(parent_pid)
-                timestamp_ms = int(record.get("timestamp_ms", 0))
-                if parent_ms is not None and timestamp_ms <= parent_ms:
+                parent_ms = cls._ecar_int(parent.get("timestamp_ms"), 0)
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                if timestamp_ms <= parent_ms:
                     record["timestamp_ms"] = parent_ms + 1
                     changed = True
+            if not changed:
+                break
 
         normalized: list[str] = []
         for line, record in zip(lines, records, strict=True):
@@ -890,6 +1089,8 @@ class EcarEmitter(HostMultiplexEmitter):
         "registry_value",
         "failure_reason",
         "outcome",
+        "logon_type",
+        "session_type",
         "session_lifecycle",
         "status_code",
         "sub_status",

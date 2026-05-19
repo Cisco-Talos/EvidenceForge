@@ -337,6 +337,18 @@ class TestPermitRecords:
         assert byte_match is not None
         assert int(byte_match.group(1)) != 5120
 
+    def test_successful_tcp_teardown_uses_fin_reason(self, asa_emitter, tmp_path):
+        """ASA teardown reason should agree with a normal Zeek SF/FIN close."""
+        event = _make_connection_event(protocol="tcp", conn_state="SF")
+
+        asa_emitter.emit(event)
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
+        teardown = next(line for line in output.splitlines() if "%ASA-6-302014:" in line)
+        assert "TCP FINs" in teardown
+        assert "TCP Reset" not in teardown
+
     def test_same_interface_permit_is_not_rendered_as_perimeter_flow(self, asa_emitter, tmp_path):
         """ASA should not mirror same-interface internal permits by default."""
         event = _make_connection_event(
@@ -434,9 +446,9 @@ class TestPermitRecords:
         output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         built_line = next(line for line in output.splitlines() if "%ASA-6-302020:" in line)
         assert "Built inbound ICMP connection" in built_line
-        assert "faddr 203.0.113.50/8" in built_line
-        assert "gaddr 172.16.0.5/0" in built_line
-        assert "laddr 172.16.0.5/0" in built_line
+        assert "faddr outside:203.0.113.50/8" in built_line
+        assert "gaddr dmz:172.16.0.5/0" in built_line
+        assert "laddr dmz:172.16.0.5/0" in built_line
 
     def test_inbound_direction_for_external_source(self, asa_emitter, tmp_path):
         """External source -> internal destination should be 'inbound'."""

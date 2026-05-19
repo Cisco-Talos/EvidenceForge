@@ -275,6 +275,11 @@ def test_world_planner_bootstraps_ssh_session(
     users: dict[str, User],
 ) -> None:
     """SSH bootstrap should create a durable session plus correlated network metadata."""
+    state_manager.register_boot_time(
+        systems["DB-01"].hostname,
+        datetime(2024, 1, 6, 10, 15, 0, tzinfo=UTC),
+    )
+
     result = planner.bootstrap_user_session(
         user=users["alice.admin"],
         target_system=systems["DB-01"],
@@ -291,6 +296,7 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.source_ip == systems["WKS-01"].ip
     assert session.source_port > 0
     assert session.transport_pid is not None
+    assert session.transport_pid > 180_000
     assert result.network_uid
 
 

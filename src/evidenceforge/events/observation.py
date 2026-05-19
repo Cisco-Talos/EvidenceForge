@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
 
-from evidenceforge.config.observation_profiles import get_observation_profile
+from evidenceforge.config.observation_profiles import (
+    get_observation_profile,
+    observation_profile_exists,
+)
 from evidenceforge.events.base import RawLogEntry, SecurityEvent
 from evidenceforge.utils.rng import _stable_seed
 
@@ -94,7 +97,7 @@ class ObservationPolicy:
     def __init__(self, profile_name: str = "complete") -> None:
         self.profile_name = profile_name or "complete"
         self.profile = get_observation_profile(self.profile_name)
-        if not self.profile:
+        if not self.profile and not observation_profile_exists(self.profile_name):
             raise ValueError(f"Unknown observation_profile: {self.profile_name}")
         self.default = self.profile.get("default", {})
         self.sources = self.profile.get("sources", {})
@@ -188,14 +191,15 @@ class ObservationPolicy:
         group = self._coherent_group_key(source, event)
         host = self._host_key_for_event(event)
         timestamp = int(event.timestamp.timestamp() * 1_000_000)
+        coherent = self._uses_coherent_source_identity(source, group)
         return "|".join(
             [
                 source,
-                format_name,
-                event.event_type,
+                source if coherent else format_name,
+                source if coherent else event.event_type,
                 host,
                 group,
-                str(timestamp),
+                "" if coherent else str(timestamp),
             ]
         )
 
@@ -211,6 +215,10 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if source == "syslog" and event.syslog and event.syslog.app_name == "sshd":
+            pid = event.syslog.pid if event.syslog.pid not in (None, "") else ""
+            if pid:
+                return f"sshd:{pid}"
         if event.network:
             uid = getattr(event.network, "uid", "") or getattr(event.network, "zeek_uid", "")
             if uid:
@@ -232,6 +240,15 @@ class ObservationPolicy:
         if event.ids:
             return f"ids:{event.ids.sid}:{event.ids.message}"
         return "event"
+
+    @staticmethod
+    def _uses_coherent_source_identity(source: str, group: str) -> bool:
+        """Return whether observation delay/drop should be shared within a source group."""
+        if source == "syslog" and group.startswith("sshd:"):
+            return True
+        if source == "zeek" and (group.startswith("uid:") or group.startswith("dns:")):
+            return True
+        return False
 
     def _host_key_for_event(self, event: SecurityEvent) -> str:
         host = event.dst_host or event.src_host

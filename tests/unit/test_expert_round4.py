@@ -10,6 +10,7 @@ from evidenceforge.generation.activity.application_catalog import (
 )
 from evidenceforge.generation.activity.bash_commands import (
     _get_user_pool,
+    _resolve_template,
     load_bash_commands,
 )
 from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
@@ -102,6 +103,50 @@ class TestPerUserToolAffinity:
         # Just verify they're both subsets of the original
         assert all(cmd in pool for cmd in pool_a)
         assert all(cmd in pool for cmd in pool_b)
+
+    def test_same_user_pool_affinity_is_role_specific(self):
+        """A user's web-admin affinity should not leak into later DB sessions."""
+        commands = load_bash_commands()
+        web_pool = commands["webadmin"]
+        db_pool = commands["dba"]
+
+        _get_user_pool("marcus.chen", web_pool)
+        db_affinity = _get_user_pool("marcus.chen", db_pool)
+
+        assert all(command in db_pool for command in db_affinity)
+        assert not any("apache2" in command or "nginx" in command for command in db_affinity)
+
+    def test_service_placeholder_prefers_host_services(self):
+        """Generic service placeholders should not pull web services onto DB hosts."""
+        command = _resolve_template(
+            "systemctl status {service}",
+            random.Random(42),
+            {"service": ["apache2", "nginx"]},
+            ["mysql", "ssh", "dns-client"],
+        )
+
+        assert command in {"systemctl status mysql", "systemctl status sshd"}
+
+    def test_service_placeholder_ignores_recursive_host_service_names(self):
+        """Scenario services containing template markers must not recurse forever."""
+        command = _resolve_template(
+            "systemctl status {service}",
+            random.Random(42),
+            {"service": ["apache2"]},
+            ["{service}", "x{service}", "mysql"],
+        )
+
+        assert command == "systemctl status mysql"
+
+    def test_template_resolution_is_bounded_for_recursive_candidates(self):
+        """Replacement values with the current token should not trigger unbounded expansion."""
+        command = _resolve_template(
+            "echo {arg}",
+            random.Random(42),
+            {"arg": ["x{arg}"]},
+        )
+
+        assert command == "echo x{arg}"
 
 
 class TestPerUserBrowserAffinity:

@@ -132,6 +132,27 @@ class TestObservationProfiles:
         emitter.emit.assert_called_once_with(event)
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"visible": 1}
 
+    def test_empty_configured_profile_uses_default_visible_policy(self, monkeypatch):
+        """An explicitly configured empty profile should not be mistaken for unknown."""
+        from evidenceforge.config import observation_profiles
+
+        monkeypatch.setattr(
+            observation_profiles,
+            "load_observation_profiles",
+            lambda: {"profiles": {"complete": {}, "empty_profile": {}}},
+        )
+
+        policy = ObservationPolicy("empty_profile")
+        event = SecurityEvent(timestamp=_make_ts(), event_type="process_create")
+
+        assert policy.profile == {}
+        assert policy.decide("windows_event_sysmon", event).status == "visible"
+
+    def test_unknown_profile_still_raises(self):
+        """Missing profile names are still rejected during policy construction."""
+        with pytest.raises(ValueError, match="Unknown observation_profile: missing_profile"):
+            ObservationPolicy("missing_profile")
+
     def test_source_missingness_drops_rendering_without_skipping_state(self, monkeypatch):
         """Non-complete profiles can drop source rows without corrupting canonical state."""
         monkeypatch.setattr(
@@ -202,6 +223,103 @@ class TestObservationProfiles:
         assert emitted_event.timestamp == event.timestamp + timedelta(milliseconds=17)
         assert event.timestamp == _make_ts()
         assert dispatcher.source_evidence_status["story-001"]["sysmon"] == {"delayed": 1}
+
+    def test_zeek_observation_delay_is_coherent_per_uid(self, monkeypatch):
+        """Zeek protocol rows for one UID should share source collection delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "zeek": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        sm = MagicMock(spec=StateManager)
+        conn = _make_mock_emitter("zeek_conn", handles=True)
+        http = _make_mock_emitter("zeek_http", handles=True)
+        dispatcher = EventDispatcher(
+            state_manager=sm,
+            emitters={"zeek_conn": conn, "zeek_http": http},
+            observation_policy=ObservationPolicy("zeek_delay_test"),
+        )
+
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.1.10",
+                src_port=51111,
+                dst_ip="10.0.2.20",
+                dst_port=443,
+                protocol="tcp",
+                zeek_uid="CUID123456789",
+            ),
+        )
+        dispatcher.dispatch(event)
+
+        conn_event = conn.emit.call_args.args[0]
+        http_event = http.emit.call_args.args[0]
+        assert conn_event.timestamp == http_event.timestamp
+        assert conn_event.timestamp > event.timestamp
+
+    def test_syslog_ssh_lifecycle_delay_preserves_session_order(self, monkeypatch):
+        """SSH lifecycle syslog rows with one sshd PID should share collection delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "syslog": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("syslog_delay_test")
+        host = HostContext(
+            hostname="APP-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        connection = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="syslog",
+            src_host=host,
+            syslog=SyslogContext(
+                app_name="sshd",
+                pid=5158,
+                message='Connection from 10.0.1.10 port 52713 on 10.0.3.10 port 22 rdomain ""',
+            ),
+        )
+        accepted = SecurityEvent(
+            timestamp=_make_ts() + timedelta(milliseconds=120),
+            event_type="ssh_session",
+            dst_host=host,
+            syslog=SyslogContext(
+                app_name="sshd",
+                pid=5158,
+                message="Accepted publickey for admin from 10.0.1.10 port 52713 ssh2",
+            ),
+        )
+
+        delay = policy.decide("syslog", connection).delay
+        assert delay == policy.decide("syslog", accepted).delay
+        assert connection.timestamp + delay < accepted.timestamp + delay
 
     def test_network_visibility_records_filtered_source_status(self):
         """Network visibility filtering is reflected in source evidence status."""
@@ -691,6 +809,66 @@ class TestCanHandleDefault:
         assert new_sessions == sorted(new_sessions)
         assert removed_session == new_sessions[0]
 
+    def test_syslog_normalizes_kernel_uptime_in_rendered_order(self, tmp_path):
+        """Kernel bracket uptime should not regress after final syslog sorting."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        for timestamp, uptime in [
+            (datetime(2024, 3, 18, 15, 1, 43, 449789, tzinfo=UTC), "2343703.417789"),
+            (datetime(2024, 3, 18, 15, 1, 43, 466984, tzinfo=UTC), "2343703.353984"),
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "kernel",
+                    "pid": None,
+                    "facility": 0,
+                    "severity": 5,
+                    "message": f"[{uptime}] [UFW BLOCK] IN=ens160 OUT= SRC=10.0.0.1",
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert "[2343703.417789]" in lines[0]
+        assert "[2343703.417790]" in lines[1]
+
+    def test_syslog_ignores_oversized_raw_logind_session_ids_on_close(self, tmp_path):
+        """Oversized raw logind session IDs should not crash close-time normalization."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        oversized_session = "1" * 5000
+        emitter.emit_raw(
+            {
+                "timestamp": datetime(2024, 3, 18, 12, 4, 40, tzinfo=UTC),
+                "hostname": "linux01",
+                "app_name": "systemd-logind",
+                "pid": 22523,
+                "facility": 10,
+                "severity": 6,
+                "message": f"New session {oversized_session} of user root.",
+            }
+        )
+
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert f"New session {oversized_session} of user root." in lines[0]
+
     def test_syslog_rewrites_prewindow_logind_removals_below_visible_news(self, tmp_path):
         """Pre-window removes should not reuse a later visible New-session ID."""
         from datetime import UTC, datetime
@@ -736,6 +914,54 @@ class TestCanHandleDefault:
 
         assert first_removed < new_session
         assert later_removed == new_session
+
+    def test_syslog_rewrites_duplicate_prewindow_logind_removals_uniquely(self, tmp_path):
+        """Removed-only logind rows should not collapse to one duplicate session ID."""
+        from datetime import UTC, datetime
+
+        from evidenceforge.formats import load_format
+        from evidenceforge.generation.emitters.syslog import SyslogEmitter
+
+        format_def = load_format("syslog")
+        output_path = tmp_path / "syslog.log"
+        emitter = SyslogEmitter(format_def, output_path, buffer_size=10)
+        for timestamp, message in [
+            (
+                datetime(2024, 3, 18, 12, 1, 55, tzinfo=UTC),
+                "Removed session 12940.",
+            ),
+            (
+                datetime(2024, 3, 18, 12, 9, 11, tzinfo=UTC),
+                "Removed session 12940.",
+            ),
+            (
+                datetime(2024, 3, 18, 12, 18, 13, tzinfo=UTC),
+                "New session 12945 of user root.",
+            ),
+        ]:
+            emitter.emit_raw(
+                {
+                    "timestamp": timestamp,
+                    "hostname": "linux01",
+                    "app_name": "systemd-logind",
+                    "pid": 24094,
+                    "facility": 10,
+                    "severity": 6,
+                    "message": message,
+                }
+            )
+        emitter.close()
+
+        lines = output_path.read_text(encoding="utf-8").splitlines()
+        removed_sessions = [
+            int(line.split("Removed session ", 1)[1].rstrip("."))
+            for line in lines
+            if "Removed session" in line
+        ]
+        new_session = int(lines[-1].split("New session ", 1)[1].split(" ", 1)[0])
+
+        assert len(removed_sessions) == len(set(removed_sessions))
+        assert all(session < new_session for session in removed_sessions)
 
     def test_syslog_sorts_same_second_ssh_lifecycle(self, tmp_path):
         """Same-second SSH syslog groups should keep lifecycle order."""

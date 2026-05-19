@@ -38,11 +38,17 @@ import random
 import re
 import shlex
 import uuid
+from collections.abc import Iterator, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
+from evidenceforge.generation.activity.generator import (
+    _ssh_syslog_time,
+    _zeek_conn_observation_time,
+)
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     is_stable_resource_path,
@@ -57,12 +63,67 @@ from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
 
+_MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
+_IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
 
 def _is_exfil_connection_spec(spec: Any) -> bool:
     """Return True when a storyline connection describes exfiltration."""
     desc = (spec.description or "").lower()
     tech = (spec.technique or "").lower()
     return "exfil" in desc or "t1041" in tech or "t1048" in tech
+
+
+def _is_c2_http_request(
+    *,
+    description: str | None,
+    technique: str | None,
+    uri: str | None,
+    activity: str | None = None,
+) -> bool:
+    """Return True when a storyline HTTP request should look like C2/tasking."""
+    uri_l = (uri or "").lower()
+    text = f"{description or ''} {technique or ''} {activity or ''} {uri_l}".lower()
+    text_markers = (
+        "c2",
+        "beacon",
+        "callback",
+        "checkin",
+        "tasking",
+        "command and control",
+        "t1041",
+        "t1071",
+    )
+    path_markers = (
+        "/v2/",
+        "/callback",
+        "/checkin",
+        "/beacon",
+        "/task",
+        "/cmd",
+        "/gate",
+    )
+    return any(marker in text for marker in text_markers) or any(
+        marker in uri_l for marker in path_markers
+    )
+
+
+def _c2_http_response_size(rng: random.Random, *, method: str, uri: str) -> int:
+    """Return varied source-native response body sizes for C2-like HTTP requests."""
+    method_u = method.upper()
+    uri_l = uri.lower()
+    if method_u == "POST":
+        return rng.randint(160, 2600)
+    if any(marker in uri_l for marker in ("/status", "/check", "/heartbeat", "/ping")):
+        band = rng.choices(["ack", "config", "task"], weights=[55, 34, 11], k=1)[0]
+        if band == "ack":
+            return rng.randint(90, 1800)
+        if band == "config":
+            return rng.randint(2400, 14500)
+        return rng.randint(18_000, 86_000)
+    if any(marker in uri_l for marker in ("/client", "/stage", "/update", "/loader")):
+        return rng.randint(8_000, 94_000)
+    return rng.randint(220, 11_000)
 
 
 def _is_round_transfer_size(value: int) -> bool:
@@ -196,13 +257,14 @@ def _iter_dns_tunnel_ticks(
     for tick_index, tick_time in enumerate(
         _iter_periodic_ticks(start_time, interval_sec, duration_sec, count, jitter, rng)
     ):
-        if tick_index > 0 and rng.random() < 0.025:
-            pause_offset += rng.uniform(interval_sec * 3.0, interval_sec * 18.0)
-        if tick_index > 0 and rng.random() < 0.035:
+        if tick_index > 0 and rng.random() < 0.045:
+            pause_offset += rng.uniform(interval_sec * 4.0, interval_sec * 26.0)
+        if tick_index > 0 and rng.random() < 0.055:
             continue
-        paced_time = tick_time + timedelta(
-            seconds=pause_offset + rng.expovariate(1.0 / max(interval_sec * 0.18, 0.001))
-        )
+        local_spacing = rng.expovariate(1.0 / max(interval_sec * 0.55, 0.001))
+        if tick_index > 0 and rng.random() < 0.11:
+            local_spacing += rng.uniform(interval_sec * 1.4, interval_sec * 6.5)
+        paced_time = tick_time + timedelta(seconds=pause_offset + local_spacing)
         if end_time is not None and paced_time > end_time:
             break
         yield paced_time
@@ -375,6 +437,44 @@ def _scan_target_exposes_port(
     return False
 
 
+def _iter_shuffled_port_scan_pairs(
+    targets: Sequence[str],
+    ports: Sequence[int],
+    rng: random.Random,
+) -> Iterator[tuple[str, int]]:
+    """Yield each target/port probe once in deterministic pseudo-shuffled order.
+
+    Port-scan scenarios can legitimately describe thousands of targets and
+    thousands of ports. Building and shuffling the full Cartesian product would
+    allocate one tuple per probe up front, so this uses an affine permutation of
+    the flattened index space instead. Memory stays proportional to the already
+    resolved target and port lists while preserving a randomized probe order.
+    """
+    target_count = len(targets)
+    port_count = len(ports)
+    total_pairs = target_count * port_count
+    if total_pairs == 0:
+        return
+
+    offset = rng.randrange(total_pairs)
+    step = 1
+    if total_pairs > 1:
+        step = rng.randrange(1, total_pairs)
+        if math.gcd(step, total_pairs) != 1:
+            for delta in range(1, 1025):
+                candidate = (step + delta) % total_pairs or 1
+                if math.gcd(candidate, total_pairs) == 1:
+                    step = candidate
+                    break
+            else:
+                step = 1
+
+    for sequence_index in range(total_pairs):
+        probe_index = (offset + sequence_index * step) % total_pairs
+        target_index, port_index = divmod(probe_index, port_count)
+        yield targets[target_index], ports[port_index]
+
+
 def _port_scan_connection_profile(
     rng,
     *,
@@ -430,17 +530,122 @@ def _observed_web_scan_status(path_entry: dict[str, Any], rng) -> int:
     return status
 
 
+def _web_scan_uri_with_runtime_variation(uri: str, request_count: int, rng) -> str:
+    """Return scanner URI with sparse per-request query noise."""
+    if "?" in uri or rng.random() >= 0.24:
+        return uri
+    separator = "&" if "?" in uri else "?"
+    if rng.random() < 0.34:
+        param = rng.choice(("v", "_", "cache", "rnd"))
+        value = rng.randbytes(rng.randint(2, 5)).hex()
+    elif rng.random() < 0.68:
+        param = rng.choice(("id", "page", "item", "debug"))
+        value = str((request_count * rng.randint(3, 17) + rng.randint(1, 2009)) % 10000)
+    else:
+        param = rng.choice(("return", "next", "url"))
+        value = rng.choice(("%2F", "%2Flogin", "%2Fadmin", "%2Findex.php"))
+    return f"{uri}{separator}{param}={value}"
+
+
 def _dns_tunnel_extra_labels(query_count: int, rng) -> list[str]:
     """Return optional DNS tunnel labels that make query grammar less uniform."""
     roll = rng.random()
-    if roll < 0.55:
+    if roll < 0.34:
         return []
-    edge = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x'))}{rng.randint(1, 99)}"
-    if roll < 0.74:
+    edge = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x', 'u'))}{rng.randint(1, 99)}"
+    region = rng.choice(("iad", "ord", "dfw", "sjc", "lax", "atl", "ewr"))
+    if roll < 0.54:
         return [edge]
-    if roll < 0.9:
-        return [f"s{query_count & 0xFFFF:x}"]
-    return [edge, f"r{rng.randint(1, 12)}"]
+    if roll < 0.72:
+        return [rng.choice(("cdn", "api", "img", "edge", "r", region)), edge]
+    if roll < 0.86:
+        return [f"s{query_count & 0xFFFF:x}", rng.choice(("a", "b", "r", region))]
+    if roll < 0.95:
+        return [edge, f"r{rng.randint(1, 12)}", rng.choice(("cdn", "cache", "svc", region))]
+    return [
+        rng.choice(("api", "cdn", "assets", "edge")),
+        region,
+        f"n{rng.randint(1, 7)}",
+    ]
+
+
+def _dns_tunnel_background_txt_record(rng: random.Random) -> tuple[str, str, int]:
+    """Return a benign TXT query/answer that can collide with tunnel-era DNS."""
+    domain = rng.choice(
+        (
+            "meridianhcs.com",
+            "microsoft.com",
+            "github.com",
+            "sendgrid.net",
+            "okta.com",
+            "duo.com",
+            "zoom.us",
+            "atlassian.net",
+        )
+    )
+    selector = rng.choice(("selector1", "selector2", "s1", "mail", "k1", "mta"))
+    style = rng.choices(("spf", "dkim", "dmarc", "verify"), weights=[38, 32, 20, 10], k=1)[0]
+    if style == "spf":
+        domain_spf: dict[str, tuple[str, ...]] = {
+            "duo.com": (
+                "v=spf1 include:spf.protection.outlook.com include:_spf.salesforce.com -all",
+                "v=spf1 include:_spf.duosecurity.com include:sendgrid.net ~all",
+            ),
+            "github.com": (
+                "v=spf1 include:_spf.google.com include:spf.protection.outlook.com ~all",
+                "v=spf1 include:servers.mcsv.net include:mail.zendesk.com ~all",
+            ),
+            "meridianhcs.com": (
+                "v=spf1 include:spf.protection.outlook.com include:sendgrid.net -all",
+                "v=spf1 include:amazonses.com include:mailgun.org ~all",
+            ),
+            "microsoft.com": (
+                "v=spf1 include:spf.protection.outlook.com -all",
+                "v=spf1 include:_spf-a.microsoft.com include:_spf-b.microsoft.com -all",
+            ),
+            "okta.com": (
+                "v=spf1 include:spf.protection.outlook.com include:sendgrid.net -all",
+                "v=spf1 include:_spf.salesforce.com include:amazonses.com ~all",
+            ),
+            "sendgrid.net": (
+                "v=spf1 include:sendgrid.net -all",
+                "v=spf1 include:_spf.google.com include:spf.protection.outlook.com ~all",
+            ),
+            "zoom.us": (
+                "v=spf1 include:spf.protection.outlook.com include:amazonses.com ~all",
+                "v=spf1 include:_spf.google.com include:sendgrid.net ~all",
+            ),
+        }
+        answer = rng.choice(
+            domain_spf.get(
+                domain,
+                (
+                    "v=spf1 include:spf.protection.outlook.com -all",
+                    "v=spf1 include:sendgrid.net include:_spf.google.com ~all",
+                ),
+            )
+        )
+        return domain, answer, rng.choice((300, 600, 1800, 3600))
+    if style == "dkim":
+        token = rng.randbytes(rng.randint(9, 18)).hex()
+        return (
+            f"{selector}._domainkey.{domain}",
+            f"v=DKIM1; k=rsa; p={token}",
+            rng.choice((300, 600, 900, 1800)),
+        )
+    if style == "dmarc":
+        policy = rng.choice(("none", "quarantine", "reject"))
+        return (
+            f"_dmarc.{domain}",
+            f"v=DMARC1; p={policy}; rua=mailto:dmarc@{domain}",
+            rng.choice((300, 600, 1800)),
+        )
+    token = rng.randbytes(8).hex()
+    return (
+        f"_verify.{domain}",
+        f"verification={token}",
+        rng.choice((60, 300, 600)),
+    )
 
 
 def _web_scan_path_allows_referrer(path_entry: dict[str, Any]) -> bool:
@@ -690,6 +895,36 @@ def _extract_schtasks_option(command_line: str, option: str) -> str:
     return (match.group("quoted") or match.group("bare") or "").strip()
 
 
+def _extract_sc_create_service_start_type(command_line: str) -> tuple[str, str] | None:
+    """Extract service name and native start type from an sc.exe create command."""
+    if not command_line:
+        return None
+    match = re.search(
+        r'\bsc(?:\.exe)?\s+create\s+(\S+)\s+binpath=\s*"?([^"]+)"?',
+        command_line,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        return None
+    service_name = match.group(1)
+    service_start_type = "3"
+    start_match = re.search(
+        r"\bstart=\s*(delayed-auto|auto|demand|disabled|boot|system)\b",
+        command_line,
+        flags=re.IGNORECASE,
+    )
+    if start_match is not None:
+        service_start_type = {
+            "boot": "0",
+            "system": "1",
+            "auto": "2",
+            "delayed-auto": "2",
+            "demand": "3",
+            "disabled": "4",
+        }[start_match.group(1).lower()]
+    return service_name, service_start_type
+
+
 class StorylineMixin:
     """Mixin providing storyline event scheduling and execution methods."""
 
@@ -728,6 +963,97 @@ class StorylineMixin:
         }
 
     @staticmethod
+    def _normalize_storyline_service_file_name(service_file_name: str) -> str:
+        """Return a Windows service image path in source-native expanded form."""
+        image = service_file_name.strip().strip('"')
+        replacements = {
+            "%SystemRoot%": r"C:\Windows",
+            "%systemroot%": r"C:\Windows",
+            r"\SystemRoot": r"C:\Windows",
+        }
+        for marker, replacement in replacements.items():
+            if image.startswith(marker):
+                image = replacement + image[len(marker) :]
+                break
+        return image.replace("/", "\\")
+
+    @staticmethod
+    def _service_account_user(service_account: str) -> User | None:
+        """Return a User model for service identities that can own process telemetry."""
+        normalized = service_account.strip().replace("/", "\\")
+        account_key = normalized.upper()
+        if account_key in {"LOCALSYSTEM", "LOCAL SYSTEM", "NT AUTHORITY\\SYSTEM", "SYSTEM"}:
+            return User(
+                username="SYSTEM",
+                full_name="Local System",
+                email="system@example.local",
+            )
+        return None
+
+    def _storyline_service_context_for_process(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        process_name: str,
+    ) -> tuple[User, str, int] | None:
+        """Return service identity/logon/parent PID for recent service-backed commands."""
+        if _get_os_category(system.os) != "windows":
+            return None
+        services = getattr(self, "_last_storyline_service_by_system", {})
+        service = services.get(system.hostname)
+        if not service:
+            return None
+
+        installed_at = service.get("installed_at")
+        if isinstance(installed_at, datetime):
+            if time < installed_at or time - installed_at > timedelta(minutes=30):
+                return None
+
+        service_file_name = str(service.get("service_file_name") or "")
+        if not service_file_name:
+            return None
+        service_image = self._normalize_storyline_service_file_name(service_file_name)
+        service_exe = service_image.rsplit("\\", 1)[-1].lower()
+        if service_exe not in {"psexesvc.exe", "healthmonitorsvc.exe"}:
+            return None
+
+        process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if process_exe == service_exe:
+            return None
+        service_child_exes = {
+            "cmd.exe",
+            "powershell.exe",
+            "pwsh.exe",
+            "net.exe",
+            "net1.exe",
+            "whoami.exe",
+            "hostname.exe",
+            "ipconfig.exe",
+            "nltest.exe",
+            "klist.exe",
+            "sc.exe",
+            "wevtutil.exe",
+            "wmic.exe",
+            "certutil.exe",
+        }
+        if process_exe not in service_child_exes:
+            return None
+
+        service_user = self._service_account_user(str(service.get("service_account") or ""))
+        if service_user is None:
+            return None
+
+        service_pid, _service_image = self._ensure_storyline_service_process_for_beacon(
+            actor=service_user,
+            system=system,
+            time=time,
+        )
+        if service_pid <= 0:
+            return None
+        return service_user, "0x3e7", service_pid
+
+    @staticmethod
     def _scheduled_task_lookup_key(system: System, task_name: str) -> tuple[str, str]:
         """Return a normalized host/task key for correlating schtasks with 4698."""
         normalized_task = task_name.strip().strip('"').replace("/", "\\")
@@ -759,6 +1085,36 @@ class StorylineMixin:
         commands = getattr(self, "_storyline_scheduled_task_commands", {})
         return commands.get(self._scheduled_task_lookup_key(system, task_name), "")
 
+    @staticmethod
+    def _service_lookup_key(system: System, service_name: str) -> tuple[str, str]:
+        """Return a normalized lookup key for host-local service metadata."""
+        return (system.hostname.lower(), service_name.lower())
+
+    def _record_storyline_service_create_command(
+        self,
+        system: System,
+        command_line: str,
+    ) -> None:
+        """Remember an sc.exe create command so the later 4697 fields match it."""
+        parsed = _extract_sc_create_service_start_type(command_line)
+        if parsed is None:
+            return
+        service_name, service_start_type = parsed
+        if not hasattr(self, "_storyline_service_start_types"):
+            self._storyline_service_start_types: dict[tuple[str, str], str] = {}
+        self._storyline_service_start_types[self._service_lookup_key(system, service_name)] = (
+            service_start_type
+        )
+
+    def _recent_storyline_service_start_type(
+        self,
+        system: System,
+        service_name: str,
+    ) -> str:
+        """Return a service start type inferred from a preceding sc.exe command."""
+        start_types = getattr(self, "_storyline_service_start_types", {})
+        return start_types.get(self._service_lookup_key(system, service_name), "3")
+
     def _ensure_storyline_service_process_for_beacon(
         self,
         actor: User,
@@ -775,6 +1131,7 @@ class StorylineMixin:
         service_file_name = str(service.get("service_file_name") or "")
         if not service_file_name:
             return -1, None
+        service_file_name = self._normalize_storyline_service_file_name(service_file_name)
 
         image_lower = service_file_name.lower()
         running = [
@@ -814,11 +1171,28 @@ class StorylineMixin:
         self._record_last_storyline_process(system, pid, service_file_name)
         return pid, service_file_name
 
-    def _record_storyline_logon(self, actor: User, system: System, logon_id: str) -> None:
+    def _record_storyline_logon(
+        self,
+        actor: User,
+        system: System,
+        logon_id: str,
+        source_ip: str | None = None,
+    ) -> None:
         """Record the latest storyline-created session by actor and target host."""
         if not hasattr(self, "_last_storyline_logon_by_actor_system"):
             self._last_storyline_logon_by_actor_system: dict[tuple[str, str], str] = {}
         self._last_storyline_logon_by_actor_system[(actor.username, system.hostname)] = logon_id
+        if source_ip is None and hasattr(self, "state_manager"):
+            get_session = getattr(self.state_manager, "get_session", None)
+            if callable(get_session):
+                session = get_session(logon_id)
+                source_ip = getattr(session, "source_ip", "") if session is not None else None
+        if source_ip:
+            if not hasattr(self, "_last_storyline_logon_source_by_actor_system"):
+                self._last_storyline_logon_source_by_actor_system: dict[tuple[str, str], str] = {}
+            self._last_storyline_logon_source_by_actor_system[(actor.username, system.hostname)] = (
+                source_ip
+            )
 
     def _last_storyline_logon_for_actor_system(
         self,
@@ -834,6 +1208,187 @@ class StorylineMixin:
         if session is None or session.system != system.hostname:
             return None
         return logon_id
+
+    def _last_storyline_logon_source_for_actor_system(
+        self,
+        actor: User,
+        system: System,
+    ) -> str | None:
+        """Return the latest storyline network-logon source for this actor/host."""
+        if self._last_storyline_logon_for_actor_system(actor, system) is None:
+            return None
+        sources = getattr(self, "_last_storyline_logon_source_by_actor_system", {})
+        return sources.get((actor.username, system.hostname))
+
+    @staticmethod
+    def _extract_compress_archive_destination(command_line: str) -> str | None:
+        """Extract a PowerShell Compress-Archive destination path."""
+        if "compress-archive" not in command_line.lower():
+            return None
+        match = re.search(
+            r"-DestinationPath\s+(?:\"([^\"]+)\"|'([^']+)'|([^\s;]+))",
+            command_line,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        destination = next(group for group in match.groups() if group)
+        destination = destination.strip().strip("\"'").rstrip(");,")
+        return destination or None
+
+    @staticmethod
+    def _smb_filename_for_staged_archive(system: System, archive_path: str) -> str:
+        """Return a Zeek files.log filename for a staged archive read over SMB."""
+        if archive_path.startswith("\\\\"):
+            return archive_path
+        drive_match = re.match(r"^([A-Za-z]):[\\/](.+)$", archive_path)
+        if drive_match:
+            drive = drive_match.group(1).upper()
+            rest = drive_match.group(2).replace("/", "\\")
+            return f"\\\\{system.hostname}\\{drive}$\\{rest}"
+        normalized = archive_path.replace("/", "\\")
+        normalized = normalized.lstrip("\\")
+        return f"\\\\{system.hostname}\\{normalized}"
+
+    def _record_storyline_staged_archive(
+        self,
+        *,
+        actor: User,
+        system: System,
+        archive_path: str,
+        source_ip: str,
+        staged_at: datetime,
+    ) -> None:
+        """Remember an archive staged on a server by a remote source host."""
+        if not source_ip or not archive_path:
+            return
+        if not hasattr(self, "_storyline_staged_archives"):
+            self._storyline_staged_archives: list[SimpleNamespace] = []
+        self._storyline_staged_archives.append(
+            SimpleNamespace(
+                actor=actor,
+                staging_host=system.hostname,
+                staging_ip=system.ip,
+                source_ip=source_ip,
+                archive_path=archive_path,
+                smb_filename=self._smb_filename_for_staged_archive(system, archive_path),
+                staged_at=staged_at,
+                consumed=False,
+            )
+        )
+
+    def _matching_storyline_staged_archive_for_exfil(
+        self,
+        *,
+        source_ip: str,
+        exfil_time: datetime,
+    ) -> SimpleNamespace | None:
+        """Find the most recent unconsumed staged archive for this exfil source."""
+        archives = getattr(self, "_storyline_staged_archives", [])
+        horizon = timedelta(hours=6)
+        candidates = [
+            archive
+            for archive in archives
+            if not archive.consumed
+            and archive.source_ip == source_ip
+            and archive.staged_at <= exfil_time
+            and exfil_time - archive.staged_at <= horizon
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda archive: archive.staged_at)
+
+    def _emit_storyline_archive_transfer_before_exfil(
+        self,
+        *,
+        source_ip: str,
+        exfil_time: datetime,
+        upload_bytes: int,
+        rng: random.Random,
+    ) -> None:
+        """Emit the SMB read that moves a staged archive to the upload host."""
+        if upload_bytes < 1_000_000:
+            return
+        archive = self._matching_storyline_staged_archive_for_exfil(
+            source_ip=source_ip,
+            exfil_time=exfil_time,
+        )
+        if archive is None:
+            return
+        target_system = self._system_for_ip(archive.staging_ip)
+        if target_system is None:
+            return
+        source_system = self._system_for_ip(source_ip)
+        transfer_bytes = max(
+            32_768,
+            upload_bytes - rng.randint(4096, max(4096, min(upload_bytes // 180, 2_000_000))),
+        )
+        throughput = rng.uniform(18_000_000, 85_000_000)
+        duration = max(3.0, min(180.0, transfer_bytes / throughput + rng.uniform(0.5, 6.0)))
+        gap_seconds = rng.uniform(20.0, 180.0)
+        transfer_time = exfil_time - timedelta(seconds=duration + gap_seconds)
+        earliest = archive.staged_at + timedelta(seconds=rng.uniform(20.0, 180.0))
+        if transfer_time < earliest:
+            latest = exfil_time - timedelta(seconds=duration + 5.0)
+            if latest <= earliest:
+                return
+            span = (latest - earliest).total_seconds()
+            transfer_time = earliest + timedelta(seconds=rng.uniform(0.0, span))
+
+        from evidenceforge.events.contexts import FileTransferContext
+        from evidenceforge.generation.activity.generator import _file_transfer_hashes
+        from evidenceforge.utils.ids import generate_zeek_uid
+
+        analyzers = ["MD5", "SHA1"]
+        fuid = generate_zeek_uid("F")
+        hashes = _file_transfer_hashes(
+            f"smb:{archive.source_ip}:{archive.staging_ip}:{archive.archive_path}:{transfer_bytes}",
+            analyzers,
+        )
+        self.activity_generator.generate_connection(
+            src_ip=archive.source_ip,
+            dst_ip=archive.staging_ip,
+            time=transfer_time,
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=duration,
+            orig_bytes=rng.randint(35_000, 180_000),
+            resp_bytes=transfer_bytes,
+            conn_state="SF",
+            emit_dns=False,
+            source_system=source_system,
+            file_transfer=FileTransferContext(
+                fuid=fuid,
+                source="SMB",
+                depth=0,
+                filename=archive.smb_filename,
+                analyzers=analyzers,
+                mime_type="application/zip",
+                duration=max(0.0, duration * rng.uniform(0.72, 0.98)),
+                local_orig=True,
+                is_orig=False,
+                seen_bytes=transfer_bytes,
+                total_bytes=transfer_bytes,
+                missing_bytes=0,
+                overflow_bytes=0,
+                timedout=False,
+                **hashes,
+            ),
+        )
+        if (
+            target_system.roles
+            and "file_server" in [role.lower() for role in target_system.roles]
+            and hasattr(self, "_emit_smb_logon_pair")
+        ):
+            self._emit_smb_logon_pair(
+                archive.actor,
+                target_system,
+                archive.source_ip,
+                transfer_time,
+                rng,
+            )
+        archive.consumed = True
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
         """Return the last live storyline process for the same source host."""
@@ -1194,7 +1749,7 @@ class StorylineMixin:
                 session.storyline_protected = True
             malicious_event["logon_id"] = logon_id
             malicious_event["source_ip"] = source_ip
-            self._record_storyline_logon(actor, system, logon_id)
+            self._record_storyline_logon(actor, system, logon_id, source_ip=source_ip)
 
         elif spec.type == "failed_logon":
             _attacker_ips = ["45.33.32.156", "185.220.101.34", "91.219.236.174"]
@@ -1300,13 +1855,15 @@ class StorylineMixin:
                     time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
             if os_category == "linux":
-                self.activity_generator.generate_bash_command(
+                scheduled_bash_time = self.activity_generator.generate_bash_command(
                     actor,
                     system,
                     time,
                     command_line,
                     emit_process_telemetry=False,
                 )
+                if isinstance(scheduled_bash_time, datetime):
+                    time = scheduled_bash_time
 
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(
@@ -1329,19 +1886,30 @@ class StorylineMixin:
                         process_command_line = inferred_command_line
 
             output_file = self._extract_output_file(command_line, os_category)
-            parent_pid = self.activity_generator._resolve_parent(
-                system, actor, time, logon_id, process_name
+            process_actor = actor
+            process_logon_id = logon_id
+            service_context = self._storyline_service_context_for_process(
+                actor=actor,
+                system=system,
+                time=time,
+                process_name=process_name,
             )
+            if service_context is not None:
+                process_actor, process_logon_id, parent_pid = service_context
+            else:
+                parent_pid = self.activity_generator._resolve_parent(
+                    system, actor, time, logon_id, process_name
+                )
             exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
             service_backed_process = "service_installed" in explicit_types and exe_name in {
                 "psexesvc.exe",
                 "healthmonitorsvc.exe",
             }
             pid = self.activity_generator.generate_process(
-                user=actor,
+                user=process_actor,
                 system=system,
                 time=time,
-                logon_id=logon_id,
+                logon_id=process_logon_id,
                 process_name=process_name,
                 command_line=process_command_line,
                 parent_pid=parent_pid,
@@ -1349,18 +1917,38 @@ class StorylineMixin:
                 from_storyline=True,
                 suppress_command_file_effect=output_file is not None,
             )
-            self.activity_generator._record_user_process(system, actor, pid, process_name)
+            self.activity_generator._record_user_process(system, process_actor, pid, process_name)
             self._record_last_storyline_process(system, pid, process_name)
             malicious_event["process_name"] = process_name
             malicious_event["command_line"] = command_line
             malicious_event["pid"] = pid
+            archive_destination = self._extract_compress_archive_destination(command_line)
+            if archive_destination:
+                staging_source_ip = self._last_storyline_logon_source_for_actor_system(
+                    actor,
+                    system,
+                )
+                if staging_source_ip and staging_source_ip != system.ip:
+                    self._record_storyline_staged_archive(
+                        actor=process_actor,
+                        system=system,
+                        archive_path=archive_destination,
+                        source_ip=staging_source_ip,
+                        staged_at=time,
+                    )
+                    malicious_event["staged_archive"] = archive_destination
             task_name = _extract_schtasks_option(command_line, "tn")
             if task_name and "/create" in command_line.lower():
                 self._record_storyline_scheduled_task_command(system, task_name, command_line)
+            self._record_storyline_service_create_command(system, command_line)
 
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
-                    home = "/root" if actor.username == "root" else f"/home/{actor.username}"
+                    home = (
+                        "/root"
+                        if process_actor.username == "root"
+                        else f"/home/{process_actor.username}"
+                    )
                     output_file = f"{home}/{output_file[2:]}"
                 file_time = time + timedelta(seconds=rng.uniform(0.5, 3.0))
                 from evidenceforge.events.base import SecurityEvent
@@ -1379,14 +1967,14 @@ class StorylineMixin:
                         timestamp=file_time,
                         event_type="file_create",
                         src_host=host_ctx,
-                        auth=AuthContext(username=actor.username),
+                        auth=AuthContext(username=process_actor.username),
                         process=ProcessContext(
                             pid=pid,
                             parent_pid=parent_pid,
                             image=process_name,
                             command_line=process_command_line,
-                            username=actor.username,
-                            logon_id=logon_id,
+                            username=process_actor.username,
+                            logon_id=process_logon_id,
                             start_time=running_proc.start_time
                             if running_proc is not None
                             else None,
@@ -1501,11 +2089,11 @@ class StorylineMixin:
                         self._emit_scp_receiver_artifacts(
                             source_system=system,
                             target_system=target_system,
-                            actor=actor,
+                            actor=process_actor,
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
-                            target_user=scp_destination[2] or actor.username,
+                            target_user=scp_destination[2] or process_actor.username,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
                             source_port=source_port,
@@ -1526,10 +2114,10 @@ class StorylineMixin:
             if uses_explicit_creds and os_category == "windows":
                 cred_time = time - timedelta(milliseconds=rng.randint(5, 50))
                 self.activity_generator.generate_explicit_credentials(
-                    user=actor,
+                    user=process_actor,
                     system=system,
                     time=cred_time,
-                    target_username=actor.username,
+                    target_username=process_actor.username,
                     target_server="localhost",
                     process_name=process_name,
                     process_pid=pid,
@@ -1539,11 +2127,11 @@ class StorylineMixin:
                 self.activity_generator._expand_and_emit(
                     "process_create",
                     time,
-                    actor=actor,
+                    actor=process_actor,
                     target_system=system,
                     command_line=command_line,
                     os_category=os_category,
-                    logon_id=logon_id,
+                    logon_id=process_logon_id,
                     skip_types=explicit_types,
                 )
 
@@ -1554,12 +2142,12 @@ class StorylineMixin:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)
                 self._queue_story_process_termination(
-                    actor=actor,
+                    actor=process_actor,
                     system=system,
                     time=term_time,
                     pid=pid,
                     process_name=process_name,
-                    logon_id=logon_id,
+                    logon_id=process_logon_id,
                 )
                 if os_category == "linux":
                     self._storyline_shell_available_at[shell_key] = term_time
@@ -1592,20 +2180,11 @@ class StorylineMixin:
                 _uri_raw = spec.uri or "/"
                 _uri = _uri_raw.lower()
                 _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
-                _desc = f"{spec.description or ''} {spec.technique or ''} {_uri}".lower()
-                _is_c2_http = any(
-                    marker in _desc
-                    for marker in (
-                        "c2",
-                        "beacon",
-                        "callback",
-                        "checkin",
-                        "tasking",
-                        "exfil",
-                        "upload",
-                        "t1041",
-                        "t1071",
-                    )
+                _is_c2_http = _is_c2_http_request(
+                    description=spec.description,
+                    technique=spec.technique,
+                    uri=_uri_raw,
+                    activity=activity,
                 )
                 if _is_c2_http and _mime_type == "text/html":
                     _mime_type = rng.choices(
@@ -1623,6 +2202,8 @@ class StorylineMixin:
                     kw in _uri for kw in ("/callback", "/task", "/cmd", "/beacon", "/gate")
                 ):
                     resp_bytes = rng.randint(500, 5000)
+                elif _is_c2_http:
+                    resp_bytes = _c2_http_response_size(rng, method=_method, uri=_uri_raw)
                 elif _method == "POST":
                     resp_bytes = rng.randint(200, 5000)
                 else:
@@ -1691,6 +2272,13 @@ class StorylineMixin:
                 conn_hostname = ""  # suppress — raw IP
                 emit_dns = False
             s_conn_state = spec.conn_state or "SF"
+            if _is_exfil_connection_spec(spec):
+                self._emit_storyline_archive_transfer_before_exfil(
+                    source_ip=source_ip,
+                    exfil_time=time,
+                    upload_bytes=s_ob,
+                    rng=rng,
+                )
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=effective_dst_ip,
@@ -1709,9 +2297,14 @@ class StorylineMixin:
                 hostname=conn_hostname,
                 preserve_dst_ip=bool(spec.hostname),
             )
-            malicious_event["dst_ip"] = dst_ip
+            logged_dst_ip = getattr(
+                self.activity_generator,
+                "_last_connection_effective_dst_ip",
+                effective_dst_ip,
+            )
+            malicious_event["dst_ip"] = logged_dst_ip
             malicious_event["dst_port"] = dst_port
-            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, effective_dst_ip)
+            malicious_event["uid"] = _ground_truth_uid(uid, source_ip, logged_dst_ip)
 
             # Causal expansion: SMB to file server emits type 3 logon pair
             if dst_port == 445:
@@ -1758,7 +2351,12 @@ class StorylineMixin:
                 )
                 result = SimpleNamespace(network_uid=uid)
             if getattr(result, "session", None) is not None:
-                self._record_storyline_logon(actor, target, result.session.logon_id)
+                self._record_storyline_logon(
+                    actor,
+                    target,
+                    result.session.logon_id,
+                    source_ip=result.session.source_ip,
+                )
             malicious_event["dst_ip"] = system.ip
             malicious_event["dst_port"] = 22
             result_source_ip = (
@@ -1890,6 +2488,10 @@ class StorylineMixin:
                 time=time,
                 service_name=spec.service_name,
                 service_file_name=spec.service_file_name,
+                service_start_type=self._recent_storyline_service_start_type(
+                    system,
+                    spec.service_name,
+                ),
                 service_account=spec.service_account,
             )
             self._record_storyline_service_install(
@@ -2119,11 +2721,20 @@ class StorylineMixin:
                 )
                 if seg:
                     if is_external_scan:
-                        segment_systems = [
-                            candidate
-                            for candidate in self.scenario.environment.systems
-                            if candidate.hostname in (seg.systems or [])
-                        ]
+                        segment_hostnames = set(seg.systems or [])
+                        if segment_hostnames:
+                            segment_systems = [
+                                candidate
+                                for candidate in self.scenario.environment.systems
+                                if candidate.hostname in segment_hostnames
+                            ]
+                        else:
+                            net = ipaddress.ip_network(seg.cidr, strict=False)
+                            segment_systems = [
+                                candidate
+                                for candidate in self.scenario.environment.systems
+                                if ipaddress.ip_address(candidate.ip) in net
+                            ]
                         all_hosts = []
                         for candidate in segment_systems:
                             public_target = (
@@ -2163,12 +2774,12 @@ class StorylineMixin:
 
             # Generate scan probes: open service hits plus rejected/filtered denies.
             spacing = 1.0 / spec.scan_rate
-            probe_pairs = [
-                (target_ip, port) for target_ip in resolved_targets for port in spec.ports
-            ]
-            scan_profile_rng.shuffle(probe_pairs)
             total_count = 0
-            for target_ip, port in probe_pairs:
+            for target_ip, port in _iter_shuffled_port_scan_pairs(
+                resolved_targets,
+                spec.ports,
+                scan_profile_rng,
+            ):
                 real_target_ip = vip_to_real_ip.get(target_ip, target_ip)
                 target_system = ip_map.get(real_target_ip)
                 dst_iface = self._resolve_firewall_interface(target_ip)
@@ -2256,6 +2867,9 @@ class StorylineMixin:
             # Allow mode: resolve service, http context, hostname, byte sizing
             service = spec.service
             http_ctx = None
+            http_is_c2 = False
+            http_method = ""
+            http_uri = ""
             conn_hostname = None
             emit_dns = False
             s_ob, s_rb = _size_storyline_connection(spec, rng)
@@ -2273,19 +2887,16 @@ class StorylineMixin:
 
                     _method = spec.method or "GET"
                     _uri_raw = spec.uri or "/"
+                    http_method = _method
+                    http_uri = _uri_raw
                     _mime_type = normalize_mime_type_for_path(_uri_raw, "text/html")
-                    _desc = f"{spec.description or ''} {spec.technique or ''} {_uri_raw}".lower()
-                    _is_c2_http = any(
-                        marker in _desc
-                        for marker in (
-                            "c2",
-                            "beacon",
-                            "callback",
-                            "checkin",
-                            "tasking",
-                            "t1071",
-                        )
+                    _is_c2_http = _is_c2_http_request(
+                        description=spec.description,
+                        technique=spec.technique,
+                        uri=_uri_raw,
+                        activity=activity,
                     )
+                    http_is_c2 = _is_c2_http
                     if _is_c2_http and _mime_type == "text/html":
                         _mime_type = rng.choices(
                             ["application/json", "text/plain", "application/octet-stream"],
@@ -2297,7 +2908,7 @@ class StorylineMixin:
                     elif _method == "POST":
                         resp_bytes = rng.randint(200, 2000)
                     elif _is_c2_http:
-                        resp_bytes = rng.randint(180, 6500)
+                        resp_bytes = _c2_http_response_size(rng, method=_method, uri=_uri_raw)
                     else:
                         resp_bytes = response_size_for_mime(rng, _mime_type)
                     from evidenceforge.generation.activity.referrer import pick_referrer
@@ -2363,6 +2974,22 @@ class StorylineMixin:
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
+                tick_http_ctx = http_ctx
+                tick_resp_bytes = s_rb
+                if http_ctx is not None and http_is_c2 and spec.response_body_len is None:
+                    tick_http_body_len = _c2_http_response_size(
+                        rng,
+                        method=http_method or http_ctx.method,
+                        uri=http_uri or http_ctx.uri,
+                    )
+                    tick_http_ctx = replace(
+                        http_ctx,
+                        response_body_len=tick_http_body_len,
+                        tags=list(http_ctx.tags),
+                        resp_fuids=list(http_ctx.resp_fuids),
+                        resp_mime_types=list(http_ctx.resp_mime_types),
+                    )
+                    tick_resp_bytes = max(s_rb, tick_http_body_len + rng.randint(300, 5000))
                 if story_pid <= 0:
                     story_pid, story_image = self._ensure_storyline_service_process_for_beacon(
                         actor,
@@ -2404,6 +3031,7 @@ class StorylineMixin:
                             cache_result="DENIED",
                             referrer=spec.referrer or "",
                             proxy_fqdn=self.activity_generator._proxy_fqdn(proxy_sys),
+                            proxy_action="deny",
                         )
                         self.activity_generator.generate_connection(
                             src_ip=beacon_src_ip,
@@ -2414,11 +3042,11 @@ class StorylineMixin:
                             service="ssl" if spec.dst_port == 443 else "http",
                             duration=rng.uniform(0.05, 2.0),
                             orig_bytes=s_ob,
-                            resp_bytes=s_rb,
+                            resp_bytes=tick_resp_bytes,
                             conn_state="SF",
                             emit_dns=emit_dns and attempt_count == 0,
                             source_system=src_sys,
-                            http=http_ctx,
+                            http=tick_http_ctx,
                             proxy=proxy_ctx,
                             hostname=conn_hostname if conn_hostname is not None else spec.hostname,
                             pid=story_pid,
@@ -2447,11 +3075,11 @@ class StorylineMixin:
                         service=service,
                         duration=rng.uniform(0.5, 10.0),
                         orig_bytes=s_ob,
-                        resp_bytes=s_rb,
+                        resp_bytes=tick_resp_bytes,
                         conn_state=s_conn_state,
                         emit_dns=emit_dns and attempt_count == 0,
                         source_system=src_sys,
-                        http=http_ctx,
+                        http=tick_http_ctx,
                         hostname=conn_hostname,
                         pid=story_pid,
                         process_image=story_image,
@@ -2651,7 +3279,17 @@ class StorylineMixin:
                 path_entry = _next_scan_path()
 
                 _method = path_entry.get("method", "GET")
-                _uri = path_entry.get("uri", "/")
+                _uri = _web_scan_uri_with_runtime_variation(
+                    str(path_entry.get("uri", "/")),
+                    request_count,
+                    random.Random(
+                        _stable_seed(
+                            "web_scan_uri_variation:"
+                            f"{scan_src_ip}:{scan_dst_ip}:{request_count}:"
+                            f"{tick_time.isoformat()}"
+                        )
+                    ),
+                )
                 _status = _observed_web_scan_status(
                     path_entry,
                     random.Random(
@@ -3051,16 +3689,69 @@ class StorylineMixin:
             chunk_idx = 0
             tunnel_salt = rng.randbytes(4)
 
+            scenario = getattr(self, "scenario", None)
+            environment = getattr(scenario, "environment", None)
+            background_systems = [
+                candidate
+                for candidate in getattr(environment, "systems", [])
+                if getattr(candidate, "ip", "") and getattr(candidate, "ip", "") != query_src_ip
+            ]
+            background_window_sec = (
+                duration_sec
+                if duration_sec is not None
+                else interval_sec * float(count if count is not None else 120)
+            )
+            if background_systems and background_window_sec > 0:
+                background_count = min(36, max(12, len(background_systems) * 2 + rng.randint(3, 9)))
+                for _ in range(background_count):
+                    bg_system = rng.choice(background_systems)
+                    bg_query, bg_answer, bg_ttl = _dns_tunnel_background_txt_record(rng)
+                    bg_rtt = rng.uniform(min_rtt, max_rtt)
+                    bg_dns = DnsContext(
+                        query=bg_query,
+                        query_type="TXT",
+                        qtype=16,
+                        rcode="NOERROR",
+                        rcode_num=0,
+                        answers=[bg_answer],
+                        TTLs=[float(bg_ttl)],
+                        trans_id=rng.randint(1, 65535),
+                        AA=False,
+                        RD=True,
+                        RA=True,
+                        rejected=False,
+                        rtt=bg_rtt,
+                    )
+                    bg_offset = rng.uniform(-240.0, background_window_sec + 240.0)
+                    bg_time = start + timedelta(seconds=bg_offset)
+                    self.activity_generator.generate_connection(
+                        src_ip=bg_system.ip,
+                        dst_ip=rng.choice(dns_server_ips),
+                        time=bg_time,
+                        dst_port=53,
+                        proto="udp",
+                        service="dns",
+                        dns=bg_dns,
+                        emit_dns=False,
+                        resp_bytes=max(90, len(bg_query) + len(bg_answer) + rng.randint(35, 120)),
+                        duration=bg_rtt,
+                        source_system=bg_system,
+                    )
+
             for tick_time in _iter_dns_tunnel_ticks(
                 start, interval_sec, duration_sec, count, spec.jitter, rng
             ):
                 self.state_manager.set_current_time(tick_time)
 
-                label_length = (
-                    rng.randint(max(20, spec.label_length - 10), spec.label_length)
-                    if spec.label_length >= 20
-                    else spec.label_length
-                )
+                if spec.label_length >= 24:
+                    min_label_length = max(14, int(spec.label_length * 0.45))
+                    label_length = int(
+                        rng.triangular(min_label_length, spec.label_length, spec.label_length - 4)
+                    )
+                elif spec.label_length >= 20:
+                    label_length = rng.randint(max(16, spec.label_length - 8), spec.label_length)
+                else:
+                    label_length = spec.label_length
                 if spec.encoding == "hex":
                     effective_bytes_per_label = label_length // 2
                 elif spec.encoding == "base32":
@@ -3223,7 +3914,17 @@ class StorylineMixin:
 
         elif spec.type == "workstation_lock":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
-            session = next((s for s in sessions if s.system == system.hostname), None)
+            session = max(
+                (
+                    s
+                    for s in sessions
+                    if s.system == system.hostname
+                    and s.logon_type in (2, 10, 11)
+                    and s.start_time <= time
+                ),
+                key=lambda s: s.start_time,
+                default=None,
+            )
             logon_id = session.logon_id if session else "0x0"
             self.activity_generator.generate_workstation_lock(
                 user=actor,
@@ -3234,7 +3935,17 @@ class StorylineMixin:
 
         elif spec.type == "workstation_unlock":
             sessions = self.state_manager.get_sessions_for_user(actor.username)
-            session = next((s for s in sessions if s.system == system.hostname), None)
+            session = max(
+                (
+                    s
+                    for s in sessions
+                    if s.system == system.hostname
+                    and s.logon_type in (2, 10, 11)
+                    and s.start_time <= time
+                ),
+                key=lambda s: s.start_time,
+                default=None,
+            )
             logon_id = session.logon_id if session else "0x0"
             self.activity_generator.generate_workstation_unlock(
                 user=actor,
@@ -3292,14 +4003,33 @@ class StorylineMixin:
         Detects common output file patterns in PowerShell, cmd, and Linux commands.
         Returns the file path if found, None otherwise.
         """
+        try:
+            parts = shlex.split(command_line, posix=os_category != "windows")
+        except ValueError:
+            parts = command_line.split()
+        command_name = parts[0].rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower() if parts else ""
+
         patterns = [
             r'Export-Csv\s+[\'"]?([^\s\'">;]+)',  # PowerShell Export-Csv
             r'-OutFile\s+[\'"]?([^\s\'">;]+)',  # PowerShell -OutFile
             r'Out-File\s+[\'"]?([^\s\'">;]+)',  # PowerShell Out-File
             r'>\s*[\'"]?([^\s\'">;]+)',  # Shell redirect >
-            r'-o\s+[\'"]?([^\s\'">;]+)',  # Common -o flag
             r'--output[= ]\s*[\'"]?([^\s\'">;]+)',  # --output flag
         ]
+        short_o_output_tools = {
+            "curl",
+            "wget",
+            "nmap",
+            "tar",
+            "zip",
+            "7z",
+            "mysql",
+            "mysqldump",
+            "psql",
+            "sqlcmd",
+        }
+        if command_name in short_o_output_tools:
+            patterns.append(r'-o\s+[\'"]?([^\s\'">;]+)')  # Tool-specific output flag
         for pattern in patterns:
             match = re.search(pattern, command_line, re.IGNORECASE)
             if match:
@@ -3386,9 +4116,25 @@ class StorylineMixin:
             integrity_level="High" if target_user == "root" else "Medium",
         )
         sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
+        ssh_syslog_seed = (
+            target_system.hostname,
+            source_system.ip,
+            source_port,
+            sshd_pid,
+            transfer_time.isoformat(),
+        )
+        observed_transfer_time = _zeek_conn_observation_time(
+            transfer_time,
+            source_system.ip,
+            source_port,
+            target_system.ip,
+            22,
+            "tcp",
+            "ssh",
+        )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=80),
+            time=_ssh_syslog_time(observed_transfer_time, "connection", 80, *ssh_syslog_seed),
             app_name="sshd",
             message=(
                 f"Connection from {source_system.ip} port {source_port} "
@@ -3399,7 +4145,7 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=350),
+            time=_ssh_syslog_time(observed_transfer_time, "accepted", 350, *ssh_syslog_seed),
             app_name="sshd",
             message=f"Accepted publickey for {target_user} from {source_system.ip} port {source_port} ssh2",
             pid=sshd_pid,
@@ -3407,7 +4153,7 @@ class StorylineMixin:
         )
         self.activity_generator.generate_syslog_event(
             system=target_system,
-            time=transfer_time + timedelta(milliseconds=900),
+            time=_ssh_syslog_time(observed_transfer_time, "pam", 900, *ssh_syslog_seed),
             app_name="sshd",
             message=(
                 f"pam_unix(sshd:session): session opened for user "
@@ -3459,12 +4205,14 @@ class StorylineMixin:
             command_line,
         )
         if shell_b64_match:
-            try:
-                decoded = base64.b64decode(shell_b64_match.group(1), validate=True).decode("utf-8")
-            except (binascii.Error, UnicodeDecodeError, ValueError):
-                decoded = ""
-            if decoded and decoded not in texts:
-                texts.append(decoded)
+            token = shell_b64_match.group(1)
+            if len(token) <= _MAX_EMBEDDED_COMMAND_B64_CHARS:
+                try:
+                    decoded = base64.b64decode(token, validate=True).decode("utf-8")
+                except (binascii.Error, UnicodeDecodeError, ValueError):
+                    decoded = ""
+                if decoded and decoded not in texts:
+                    texts.append(decoded)
         encoded_match = re.search(
             r"(?i)(?:-|/)(?:encodedcommand|enc|e)\s+([A-Za-z0-9+/=]+)",
             command_line,
@@ -3473,6 +4221,9 @@ class StorylineMixin:
             return texts
 
         token = encoded_match.group(1)
+        if len(token) > _MAX_EMBEDDED_COMMAND_B64_CHARS:
+            return texts
+
         try:
             decoded_bytes = base64.b64decode(token, validate=True)
         except (binascii.Error, ValueError):
@@ -3514,7 +4265,7 @@ class StorylineMixin:
     def _resolve_storyline_network_target(self, target: str) -> str | None:
         """Resolve a storyline command target host/IP to an environment IP when possible."""
         lowered = target.rstrip(".").lower()
-        if re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", lowered):
+        if _IPV4_LITERAL_RE.fullmatch(lowered):
             return target
         ad_domain = getattr(self, "_ad_domain", "")
         for system in self.scenario.environment.systems:
@@ -3531,28 +4282,48 @@ class StorylineMixin:
     def _storyline_authored_ip_for_hostname(self, hostname: str) -> str | None:
         """Return an explicit storyline IP for an external hostname when one exists."""
         lowered = hostname.rstrip(".").lower()
+        return self._storyline_authored_ip_index().get(lowered)
+
+    def _storyline_authored_ip_index(self) -> dict[str, str]:
+        """Build a cached hostname-to-authored-IP index from storyline specs."""
+        cached = getattr(self, "_storyline_authored_ip_by_hostname", None)
+        if cached is not None:
+            return cached
+
+        authored_ips: dict[str, str] = {}
         for story_event in getattr(self.scenario, "storyline", []):
             for spec in getattr(story_event, "events", []):
                 event_hostname = self._storyline_spec_value(spec, "hostname")
                 dst_ip = self._storyline_spec_value(spec, "dst_ip")
-                if (
-                    event_hostname
-                    and str(event_hostname).rstrip(".").lower() == lowered
-                    and isinstance(dst_ip, str)
-                    and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", dst_ip)
-                ):
-                    return dst_ip
+                self._record_storyline_authored_ip(
+                    authored_ips,
+                    hostname=event_hostname,
+                    ip=dst_ip,
+                )
 
                 query = self._storyline_spec_value(spec, "query")
                 answer = self._storyline_spec_value(spec, "answer")
-                if (
-                    query
-                    and str(query).rstrip(".").lower() == lowered
-                    and isinstance(answer, str)
-                    and re.fullmatch(r"\d{1,3}(?:\.\d{1,3}){3}", answer)
-                ):
-                    return answer
-        return None
+                self._record_storyline_authored_ip(
+                    authored_ips,
+                    hostname=query,
+                    ip=answer,
+                )
+
+        self._storyline_authored_ip_by_hostname = authored_ips
+        return authored_ips
+
+    @staticmethod
+    def _record_storyline_authored_ip(
+        authored_ips: dict[str, str],
+        *,
+        hostname: Any,
+        ip: Any,
+    ) -> None:
+        """Record the first valid authored IP for a normalized storyline hostname."""
+        if not hostname or not isinstance(ip, str) or not _IPV4_LITERAL_RE.fullmatch(ip):
+            return
+        lowered = str(hostname).rstrip(".").lower()
+        authored_ips.setdefault(lowered, ip)
 
     @staticmethod
     def _storyline_spec_value(spec: Any, field_name: str) -> Any:

@@ -67,6 +67,12 @@ def _extract_exe_basename(image_path: str) -> str:
     return image_path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
 
 
+def _is_windows_system_module_path(image_path: str) -> bool:
+    """Return True for DLL paths owned by the Windows OS installation tree."""
+    normalized = image_path.replace("/", "\\").lower()
+    return "\\windows\\" in normalized
+
+
 def load_dll_profiles() -> dict[str, list[dict[str, Any]]]:
     """Build unified exe→DLL mapping from system_processes + app catalog.
 
@@ -203,6 +209,8 @@ def _inherit_application_module_metadata(
     explicit = module.get("pe_metadata")
     if explicit:
         return _metadata_tuple(explicit, module_name)
+    if _is_windows_system_module_path(module.get("path", "")):
+        return None
     company = module.get("signature") or app_pe.get("company", "-")
     return (
         app_pe.get("file_version", "-"),
@@ -265,6 +273,8 @@ def get_module_pe_metadata(image_path: str) -> tuple[str, str, str, str, str]:
     index = load_module_pe_metadata()
     normalized = image_path.replace("/", "\\").lower()
     basename = _extract_exe_basename(image_path)
+    if _is_windows_system_module_path(image_path):
+        return index.get(normalized) or ("-", "-", "-", "-", "-")
     return index.get(normalized) or index.get(basename) or ("-", "-", "-", "-", "-")
 
 

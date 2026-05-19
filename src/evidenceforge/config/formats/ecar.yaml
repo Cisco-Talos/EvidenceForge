@@ -159,6 +159,16 @@ fields:
     constraints:
       allowed_values: [success, failure]
 
+  - name: logon_type
+    type: string
+    required: false
+    description: "Windows-style logon type for USER_SESSION/LOGIN events, string in properties"
+
+  - name: session_type
+    type: string
+    required: false
+    description: "OS-native session type for non-Windows USER_SESSION events"
+
   - name: session_lifecycle
     type: string
     required: false

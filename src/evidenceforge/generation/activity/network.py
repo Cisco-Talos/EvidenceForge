@@ -84,6 +84,7 @@ _IPV6_MAP: dict[str, str] = get_ipv6_map()
 # AD SRV record templates for domain service discovery
 _AD_SRV_QUERIES = [
     "_ldap._tcp.dc._msdcs.{domain}",
+    "_ldap._tcp.Default-First-Site-Name._sites.{domain}",
     "_kerberos._tcp.{domain}",
     "_kerberos._tcp.dc._msdcs.{domain}",
     "_ldap._tcp.{domain}",

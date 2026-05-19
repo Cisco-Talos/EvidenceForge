@@ -83,10 +83,22 @@ class TestSysmonEventEmitter:
         assert "<Keywords>0x8000000000000000</Keywords>" in content
         assert "Microsoft-Windows-Sysmon" in content
         assert "Microsoft-Windows-Sysmon/Operational" in content
-        assert '<Data Name="ProcessGuid">{12345678-abcd-ef01-2345-678901234567}</Data>' in content
+        assert '<Data Name="ProcessGuid">{' in content
         assert '<Data Name="Image">C:\\Windows\\System32\\cmd.exe</Data>' in content
         assert '<Data Name="Hashes">SHA1=ABC123' in content
         assert '<Data Name="ParentImage">C:\\Windows\\explorer.exe</Data>' in content
+
+    def test_sysmon_thread_ids_reuse_pool_without_round_robin_balance(
+        self, format_def, temp_output
+    ):
+        """Sysmon provider threads should be reused in bursts, not perfectly round-robin."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
+
+        thread_ids = [emitter._get_sysmon_thread_id("WS-01") for _ in range(120)]
+        counts = {thread_id: thread_ids.count(thread_id) for thread_id in set(thread_ids)}
+
+        assert 3 <= len(counts) <= 5
+        assert max(counts.values()) - min(counts.values()) >= 10
 
     def test_emit_sysmon_aligns_provider_execution_ids(self, format_def, temp_output):
         """Sysmon XML provider PID/TID values should be 4-byte aligned."""
@@ -121,6 +133,41 @@ class TestSysmonEventEmitter:
 
         content = temp_output.read_text()
         assert '<Execution ProcessID="2756" ThreadID="1544"/>' in content
+
+    def test_emit_sysmon_preserves_oversized_decimal_execution_id(self, format_def, temp_output):
+        """Oversized raw decimal PID/TID strings should not abort Sysmon XML rendering."""
+        emitter = SysmonEventEmitter(format_def, temp_output, buffer_size=1)
+        oversized_pid = "9" * 5000
+
+        event_data = {
+            "EventID": 1,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+            "Computer": "WKS-01.corp.local",
+            "Channel": "Microsoft-Windows-Sysmon/Operational",
+            "Level": 4,
+            "ExecutionProcessID": oversized_pid,
+            "ExecutionThreadID": "1543",
+            "UtcTime": "2024-01-15 10:30:00.000",
+            "ProcessGuid": "{12345678-abcd-ef01-2345-678901234567}",
+            "ProcessId": 8052,
+            "Image": r"C:\Windows\System32\cmd.exe",
+            "CommandLine": r"cmd.exe /c whoami",
+            "User": r"CORP\jsmith",
+            "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+            "LogonId": "0x3e7abc",
+            "IntegrityLevel": "Medium",
+            "Hashes": "SHA1=ABC123,MD5=DEF456,SHA256=GHI789,IMPHASH=JKL012",
+            "ParentProcessGuid": "{87654321-dcba-10fe-5432-109876543210}",
+            "ParentProcessId": 4200,
+            "ParentImage": r"C:\Windows\explorer.exe",
+            "ParentCommandLine": r"C:\Windows\explorer.exe",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert f'<Execution ProcessID="{oversized_pid}" ThreadID="1544"/>' in content
 
     def test_emit_sysmon_create_remote_thread(self, format_def, temp_output):
         """Test emitting Sysmon Event 8 (CreateRemoteThread)."""
@@ -360,7 +407,7 @@ class TestSysmonEventEmitter:
         assert '<Data Name="StartModule">C:\\Windows\\System32\\ntdll.dll</Data>' in content
         assert '<Data Name="StartFunction">NtCreateThreadEx</Data>' in content
 
-    def test_process_terminate_guid_uses_process_start_time(self, format_def, tmp_path):
+    def test_process_terminate_guid_uses_process_create_render_time(self, format_def, tmp_path):
         """Event 5 ProcessGuid should match Event 1 even after process state is removed."""
         from evidenceforge.events.base import SecurityEvent
         from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
@@ -396,8 +443,8 @@ class TestSysmonEventEmitter:
             auth=AuthContext(username="jsmith"),
         )
 
-        expected_guid = emitter._generate_process_guid("WKS-01", 8052, start_time)
-        terminate_time_guid = emitter._generate_process_guid("WKS-01", 8052, terminate_time)
+        expected_guid = emitter._get_stable_process_guid("WKS-01", 8052, start_time)
+        terminate_time_guid = emitter._get_stable_process_guid("WKS-01", 8052, terminate_time)
 
         emitter.emit(event)
         emitter.close()
@@ -576,8 +623,8 @@ class TestSysmonEventEmitter:
             auth=AuthContext(username="jsmith", logon_id="0xabc123"),
         )
 
-        expected_parent_guid = emitter._generate_process_guid("WKS-01", 4200, parent_start)
-        later_parent_guid = emitter._generate_process_guid(
+        expected_parent_guid = emitter._get_stable_process_guid("WKS-01", 4200, parent_start)
+        later_parent_guid = emitter._get_stable_process_guid(
             "WKS-01", 4200, later_reused_parent_start
         )
 
@@ -832,3 +879,33 @@ class TestSysmonEventEmitter:
         assert guid1.startswith("{") and guid1.endswith("}")
         assert len(guid1) == 38  # {8-4-4-4-12} = 38 chars
         assert guid1.strip("{}").split("-")[3] != f"{1234:04x}"
+        assert guid1.strip("{}").split("-")[4].startswith("000000")
+
+    def test_event1_time_shift_rewrites_process_guid_references(self, format_def, temp_output):
+        """Final Event 1 timestamp shifts should not leave stale ProcessGuid references."""
+        emitter = SysmonEventEmitter(format_def, temp_output)
+        original = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        shifted = original + timedelta(seconds=2)
+        old_guid = emitter._generate_process_guid("WKS-01", 1234, original)
+        new_guid = emitter._generate_process_guid("WKS-01", 1234, shifted)
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "Computer": "WKS-01.corp.local",
+                "TimeCreated": shifted,
+                "ProcessGuid": old_guid,
+                "ProcessId": 1234,
+            },
+            {
+                "EventID": 5,
+                "Computer": "WKS-01.corp.local",
+                "TimeCreated": shifted + timedelta(seconds=1),
+                "ProcessGuid": old_guid,
+                "ProcessId": 1234,
+            },
+        ]
+
+        emitter._sync_process_guids_to_event1_times()
+
+        assert emitter._event_dicts[0]["ProcessGuid"] == new_guid
+        assert emitter._event_dicts[1]["ProcessGuid"] == new_guid

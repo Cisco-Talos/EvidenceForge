@@ -71,13 +71,27 @@ def test_timing_profiles_load_default_relationship():
     assert navigation_window.relationship_class == "human_workflow"
     assert navigation_window.min_ms >= 3000
     assert asset_window.relationship_class == "burst_fanout"
-    assert asset_window.max_ms <= 200
+    assert asset_window.min_ms >= 1500
+
+    zeek_conn_window = get_timing_window(
+        "source.zeek_conn_start",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    zeek_http_window = get_timing_window(
+        "source.zeek_http_request",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert asset_window.min_ms > zeek_conn_window.max_ms + zeek_http_window.max_ms
 
     sensor_timing = network_sensor_observation_timing()
-    assert sensor_timing.clock_skew_min_us == -1500
-    assert sensor_timing.clock_skew_max_us == 1500
-    assert sensor_timing.path_delay_min_us == 50
-    assert sensor_timing.path_delay_max_us == 2000
+    assert sensor_timing.clock_skew_min_us == -18000
+    assert sensor_timing.clock_skew_max_us == 22000
+    assert sensor_timing.path_delay_min_us == 1200
+    assert sensor_timing.path_delay_max_us == 58000
 
 
 def test_timing_profiles_overlay_overrides_relationship(tmp_path, monkeypatch):
@@ -187,7 +201,7 @@ network_sensor_observation:
     assert spacing["near_gap_max_us"] == 1_000_000
     assert spacing["large_gap_min_ms"] == 1000
     assert spacing["large_gap_max_ms"] == 60_000
-    assert sensor_timing.clock_skew_min_us == -1500
-    assert sensor_timing.clock_skew_max_us == 1500
-    assert sensor_timing.path_delay_min_us == 50
-    assert sensor_timing.path_delay_max_us == 2000
+    assert sensor_timing.clock_skew_min_us == -18000
+    assert sensor_timing.clock_skew_max_us == 22000
+    assert sensor_timing.path_delay_min_us == 1200
+    assert sensor_timing.path_delay_max_us == 58000

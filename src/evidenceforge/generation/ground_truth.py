@@ -32,6 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.paths import safe_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class GroundTruthGenerator:
             content.append(self._create_red_herring_section())
 
         # Write to file
-        output_path.write_text("\n".join(content))
+        safe_write_text(output_path, "\n".join(content))
         logger.info(f"Ground truth documentation written: {output_path}")
 
     def _create_narrative(self) -> str:

@@ -38,6 +38,9 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
     _materialize_registry_value_for_time,
+    _module_matches_process,
+    _ufw_block_syn_packet_len,
+    _ufw_block_ttl,
     _windows_scheduled_task_offsets,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -80,6 +83,20 @@ def timestamp():
     return datetime(2024, 3, 15, 10, 30, 0, tzinfo=UTC)
 
 
+class TestModuleLoadProcessMatching:
+    """Tests for process-aware Sysmon module-load pool filtering."""
+
+    def test_chrome_and_edge_modules_stay_in_their_own_package_paths(self):
+        """Chromium-family browsers should not swap package DLL ownership."""
+        chrome_module = r"C:\Program Files\Google\Chrome\Application\120.0.6099.225\libegl.dll"
+        edge_module = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge_elf.dll"
+
+        assert _module_matches_process("chrome.exe", chrome_module)
+        assert not _module_matches_process("msedge.exe", chrome_module)
+        assert _module_matches_process("msedge.exe", edge_module)
+        assert not _module_matches_process("chrome.exe", edge_module)
+
+
 class TestIdsAlertCorrelation:
     """IDS alerts should produce both Snort alert and Zeek conn records."""
 
@@ -111,6 +128,47 @@ class TestIdsAlertCorrelation:
         event = snort.emit.call_args[0][0]
         assert event.ids is not None
         assert event.ids.sid == 10001
+
+    def test_ufw_block_packet_profile_is_valid_and_stable(self):
+        """UFW blocked SYN metadata should be valid and path-stable by source."""
+        src_ip = "45.33.74.51"
+
+        lengths = [_ufw_block_syn_packet_len(src_ip) for _ in range(10)]
+        ttls = [_ufw_block_ttl(src_ip) for _ in range(10)]
+
+        assert len(set(lengths)) == 1
+        assert lengths[0] in {40, 44, 48, 52, 60}
+        assert lengths[0] % 4 == 0
+        assert len(set(ttls)) == 1
+        assert 32 <= ttls[0] <= 251
+
+    def test_ufw_block_connection_uses_drop_semantics_and_matching_packet_len(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """A UFW BLOCK companion Zeek row should be S0 with no responder packet."""
+        packet_len = _ufw_block_syn_packet_len("45.33.74.51")
+
+        activity_gen.generate_connection(
+            src_ip="45.33.74.51",
+            dst_ip="10.0.10.5",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            conn_state="S0",
+            src_port=40664,
+            packet_overhead_bytes=packet_len,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args.args[0]
+        assert event.network.conn_state == "S0"
+        assert event.network.history == "S"
+        assert event.network.orig_pkts == 1
+        assert event.network.orig_ip_bytes == packet_len
+        assert event.network.resp_pkts == 0
+        assert event.network.resp_ip_bytes == 0
 
     def test_ids_connection_also_dispatches_to_zeek(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -206,7 +264,7 @@ class TestIdsAlertCorrelation:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.ssl is not None
         assert event.x509 is not None
-        assert event.network.duration >= 0.8
+        assert event.network.duration > 0.8
 
 
 class TestForegroundProcessTermination:
@@ -347,6 +405,79 @@ class TestWebAccessCorrelation:
         assert event.http.method == "DELETE"
         assert event.http.uri == "/api/v1/resource/42"
         assert event.http.status_code == 204
+
+    def test_static_zero_body_success_normalizes_to_not_modified(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Static GET responses should not fan out as 200 OK with zero body and MIME."""
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.10.5",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.1,
+            orig_bytes=200,
+            resp_bytes=0,
+            http=HttpContext(
+                method="GET",
+                host="WEB-01",
+                uri="/assets/css/main.063cbaf5.css",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=0,
+                response_body_len=0,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/css"],
+                tags=[],
+            ),
+        )
+
+        event = mock_emitters["zeek_http"].emit.call_args[0][0]
+        assert event.http.status_code == 304
+        assert event.http.status_msg == "Not Modified"
+        assert event.http.response_body_len == 0
+        assert event.http.resp_mime_types == []
+
+    def test_auto_http_static_resource_uses_stable_response_size(
+        self, activity_gen, state_manager, mock_emitters, timestamp, monkeypatch
+    ):
+        """Auto-generated HTTP contexts should not size static resources from flow bytes."""
+        from evidenceforge.generation.activity import generator as generator_module
+        from evidenceforge.generation.activity import proxy_uri
+        from evidenceforge.generation.activity.http_content import response_size_for_status
+
+        monkeypatch.setattr(
+            proxy_uri,
+            "pick_proxy_uri",
+            lambda *args, **kwargs: ("/favicon.ico", "image/x-icon", "GET", "", "none"),
+        )
+        monkeypatch.setattr(generator_module, "_get_http_status", lambda dst_ip, uri: (200, "OK"))
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.10.5",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.2,
+            orig_bytes=300,
+            resp_bytes=50_000,
+            conn_state="SF",
+            hostname="portal.example.com",
+        )
+
+        event = mock_emitters["zeek_http"].emit.call_args[0][0]
+        assert event.http.uri == "/favicon.ico"
+        assert event.http.response_body_len == response_size_for_status(
+            200,
+            "portal.example.com",
+            "/favicon.ico",
+        )
+        assert event.http.resp_mime_types == ["image/x-icon"]
 
 
 class TestSmbFileTransferCorrelation:
@@ -535,7 +666,11 @@ class TestSyslogContext:
         match = re.search(r"from (?P<src>\S+) port (?P<port>\d+) ssh2", syslog_event.syslog.message)
         assert match is not None
         ssh_source_port = int(match.group("port"))
-        zeek_events = [call.args[0] for call in mock_emitters["zeek_conn"].emit.call_args_list]
+        zeek_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network is not None
+        ]
 
         assert any(
             event.network.src_ip == source_ip
@@ -543,7 +678,7 @@ class TestSyslogContext:
             and event.network.dst_ip == linux.ip
             and event.network.dst_port == 22
             and event.network.service == "ssh"
-            and event.timestamp < syslog_event.timestamp
+            and abs((event.timestamp - syslog_event.timestamp).total_seconds()) <= 1.0
             for event in zeek_events
         )
 
@@ -727,18 +862,24 @@ class TestDhcpLease:
             msg_types=["REQUEST", "ACK"],
         )
 
-        syslog_messages = [
-            call[0][0].syslog.message
+        syslog_events = [
+            call[0][0]
             for call in mock_emitters["syslog"].emit.call_args_list
             if call[0][0].event_type == "syslog"
             and call[0][0].syslog is not None
             and call[0][0].syslog.app_name == "dhclient"
         ]
+        syslog_messages = [event.syslog.message for event in syslog_events]
         assert syslog_messages == [
             "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
             "bound to 10.0.10.2 -- renewal in 3600 seconds.",
         ]
+        gaps = [
+            syslog_events[idx].timestamp - syslog_events[idx - 1].timestamp
+            for idx in range(1, len(syslog_events))
+        ]
+        assert min(gaps) >= timedelta(milliseconds=1500)
 
 
 class TestAnonymousLogon:
@@ -1291,6 +1432,195 @@ class TestWebAccessExternalVisitors:
             kw["http"].uri.endswith(".css") or kw["http"].uri.endswith(".js") for kw in collected
         )
 
+    def test_web_server_access_uses_browser_cache_for_repeated_static_assets(self, monkeypatch):
+        """Repeated browser assets from one client should not all hit the server."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import browsing_session, web_session_profiles
+        from evidenceforge.generation.activity.browsing_session import BrowsingRequest
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/",
+                    method="GET",
+                    content_type="text/html",
+                    referrer="",
+                    trans_depth=1,
+                    is_page_load=True,
+                    response_body_len=4096,
+                    request_body_len=0,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=900,
+                    hostname=kwargs["hostname"],
+                    path="/assets/js/app.bundle.1234abcd.js",
+                    method="GET",
+                    content_type="application/javascript",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=2,
+                    is_page_load=False,
+                    response_body_len=180_000,
+                    request_body_len=0,
+                ),
+            ],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (2, 2)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.4.20"
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(4),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        page_rows = [kw for kw in collected if kw["http"].uri == "/"]
+        asset_rows = [
+            kw for kw in collected if kw["http"].uri == "/assets/js/app.bundle.1234abcd.js"
+        ]
+        assert len(page_rows) == 2
+        assert len(asset_rows) == 1
+        assert asset_rows[0]["http"].status_code == 200
+
+    def test_web_server_access_preserves_cache_and_partial_statuses(self, monkeypatch):
+        """Browser cache hits and partial content must not be rewritten as 200 responses."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import browsing_session, web_session_profiles
+        from evidenceforge.generation.activity.browsing_session import BrowsingRequest
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "human_browser",
+                {
+                    "kind": "session",
+                    "browsing_intensity": "normal",
+                    "user_agent_pool": "browser_any",
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/",
+                    method="GET",
+                    content_type="text/html",
+                    referrer="",
+                    trans_depth=1,
+                    is_page_load=True,
+                    response_body_len=4096,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=100,
+                    hostname=kwargs["hostname"],
+                    path="/assets/css/main.063cbaf5.css",
+                    method="GET",
+                    content_type="text/css",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=5,
+                    is_page_load=False,
+                    response_body_len=0,
+                    request_body_len=0,
+                    status_code=304,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=200,
+                    hostname=kwargs["hostname"],
+                    path="/assets/js/app.bundle.bf9655b3.js",
+                    method="GET",
+                    content_type="application/javascript",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=4,
+                    is_page_load=False,
+                    response_body_len=1152,
+                    request_body_len=0,
+                    status_code=206,
+                ),
+            ],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (1, 1)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.4.20"
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(4),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        by_uri = {kw["http"].uri: kw["http"] for kw in collected}
+        assert by_uri["/assets/css/main.063cbaf5.css"].status_code == 304
+        assert by_uri["/assets/css/main.063cbaf5.css"].response_body_len == 0
+        assert by_uri["/assets/css/main.063cbaf5.css"].resp_mime_types == []
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].status_code == 206
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].response_body_len == 1152
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].resp_mime_types == [
+            "application/javascript"
+        ]
+        root_row = next(kw for kw in collected if kw["http"].uri == "/")
+        assert root_row["http"].trans_depth == 1
+        assert root_row["duration"] >= 0.2
+        assert root_row["resp_bytes"] >= 4096 + 1152
+        assert by_uri["/assets/css/main.063cbaf5.css"].trans_depth == 2
+        assert by_uri["/assets/js/app.bundle.bf9655b3.js"].trans_depth == 3
+
     def test_web_server_access_keeps_scanner_requests_source_native(self, monkeypatch):
         """Scanner visitors should keep configured error paths and blank referrers."""
         from random import Random
@@ -1349,3 +1679,82 @@ class TestWebAccessExternalVisitors:
         assert {kw["http"].status_code for kw in collected} == {404}
         assert {kw["http"].uri for kw in collected} == {"/wp-login.php"}
         assert all(kw["http"].referrer == "" for kw in collected)
+
+    def test_health_checks_use_server_scoped_internal_sources(self, monkeypatch):
+        """Monitoring UAs should not be sourced from ordinary workstations."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "health_check",
+                {
+                    "kind": "requests",
+                    "request_count": [1, 1],
+                    "user_agent_pool": "health_check",
+                    "source_type_any": ["server", "domain_controller"],
+                    "source_role_any": ["monitoring", "load_balancer", "forward_proxy"],
+                    "referrer_mode": "none",
+                    "requests": [
+                        {
+                            "path": "/api/v1/health",
+                            "method": "GET",
+                            "status": 200,
+                            "type": "application/json",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ),
+        )
+
+        target = self._make_web_system("internal")
+        workstation = SimpleNamespace(
+            hostname="WS-01",
+            ip="10.0.10.20",
+            os="Windows 11",
+            type="workstation",
+            roles=[],
+            services=[],
+        )
+        monitor = SimpleNamespace(
+            hostname="MON-01",
+            ip="10.0.10.30",
+            os="Linux Ubuntu 22.04",
+            type="server",
+            roles=["monitoring"],
+            services=["prometheus"],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {workstation.ip: workstation, monitor.ip: monitor}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (4, 4)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="internal",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.8.8"
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            target,
+            [target, workstation, monitor],
+            Random(42),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        assert collected
+        assert {kw["src_ip"] for kw in collected} == {monitor.ip}
+        assert all(kw["source_system"] is monitor for kw in collected)
+        assert all(kw["http"].uri == "/api/v1/health" for kw in collected)
+        assert all(42 <= kw["http"].response_body_len <= 720 for kw in collected)

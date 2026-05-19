@@ -3,6 +3,8 @@
 
 """Regression test: eforge validate-config must ship 100% clean."""
 
+import random
+
 from evidenceforge.cli.validate_config import validate_config
 
 
@@ -42,6 +44,60 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_non_mapping_web_scan_ids_ua(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "ids_ua": [],
+                        "paths": [{"uri": "/", "status": 200}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" ids_ua must be a mapping, got list' in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_non_mapping_web_scan_path_ids(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "paths": [{"uri": "/cgi-bin/test", "status": 404, "ids": []}],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" path #1 (/cgi-bin/test) ids must be a mapping, got list'
+            in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import endpoint_noise
 
@@ -66,6 +122,12 @@ class TestValidateConfig:
                         "suppress_system_types": ["server", "domain_controller"],
                         "suppress_roles": ["domain_controller"],
                     }
+                },
+                "ecar_flow_identity": {
+                    "user_process_probability": 0.88,
+                    "service_process_probability": 0.48,
+                    "root_process_probability": 0.42,
+                    "inbound_listener_probability": 0.36,
                 },
             }
 
@@ -200,6 +262,85 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "tls_realism.yaml"
             and "ecdsa issuer profiles cannot use RSA child signature algorithms" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_public_dns_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import public_dns_profiles
+
+        def load_invalid_public_dns_profiles():
+            return {
+                "nameserver_profiles": [
+                    {
+                        "name": "bad",
+                        "weight": -1,
+                        "answer_sets": [["ns1.example.net"]],
+                    }
+                ],
+                "mail_profiles": [],
+            }
+
+        monkeypatch.setattr(
+            public_dns_profiles,
+            "load_public_dns_profiles",
+            load_invalid_public_dns_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "weight must be non-negative" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "mail_profiles must not be empty" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_unsafe_public_dns_templates(self, monkeypatch):
+        from evidenceforge.generation.activity import public_dns_profiles
+
+        def load_invalid_public_dns_profiles():
+            return {
+                "nameserver_profiles": [
+                    {
+                        "name": "bad_ns",
+                        "weight": 1,
+                        "answer_sets": [["{missing}"]],
+                        "soa_rnames": ["{domain:1000000000}"],
+                    }
+                ],
+                "mail_profiles": [
+                    {
+                        "name": "bad_mx",
+                        "weight": 1,
+                        "answer_sets": [["0 {domain_hyphen}.mail.example.net"]],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(
+            public_dns_profiles,
+            "load_public_dns_profiles",
+            load_invalid_public_dns_profiles,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "public DNS answer templates may only use" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "public_dns_profiles.yaml"
+            and "public DNS answer templates must not use format specifiers" in issue.message
             for issue in result.issues
         )
 
@@ -519,6 +660,51 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_proxy_connect_status_messages(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "proxy_connect_status_messages": {407: []},
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (proxy_connect_status_messages)"
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_dns_tunnel_rcode_weight_overflow(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_rcode_weights": {"NOERROR": 1.0e308, "NXDOMAIN": 1.0e308},
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_rcode_weights)"
+            and "positive finite total" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_dns_tunnel_ttl_choices(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 
@@ -538,6 +724,54 @@ class TestValidateConfig:
         assert any(
             issue.severity == "ERROR"
             and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_non_finite_dns_tunnel_ttl_weight(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_ttl_choices": [{"value": 9, "weight": float("inf")}],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_dns_tunnel_ttl_weight_total(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_ttl_choices": [
+                    {"value": 9, "weight": 1e308},
+                    {"value": 10, "weight": 1e308},
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
+            and "total" in issue.message
             for issue in result.issues
         )
 
@@ -573,6 +807,38 @@ class TestValidateConfig:
                 "max_minutes must be greater than or equal to min_minutes" in issue.message
                 or "host_count_max must be greater than or equal to host_count_min" in issue.message
             )
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_auth_noise_account_names(self, monkeypatch):
+        from evidenceforge.generation.activity import auth_noise
+
+        def load_invalid_auth_noise_config():
+            return {
+                "scheduled_stale_credentials": {
+                    "account_base_names": ["svc_backup", "bad name", "svc/foo"],
+                    "host_count_min": 1,
+                    "host_count_max": 1,
+                    "interval_ranges": [{"min_minutes": 60, "max_minutes": 120, "weight": 1}],
+                    "first_occurrence_seconds_min": 0,
+                    "first_occurrence_seconds_max": 2700,
+                    "jitter_seconds_min": -420,
+                    "jitter_seconds_max": 780,
+                    "skip_probability": 0.10,
+                    "backoff_probability": 0.10,
+                    "backoff_seconds_min": 900,
+                    "backoff_seconds_max": 3600,
+                }
+            }
+
+        monkeypatch.setattr(auth_noise, "load_auth_noise_config", load_invalid_auth_noise_config)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "auth_noise.yaml"
+            and "account_base_names entries must match scenario username syntax" in issue.message
             for issue in result.issues
         )
 
@@ -934,6 +1200,42 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_reports_invalid_extra_syslog_messages_schema(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "attacker-controlled-null-app",
+                    "messages": None,
+                },
+                {
+                    "app": "attacker-controlled-scalar-app",
+                    "messages": 123,
+                },
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-null-app"' in issue.message
+            and "messages" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-scalar-app"' in issue.message
+            and "messages" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_cron_hourly_in_extra_syslog_noise(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
@@ -988,6 +1290,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_extra_syslog_system_type(self, monkeypatch):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "packagekitd",
+                    "system_types": ["laptop"],
+                    "messages": ["search-names transaction /12345"],
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'App "packagekitd" has invalid system_type "laptop"' in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_networkmanager_same_state_transition(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
@@ -1012,6 +1339,283 @@ class TestValidateConfig:
             and issue.file == "extra_syslog_messages.yaml"
             and "NetworkManager state transition must change states" in issue.message
             for issue in result.issues
+        )
+
+    def test_extra_syslog_sudo_templates_render_contextual_services(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        entry = {
+            "app": "sudo",
+            "messages": [
+                "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+            ],
+            "params": {
+                "sudo_user": ["deploy"],
+                "tty": ["pts/1"],
+                "cwd": ["/srv/app"],
+                "service": ["ssh"],
+                "sudo_command": ["/bin/systemctl status {service}"],
+            },
+        }
+
+        message = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["nginx"],
+        )
+
+        assert message == (
+            "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/bin/systemctl status nginx"
+        )
+
+    def test_extra_syslog_treats_contextual_services_as_literals(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        entry = {
+            "app": "sudo",
+            "messages": [
+                "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
+            ],
+            "params": {
+                "sudo_user": ["deploy"],
+                "tty": ["pts/1"],
+                "cwd": ["/srv/app"],
+                "service": ["ssh"],
+                "sudo_command": ["/bin/systemctl status {service}"],
+            },
+        }
+
+        missing_placeholder = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["{missing}"],
+        )
+        unmatched_brace = render_extra_syslog_message(
+            entry,
+            random.Random(5),
+            positional_value=123456,
+            system_services=["{"],
+        )
+
+        assert missing_placeholder.endswith("COMMAND=/bin/systemctl status {missing}")
+        assert unmatched_brace.endswith("COMMAND=/bin/systemctl status {")
+
+    def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
+        from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
+
+        programs = [
+            {
+                "app": "packagekitd",
+                "system_types": ["workstation"],
+                "messages": ["search-names transaction /{}"],
+            },
+            {
+                "app": "multipathd",
+                "system_types": ["server"],
+                "roles": ["database"],
+                "messages": ["{device}: add missing path"],
+            },
+            {
+                "app": "accounts-daemon",
+                "exclude_roles": ["database"],
+                "messages": ["user 'admin' has logged in"],
+            },
+        ]
+
+        db_server = filter_syslog_message_entries(
+            programs,
+            is_rhel_like=False,
+            host_roles=["database"],
+            system_type="server",
+        )
+        workstation = filter_syslog_message_entries(
+            programs,
+            is_rhel_like=False,
+            host_roles=[],
+            system_type="workstation",
+        )
+
+        assert [entry["app"] for entry in db_server] == ["multipathd"]
+        assert [entry["app"] for entry in workstation] == ["packagekitd", "accounts-daemon"]
+
+    def test_extra_syslog_high_volume_daemons_avoid_exact_boilerplate(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        high_volume_apps = {
+            "dbus-daemon",
+            "polkitd",
+            "rsyslogd",
+            "unattended-upgr",
+            "systemd-resolved",
+            "irqbalance",
+        }
+        old_exact_messages = {
+            "[system] Activating via systemd: service name='org.freedesktop.hostname1'",
+            "[system] Successfully activated service 'org.freedesktop.resolve1'",
+            "[system] Activating via systemd: service name='org.freedesktop.timedate1'",
+            '[origin software="rsyslogd"] rsyslogd was HUPed',
+            "Allowed origins are: o=Ubuntu,a=jammy",
+            "No packages found that can be upgraded unattended",
+            "dpkg --status-fd: processing triggers for man-db",
+            "Positive Trust Anchors: . IN DS 20326",
+            "Balancing is ineffective IRQs are pinned and balanced",
+            "Operator of unix-process:{} successfully authenticated as 'root'",
+        }
+
+        checked_apps = set()
+        for entry in programs:
+            app = entry.get("app")
+            if app not in high_volume_apps:
+                continue
+            checked_apps.add(app)
+            messages = entry.get("messages", [])
+            assert not old_exact_messages.intersection(messages)
+            assert any("{" in message for message in messages)
+            if app == "systemd-resolved":
+                assert "trust_anchor" not in (entry.get("params") or {})
+                assert all("Positive Trust Anchors" not in message for message in messages)
+            if app == "irqbalance":
+                assert all("{}" not in message and "{0}" not in message for message in messages)
+                assert all("from CPU" not in message for message in messages)
+            if app == "polkitd":
+                assert any("action {action_id}" in message for message in messages)
+                assert all(
+                    "AuthenticationAgent" in message or "action" in message for message in messages
+                )
+            for message in messages:
+                rendered = render_extra_syslog_message(
+                    {**entry, "messages": [message]},
+                    random.Random(5),
+                    positional_value=123456,
+                    system_services=["sshd", "nginx"],
+                    values={"dns_server": "10.10.2.10"},
+                )
+                assert "{" not in rendered
+                assert "}" not in rendered
+                if app == "systemd-resolved":
+                    assert "UDP+EDNS0 instead of UDP+EDNS0" not in rendered
+
+        assert checked_apps == high_volume_apps
+
+    def test_extra_syslog_linux_maintenance_texture_includes_cron_and_varied_sudo(self):
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        programs = load_extra_syslog_messages()
+        apps = {entry["app"]: entry for entry in programs}
+
+        assert "cron" in apps
+        assert "anacron" in apps
+
+        sudo_entry = next(
+            entry
+            for entry in programs
+            if entry["app"] == "sudo" and "sudo_command" in (entry.get("params") or {})
+        )
+        sudo_commands = sudo_entry["params"]["sudo_command"]
+        service_commands = [command for command in sudo_commands if "{service}" in command]
+        non_service_commands = [command for command in sudo_commands if "{service}" not in command]
+
+        assert len(non_service_commands) >= len(service_commands) * 3
+        assert any("list-timers" in command for command in non_service_commands)
+        assert any("apt-get -s upgrade" in command for command in non_service_commands)
+        assert any("vmstat" in command for command in non_service_commands)
+
+        cron_messages = apps["cron"]["messages"]
+        assert any("CMD" in message for message in cron_messages)
+        assert not any("cron.hourly" in message.lower() for message in cron_messages)
+
+    def test_extra_syslog_unattended_upgrades_bounds_phased_percentage(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        unattended = next(entry for entry in programs if entry["app"] == "unattended-upgr")
+        percentage_values = unattended["params"]["phased_percentage"]
+
+        assert all(0 <= int(value) <= 100 for value in percentage_values)
+        assert not any(
+            "phased update percentage {}" in message for message in unattended["messages"]
+        )
+
+        message = render_extra_syslog_message(
+            {
+                **unattended,
+                "messages": [
+                    "Package {package_name} kept back for phased update percentage {phased_percentage}"
+                ],
+            },
+            random.Random(5),
+            positional_value=981234,
+        )
+        percentage = int(message.rsplit(" ", 1)[-1])
+
+        assert 0 <= percentage <= 100
+        assert "981234" not in message
+
+    def test_extra_syslog_anacron_uses_date_placeholder_and_no_weekly_pool(self):
+        from evidenceforge.generation.activity.extra_syslog import (
+            load_extra_syslog_messages,
+            render_extra_syslog_message,
+        )
+
+        programs = load_extra_syslog_messages()
+        anacron = next(entry for entry in programs if entry["app"] == "anacron")
+
+        assert "cron.weekly" not in anacron["params"]["job_name"]
+        assert "Anacron 2.3 started on {}" not in anacron["messages"]
+        message = render_extra_syslog_message(
+            {**anacron, "messages": ["Anacron 2.3 started on {anacron_date}"]},
+            random.Random(5),
+            positional_value=123456,
+            values={"anacron_date": "2024-03-18"},
+        )
+
+        assert message == "Anacron 2.3 started on 2024-03-18"
+
+    def test_systemd_schedule_filters_by_role_and_service_state(self):
+        from types import SimpleNamespace
+
+        from evidenceforge.generation.engine.baseline import _schedule_applies_to_system
+
+        sched = {
+            "service": "phpsessionclean",
+            "roles": ["web_server"],
+            "exclude_roles": ["forward_proxy"],
+            "services_any": ["php-fpm"],
+            "host_probability": 1.0,
+        }
+
+        php_web = SimpleNamespace(
+            hostname="WEB-EXT-01",
+            roles=["web_server"],
+            services=["apache2", "php-fpm"],
+        )
+        nginx_only = SimpleNamespace(
+            hostname="APP-INT-01",
+            roles=["web_server"],
+            services=["nginx", "systemd"],
+        )
+        proxy = SimpleNamespace(
+            hostname="PROXY-01",
+            roles=["forward_proxy"],
+            services=["squid", "php-fpm"],
+        )
+
+        assert _schedule_applies_to_system(sched, php_web, has_web_role=True)
+        assert not _schedule_applies_to_system(sched, nginx_only, has_web_role=True)
+        assert not _schedule_applies_to_system(sched, proxy, has_web_role=True)
+        assert not _schedule_applies_to_system(
+            {**sched, "host_probability": 0.0},
+            php_web,
+            has_web_role=True,
         )
 
     def test_validate_config_rejects_invalid_4672_emission_probability(self, monkeypatch):
@@ -1039,5 +1643,69 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "windows_auth_realism.yaml"
             and "emission_probabilities" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_unsafe_web_session_profile_fields(self, monkeypatch):
+        from evidenceforge.generation.activity import web_session_profiles
+
+        real_loader = web_session_profiles.load_web_session_profiles
+
+        def load_invalid_web_session_profiles():
+            data = real_loader()
+            visitor_classes = dict(data["visitor_classes"])
+            probe = dict(visitor_classes["opportunistic_probe"])
+            requests = [dict(request) for request in probe["requests"]]
+            requests[0] = {
+                **requests[0],
+                "path": "/wp-login.php\nforged",
+                "method": "GET\nPOST",
+                "status": "not-an-int",
+                "type": "text/html\nforged",
+            }
+            probe["requests"] = requests
+            visitor_classes["opportunistic_probe"] = probe
+            user_agent_pools = dict(data["user_agent_pools"])
+            user_agent_pools["scanner"] = [*user_agent_pools["scanner"], "BadUA\nForged"]
+            return {
+                **data,
+                "visitor_classes": visitor_classes,
+                "user_agent_pools": user_agent_pools,
+            }
+
+        monkeypatch.setattr(
+            web_session_profiles, "load_web_session_profiles", load_invalid_web_session_profiles
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "path must be a single-line path" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "method must be a supported single-line HTTP method" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "status must be an integer from 100 to 599" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "type must be a single-line MIME type" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_session_profiles.yaml"
+            and "must be a non-empty single-line string" in issue.message
             for issue in result.issues
         )

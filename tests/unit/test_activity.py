@@ -40,15 +40,47 @@ from evidenceforge.generation.activity import (
 )
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.generator import (
+    _extract_http_url_from_command,
     _extract_image_from_command,
+    _http_context_from_process_command,
     _jitter_default_connection_duration,
+    _network_effect_context_for_process,
+    _normalize_http_context_for_source_native_response,
+    _zeek_conn_observation_time,
 )
+from evidenceforge.generation.activity.http_content import response_size_for_status
 from evidenceforge.generation.activity.tls_realism import (
     certificate_analyzer_delay_ms,
     certificate_file_size,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
+
+
+class TestApacheRawSyslogNormalization:
+    def test_embedded_timestamp_regex_matches_apache_variants(self):
+        """Apache raw syslog timestamp normalization should keep common timestamp variants."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+
+        assert pattern.search("[Mon Jan 1 12:34:56 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 2026] [client 10.0.0.1:12345]")
+        assert pattern.search("[Mon Jan 01 12:34:56.123456 +0000 2026] message")
+
+    def test_embedded_timestamp_regex_has_bounded_middle_token(self):
+        """Scenario-controlled raw syslog messages must not hit an unbounded timestamp scan."""
+        pattern_text = generator_module._APACHE_EMBEDDED_TS_RE.pattern
+
+        assert "[^\\]]+" not in pattern_text
+        assert "{1,40}" in pattern_text
+
+    def test_embedded_timestamp_regex_handles_many_malformed_prefixes_quickly(self):
+        """Malformed Apache-like prefixes should not cause super-linear regex work."""
+        pattern = generator_module._APACHE_EMBEDDED_TS_RE
+        malicious_message = "[Mon Jan 1 " * 20_000
+
+        result = pattern.sub("[Mon Jan 01 00:00:00.000000 2026]", malicious_message, count=1)
+
+        assert result == malicious_message
 
 
 class TestStateObjectIds:
@@ -61,6 +93,216 @@ class TestStateObjectIds:
 
         assert first == ""
         assert second == ""
+
+
+class TestProcessHttpCommandCorrelation:
+    def test_http_normalization_rewrites_error_asset_mime_to_error_body(self):
+        """Caller-provided HTTP errors should not keep MIME from requested asset extension."""
+        http = HttpContext(
+            method="GET",
+            host="portal.example.com",
+            uri="/assets/logo.svg",
+            response_body_len=900,
+            status_code=503,
+            status_msg="Service Unavailable",
+            resp_mime_types=["image/svg+xml"],
+        )
+
+        normalized = _normalize_http_context_for_source_native_response(http)
+
+        assert normalized.resp_mime_types == ["text/html"]
+
+    def test_http_context_from_curl_command_preserves_url_and_user_agent(self):
+        """CLI HTTP command lines should drive the canonical HTTP flow metadata."""
+        result = _http_context_from_process_command(
+            "/usr/bin/curl",
+            "curl -s https://api.github.com/rate_limit?resource=core",
+            response_body_len=1234,
+        )
+
+        assert result is not None
+        http, host, port, service = result
+        assert host == "api.github.com"
+        assert port == 443
+        assert service == "ssl"
+        assert http.host == "api.github.com"
+        assert http.uri == "/rate_limit?resource=core"
+        assert http.user_agent == "curl/7.88.1"
+        assert http.response_body_len == 1234
+
+    @pytest.mark.parametrize(
+        "command_line",
+        [
+            "curl -s http://[::1",
+            "curl -s http://example.com:99999/",
+        ],
+    )
+    def test_http_context_from_malformed_url_returns_none(self, command_line):
+        """Malformed overlay-provided URLs should not crash process-network correlation."""
+        assert (
+            _http_context_from_process_command(
+                "/usr/bin/curl",
+                command_line,
+                response_body_len=1234,
+            )
+            is None
+        )
+
+    def test_extract_http_url_skips_malformed_candidates(self):
+        """Malformed candidates should be skipped so later valid URLs can still correlate."""
+        url = _extract_http_url_from_command(
+            "curl http://[::1 && curl https://api.example.com/status"
+        )
+
+        assert url == "https://api.example.com/status"
+
+    def test_http_context_from_static_curl_uses_stable_resource_size(self):
+        """Repeated CLI downloads of static resources should keep one object size."""
+        first = _http_context_from_process_command(
+            "/usr/bin/curl",
+            "curl -s https://cdn.example.com/favicon.ico",
+            response_body_len=1234,
+        )
+        second = _http_context_from_process_command(
+            "/usr/bin/curl",
+            "curl -s https://cdn.example.com/favicon.ico",
+            response_body_len=98765,
+        )
+
+        assert first is not None
+        assert second is not None
+        first_http = first[0]
+        second_http = second[0]
+        expected_size = response_size_for_status(200, "cdn.example.com", "/favicon.ico")
+        assert first_http.response_body_len == expected_size
+        assert second_http.response_body_len == expected_size
+        assert first_http.resp_mime_types == ["image/x-icon"]
+
+    def test_proxy_context_preserves_cli_http_user_agent(self):
+        """Proxy logs should not replace a caller-provided CLI User-Agent."""
+        generator = ActivityGenerator(StateManager(), {})
+        source = System(
+            hostname="LINUX-01",
+            ip="10.0.0.20",
+            os="Ubuntu 24.04",
+            type="workstation",
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.0.5",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        http = HttpContext(
+            method="GET",
+            host="api.github.com",
+            uri="/rate_limit",
+            user_agent="curl/7.88.1",
+            response_body_len=1234,
+            status_code=200,
+            status_msg="OK",
+            resp_mime_types=["application/json"],
+        )
+
+        proxy_context = generator._build_proxy_context(
+            src_ip=source.ip,
+            dst_ip="140.82.112.5",
+            dst_port=443,
+            service="ssl",
+            duration=1.2,
+            orig_bytes=320,
+            resp_bytes=1234,
+            hostname="api.github.com",
+            source_system=source,
+            proxy_sys=proxy,
+            http=http,
+            explicit_mode=True,
+        )
+
+        assert proxy_context.url == "https://api.github.com/rate_limit"
+        assert proxy_context.user_agent == "curl/7.88.1"
+
+    def test_network_effect_context_keeps_rendered_cli_http_command(self):
+        """A stale process-state lookup should not retarget a rendered curl command."""
+        process_name, command_line = _network_effect_context_for_process(
+            "/usr/bin/curl",
+            "curl -s https://api.slack.com/methods/api.test",
+            "/usr/bin/wget",
+            "wget https://images.netscaler.dev/agent.dat",
+        )
+
+        assert process_name == "/usr/bin/curl"
+        assert command_line == "curl -s https://api.slack.com/methods/api.test"
+
+    def test_generate_connection_uses_process_http_command_for_proxy_context(self, monkeypatch):
+        """Later network effects attributed to curl should keep the command URL."""
+        state = StateManager()
+        generator = ActivityGenerator(
+            state,
+            {},
+            dispatcher=EventDispatcher(state_manager=state, emitters={}),
+        )
+        source = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.10.3.20",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        generator._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        generator._proxy_mode = "explicit"
+        generator._proxy_listener_port = 8080
+        generator._proxy_routes = {source.ip: [proxy]}
+        generator._ad_domain = "meridianhcs.local"
+
+        timestamp = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        state.set_current_time(timestamp)
+        pid = state.create_process(
+            system=source.hostname,
+            parent_pid=4,
+            image="/usr/bin/curl",
+            command_line="curl -s https://api.slack.com/methods/api.test",
+            username="sarah.martinez",
+            integrity_level="Medium",
+            logon_id="0x1234",
+        )
+
+        captured: list[dict[str, object]] = []
+        original_build_proxy_context = generator._build_proxy_context
+
+        def capture_proxy_context(**kwargs):
+            captured.append(kwargs)
+            return original_build_proxy_context(**kwargs)
+
+        monkeypatch.setattr(generator, "_build_proxy_context", capture_proxy_context)
+
+        generator.generate_connection(
+            src_ip=source.ip,
+            dst_ip="13.107.246.52",
+            time=timestamp + timedelta(seconds=1),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=2.0,
+            orig_bytes=400,
+            resp_bytes=1200,
+            emit_dns=True,
+            pid=pid,
+            source_system=source,
+        )
+
+        assert captured
+        assert captured[0]["hostname"] == "api.slack.com"
+        assert captured[0]["dst_port"] == 443
+        http = captured[0]["http"]
+        assert isinstance(http, HttpContext)
+        assert http.user_agent == "curl/7.88.1"
+        assert http.uri == "/methods/api.test"
 
 
 class TestNetworkValidation:
@@ -206,6 +448,60 @@ class TestActivityGenerator:
             test_system.hostname, sessions[second_logon].explorer_pid
         )
         assert first_explorer.parent_pid != second_explorer.parent_pid
+
+    def test_repeated_explorer_creation_reuses_session_shell(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Baseline explorer.exe launches should reuse the interactive session shell."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        smss_pid = state_manager.create_process(
+            test_system.hostname,
+            4,
+            r"C:\Windows\System32\smss.exe",
+            r"C:\Windows\System32\smss.exe",
+            "SYSTEM",
+            "System",
+        )
+        activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
+        logon_id = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.explorer_pid is not None
+        mock_emitters["windows_event_security"].reset_mock()
+
+        first_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=1),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            parent_pid=4,
+        )
+        second_pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp + timedelta(seconds=2),
+            logon_id,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            parent_pid=4,
+        )
+
+        assert first_pid == session.explorer_pid
+        assert second_pid == session.explorer_pid
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert all(
+            not (
+                event.event_type == "process_create"
+                and event.process is not None
+                and event.process.image.lower().endswith("explorer.exe")
+            )
+            for event in emitted
+        )
 
     def test_repeated_one_shot_cli_processes_get_human_scale_spacing(
         self, activity_gen, test_user, test_system, state_manager
@@ -1209,6 +1505,41 @@ class TestActivityGenerator:
         assert event.kerberos.service_name == "krbtgt/example.local"
         assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
 
+    def test_machine_account_logon_emits_nearby_dc_kerberos_audit(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Machine Kerberos flows should have matching DC 4768/4769 audit records."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        security_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        event_types = {event.event_type for event in security_events}
+        kerberos_events = [
+            event
+            for event in security_events
+            if event.event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+
+        assert {"kerberos_tgt", "kerberos_service", "machine_logon"} <= event_types
+        assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
+        assert all(
+            abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+        )
+
     def test_bash_history_preserves_blocking_command_dwell(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -1228,6 +1559,29 @@ class TestActivityGenerator:
         events = [call.args[0] for call in bash_emitter.emit.call_args_list]
         assert events[0].timestamp == timestamp
         assert events[1].timestamp >= timestamp + timedelta(seconds=45)
+
+    def test_same_user_bash_history_avoids_same_second_across_hosts(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Same-user shell entries on different hosts should not land on the same second."""
+        linux_a = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        linux_b = System(hostname="LNX-02", ip="10.0.0.3", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        activity_gen.generate_bash_command(user, linux_a, timestamp, "whoami")
+        activity_gen.generate_bash_command(user, linux_b, timestamp, "id")
+
+        events = [call.args[0] for call in bash_emitter.emit.call_args_list]
+        event_seconds = [int(event.timestamp.timestamp()) for event in events]
+
+        assert len(events) == 2
+        assert len(set(event_seconds)) == 2
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
@@ -1276,6 +1630,100 @@ class TestActivityGenerator:
         )
         assert process_event.timestamp == scheduled_time
         assert bash_event.timestamp == scheduled_time
+
+    def test_linux_process_activity_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Linux app-catalog processes should not emit shell history for service users."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="www-data",
+        )
+        service_user = User(
+            username="www-data",
+            full_name="Web Service",
+            email="www-data@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: (
+                "/usr/bin/code",
+                "code --no-sandbox /home/www-data/projects/data-pipeline",
+            ),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line
+            == "code --no-sandbox /home/www-data/projects/data-pipeline"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
+
+    def test_linux_process_system_suppresses_service_user_bash_history(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Legacy Linux process templates should not emit shell history for service users."""
+        linux = System(
+            hostname="WEB-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user="apache",
+        )
+        service_user = User(
+            username="apache",
+            full_name="Apache Service",
+            email="apache@example.com",
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/sbin/cron", "/usr/sbin/cron -f")]},
+        ):
+            activity_gen.execute_baseline_activity(service_user, linux, timestamp, "process_system")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        assert any(
+            event.event_type == "process_create"
+            and event.process is not None
+            and event.process.command_line == "/usr/sbin/cron -f"
+            for event in emitted
+        )
+        assert not any(event.event_type == "bash_command" for event in emitted)
 
     def test_generate_logoff_ends_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1430,6 +1878,38 @@ class TestActivityGenerator:
         assert event.process.image == process_name
         assert event.process.command_line == command_line
 
+    def test_generate_process_hosts_windows_batch_scripts_under_cmd(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Windows batch scripts should not become the process image."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = "0x12345"
+
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Program Files\nodejs\npm.cmd",
+            "cmd.exe /c npm run dev",
+        )
+
+        proc = state_manager.get_process(test_system.hostname, pid)
+        assert proc is not None
+        assert proc.image == r"C:\Windows\System32\cmd.exe"
+        assert proc.command_line == "cmd.exe /c npm run dev"
+
+        process_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+            and call[0][0].process
+            and call[0][0].process.pid == pid
+        )
+        assert process_event.process.image == r"C:\Windows\System32\cmd.exe"
+        assert process_event.process.command_line == "cmd.exe /c npm run dev"
+
     def test_generate_process_derives_user_current_directory(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1455,6 +1935,87 @@ class TestActivityGenerator:
         assert process_events[0].process.current_directory == (
             f"C:\\Users\\{test_user.username}\\Documents\\"
         )
+
+    def test_generate_process_derives_project_current_directory_for_dev_tools(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Relative developer-tool commands should run from a project directory."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        process_name = r"C:\Program Files\nodejs\node.exe"
+        command_line = "node.exe scripts/build.js"
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            "0x12345",
+            process_name,
+            command_line,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+            and call[0][0].process
+            and call[0][0].process.image == process_name
+        ]
+        assert process_events
+        current_directory = process_events[0].process.current_directory
+        assert current_directory.startswith(f"C:\\Users\\{test_user.username}\\source\\repos\\")
+        assert current_directory != r"C:\Program Files\nodejs\\"
+
+    def test_ssh_process_network_effect_uses_command_target(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """SSH Sysmon/eCAR flow destinations should agree with the process command line."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        workstation = System(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            type="workstation",
+        )
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        activity_gen._ip_to_system = {workstation.ip: workstation, web_server.ip: web_server}
+        activity_gen._all_system_ips = [workstation.ip, web_server.ip]
+        state_manager.set_current_time(timestamp)
+        process_name = r"C:\Windows\System32\OpenSSH\ssh.exe"
+        command_line = "ssh.exe testuser@WEB-EXT-01"
+        pid = activity_gen.generate_process(
+            test_user,
+            workstation,
+            timestamp,
+            "0x12345",
+            process_name,
+            command_line,
+        )
+        mock_emitters["zeek_conn"].reset_mock()
+
+        activity_gen._emit_process_network_correlation(
+            workstation,
+            process_name,
+            command_line,
+            timestamp,
+            pid,
+            random.Random(1),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert network_events
+        assert network_events[-1].network.dst_ip == web_server.ip
+        assert network_events[-1].network.dst_port == 22
 
     def test_process_follow_on_file_event_after_process_create(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1538,6 +2099,7 @@ class TestActivityGenerator:
             call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         service_event = next(event for event in events if event.event_type == "service_installed")
+        assert service_event.service.service_start_type == "3"
         file_event = next(
             event
             for event in events
@@ -1595,6 +2157,55 @@ class TestActivityGenerator:
         }
         assert all(event.network.src_ip == source.ip for event in network_events)
         assert all(event.network.dst_ip == target.ip for event in network_events)
+
+    def test_remote_service_network_evidence_caps_sequential_source_ports(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Sequential SMB/RPC evidence source ports should stay in the valid TCP range."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source = System(
+            hostname="WS-ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        user = User(
+            username="alice",
+            full_name="Alice Admin",
+            email="alice@example.com",
+            primary_system=source.hostname,
+        )
+        activity_gen._world_model = SimpleNamespace(
+            systems_by_hostname={source.hostname: source, target.hostname: target}
+        )
+        activity_gen._ip_to_system = {source.ip: source, target.ip: target}
+        state_manager.set_current_time(timestamp)
+
+        with patch.object(generator_module, "_ephemeral_port", return_value=65535):
+            activity_gen.generate_service_installed(
+                user,
+                target,
+                timestamp,
+                service_name="PSEXESVC",
+                service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            )
+
+        remote_service_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+            and call.args[0].network.service in {"smb", "dce_rpc"}
+        ]
+        source_ports = [event.network.src_port for event in remote_service_events]
+
+        assert source_ports == [65534, 65535]
+        assert all(0 <= port <= 65535 for port in source_ports)
 
     def test_process_termination_uses_canonical_running_image(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2095,6 +2706,45 @@ class TestActivityGenerator:
         ]
         assert "workstation_unlocked" not in emitted_types
         assert "logon" not in emitted_types
+
+    def test_workstation_lock_unlock_reject_network_session_luid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4800/4801 and Type 7 unlock should never reuse a Type 3 network LUID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        network_logon_id = "0xabc123"
+        state_manager.register_session(
+            logon_id=network_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=3,
+            source_ip="10.0.0.55",
+            start_time=timestamp - timedelta(minutes=5),
+        )
+
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            timestamp,
+            network_logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            network_logon_id,
+        )
+
+        emitted_types = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "workstation_locked" not in emitted_types
+        assert "workstation_unlocked" not in emitted_types
+        assert not any(
+            call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 7
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        )
 
     def test_credential_dump_command_uses_high_integrity_token(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3084,6 +3734,70 @@ class TestActivityGenerator:
         ]
         assert all(event.event_type != "explicit_credentials" for event in emitted)
 
+    def test_generate_explicit_credentials_ignores_invalid_target_for_subject_fallback(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Invalid explicit target account text should not crash Windows subject coercion."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        root_user = User(username="root", full_name="root", email="root@example.local")
+
+        activity_gen.generate_explicit_credentials(
+            user=root_user,
+            system=test_system,
+            time=timestamp,
+            target_username=r"CORP\Jane Doe",
+            target_server="DC-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+            source_ip="10.10.3.10",
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.username == r"CORP\Jane Doe"
+        assert explicit.auth.subject_username == "Administrator"
+        assert all(getattr(event.auth, "username", "") != "Jane Doe" for event in emitted)
+
+    def test_generate_explicit_credentials_coerces_linux_subject_on_windows(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """A Unix-local narrative actor should not bootstrap a Windows root logon."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        root_user = User(username="root", full_name="root", email="root@example.local")
+        windows_user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha.johnson@example.local",
+            enabled=True,
+        )
+        activity_gen._users_by_username = {windows_user.username: windows_user}
+
+        activity_gen.generate_explicit_credentials(
+            user=root_user,
+            system=test_system,
+            time=timestamp,
+            target_username=windows_user.username,
+            target_server="DC-01",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=0,
+            source_ip="10.10.3.10",
+        )
+
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        logon = next(event for event in emitted if event.event_type == "logon")
+        process = next(event for event in emitted if event.event_type == "process_create")
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert logon.auth.username == windows_user.username
+        assert process.auth.username == windows_user.username
+        assert explicit.auth.subject_username == windows_user.username
+        assert all(getattr(event.auth, "username", "") != "root" for event in emitted)
+
     def test_generate_process_with_parent_pid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -3212,6 +3926,397 @@ class TestActivityGenerator:
         assert event.network.dst_ip == dst_ip
         assert event.network.dst_port == dst_port
         assert event.network.service == "ssl"
+
+    def test_generate_connection_uses_source_native_zeek_start_time(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Zeek connection timestamps should include shared source start latency."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.10.5",
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            src_port=51111,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=12.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.timestamp == _zeek_conn_observation_time(
+            timestamp,
+            "10.0.10.5",
+            51111,
+            "10.0.20.10",
+            22,
+            "tcp",
+            "ssh",
+        )
+
+    def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Internal-to-DC Kerberos conn.log rows should have matching DC audit evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.1.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds", "kerberos"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=dc.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            source_system=source,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        tgt = next(event for event in events if event.event_type == "kerberos_tgt")
+        service = next(event for event in events if event.event_type == "kerberos_service")
+        connection = next(event for event in events if event.event_type == "connection")
+
+        assert tgt.kerberos.target_username == "WEB-EXT-01$"
+        assert tgt.kerberos.source_ip == "::ffff:10.0.1.20"
+        assert service.kerberos.target_username == "WEB-EXT-01$@CORP.LOCAL"
+        assert tgt.timestamp < connection.timestamp
+        assert service.timestamp < connection.timestamp
+        assert (connection.timestamp - tgt.timestamp).total_seconds() < 1
+
+    def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Connection-layer KDC audit repair should not duplicate existing nearby audit."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2019",
+            type="server",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_kerberos_tgt(
+            username="FILE-SRV-01$",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=timestamp - timedelta(milliseconds=200),
+        )
+        activity_gen.generate_kerberos_service_ticket(
+            username="FILE-SRV-01$",
+            service_name=f"ldap/{dc.hostname}",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=timestamp - timedelta(milliseconds=80),
+        )
+        mock_emitters["windows_event_security"].emit.reset_mock()
+
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=dc.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            source_system=source,
+        )
+
+        events = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert events == ["connection"]
+
+    def test_generate_connection_clamps_http_depth_for_one_request_connections(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """A fresh connection UID should not inherit page-session transaction depth."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        http = HttpContext(
+            method="GET",
+            host="portal.example.com",
+            uri="/static/app.js",
+            response_body_len=2048,
+            trans_depth=4,
+        )
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=300,
+            resp_bytes=2048,
+            http=http,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.http.trans_depth == 1
+        assert http.trans_depth == 4
+
+    def test_generate_connection_reuses_http_uid_for_persistent_transactions(self, state_manager):
+        """Later HTTP transactions on a warm connection should reuse one Zeek UID."""
+
+        class CollectorEmitter:
+            def __init__(self, predicate):
+                self._predicate = predicate
+                self.events = []
+
+            def can_handle(self, event):
+                return self._predicate(event)
+
+            def emit(self, event):
+                self.events.append(event)
+
+        conn_emitter = CollectorEmitter(
+            lambda event: (
+                event.event_type == "connection"
+                and event.network is not None
+                and not event.network.application_layer_only
+            )
+        )
+        http_emitter = CollectorEmitter(
+            lambda event: event.event_type == "connection" and event.http is not None
+        )
+        edr_emitter = CollectorEmitter(
+            lambda event: (
+                event.event_type == "connection"
+                and event.network is not None
+                and not event.network.application_layer_only
+            )
+        )
+        emitters = {
+            "zeek_conn": conn_emitter,
+            "zeek_http": http_emitter,
+            "ecar": edr_emitter,
+        }
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        generator = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        first_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=2.0,
+            orig_bytes=450,
+            resp_bytes=12_288,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=4096,
+                flow_response_body_len=12_288,
+                flow_transaction_count=2,
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+        second_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp + timedelta(milliseconds=700),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.2,
+            orig_bytes=320,
+            resp_bytes=8192,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/assets/app.js",
+                user_agent="Mozilla/5.0",
+                response_body_len=8192,
+                trans_depth=2,
+            ),
+            emit_dns=False,
+        )
+
+        assert first_uid
+        assert second_uid == first_uid
+        assert len(conn_emitter.events) == 1
+        assert len(edr_emitter.events) == 1
+        assert len(http_emitter.events) == 2
+
+        first_event, second_event = http_emitter.events
+        assert first_event.network.zeek_uid == first_uid
+        assert first_event.network.application_layer_only is False
+        assert first_event.http.trans_depth == 1
+        assert second_event.network.zeek_uid == first_uid
+        assert second_event.network.src_port == first_event.network.src_port
+        assert second_event.network.application_layer_only is True
+        assert second_event.http.trans_depth == 2
+
+    def test_generate_connection_derives_plain_http_bytes_from_http_context(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Single plain-HTTP transactions should not keep unrelated oversized conn bytes."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=4_900,
+            resp_bytes=44_000,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/favicon.ico",
+                user_agent="Mozilla/5.0",
+                response_body_len=0,
+                status_code=304,
+                status_msg="Not Modified",
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+
+        assert event.network.conn_state == "SF"
+        assert event.network.orig_bytes < 1_200
+        assert 120 <= event.network.resp_bytes < 900
+        assert event.network.resp_bytes > event.http.response_body_len
+
+    def test_generate_connection_does_not_reuse_http_uid_after_parent_close(self, state_manager):
+        """A late HTTP request should start a new flow instead of overrunning conn.log."""
+
+        class CollectorEmitter:
+            def __init__(self, predicate):
+                self._predicate = predicate
+                self.events = []
+
+            def can_handle(self, event):
+                return self._predicate(event)
+
+            def emit(self, event):
+                self.events.append(event)
+
+        conn_emitter = CollectorEmitter(
+            lambda event: (
+                event.event_type == "connection"
+                and event.network is not None
+                and not event.network.application_layer_only
+            )
+        )
+        http_emitter = CollectorEmitter(
+            lambda event: event.event_type == "connection" and event.http is not None
+        )
+        emitters = {
+            "zeek_conn": conn_emitter,
+            "zeek_http": http_emitter,
+        }
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        generator = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        first_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.25,
+            orig_bytes=450,
+            resp_bytes=4096,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/",
+                user_agent="Mozilla/5.0",
+                response_body_len=4096,
+                trans_depth=1,
+            ),
+            emit_dns=False,
+        )
+        second_uid = generator.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp + timedelta(seconds=2),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.25,
+            orig_bytes=320,
+            resp_bytes=8192,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="portal.example.com",
+                uri="/assets/app.js",
+                user_agent="Mozilla/5.0",
+                response_body_len=8192,
+                trans_depth=2,
+            ),
+            emit_dns=False,
+        )
+
+        assert first_uid
+        assert second_uid
+        assert second_uid != first_uid
+        assert len(conn_emitter.events) == 2
+        assert len(http_emitter.events) == 2
+        assert http_emitter.events[1].network.application_layer_only is False
+        assert http_emitter.events[1].http.trans_depth == 1
 
     def test_generate_connection_with_bytes(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should include byte counts in NetworkContext."""
@@ -3698,6 +4803,41 @@ class TestActivityGenerator:
         assert terminate_events
         assert process_events[-1].timestamp < terminate_events[-1].timestamp
 
+    def test_process_user_apps_bash_pool_respects_database_role(
+        self, activity_gen, test_user, monkeypatch, mock_emitters
+    ):
+        """Generic user-app shell noise on DB hosts should not pick web-admin commands."""
+
+        class AssertingRng:
+            def choice(self, seq):
+                joined = "\n".join(seq)
+                assert "apache" not in joined
+                assert "nginx" not in joined
+                assert "certbot" not in joined
+                assert "ab -n" not in joined
+                return "du -sh /var/lib/mysql/*"
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: AssertingRng())
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["mysql"],
+            assigned_user=test_user.username,
+        )
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            "process_user_apps",
+            emit_process_telemetry=False,
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.shell.command == "du -sh /var/lib/mysql/*"
+
     def test_generate_bash_command_does_not_emit_process_for_shell_builtin(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -3880,6 +5020,23 @@ class TestActivityGenerator:
             "mysqldump --single-transaction ehr patients",
         )
 
+    def test_linux_shell_glob_tokens_remain_unquoted_in_process_argv(self):
+        """Expanded shell globs should not be rendered as literal quoted wildcards."""
+        process = generator_module._linux_command_process_from_shell("du -sh /var/log/*")
+
+        assert process == ("/usr/bin/du", "du -sh /var/log/*")
+
+    def test_linux_mysql_query_argument_remains_shell_safe(self):
+        """SQL passed through mysql -e should keep shell metacharacters quoted."""
+        process = generator_module._linux_command_process_from_shell(
+            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'"
+        )
+
+        assert process == (
+            "/usr/bin/mysql",
+            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'",
+        )
+
     def test_linux_shell_control_operators_split_process_argv(self):
         """Shell control operators should separate child process argv entries."""
         processes = generator_module._linux_command_processes_from_shell(
@@ -3892,6 +5049,59 @@ class TestActivityGenerator:
             ("/usr/bin/df", "df"),
             ("/usr/bin/uptime", "uptime"),
         ]
+
+    def test_linux_shell_single_process_inference_stops_after_first_stage(self, monkeypatch):
+        """Single-process inference should not parse unused pipeline stages."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str]:
+            parsed_stages.append(stage)
+            return "/usr/bin/whoami", stage
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+
+        process = generator_module._linux_command_process_from_shell("whoami | id | df | uptime")
+
+        assert process == ("/usr/bin/whoami", "whoami")
+        assert parsed_stages == ["whoami"]
+
+    def test_linux_shell_process_inference_limits_emitted_pipeline_stages(self, monkeypatch):
+        """Pipeline process inference should parse only the emitted process budget."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str]:
+            parsed_stages.append(stage)
+            return "/usr/bin/whoami", stage
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+        command = " | ".join(["whoami"] * 100)
+
+        processes = generator_module._linux_command_processes_from_shell(command)
+
+        assert len(processes) == 4
+        assert parsed_stages == ["whoami"] * 4
+
+    def test_linux_shell_process_inference_limits_unmatched_pipeline_stages(self, monkeypatch):
+        """Unmatched pipeline stages should not be parsed without a stage cap."""
+        parsed_stages: list[str] = []
+
+        def fake_process_from_stage(stage: str) -> tuple[str, str] | None:
+            parsed_stages.append(stage)
+            return None
+
+        monkeypatch.setattr(
+            generator_module, "_linux_command_process_from_stage", fake_process_from_stage
+        )
+        command = " | ".join(["unknown"] * 100)
+
+        processes = generator_module._linux_command_processes_from_shell(command)
+
+        assert processes == []
+        assert len(parsed_stages) == 32
 
     def test_generate_bash_command_emits_pipeline_children_with_clean_argv(
         self, activity_gen, test_user, state_manager, mock_emitters
@@ -4253,6 +5463,41 @@ def activity_gen():
         "syslog": Mock(),
     }
     return ActivityGenerator(sm, mock_emitters)
+
+
+def test_disambiguate_icmp_observation_time_uses_constant_time_sequence(activity_gen):
+    """Duplicate ICMP observations should not linearly probe prior timestamps."""
+
+    class CountingDict(dict[tuple[str, int, str, int], int]):
+        """Dictionary that counts next-timestamp lookups."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.get_calls = 0
+
+        def get(self, key: tuple[str, int, str, int], default: int = 0) -> int:
+            self.get_calls += 1
+            return super().get(key, default)
+
+    next_timestamps = CountingDict()
+    activity_gen._next_icmp_observation_ts_us = next_timestamps
+    base_time = datetime(2024, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    adjusted_times = [
+        activity_gen._disambiguate_icmp_observation_time(
+            "10.0.0.1",
+            0,
+            "10.0.0.2",
+            0,
+            base_time,
+        )
+        for _ in range(1000)
+    ]
+
+    assert adjusted_times[0] == base_time
+    assert adjusted_times[-1] == base_time + timedelta(milliseconds=11 * 999)
+    assert next_timestamps.get_calls == len(adjusted_times)
+    assert len(next_timestamps) == 1
 
 
 def test_emit_dns_lookup_prunes_and_bounds_dns_cache(activity_gen):

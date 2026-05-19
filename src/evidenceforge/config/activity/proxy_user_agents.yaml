@@ -13,7 +13,6 @@ domain_overrides:
     hosts:
       - download.windowsupdate.com
       - ctldl.windowsupdate.com
-      - packages.microsoft.com
     user_agents:
       - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
   google_update_windows:
@@ -42,6 +41,7 @@ domain_overrides:
       - ocsp.sectigo.com
       - ocsp.globalsign.com
       - ocsp.int-x3.letsencrypt.org
+      - ocsp.meridianhcs.local
       - r3.o.lencr.org
       - x1.c.lencr.org
     user_agents:
@@ -83,6 +83,7 @@ workstation:
         - changelogs.ubuntu.com
         - deb.debian.org
         - security.debian.org
+        - packages.microsoft.com
       user_agents:
         - "apt-http/2.4.11 (amd64)"
         - "Debian APT-HTTP/1.3 (2.4.11)"
@@ -124,6 +125,7 @@ server:
         - changelogs.ubuntu.com
         - deb.debian.org
         - security.debian.org
+        - packages.microsoft.com
       user_agents:
         - "apt-http/2.4.11 (amd64)"
         - "Debian APT-HTTP/1.3 (2.4.11)"

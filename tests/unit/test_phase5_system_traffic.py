@@ -29,9 +29,17 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
+    BaselineMixin,
+    _dc_kerberos_cycle_range,
+    _dc_kerberos_tgs_range,
+    _is_kerberos_member_server,
+    _kernel_uptime_stamp,
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
+    _pick_dc_kerberos_service,
+    _pick_dc_kerberos_target,
     _registry_writer_candidates,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -58,6 +66,58 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
+    """Kernel bracket timestamps should be monotonic within a host boot stream."""
+    scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    first = scenario_start + timedelta(seconds=387.345076)
+    second = scenario_start + timedelta(seconds=387.997014)
+
+    first_stamp = _kernel_uptime_stamp(2332800.0, scenario_start, first)
+    second_stamp = _kernel_uptime_stamp(2332800.0, scenario_start, second)
+
+    assert first_stamp == "2333187.345076"
+    assert second_stamp == "2333187.997014"
+    assert float(second_stamp) > float(first_stamp)
+
+
+def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
+    """Anacron syslog should be a coherent daily run, not random repeated fragments."""
+    engine = type("FakeEngine", (object,), {})()
+    engine.activity_generator = Mock()
+    engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    engine.end_time = datetime(2024, 3, 18, 18, 0, 0, tzinfo=UTC)
+    engine._scenario_tz = None
+    engine._emit_anacron_lifecycle = BaselineMixin._emit_anacron_lifecycle.__get__(
+        engine,
+        type(engine),
+    )
+    ts = datetime(2024, 3, 18, 12, 16, 58, tzinfo=UTC)
+
+    engine._emit_anacron_lifecycle(
+        linux_system,
+        ts - timedelta(hours=2),
+        random.Random(5),
+        {"anacron": 13517},
+    )
+    engine._emit_anacron_lifecycle(linux_system, ts, random.Random(7), {"anacron": 13517})
+    engine._emit_anacron_lifecycle(
+        linux_system,
+        ts + timedelta(hours=1),
+        random.Random(9),
+        {"anacron": 13517},
+    )
+
+    calls = engine.activity_generator.generate_syslog_event.call_args_list
+    messages = [call.kwargs["message"] for call in calls]
+    times = [call.kwargs["time"] for call in calls]
+
+    assert len(messages) == 5
+    assert messages[0] == "Anacron 2.3 started on 2024-03-18"
+    assert all("cron.weekly" not in message for message in messages)
+    assert messages[-1] == "Normal exit (1 job run)"
+    assert times == sorted(times)
 
 
 @pytest.fixture
@@ -383,6 +443,92 @@ class TestGenerateSystemProcess:
         ]
         assert len(security_creates) == 1
 
+    def test_singleton_windows_service_reuse_ignores_noncanonical_future_process(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Singleton service reuse should not select attacker-like future user processes."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+        state_manager.set_current_time(timestamp + timedelta(hours=1))
+        rogue_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Users\Public\spoolsv.exe",
+            r"C:\Users\Public\spoolsv.exe",
+            "bob",
+            "Medium",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        returned_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert returned_pid != rogue_pid
+        returned_proc = state_manager.get_process(win_system.hostname, returned_pid)
+        assert returned_proc is not None
+        assert returned_proc.image == r"C:\Windows\System32\spoolsv.exe"
+        assert returned_proc.username == "SYSTEM"
+        assert returned_proc.start_time == timestamp + timedelta(minutes=10)
+        security_creates = [
+            c[0][0]
+            for c in mock_emitters["windows_event_security"].emit.call_args_list
+            if c[0][0].event_type == "system_process_create"
+            and c[0][0].process.image == r"C:\Windows\System32\spoolsv.exe"
+        ]
+        assert len(security_creates) == 1
+        assert security_creates[0].process.pid == returned_pid
+
+    def test_singleton_windows_service_reuse_ignores_canonical_future_process(
+        self, activity_gen, win_system, timestamp, state_manager, mock_emitters
+    ):
+        """Singleton service reuse should not select processes that start after event time."""
+        state_manager.set_current_time(timestamp)
+        parent_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\System32\services.exe",
+            "services.exe",
+            "SYSTEM",
+            "System",
+        )
+        state_manager.set_current_time(timestamp + timedelta(hours=1))
+        future_pid = state_manager.create_process(
+            win_system.hostname,
+            parent_pid,
+            r"C:\Windows\System32\spoolsv.exe",
+            "spoolsv.exe",
+            "SYSTEM",
+            "System",
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        returned_pid = activity_gen.generate_system_process(
+            system=win_system,
+            time=timestamp + timedelta(minutes=10),
+            process_name=r"C:\Windows\System32\spoolsv.exe",
+            command_line="spoolsv.exe",
+            parent_pid=parent_pid,
+            username="SYSTEM",
+        )
+
+        assert returned_pid != future_pid
+        returned_proc = state_manager.get_process(win_system.hostname, returned_pid)
+        assert returned_proc is not None
+        assert returned_proc.start_time == timestamp + timedelta(minutes=10)
+
     def test_allows_multiple_non_singleton_windows_service_processes(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters
     ):
@@ -613,6 +759,107 @@ class TestParentPidSelection:
         )
 
 
+class TestSystemProcessSessionOwnership:
+    """Test source-native ownership for system-pool Windows process candidates."""
+
+    def test_shell_uwp_processes_use_active_interactive_session(self, state_manager, mock_emitters):
+        """Shell/UWP processes selected by system traffic should not run as SYSTEM/session 0."""
+        from evidenceforge.generation.engine import GenerationEngine
+
+        system = System(
+            hostname="WKS-01",
+            ip="10.0.10.1",
+            os="Windows 10",
+            type="workstation",
+            assigned_user="alice",
+        )
+        user = User(username="alice", full_name="Alice", email="alice@example.com")
+        engine = object.__new__(GenerationEngine)
+        engine.state_manager = state_manager
+        engine._system_pids = {}
+        pids: dict[str, int] = {}
+        engine._seed_windows_process_tree(system, pids)
+
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        ag._system_pids = {system.hostname: pids}
+        ag._users_by_username = {user.username: user}
+        timestamp = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = ag.generate_logon(user, system, timestamp, logon_type=2)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        pid = ag.generate_system_process(
+            system,
+            timestamp + timedelta(seconds=3),
+            r"C:\Windows\System32\sihost.exe",
+            "sihost.exe",
+            parent_pid=pids["svchost_netsvcs"],
+            username="SYSTEM",
+        )
+
+        assert pid != 0
+        proc = state_manager.get_process(system.hostname, pid)
+        assert proc is not None
+        assert proc.username == user.username
+        assert proc.logon_id == logon_id
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        process_event = next(
+            event
+            for event in emitted
+            if event.event_type == "process_create" and event.process.pid == pid
+        )
+        assert process_event.auth.username == user.username
+        assert process_event.auth.logon_id == logon_id
+        assert process_event.auth.logon_type == 2
+        assert process_event.process.integrity_level == "Medium"
+        assert all(
+            event.event_type != "system_process_create" or event.process.pid != pid
+            for event in emitted
+        )
+
+    def test_shell_uwp_processes_skip_without_interactive_session(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Desktop-only shell helpers should not appear on hosts without a desktop session."""
+        system = System(hostname="DC-01", ip="10.0.0.10", os="Windows Server 2022", type="server")
+        state_manager.set_current_time(datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC))
+
+        pid = activity_gen.generate_system_process(
+            system,
+            datetime(2024, 3, 15, 10, 0, 1, tzinfo=UTC),
+            r"C:\Windows\System32\RuntimeBroker.exe",
+            "RuntimeBroker.exe -Embedding",
+            parent_pid=4,
+            username="SYSTEM",
+        )
+
+        assert pid == 0
+        emitted = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert all(
+            "runtimebroker.exe" not in (event.process.image or "").lower()
+            for event in emitted
+            if event.process is not None
+        )
+
+    def test_system_service_pools_exclude_desktop_shell_helpers(self):
+        """System service config should not list user-session shell/UWP processes."""
+        service_pools = load_system_processes()["system_services"]
+        pool_images = {
+            image.rsplit("\\", 1)[-1].lower()
+            for pool_name in ("all", "workstation")
+            for entry in service_pools[pool_name]
+            for image in [entry["image"]]
+        }
+
+        assert "sihost.exe" not in pool_images
+        assert "runtimebroker.exe" not in pool_images
+        assert "backgroundtaskhost.exe" not in pool_images
+        assert "searchhost.exe" not in pool_images
+
+
 class TestInfrastructureTrafficGeneration:
     """Test Kerberos/LDAP/DB traffic detection and generation."""
 
@@ -632,6 +879,54 @@ class TestInfrastructureTrafficGeneration:
 
         assert all(0 <= offset <= 3599 for offset in offsets)
         assert all(abs(offset - tgt_offset) >= 2.0 for offset in offsets)
+
+    def test_dc_kerberos_counts_are_capped_for_high_activity_dcs(self):
+        """DC activity multipliers should not explode machine-account TGS volume."""
+        assert _dc_kerberos_cycle_range(8.0) == (2, 8)
+        assert _dc_kerberos_tgs_range(8.0) == (2, 3)
+
+    def test_dc_kerberos_service_distribution_is_skewed(self):
+        """Baseline service-ticket classes should not be uniform buckets."""
+        from collections import Counter
+
+        member_rng = random.Random(21)
+        dc_rng = random.Random(22)
+        member_counts = Counter(
+            _pick_dc_kerberos_service(member_rng, target_is_dc=False) for _ in range(500)
+        )
+        dc_counts = Counter(
+            _pick_dc_kerberos_service(dc_rng, target_is_dc=True) for _ in range(500)
+        )
+
+        assert member_counts["cifs"] > member_counts["http"] > member_counts["termsrv"]
+        assert dc_counts["ldap"] > dc_counts["cifs"] > dc_counts["http"]
+
+    def test_dc_kerberos_targets_prefer_member_servers_when_available(self):
+        rng = random.Random(23)
+        picks = [_pick_dc_kerberos_target(rng, ["FILE-01", "APP-01"], "DC-01") for _ in range(200)]
+
+        member_count = sum(1 for _target, is_dc in picks if not is_dc)
+        assert member_count > 140
+
+    def test_kerberos_member_server_detector_handles_roles_and_source_native_services(self):
+        file_server = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.0.20",
+            os="Windows Server 2019",
+            type="server",
+            services=["SMB", "Windows Search"],
+            roles=["file_server"],
+        )
+        ordinary_workstation = System(
+            hostname="WS-01",
+            ip="10.0.0.30",
+            os="Windows 11",
+            type="workstation",
+            services=["dns-client"],
+        )
+
+        assert _is_kerberos_member_server(file_server)
+        assert not _is_kerberos_member_server(ordinary_workstation)
 
     def test_detects_mssql_from_services(self):
         """DB servers should be detected from system services list."""

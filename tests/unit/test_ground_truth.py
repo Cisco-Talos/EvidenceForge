@@ -135,6 +135,22 @@ class TestGroundTruthGenerator:
         assert output_path.exists()
         assert output_path.stat().st_size > 0
 
+    def test_generate_rejects_dangling_symlink(self, minimal_scenario, malicious_events, tmp_path):
+        """generate() should not follow dangling symlinks for GROUND_TRUTH.md."""
+        output_path = tmp_path / "GROUND_TRUTH.md"
+        outside_target = tmp_path / "outside-ground-truth.md"
+        try:
+            output_path.symlink_to(outside_target)
+        except OSError as exc:
+            pytest.skip(f"Symlink creation unsupported in this environment: {exc}")
+        generator = GroundTruthGenerator(minimal_scenario, malicious_events)
+
+        with pytest.raises(PermissionError):
+            generator.generate(output_path)
+
+        assert output_path.is_symlink()
+        assert not outside_target.exists()
+
     def test_generate_includes_header(self, minimal_scenario, malicious_events, tmp_path):
         """Generated file should include header with scenario name and description."""
         output_path = tmp_path / "GROUND_TRUTH.md"

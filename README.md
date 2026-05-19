@@ -129,7 +129,7 @@ Every generated scenario includes a `GROUND_TRUTH.md` file. Attack scenarios doc
 | Bash History | Host | Per-user timestamped command history |
 | Snort Alert | Network | IDS alert format (fast alert) |
 | Web Access | Network | Apache/Nginx combined log format |
-| HTTP Proxy | Host | Forward proxy access log (W3C Extended format, CONNECT entries for HTTPS, cache status) |
+| HTTP Proxy | Host | Forward proxy access log (W3C Extended format, CONNECT entries, cache status, proxy action hints) |
 
 See [Evidence Formats Reference](docs/reference/EVIDENCE_FORMATS.md) for detailed field documentation, output paths, and known limitations.
 

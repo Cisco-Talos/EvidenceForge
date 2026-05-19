@@ -9,9 +9,57 @@ from evidenceforge.generation.activity.site_maps import (
     PageDef,
     SiteMap,
     SubresourceDef,
+    _replace_hex_tokens,
     get_site_map,
     load_site_maps,
 )
+
+
+class TestHexTokenReplacement:
+    """Verify hex-token substitution remains bounded for overlay-controlled paths."""
+
+    def test_replaces_many_hex_tokens_without_quadratic_loop(self):
+        rng = random.Random(42)
+        path = "/asset/" + "{hex8}" * 2048 + "/" + "{hex16}" * 2048
+
+        replaced = _replace_hex_tokens(
+            rng,
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=False,
+        )
+
+        assert "{hex8}" not in replaced
+        assert "{hex16}" not in replaced
+        assert len(replaced) == len("/asset//") + (2048 * 8) + (2048 * 16)
+
+    def test_stable_hex_tokens_preserve_per_occurrence_values(self):
+        rng = random.Random(42)
+        path = "/assets/app.{hex8}.{hex8}.{hex16}.js"
+
+        replaced_one = _replace_hex_tokens(
+            rng,
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=True,
+        )
+        replaced_two = _replace_hex_tokens(
+            random.Random(999),
+            path,
+            hostname="cdn.example.com",
+            template=path,
+            stable_asset_tokens=True,
+        )
+
+        assert replaced_one == replaced_two
+        assert "{hex" not in replaced_one
+        segments = replaced_one.rsplit("/", 1)[1].split(".")
+        assert len(segments[1]) == 8
+        assert len(segments[2]) == 8
+        assert segments[1] != segments[2]
+        assert len(segments[3]) == 16
 
 
 class TestLoadSiteMaps:
@@ -153,13 +201,32 @@ class TestGetSiteMap:
 
     def test_different_seeds_produce_different_vars(self):
         """Different seeds should produce different template substitutions."""
-        sm1 = get_site_map("outlook.office365.com", [], random.Random(1))
-        sm2 = get_site_map("outlook.office365.com", [], random.Random(999))
-        # The page paths are fixed (/owa/, /owa/#/mail, etc.) but subresource
-        # paths contain {hex16} which should differ
+        sm1 = get_site_map("github.com", [], random.Random(1))
+        sm2 = get_site_map("github.com", [], random.Random(999))
+        # User/content URLs should still vary between sessions.
         subs1 = [s.path for p in sm1.pages for s in p.subresources]
         subs2 = [s.path for p in sm2.pages for s in p.subresources]
         assert subs1 != subs2
+
+    def test_deployment_static_asset_hashes_are_stable_per_host(self):
+        """Cache-busted JS/CSS bundles should look like a deployed app version."""
+        sm1 = get_site_map("portal.example.com", ["web"], random.Random(1))
+        sm2 = get_site_map("portal.example.com", ["web"], random.Random(999))
+
+        def _paths(site_map):
+            return [s.path for p in site_map.pages for s in p.subresources]
+
+        paths1 = _paths(sm1)
+        paths2 = _paths(sm2)
+        app_bundles1 = [path for path in paths1 if "/assets/js/app.bundle." in path]
+        app_bundles2 = [path for path in paths2 if "/assets/js/app.bundle." in path]
+        content_images1 = [path for path in paths1 if "/assets/img/content/" in path]
+        content_images2 = [path for path in paths2 if "/assets/img/content/" in path]
+
+        assert app_bundles1
+        assert app_bundles1 == app_bundles2
+        assert content_images1
+        assert content_images1 != content_images2
 
     def test_favicon_in_curated_domains(self):
         """Curated domains should include favicon.ico in subresources."""

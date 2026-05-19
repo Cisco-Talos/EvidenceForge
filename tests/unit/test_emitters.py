@@ -25,6 +25,7 @@
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from unittest.mock import Mock
 
 import pytest
 
@@ -101,6 +102,70 @@ class TestWindowsEventEmitter:
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
+    @pytest.mark.parametrize(
+        ("logon_type", "expected_role", "expected_process"),
+        [
+            (2, "winlogon", r"C:\Windows\System32\winlogon.exe"),
+            (5, "services", r"C:\Windows\System32\services.exe"),
+            (10, "winlogon", r"C:\Windows\System32\winlogon.exe"),
+            (3, "lsass", r"C:\Windows\System32\lsass.exe"),
+        ],
+    )
+    def test_render_logon_uses_source_native_caller_process(
+        self,
+        format_def,
+        temp_output,
+        logon_type,
+        expected_role,
+        expected_process,
+    ):
+        """4624 ProcessName should reflect the logon type's caller, not always lsass."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        emitter.emit_event = Mock()
+        emitter._system_pids = {
+            "WIN-TEST-01": {
+                "winlogon": 612,
+                "services": 704,
+                "lsass": 736,
+            }
+        }
+        host = HostContext(
+            hostname="WIN-TEST-01",
+            ip="10.0.0.10",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WIN-TEST-01.corp.local",
+            netbios_domain="CORP",
+        )
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0x12345",
+                logon_type=logon_type,
+                auth_package="Negotiate",
+                source_ip="-" if logon_type in {2, 5} else "10.0.0.50",
+                source_port=0 if logon_type in {2, 5} else 50123,
+                logon_process="User32" if logon_type in {2, 10} else "Kerberos",
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                reporting_pid=736,
+            ),
+        )
+
+        emitter._render_logon(event)
+
+        rendered = emitter.emit_event.call_args.args[0]
+        assert rendered["ProcessName"] == expected_process
+        assert rendered["ProcessId"] == f"0x{emitter._system_pids['WIN-TEST-01'][expected_role]:x}"
+
     def test_emit_event_aligns_provider_execution_ids(self, format_def, temp_output):
         """Security XML provider PID/TID values should look Windows-native."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
@@ -128,6 +193,35 @@ class TestWindowsEventEmitter:
 
         content = temp_output.read_text()
         assert '<Execution ProcessID="544" ThreadID="116"/>' in content
+
+    def test_emit_event_preserves_oversized_decimal_execution_id(self, format_def, temp_output):
+        """Oversized raw decimal PID/TID strings should not abort Security XML rendering."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        oversized_pid = "9" * 5000
+
+        event_data = {
+            "EventID": 4624,
+            "TimeCreated": datetime(2024, 1, 15, 10, 30, 45, tzinfo=UTC),
+            "Computer": "WIN-TEST-01.corp.local",
+            "Channel": "Security",
+            "Level": 0,
+            "ExecutionProcessID": oversized_pid,
+            "ExecutionThreadID": "113",
+            "TargetUserName": "jsmith",
+            "TargetDomainName": "CORP",
+            "TargetLogonId": "0x3e7abc",
+            "LogonType": 2,
+            "WorkstationName": "WIN-TEST-01",
+            "IpAddress": "192.168.1.100",
+            "LogonProcessName": "User32",
+            "AuthenticationPackageName": "Negotiate",
+        }
+
+        emitter.emit_event(event_data)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert f'<Execution ProcessID="{oversized_pid}" ThreadID="116"/>' in content
 
     def test_network_logon_workstation_name_uses_source_host(self, format_def, temp_output):
         """Network 4624 events should name the source workstation, not the destination."""
@@ -175,6 +269,53 @@ class TestWindowsEventEmitter:
         assert '<Data Name="WorkstationName">WS-01</Data>' in content
         assert "<Computer>FS-01.example.com</Computer>" in content
         assert '<Data Name="ElevatedToken">%%1843</Data>' in content
+
+    def test_kerberos_network_logon_can_render_blank_workstation_name(
+        self, format_def, temp_output
+    ):
+        """Native Kerberos type-3 4624 often leaves WorkstationName unset."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 45, tzinfo=UTC),
+            event_type="logon",
+            src_host=HostContext(
+                hostname="WS-01",
+                ip="10.0.1.10",
+                fqdn="WS-01.example.com",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+            ),
+            dst_host=HostContext(
+                hostname="FS-01",
+                ip="10.0.2.20",
+                fqdn="FS-01.example.com",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+            ),
+            auth=AuthContext(
+                username="jsmith",
+                user_sid="S-1-5-21-1-2-3-1001",
+                logon_id="0xkerb1",
+                logon_type=3,
+                source_ip="10.0.1.10",
+                auth_package="Kerberos",
+                logon_process="Kerberos",
+                lm_package="-",
+                subject_sid="S-1-5-18",
+                subject_username="SYSTEM",
+                subject_domain="NT AUTHORITY",
+                subject_logon_id="0x3e7",
+                reporting_pid=744,
+            ),
+        )
+
+        emitter.emit(event)
+        emitter.close()
+
+        content = temp_output.read_text()
+        assert '<Data Name="WorkstationName">-</Data>' in content
 
     def test_logon_elevated_token_reflects_auth_context(self, format_def, temp_output):
         """4624 ElevatedToken should vary with canonical auth.elevated."""
@@ -599,6 +740,53 @@ class TestWindowsEventEmitter:
 
         assert emitter._event_dicts[0]["TimeCreated"] == parent_time + timedelta(milliseconds=1)
 
+    def test_process_create_self_parent_is_not_shifted_forever(self, format_def, temp_output):
+        """Self-parent raw Security 4688 records should be treated as unshiftable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": event_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1234",
+                "NewProcessId": "0x1234",
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == event_time
+
+    def test_process_create_parent_cycle_is_not_shifted_forever(self, format_def, temp_output):
+        """Cyclic raw Security 4688 parent PIDs should be treated as unshiftable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        first_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": first_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x2222",
+                "NewProcessId": "0x1111",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": second_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1111",
+                "NewProcessId": "0x2222",
+            },
+        ]
+
+        emitter._shift_process_creates_after_visible_parent()
+
+        assert emitter._event_dicts[0]["TimeCreated"] == first_time
+        assert emitter._event_dicts[1]["TimeCreated"] == second_time
+
     def test_process_create_shifted_after_visible_logon(self, format_def, temp_output):
         """Security 4688 should not visibly precede its same-session 4624 row."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -685,6 +873,40 @@ class TestWindowsEventEmitter:
         assert child["TimeCreated"] == parent_time + timedelta(milliseconds=1)
         emitter._cleanup_spool_unlocked()
 
+    def test_spooled_process_create_parent_cycle_is_not_shifted_forever(
+        self, format_def, temp_output
+    ):
+        """Spooled cyclic raw Security 4688 parent PIDs should be treated as unshiftable."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        first_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4688,
+                "TimeCreated": first_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x2222",
+                "NewProcessId": "0x1111",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": second_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1111",
+                "NewProcessId": "0x2222",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_creates_after_visible_parent_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        first = next(event for event in events if event["NewProcessId"] == "0x1111")
+        second = next(event for event in events if event["NewProcessId"] == "0x2222")
+        assert first["TimeCreated"] == first_time
+        assert second["TimeCreated"] == second_time
+        emitter._cleanup_spool_unlocked()
+
     def test_spooled_process_create_shifted_after_visible_logon(self, format_def, temp_output):
         """Spooled Security 4688 fixups should preserve logon-before-process ordering."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -740,6 +962,63 @@ class TestWindowsEventEmitter:
         gaps = [rendered_times[i] - rendered_times[i - 1] for i in range(1, len(rendered_times))]
         assert max(gaps[:24]) < timedelta(milliseconds=1)
         assert min(gaps[25:]) >= timedelta(seconds=1)
+
+    def test_kerberos_tgt_shifted_before_visible_service_ticket(self, format_def, temp_output):
+        """Rendered DC Security 4768 rows should visibly precede dependent 4769 rows."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        tgs_time = datetime(2024, 1, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        tgt_time = tgs_time + timedelta(milliseconds=50)
+        tgs = {
+            "EventID": 4769,
+            "TimeCreated": tgs_time,
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice@CORP.LOCAL",
+            "IpAddress": "::ffff:10.0.0.25",
+        }
+        tgt = {
+            "EventID": 4768,
+            "TimeCreated": tgt_time,
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice",
+            "IpAddress": "::ffff:10.0.0.25",
+        }
+        emitter._event_dicts = [tgs, tgt]
+
+        emitter._shift_kerberos_tgts_before_service_tickets()
+
+        assert tgt["TimeCreated"] < tgs["TimeCreated"]
+
+    def test_spooled_kerberos_tgt_shifted_before_visible_service_ticket(
+        self,
+        format_def,
+        temp_output,
+    ):
+        """Spooled Windows rows should keep visible TGT before TGS after final sort."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        tgs_time = datetime(2024, 1, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        emitter._event_dicts = [
+            {
+                "EventID": 4769,
+                "TimeCreated": tgs_time,
+                "Computer": "DC-01.corp.local",
+                "TargetUserName": "alice@CORP.LOCAL",
+                "IpAddress": "::ffff:10.0.0.25",
+            },
+            {
+                "EventID": 4768,
+                "TimeCreated": tgs_time + timedelta(milliseconds=50),
+                "Computer": "DC-01.corp.local",
+                "TargetUserName": "alice",
+                "IpAddress": "::ffff:10.0.0.25",
+            },
+        ]
+        emitter._spool_event_dicts_unlocked()
+
+        emitter._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        assert [event["EventID"] for event in events] == [4768, 4769]
+        assert events[0]["TimeCreated"] < events[1]["TimeCreated"]
 
     def test_windows_events_defer_rendering_until_close(self, format_def, temp_output):
         """Windows events should render in one final chronological RecordID pass."""
@@ -1861,6 +2140,50 @@ class TestWindowsEventEmitter:
         session_lines = [line for line in content.splitlines() if 'Data Name="SessionId"' in line]
         assert len(session_lines) == 2
         assert session_lines[0] == session_lines[1]
+
+    def test_duplicate_unlock_suppression_handles_many_paired_type7_logons(
+        self, format_def, temp_output
+    ):
+        """Duplicate unlock suppression should drop paired type 7 logons at scale."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        host = "WKS-01.corp.local"
+        logon_id = "0x4f2a1b"
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        event_count = 400
+        events = [
+            {
+                "EventID": 4801,
+                "TimeCreated": base,
+                "Computer": host,
+                "TargetLogonId": logon_id,
+                "SessionId": 2,
+            },
+        ]
+        for offset in range(1, event_count):
+            unlock_time = base + timedelta(seconds=offset * 3)
+            events.extend(
+                [
+                    {
+                        "EventID": 4801,
+                        "TimeCreated": unlock_time,
+                        "Computer": host,
+                        "TargetLogonId": logon_id,
+                        "SessionId": 2,
+                    },
+                    {
+                        "EventID": 4624,
+                        "TimeCreated": unlock_time + timedelta(milliseconds=50),
+                        "Computer": host,
+                        "TargetLogonId": logon_id,
+                        "LogonType": 7,
+                    },
+                ]
+            )
+        emitter._event_dicts = events
+
+        emitter._suppress_duplicate_lock_unlock_transitions()
+
+        assert emitter._event_dicts == [events[0]]
 
     def test_duplicate_lock_unlock_state_transitions_are_suppressed(self, format_def, temp_output):
         """Security 4800/4801 should alternate chronologically for a session."""

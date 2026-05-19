@@ -8,6 +8,8 @@ events, and baseline should generate bash history for all Linux users,
 not just the attack user.
 """
 
+import random
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -236,6 +238,56 @@ class TestBaselineLinuxBashHistory:
         assert is_typo is False
         assert command
 
+    def test_bash_picker_suppresses_repeated_exact_commands(self, monkeypatch):
+        """Generated bash histories should not overuse one exact command string."""
+        from evidenceforge.generation.activity import bash_commands
+
+        bash_commands.reset_bash_command_memory()
+        monkeypatch.setattr(bash_commands, "_typo_rate", lambda _username, _commands: 0.0)
+
+        rng = random.Random(7)
+        picked = [
+            bash_commands.pick_bash_command_entry(
+                rng,
+                "sysadmin",
+                "WEB-01",
+                ["nginx", "ssh"],
+                username="deploy",
+                session_command_count=80,
+            )[0]
+            for _ in range(80)
+        ]
+
+        counts = Counter(picked)
+        assert max(counts.values()) <= 6
+
+    def test_bash_picker_suppresses_same_user_repeats_across_hosts(self):
+        """A user's command memory should carry across parallel SSH hosts."""
+        from evidenceforge.generation.activity import bash_commands
+
+        bash_commands.reset_bash_command_memory()
+        bash_commands._remember_command("WEB-01", "deploy", "ls")
+
+        class PreferRepeatedThenFresh(random.Random):
+            def __init__(self):
+                super().__init__(3)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                return values[0] if self.calls == 1 else values[1]
+
+        command = bash_commands._choose_template_with_memory(
+            PreferRepeatedThenFresh(),
+            ["ls", "pwd"],
+            {},
+            [],
+            "DB-01",
+            "deploy",
+        )
+
+        assert command == "pwd"
+
 
 class TestBashHistoryChronological:
     """Bash history entries should be chronologically sorted."""
@@ -277,6 +329,31 @@ class TestBashHistoryChronological:
 
         assert deltas
         assert any(delta != 2.0 for delta in deltas)
+        assert any(delta > 10.0 for delta in deltas)
+
+    def test_simple_command_dwell_avoids_mechanical_short_bursts(
+        self, state_manager, mock_emitters, linux_system, root_user
+    ):
+        ag = ActivityGenerator(state_manager, mock_emitters)
+        start = datetime(2024, 3, 18, 14, 0, 0, tzinfo=UTC)
+
+        for offset in range(12):
+            ag.generate_bash_command(
+                root_user,
+                linux_system,
+                start + timedelta(seconds=offset * 2),
+                "ls",
+            )
+
+        events = [call.args[0] for call in mock_emitters["bash_history"].emit.call_args_list]
+        deltas = [
+            (events[idx].timestamp - events[idx - 1].timestamp).total_seconds()
+            for idx in range(1, len(events))
+        ]
+
+        assert deltas
+        assert sum(delta <= 10.0 for delta in deltas) <= 3
+        assert any(delta >= 60.0 for delta in deltas)
 
     def test_shred_remove_clears_rendered_history(self, tmp_path):
         """A destructive shred of .bash_history should erase prior collected entries."""

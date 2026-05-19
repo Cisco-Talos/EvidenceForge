@@ -31,6 +31,20 @@ from collections import Counter
 from evidenceforge.formats import load_all_formats, load_format, validate_event
 
 
+class TestFormatDefinitionAuthenticity:
+    """Tests for rendered format metadata that reaches generated datasets."""
+
+    def test_format_headers_do_not_expose_generator_identity(self):
+        """Source-native headers should not identify the dataset generator."""
+        leaked_headers = []
+        for fmt in load_all_formats().values():
+            header = fmt.output.header_template or ""
+            if re.search(r"\bEvidenceForge\b", header, flags=re.IGNORECASE):
+                leaked_headers.append(fmt.name)
+
+        assert leaked_headers == []
+
+
 class TestWindowsEventFormat:
     """Tests for Windows Event Log format definition."""
 

@@ -858,6 +858,7 @@ class WorldPlanner:
             get_app_categories,
             has_catalog_entry,
             is_persona_allowed,
+            is_system_type_allowed,
             load_catalog,
             resolve_image_path,
         )
@@ -876,6 +877,9 @@ class WorldPlanner:
 
         def _is_allowed(exe: str) -> bool:
             if not has_catalog_entry(exe, os_cat):
+                return False
+            system_type = getattr(system, "type", None)
+            if not is_system_type_allowed(exe, os_cat, system_type):
                 return False
             allowed = is_persona_allowed(exe, os_cat, persona)
             # Server-admin sessions also grant sysadmin-level tool access
@@ -999,7 +1003,10 @@ class WorldPlanner:
             source_port=source_port,
             session_kind="ssh",
         )
-        sshd_pid = 1000 + (_stable_seed(f"sshd_pid_{logon_id}") % 59000)
+        sshd_pid = self.state_manager.allocate_transient_linux_pid(
+            plan.target_system.hostname,
+            logon_time,
+        )
         self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
         min_duration = max(

@@ -18,7 +18,7 @@ You are helping the user evaluate the quality of generated synthetic security lo
 If the user has a generated output directory and scenario file:
 
 ```bash
-eforge eval <output_dir> --scenario <scenario.yaml> --verbose
+eforge eval scenarios/<slug>/data --scenario scenarios/<slug>/scenario.yaml --verbose
 ```
 
 If they don't have generated output yet, suggest using `/eforge generate` first.
@@ -35,6 +35,7 @@ The user needs to provide (or you can infer) the scenario directory. The standar
 scenarios/<scenario-name>/
   scenario.yaml
   ENVIRONMENT.md
+  artifacts/         ← optional authored collateral, not eval input
   GROUND_TRUTH.md
   OBSERVATION_MANIFEST.json  ← optional, generated for source-observation-aware eval
   data/              ← this is the output_dir for eforge eval
@@ -43,6 +44,8 @@ scenarios/<scenario-name>/
 If the user provides the scenario directory (e.g., `scenarios/retail-store-ftp-attack/`), derive:
 - Data directory: `scenarios/<name>/data/`
 - Scenario file: `scenarios/<name>/scenario.yaml`
+
+Ignore optional `artifacts/` contents for evaluation; they are exercise collateral, not generated log output.
 
 If they don't specify, look for scenario directories under `scenarios/`. Ask if you can't find it.
 

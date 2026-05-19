@@ -82,6 +82,21 @@ class AbbreviatedGroup(typer.core.TyperGroup):
 
 
 # Initialize Typer app and Rich console
+
+
+def _path_exists_or_symlink(path: Path) -> bool:
+    """Return True for existing paths and dangling symlinks."""
+    return path.exists() or path.is_symlink()
+
+
+def _reject_generated_sidecar_symlinks(paths: list[Path]) -> None:
+    """Reject generated sidecar paths that are symlinks, including dangling ones."""
+    symlinks = [path for path in paths if path.is_symlink()]
+    if symlinks:
+        joined = ", ".join(str(path) for path in symlinks)
+        raise PermissionError(f"Refusing to write generated sidecar through symlink: {joined}")
+
+
 app = typer.Typer(
     name="eforge",
     help="EvidenceForge - Generate realistic synthetic security logs for threat hunting training",
@@ -297,16 +312,22 @@ def generate(
     # Check for existing generated output (data/ and generated sidecars only).
     # ENVIRONMENT.md is authored by /eforge scenario, not the engine — never touch it.
     existing = []
-    if data_dir.exists():
-        existing.append(f"  data/           ({data_dir})")
     gt_path = ground_truth_dir / "GROUND_TRUTH.md"
-    if gt_path.exists():
-        existing.append(f"  GROUND_TRUTH.md ({gt_path})")
     manifest_path = ground_truth_dir / OBSERVATION_MANIFEST_FILENAME
-    if manifest_path.exists():
+    try:
+        _reject_generated_sidecar_symlinks([gt_path, manifest_path])
+    except PermissionError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}", style="red")
+        raise typer.Exit(EXIT_INPUT_ERROR)
+
+    if _path_exists_or_symlink(data_dir):
+        existing.append(f"  data/           ({data_dir})")
+    if _path_exists_or_symlink(gt_path):
+        existing.append(f"  GROUND_TRUTH.md ({gt_path})")
+    if _path_exists_or_symlink(manifest_path):
         existing.append(f"  {OBSERVATION_MANIFEST_FILENAME} ({manifest_path})")
     target_path = ground_truth_dir / OUTPUT_TARGET_FILENAME
-    if target_path.exists():
+    if _path_exists_or_symlink(target_path):
         existing.append(f"  {OUTPUT_TARGET_FILENAME} ({target_path})")
 
     has_existing = bool(existing)
@@ -440,7 +461,7 @@ def generate(
                     gt_path.rename(rollback_dir / "GROUND_TRUTH.md")
                 if manifest_path.exists():
                     manifest_path.rename(rollback_dir / OBSERVATION_MANIFEST_FILENAME)
-                if target_path.exists():
+                if _path_exists_or_symlink(target_path):
                     target_path.rename(rollback_dir / OUTPUT_TARGET_FILENAME)
 
                 # Step 2: Install new output
@@ -461,7 +482,7 @@ def generate(
                         gt_path.unlink()
                     if manifest_path.exists():
                         manifest_path.unlink()
-                    if target_path.exists():
+                    if _path_exists_or_symlink(target_path):
                         target_path.unlink()
                     if (rollback_dir / "data").exists():
                         (rollback_dir / "data").rename(data_dir)

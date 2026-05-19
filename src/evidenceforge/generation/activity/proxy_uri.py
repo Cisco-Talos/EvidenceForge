@@ -14,7 +14,10 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
-from evidenceforge.generation.activity.http_content import normalize_mime_type_for_path
+from evidenceforge.generation.activity.http_content import (
+    is_stable_resource_path,
+    normalize_mime_type_for_path,
+)
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -78,6 +81,18 @@ def is_browser_like_proxy_domain(hostname: str) -> bool:
     return domain_class not in _NON_BROWSER_DOMAIN_CLASSES
 
 
+def _entry_matches_source_os(entry: Any, source_os: str | None) -> bool:
+    """Return whether a URI template entry is compatible with the source OS."""
+    if not isinstance(entry, dict):
+        return False
+    entry_os = entry.get("os")
+    if not entry_os or not source_os:
+        return True
+    if isinstance(entry_os, list):
+        return source_os in {str(value) for value in entry_os}
+    return str(entry_os) == source_os
+
+
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
     """Replace template variables in a URI path."""
     while "{guid}" in path:
@@ -127,13 +142,16 @@ def pick_proxy_uri(
     # 1. Exact domain match
     domains = data.get("domains", {})
     entry = domains.get(hostname)
+    if not _entry_matches_source_os(entry, source_os):
+        entry = None
 
     # 2. Tag-based fallback
     if entry is None:
         tags = data.get("tags", {})
         for tag in domain_tags:
-            if tag in tags:
-                entry = tags[tag]
+            candidate = tags.get(tag)
+            if _entry_matches_source_os(candidate, source_os):
+                entry = candidate
                 break
 
     # 3. Generic fallback
@@ -166,5 +184,7 @@ def pick_proxy_uri(
     path = _substitute_vars(rng, path, data)
 
     content_type = normalize_mime_type_for_path(path, content_type)
+    if referrer_policy != "none" and is_stable_resource_path(path):
+        referrer_policy = "none"
 
     return path, content_type, method, user_agent, referrer_policy

@@ -660,6 +660,50 @@ class TestObservationAwareCausality:
         assert event_presence.score == 0.0
         assert event_presence.adjusted is False
 
+    def test_mismatched_manifest_does_not_exempt_missing_evidence(self):
+        """Scoring should ignore forged manifests that do not match the scenario."""
+        scenario = _make_scenario(
+            storyline=[
+                {
+                    "id": "step-001",
+                    "time": "+10m",
+                    "actor": "jsmith",
+                    "system": "WS-01",
+                    "activity": "Run PowerShell",
+                    "events": [{"type": "process", "process_name": "powershell.exe"}],
+                }
+            ]
+        )
+        scenario.observation_profile = "enterprise_standard"
+        manifest = ObservationManifest(
+            scenario_name="attacker-different-scenario",
+            observation_profile="enterprise_standard",
+            collection_window={"start": "2024-01-15T10:00:00Z", "end": "2024-01-15T18:00:00Z"},
+            source_summary={"windows_security": {"dropped": 1}, "ecar": {"dropped": 1}},
+            storyline_events=[
+                ObservationManifestEvent(
+                    kind="storyline",
+                    storyline_id="step-001",
+                    index=0,
+                    actor="jsmith",
+                    system="WS-01",
+                    activity="Run PowerShell",
+                    event_types=["process"],
+                    source_status={"windows_security": {"dropped": 1}, "ecar": {"dropped": 1}},
+                )
+            ],
+        )
+
+        result = CausalityScorer().score(
+            {},
+            scenario,
+            context=EvaluationContext(observation_manifest=manifest),
+        )
+        event_presence = next(s for s in result.sub_scores if s.key == "event_presence")
+
+        assert event_presence.score == 0.0
+        assert event_presence.adjusted is False
+
 
 class TestZeekDhcpIndexing:
     """zeek_dhcp records must be indexed by client_addr and host_name."""

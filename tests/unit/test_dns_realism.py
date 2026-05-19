@@ -68,6 +68,36 @@ def timestamp():
 class TestHostnameConsistency:
     """DNS query domain, SSL SNI, and proxy hostname must be identical."""
 
+    def test_tunnel_era_background_txt_spf_avoids_documentation_ranges(self):
+        """Benign TXT/SPF collisions should not expose RFC 5737 test networks."""
+        from evidenceforge.generation.engine.storyline import _dns_tunnel_background_txt_record
+
+        answers = [_dns_tunnel_background_txt_record(random.Random(seed))[1] for seed in range(500)]
+
+        assert not any("203.0.113." in answer for answer in answers)
+
+    def test_explicit_unregistered_hostname_tracks_rewritten_destination(
+        self, activity_gen, timestamp, mock_emitters
+    ):
+        from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+
+        hostname = "attacker-validated.example.net"
+        expected_ip = resolve_domain_ip(hostname, src_host="10.0.1.50")
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="93.184.216.34",
+            time=timestamp,
+            dst_port=443,
+            service="ssl",
+            emit_dns=True,
+            hostname=hostname,
+        )
+
+        assert activity_gen._last_connection_effective_dst_ip == expected_ip
+        conn_event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert conn_event.network.dst_ip == expected_ip
+
     def test_ssl_sni_matches_dns_query(self, activity_gen, timestamp, state_manager, mock_emitters):
         """For a web connection with emit_dns=True, SNI should match DNS query domain."""
         state_manager.set_current_time(timestamp)
@@ -926,6 +956,31 @@ class TestWeirdProtocolConstraint:
         assert event.network.history in {"Dd", "D"}
         assert not set(event.network.history) & set("SshAaFfRr")
 
+    def test_unanswered_udp_dns_keeps_request_payload(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """A Zeek dns-service S0 row still needs a visible UDP DNS request payload."""
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="8.8.8.8",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            conn_state="S0",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.protocol == "udp"
+        assert event.network.service == "dns"
+        assert event.network.conn_state == "S0"
+        assert event.network.history == "D"
+        assert event.network.orig_bytes >= 40
+        assert event.network.orig_ip_bytes > event.network.orig_bytes
+        assert event.network.resp_bytes == 0
+
     def test_denied_dns_query_has_no_response_payload(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
@@ -963,6 +1018,7 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
         assert event.network.conn_state == "S0"
+        assert event.network.orig_bytes >= 40
         assert event.network.resp_bytes == 0
         assert event.network.resp_pkts == 0
         assert event.dns.answers == []
@@ -1189,6 +1245,54 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "SRV"
         assert event.network.dst_ip == "10.0.0.10"
         assert event.dns.AA is True
+
+    def test_default_ad_site_srv_query_resolves_to_dc(
+        self, activity_gen, timestamp, mock_emitters, monkeypatch
+    ):
+        import evidenceforge.generation.activity.generator as generator_module
+
+        self._force_dns_random(monkeypatch, [0.5, 0.95, 0.5])
+        monkeypatch.setattr(
+            generator_module,
+            "_AD_SRV_QUERIES",
+            ["_ldap._tcp.Default-First-Site-Name._sites.{domain}"],
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        activity_gen._ip_to_system = {proxy.ip: proxy}
+        activity_gen._ad_domain = "example.com"
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+
+        activity_gen._emit_dns_lookup(
+            src_ip=proxy.ip,
+            dst_ip="142.250.72.36",
+            time=timestamp,
+            hostname="www.gstatic.com",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args_list[0][0][0]
+        assert event.dns is not None
+        assert event.dns.query == "_ldap._tcp.Default-First-Site-Name._sites.example.com"
+        assert event.dns.query_type == "SRV"
+        assert event.dns.rcode == "NOERROR"
+        assert event.dns.answers == ["0 100 389 dc-01.example.com"]
+        assert event.network.dst_ip == "10.0.0.10"
+        assert event.dns.AA is True
+
+    def test_default_ad_site_srv_is_not_nxdomain_noise(self):
+        from evidenceforge.generation.activity.generator import _dns_nxdomain_companion_queries
+        from evidenceforge.generation.activity.network import _AD_SRV_QUERIES
+
+        site_query = "_ldap._tcp.Default-First-Site-Name._sites.{domain}"
+        assert site_query in _AD_SRV_QUERIES
+        assert "_ldap._tcp.Default-First-Site-Name._sites.example.com" not in (
+            _dns_nxdomain_companion_queries("www.gstatic.com", "example.com")
+        )
 
     def test_internal_nxdomain_companions_use_internal_resolver_and_rtt(
         self, activity_gen, timestamp, mock_emitters, monkeypatch

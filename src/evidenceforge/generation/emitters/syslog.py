@@ -60,6 +60,22 @@ _LOGIND_REMOVED_SESSION_RE = re.compile(
     r"\s+(?P<pid_token>\d+)\s+\S+\s+\S+)\s+Removed session )"
     r"(?P<session>\d+)(?P<suffix>\.)"
 )
+_KERNEL_UPTIME_RE = re.compile(
+    r"(?P<prefix>\bkernel(?:\[\d+\])?(?::|\s+-\s+-\s+-)\s+\[)"
+    r"(?P<uptime>\d+\.\d{6})"
+    r"(?P<suffix>\])"
+)
+_MAX_LOGIND_SESSION_ID_DIGITS = 18
+
+
+def _parse_logind_session_id(value: str) -> int | None:
+    """Parse bounded systemd-logind session IDs without triggering huge-int failures."""
+    if len(value) > _MAX_LOGIND_SESSION_ID_DIGITS:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
 
 
 def _ssh_lifecycle_priority(line: str) -> int:
@@ -254,11 +270,49 @@ class SyslogEmitter(HostMultiplexEmitter):
         )
 
     def close(self) -> None:
-        """Close emitter after normalizing source-native logind session order."""
+        """Close emitter after normalizing source-native syslog presentation state."""
         if self.threaded:
             self.stop_thread()
         self._normalize_logind_session_ids()
+        self._normalize_kernel_uptime_stamps()
         self.flush(force=True)
+
+    def _sorted_lines_by_host(self) -> dict[str, list[tuple[int, tuple[Any, ...], str, str]]]:
+        """Return buffered rows grouped by host and sorted in final render order."""
+        grouped: dict[str, list[tuple[str, Any]]] = {}
+        for route_key, writer in self._writers.items():
+            grouped.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
+
+        sorted_by_host: dict[str, list[tuple[int, tuple[Any, ...], str, str]]] = {}
+        for host_key, route_writers in grouped.items():
+            rows: list[tuple[int, tuple[Any, ...], str, str]] = []
+            for route_key, writer in route_writers:
+                year = int(syslog_route_year(route_key) or 0)
+                with writer._lock:
+                    for line in writer.buffer:
+                        sort_key = (
+                            _syslog_sort_key(line)
+                            if self.output_target == OutputTarget.SOF_ELK
+                            else _rfc5424_syslog_sort_key(line)
+                        )
+                        rows.append((year, sort_key, route_key, line))
+            rows.sort(key=lambda row: (row[0], row[1]))
+            sorted_by_host[host_key] = rows
+        return sorted_by_host
+
+    def _replace_buffers_by_sorted_rows(
+        self,
+        rows: list[tuple[int, tuple[Any, ...], str, str]],
+        normalized: list[str],
+    ) -> None:
+        """Replace writer buffers with normalized lines while preserving route splits."""
+        buffers_by_route: dict[str, list[str]] = {}
+        for row, line in zip(rows, normalized, strict=True):
+            buffers_by_route.setdefault(row[2], []).append(line)
+        for route_key, writer in self._writers.items():
+            if route_key in buffers_by_route:
+                with writer._lock:
+                    writer.buffer = buffers_by_route[route_key]
 
     def _normalize_logind_session_ids(self) -> None:
         """Rewrite visible logind New-session IDs in final rendered order.
@@ -271,34 +325,25 @@ class SyslogEmitter(HostMultiplexEmitter):
         visible in the collection window.
         """
         with self._writers_lock:
-            grouped: dict[str, list[tuple[str, Any]]] = {}
-            for route_key, writer in self._writers.items():
-                grouped.setdefault(syslog_route_source(route_key), []).append((route_key, writer))
-            for host_key, route_writers in grouped.items():
-                rows: list[tuple[int, tuple[Any, ...], str, str]] = []
-                for route_key, writer in route_writers:
-                    year = int(syslog_route_year(route_key) or 0)
-                    with writer._lock:
-                        for line in writer.buffer:
-                            sort_key = (
-                                _syslog_sort_key(line)
-                                if self.output_target == OutputTarget.SOF_ELK
-                                else _rfc5424_syslog_sort_key(line)
-                            )
-                            rows.append((year, sort_key, route_key, line))
+            for host_key, rows in self._sorted_lines_by_host().items():
                 if not rows:
                     continue
-                rows.sort(key=lambda row: (row[0], row[1]))
                 normalized = self._normalize_logind_session_ids_for_lines(
                     [line for _year, _sort_key, _route_key, line in rows],
                     host_key,
                 )
-                buffers_by_route: dict[str, list[str]] = {}
-                for row, line in zip(rows, normalized, strict=True):
-                    buffers_by_route.setdefault(row[2], []).append(line)
-                for route_key, writer in route_writers:
-                    with writer._lock:
-                        writer.buffer = buffers_by_route.get(route_key, [])
+                self._replace_buffers_by_sorted_rows(rows, normalized)
+
+    def _normalize_kernel_uptime_stamps(self) -> None:
+        """Clamp visible kernel bracket uptime values to final syslog order."""
+        with self._writers_lock:
+            for rows in self._sorted_lines_by_host().values():
+                if not rows:
+                    continue
+                normalized = self._normalize_kernel_uptime_stamps_for_lines(
+                    [line for _year, _sort_key, _route_key, line in rows]
+                )
+                self._replace_buffers_by_sorted_rows(rows, normalized)
 
     @staticmethod
     def _normalize_logind_session_ids_for_lines(lines: list[str], host_key: str) -> list[str]:
@@ -309,7 +354,9 @@ class SyslogEmitter(HostMultiplexEmitter):
             if match is None:
                 continue
             pid = _logind_pid(match)
-            session = int(match.group("session"))
+            session = _parse_logind_session_id(match.group("session"))
+            if session is None:
+                continue
             first_by_pid[pid] = min(session, first_by_pid.get(pid, session))
 
         if not first_by_pid:
@@ -318,13 +365,16 @@ class SyslogEmitter(HostMultiplexEmitter):
         next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
         prewindow_next_by_pid = {pid: max(2, start) - 1 for pid, start in first_by_pid.items()}
         rewritten_by_original: dict[tuple[str, str], int] = {}
-        prewindow_removed_by_original: dict[tuple[str, str], int] = {}
+        prewindow_seen_by_original: set[tuple[str, str]] = set()
         normalized: list[str] = []
         for index, line in enumerate(lines):
             new_match = _LOGIND_NEW_SESSION_RE.search(line)
             if new_match is not None:
                 pid = _logind_pid(new_match)
                 original_session = new_match.group("session")
+                if _parse_logind_session_id(original_session) is None:
+                    normalized.append(line)
+                    continue
                 step_seed = _stable_seed(
                     f"syslog_logind_session_step:{host_key}:{pid}:{original_session}:{index}"
                 )
@@ -345,27 +395,47 @@ class SyslogEmitter(HostMultiplexEmitter):
                 rewritten = rewritten_by_original.get(key)
                 if rewritten is None:
                     pid = _logind_pid(removed_match)
-                    session = int(removed_match.group("session"))
-                    first_visible = max(2, first_by_pid.get(pid, session + 1))
-                    if session >= first_visible:
-                        rewritten = prewindow_removed_by_original.get(key)
-                        if rewritten is None:
-                            step_seed = _stable_seed(
-                                "syslog_logind_prewindow_session_step:"
-                                f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
-                            )
-                            prewindow_next_by_pid[pid] = (
-                                prewindow_next_by_pid.get(pid, first_visible - 1)
-                                - 1
-                                - (step_seed % 3)
-                            )
-                            rewritten = prewindow_next_by_pid[pid]
-                            prewindow_removed_by_original[key] = rewritten
+                    original_session_id = _parse_logind_session_id(removed_match.group("session"))
+                    if original_session_id is None:
+                        normalized.append(line)
+                        continue
+                    first_visible = max(2, first_by_pid.get(pid, original_session_id + 1))
+                    needs_prewindow_rewrite = (
+                        original_session_id >= first_visible or key in prewindow_seen_by_original
+                    )
+                    prewindow_seen_by_original.add(key)
+                    if needs_prewindow_rewrite:
+                        step_seed = _stable_seed(
+                            "syslog_logind_prewindow_session_step:"
+                            f"{host_key}:{pid}:{removed_match.group('session')}:{index}"
+                        )
+                        prewindow_next_by_pid[pid] = (
+                            prewindow_next_by_pid.get(pid, first_visible - 1) - 1 - (step_seed % 3)
+                        )
+                        rewritten = prewindow_next_by_pid[pid]
                 if rewritten is not None:
                     line = (
                         f"{line[: removed_match.start('session')]}"
                         f"{rewritten}"
                         f"{line[removed_match.end('session') :]}"
                     )
+            normalized.append(line)
+        return normalized
+
+    @staticmethod
+    def _normalize_kernel_uptime_stamps_for_lines(lines: list[str]) -> list[str]:
+        """Return lines with nondecreasing kernel bracket uptime values."""
+        last_uptime: float | None = None
+        normalized: list[str] = []
+        for line in lines:
+            match = _KERNEL_UPTIME_RE.search(line)
+            if match is None:
+                normalized.append(line)
+                continue
+            uptime = float(match.group("uptime"))
+            if last_uptime is not None and uptime <= last_uptime:
+                uptime = last_uptime + 0.000001
+                line = line[: match.start("uptime")] + f"{uptime:.6f}" + line[match.end("uptime") :]
+            last_uptime = uptime
             normalized.append(line)
         return normalized

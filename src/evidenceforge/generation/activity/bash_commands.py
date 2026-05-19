@@ -10,6 +10,7 @@ Follows the same data-driven pattern as spawn_rules.py.
 """
 
 import random
+from collections import Counter, deque
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
@@ -68,14 +69,42 @@ def _resolve_server_role(hostname: str, services: list[str]) -> str:
     return "generic"
 
 
-def _resolve_template(template: str, rng: random.Random, params: dict[str, list[str]]) -> str:
+def _service_template_values(system_services: list[str] | None, fallback: list[str]) -> list[str]:
+    """Return safe service placeholder values that fit the current host when possible."""
+    contextual: list[str] = []
+    for service in system_services or []:
+        normalized = service.strip().lower()
+        if (
+            not normalized
+            or normalized in {"dns-client", "systemd"}
+            or "{" in normalized
+            or "}" in normalized
+        ):
+            continue
+        if normalized == "ssh":
+            normalized = "sshd"
+        contextual.append(normalized)
+    return contextual or fallback
+
+
+def _resolve_template(
+    template: str,
+    rng: random.Random,
+    params: dict[str, list[str]],
+    system_services: list[str] | None = None,
+) -> str:
     """Resolve {placeholder} tokens in a command template."""
     result = template
-    # Iterate to handle templates with multiple placeholders
+    # Resolve only the occurrences present for each token when that token is visited.
+    # Scenario-controlled service names are filtered above, but this bound also prevents
+    # any replacement value from recursively expanding the same token forever.
     for key, values in params.items():
         token = "{" + key + "}"
-        while token in result:
-            result = result.replace(token, rng.choice(values), 1)
+        candidates = (
+            _service_template_values(system_services, values) if key == "service" else values
+        )
+        for _ in range(result.count(token)):
+            result = result.replace(token, rng.choice(candidates), 1)
     return result
 
 
@@ -218,7 +247,19 @@ def _typo_allowed(
     return True
 
 
-_USER_TOOL_AFFINITY: dict[str, list[str]] = {}
+_USER_TOOL_AFFINITY: dict[tuple[str, tuple[str, ...]], list[str]] = {}
+_COMMAND_RECENCY_LIMIT = 14
+_COMMAND_CANDIDATE_ATTEMPTS = 16
+_COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
+_COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
+_COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
+
+
+def reset_bash_command_memory() -> None:
+    """Clear per-generation bash command memory."""
+    _COMMAND_RECENCY.clear()
+    _COMMAND_USER_RECENCY.clear()
+    _COMMAND_GLOBAL_COUNTS.clear()
 
 
 def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
@@ -228,8 +269,9 @@ def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
     80% of role-specific commands come from the primary tools, 20% from
     the full pool — so users have consistent tooling preferences.
     """
-    if username in _USER_TOOL_AFFINITY:
-        return _USER_TOOL_AFFINITY[username]
+    cache_key = (username, tuple(full_pool))
+    if cache_key in _USER_TOOL_AFFINITY:
+        return _USER_TOOL_AFFINITY[cache_key]
 
     # Identify tool families by prefix keywords
     _TOOL_FAMILIES = {
@@ -260,8 +302,58 @@ def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
     if len(primary_pool) < 3:
         primary_pool = full_pool
 
-    _USER_TOOL_AFFINITY[username] = primary_pool
+    _USER_TOOL_AFFINITY[cache_key] = primary_pool
     return primary_pool
+
+
+def _remember_command(system_hostname: str, username: str, command: str) -> None:
+    """Record command selection so later picks avoid exact repeated strings."""
+    key = (system_hostname.lower(), username.lower())
+    recent = _COMMAND_RECENCY.setdefault(key, deque(maxlen=_COMMAND_RECENCY_LIMIT))
+    recent.append(command)
+    if username:
+        user_recent = _COMMAND_USER_RECENCY.setdefault(
+            username.lower(), deque(maxlen=_COMMAND_RECENCY_LIMIT * 2)
+        )
+        user_recent.append(command)
+    _COMMAND_GLOBAL_COUNTS[command] += 1
+
+
+def _choose_template_with_memory(
+    rng: random.Random,
+    pool: list[str],
+    params: dict[str, list[str]],
+    system_services: list[str] | None,
+    system_hostname: str,
+    username: str,
+) -> str:
+    """Pick a command while suppressing recent and globally overused exact repeats."""
+    if not pool:
+        return "ls"
+
+    key = (system_hostname.lower(), username.lower())
+    recent = set(_COMMAND_RECENCY.get(key, ()))
+    if username:
+        recent.update(_COMMAND_USER_RECENCY.get(username.lower(), ()))
+    soft_cap = max(3, min(6, max(1, len(pool) // 5)))
+    attempts = _COMMAND_CANDIDATE_ATTEMPTS
+    candidates: list[str] = []
+    for _ in range(attempts):
+        template = rng.choice(pool)
+        command = _resolve_template(template, rng, params, system_services)
+        candidates.append(command)
+        if command not in recent and _COMMAND_GLOBAL_COUNTS[command] < soft_cap:
+            _remember_command(system_hostname, username, command)
+            return command
+
+    for command in candidates:
+        if command not in recent and _COMMAND_GLOBAL_COUNTS[command] < soft_cap + 2:
+            _remember_command(system_hostname, username, command)
+            return command
+
+    command = min(candidates, key=lambda candidate: _COMMAND_GLOBAL_COUNTS[candidate])
+    _remember_command(system_hostname, username, command)
+    return command
 
 
 def pick_bash_command(
@@ -275,7 +367,7 @@ def pick_bash_command(
 ) -> str:
     """Pick a bash command appropriate for the user's role on this server.
 
-    Distribution: 60% common, 35% role-specific, 5% typo.
+    Distribution: roughly 45% common, 50% role-specific, up to 5% typo.
     Role-specific commands use per-user tool affinity (80% primary tools,
     20% full pool) for consistent user behavior.
     """
@@ -313,20 +405,40 @@ def pick_bash_command_entry(
         session_command_count=session_command_count,
         prior_typo_count=prior_typo_count,
     ):
-        return _generate_typo(rng, username, commands), True
+        command = _generate_typo(rng, username, commands)
+        _remember_command(system_hostname, username, command)
+        return command, True
 
     # Scale remaining thresholds into the non-typo portion
     _remaining = 1.0 - _user_typo_rate
-    if roll < _user_typo_rate + _remaining * 0.37:
+    if roll < _user_typo_rate + _remaining * 0.52:
         # Role-specific command with per-user tool affinity
         pool_key = _get_role_pool(persona, server_role)
         pool = commands.get(pool_key, commands.get("common", ["ls"]))
         if username and rng.random() < 0.80:
             pool = _get_user_pool(username, pool)
-        template = rng.choice(pool)
-        return _resolve_template(template, rng, params), False
+        return (
+            _choose_template_with_memory(
+                rng,
+                pool,
+                params,
+                system_services,
+                system_hostname,
+                username,
+            ),
+            False,
+        )
 
     # Common command (60%)
     common = commands.get("common", ["ls"])
-    template = rng.choice(common)
-    return _resolve_template(template, rng, params), False
+    return (
+        _choose_template_with_memory(
+            rng,
+            common,
+            params,
+            system_services,
+            system_hostname,
+            username,
+        ),
+        False,
+    )

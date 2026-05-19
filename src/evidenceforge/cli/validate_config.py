@@ -26,6 +26,7 @@ Runs integrity checks across all config YAML files (activity, personas,
 formats, evaluation) and reports errors, warnings, and info items.
 """
 
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -197,11 +198,24 @@ def validate_config() -> ValidationResult:
         "activity/tls_realism.yaml": {
             "dict_fields": {"san", "serial_numbers", "ocsp", "certificate_chains", "destinations"},
         },
+        "activity/public_dns_profiles.yaml": {
+            "list_fields": {"nameserver_profiles": "name", "mail_profiles": "name"},
+        },
         "activity/smb_file_transfers.yaml": {
             "list_fields": {"mime_types": None, "analyzer_sets": None},
         },
         "activity/network_params.yaml": {
-            "list_fields": {"oui_prefixes": None, "public_ntp_servers": "name"},
+            "list_fields": {
+                "oui_prefixes": None,
+                "public_ntp_servers": "name",
+                "dns_tunnel_ttl_choices": None,
+            },
+            "dict_fields": {
+                "dns_tunnel_rtt",
+                "dns_tunnel_rcode_weights",
+                "proxy_connect_status_messages",
+            },
+            "string_list_fields": {"dns_tunnel_response_templates"},
         },
         "activity/windows_auth_realism.yaml": {
             "dict_fields": {"workstation_lock"},
@@ -231,7 +245,11 @@ def validate_config() -> ValidationResult:
             },
         },
         "activity/endpoint_noise.yaml": {
-            "dict_fields": {"windows_scheduled_processes", "registry_noise"},
+            "dict_fields": {
+                "windows_scheduled_processes",
+                "registry_noise",
+                "ecar_flow_identity",
+            },
         },
         "activity/host_activity_profiles.yaml": {
             "dict_fields": {
@@ -470,16 +488,24 @@ def validate_config() -> ValidationResult:
     from evidenceforge.generation.activity.process_network import load_process_network_map
     from evidenceforge.generation.activity.proxy_uri import load_proxy_uri_templates
     from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
+    from evidenceforge.generation.activity.public_dns_profiles import load_public_dns_profiles
     from evidenceforge.generation.activity.site_maps import load_site_maps
     from evidenceforge.generation.activity.spawn_rules import load_spawn_rules
     from evidenceforge.generation.activity.system_processes import load_system_processes
     from evidenceforge.generation.activity.timing_profiles import load_timing_profiles
     from evidenceforge.generation.activity.tls_realism import load_tls_realism
     from evidenceforge.generation.activity.traffic_profiles import load_traffic_profiles
-    from evidenceforge.generation.activity.web_session_profiles import load_web_session_profiles
+    from evidenceforge.generation.activity.web_session_profiles import (
+        is_safe_http_header_value,
+        is_safe_http_method,
+        is_safe_http_path,
+        is_safe_mime_type,
+        load_web_session_profiles,
+    )
     from evidenceforge.generation.activity.windows_auth_realism import load_windows_auth_realism
 
     dns_data = load_dns_registry()
+    public_dns_profiles_data = load_public_dns_profiles()
     ids_data = load_ids_signatures()
     catalog_data = load_catalog()
     traffic_data = load_traffic_profiles()
@@ -1112,6 +1138,26 @@ def validate_config() -> ValidationResult:
         result.issues.append(
             Issue("ERROR", "web_session_profiles.yaml", "user_agent_pools must be a mapping")
         )
+    if isinstance(web_ua_pools, dict):
+        for pool_name, user_agents in web_ua_pools.items():
+            if not isinstance(user_agents, list) or not user_agents:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_session_profiles.yaml",
+                        f'User-Agent pool "{pool_name}" must be a non-empty list',
+                    )
+                )
+                continue
+            for index, user_agent in enumerate(user_agents):
+                if not is_safe_http_header_value(user_agent):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_session_profiles.yaml",
+                            f'User-Agent pool "{pool_name}" entry {index} must be a non-empty single-line string',
+                        )
+                    )
     if isinstance(web_visitor_classes, dict) and isinstance(web_ua_pools, dict):
         for class_name, class_data in web_visitor_classes.items():
             if not isinstance(class_data, dict):
@@ -1221,6 +1267,43 @@ def validate_config() -> ValidationResult:
                                     f'Visitor class "{class_name}" request {index} missing "{required}"',
                                 )
                             )
+                    if not is_safe_http_path(request.get("path")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} path must be a single-line path starting with "/"',
+                            )
+                        )
+                    if not is_safe_http_method(request.get("method")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} method must be a supported single-line HTTP method',
+                            )
+                        )
+                    status = request.get("status")
+                    if (
+                        not isinstance(status, int)
+                        or isinstance(status, bool)
+                        or not 100 <= status <= 599
+                    ):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} status must be an integer from 100 to 599',
+                            )
+                        )
+                    if not is_safe_mime_type(request.get("type")):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_session_profiles.yaml",
+                                f'Visitor class "{class_name}" request {index} type must be a single-line MIME type',
+                            )
+                        )
 
     # --- Checks 11-13: Traffic Profile Integrity ---
     role_traffic = traffic_data.get("role_traffic", {})
@@ -1719,6 +1802,7 @@ def validate_config() -> ValidationResult:
         ProcessAccessPatternEntry,
         ProcessNetworkEntry,
         ProxyUserAgentOverrideEntry,
+        PublicDnsProfilesConfig,
         PublicNtpServerEntry,
         RemoteThreadStartLocationEntry,
         ScheduledTaskEntry,
@@ -1892,6 +1976,12 @@ def validate_config() -> ValidationResult:
     if tls_realism_data:
         _SCHEMA_CHECKS.append(([tls_realism_data], TlsRealismConfig, "tls_realism.yaml"))
 
+    # public_dns_profiles.yaml
+    if public_dns_profiles_data:
+        _SCHEMA_CHECKS.append(
+            ([public_dns_profiles_data], PublicDnsProfilesConfig, "public_dns_profiles.yaml")
+        )
+
     # kerberos_realism.yaml
     from evidenceforge.generation.activity.kerberos_realism import load_kerberos_realism
 
@@ -1920,7 +2010,26 @@ def validate_config() -> ValidationResult:
             if not isinstance(entry, dict):
                 continue
             app = str(entry.get("app") or "<unknown>")
-            for message in entry.get("messages", []):
+            _VALID_SYSLOG_SYSTEM_TYPES = {"workstation", "server", "domain_controller"}
+            system_types = entry.get("system_types", [])
+            if not isinstance(system_types, list):
+                system_types = []
+            for system_type in system_types:
+                if system_type not in _VALID_SYSLOG_SYSTEM_TYPES:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "extra_syslog_messages.yaml",
+                            (
+                                f'App "{app}" has invalid system_type "{system_type}" '
+                                f"(valid: {sorted(_VALID_SYSLOG_SYSTEM_TYPES)})"
+                            ),
+                        )
+                    )
+            messages = entry.get("messages", [])
+            if not isinstance(messages, list):
+                messages = []
+            for message in messages:
                 if not isinstance(message, str):
                     continue
                 message_lower = message.lower()
@@ -2044,6 +2153,22 @@ def validate_config() -> ValidationResult:
                     "network_params.yaml (dns_tunnel_ttl_choices)",
                 )
             )
+            total_ttl_weight = 0.0
+            for entry in ttl_choices:
+                if not isinstance(entry, dict):
+                    continue
+                weight = entry.get("weight", 1.0)
+                if not isinstance(weight, int | float):
+                    continue
+                total_ttl_weight += float(weight)
+            if not math.isfinite(total_ttl_weight):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (dns_tunnel_ttl_choices)",
+                        "total dns_tunnel_ttl_choices weight must be finite",
+                    )
+                )
         rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
         allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
         if not isinstance(rcode_weights, dict) or not rcode_weights:
@@ -2066,24 +2191,82 @@ def validate_config() -> ValidationResult:
                         )
                     )
                     continue
-                if not isinstance(weight, int | float) or weight <= 0:
+                if (
+                    not isinstance(weight, int | float)
+                    or weight <= 0
+                    or not math.isfinite(float(weight))
+                ):
                     result.issues.append(
                         Issue(
                             "ERROR",
                             "network_params.yaml (dns_tunnel_rcode_weights)",
-                            f"weight for '{rcode}' must be a positive number",
+                            f"weight for '{rcode}' must be a positive finite number",
                         )
                     )
                     continue
                 total_weight += float(weight)
-            if total_weight <= 0:
+            if total_weight <= 0 or not math.isfinite(total_weight):
                 result.issues.append(
                     Issue(
                         "ERROR",
                         "network_params.yaml (dns_tunnel_rcode_weights)",
-                        "at least one response code must have positive weight",
+                        "response-code weights must have a positive finite total",
                     )
                 )
+        proxy_status_messages = net_params.get("proxy_connect_status_messages", {})
+        if not isinstance(proxy_status_messages, dict) or not proxy_status_messages:
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    "network_params.yaml (proxy_connect_status_messages)",
+                    "proxy_connect_status_messages must be a non-empty mapping",
+                )
+            )
+        else:
+            for status_code, messages in proxy_status_messages.items():
+                try:
+                    numeric_status = int(status_code)
+                except (TypeError, ValueError):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"status code '{status_code}' must be an integer",
+                        )
+                    )
+                    continue
+                if numeric_status < 100 or numeric_status > 599:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"status code '{status_code}' must be between 100 and 599",
+                        )
+                    )
+                    continue
+                if isinstance(messages, str):
+                    message_list = [messages]
+                elif isinstance(messages, list):
+                    message_list = messages
+                else:
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"messages for status {numeric_status} must be a string or list",
+                        )
+                    )
+                    continue
+                if not message_list or not all(
+                    isinstance(message, str) and message.strip() for message in message_list
+                ):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (proxy_connect_status_messages)",
+                            f"messages for status {numeric_status} must be non-empty strings",
+                        )
+                    )
 
     err = validate_entry(windows_auth_data, WindowsAuthRealismConfig, "windows_auth_realism.yaml")
     if err:
@@ -2160,52 +2343,79 @@ def validate_config() -> ValidationResult:
         # Validate ids_ua
         if "ids_ua" in preset:
             ids_ua = preset["ids_ua"]
-            for field in _IDS_REQUIRED_FIELDS:
-                if field not in ids_ua:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "web_scan_presets.yaml",
-                            f'Preset "{name}" ids_ua missing required field "{field}"',
-                        )
+            if not isinstance(ids_ua, dict):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "web_scan_presets.yaml",
+                        f'Preset "{name}" ids_ua must be a mapping, got {type(ids_ua).__name__}',
                     )
-            _record_ids_rule_identity(
-                "web_scan_presets.yaml",
-                ids_ua.get("sid"),
-                ids_ua.get("gid", 1),
-                ids_ua.get("message"),
-            )
+                )
+            else:
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in ids_ua:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" ids_ua missing required field "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    ids_ua.get("sid"),
+                    ids_ua.get("gid", 1),
+                    ids_ua.get("message"),
+                )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
-            for field in _IDS_REQUIRED_FIELDS:
-                if field not in ids_rate:
-                    result.issues.append(
-                        Issue(
-                            "ERROR",
-                            "web_scan_presets.yaml",
-                            f'Preset "{name}" ids_rate missing required field "{field}"',
-                        )
-                    )
-            _record_ids_rule_identity(
-                "web_scan_presets.yaml",
-                ids_rate.get("sid"),
-                ids_rate.get("gid", 1),
-                ids_rate.get("message"),
-            )
-            threshold = ids_rate.get("threshold")
-            if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+            if not isinstance(ids_rate, dict):
                 result.issues.append(
                     Issue(
-                        "WARNING",
+                        "ERROR",
                         "web_scan_presets.yaml",
-                        f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                        f'Preset "{name}" ids_rate must be a mapping, got {type(ids_rate).__name__}',
                     )
                 )
+            else:
+                for field in _IDS_REQUIRED_FIELDS:
+                    if field not in ids_rate:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "web_scan_presets.yaml",
+                                f'Preset "{name}" ids_rate missing required field "{field}"',
+                            )
+                        )
+                _record_ids_rule_identity(
+                    "web_scan_presets.yaml",
+                    ids_rate.get("sid"),
+                    ids_rate.get("gid", 1),
+                    ids_rate.get("message"),
+                )
+                threshold = ids_rate.get("threshold")
+                if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
+                    result.issues.append(
+                        Issue(
+                            "WARNING",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" ids_rate threshold must be a positive integer, got {threshold}',
+                        )
+                    )
         # Validate per-path ids entries
         for i, path_entry in enumerate(preset.get("paths", [])):
             if isinstance(path_entry, dict) and "ids" in path_entry:
                 path_ids = path_entry["ids"]
+                if not isinstance(path_ids, dict):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "web_scan_presets.yaml",
+                            f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids must be a mapping, got {type(path_ids).__name__}',
+                        )
+                    )
+                    continue
                 for field in _IDS_REQUIRED_FIELDS:
                     if field not in path_ids:
                         result.issues.append(

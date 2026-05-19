@@ -28,10 +28,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Barrier, Thread
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import NetworkContext, X509Context
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
+from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
 
 
 class TestPerSensorDirectoryRouting:
@@ -71,6 +75,63 @@ class TestPerSensorDirectoryRouting:
             assert line1["uid"].startswith("C")
             assert line2["uid"].startswith("C")
 
+    def test_x509_sensor_timing_uses_parent_connection_uid(self):
+        """X.509 certificate rows should share flow-keyed sensor timing with files.log."""
+        x509_fmt = load_format("zeek_x509")
+        files_fmt = load_format("zeek_files")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, base, sensor_hostnames=["core", "dmz"])
+            files_emitter = ZeekFilesEmitter(files_fmt, base, sensor_hostnames=["core", "dmz"])
+
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CMySpecificUID123",
+                    conn_state="SF",
+                    duration=2.0,
+                ),
+                x509=X509Context(
+                    fuid="Fabcdef1234567890",
+                    fingerprint="a" * 40,
+                    certificate_serial="01",
+                    certificate_subject="CN=example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+            )
+            event._sensor_hostnames_by_format = {
+                "zeek_x509": ["core", "dmz"],
+                "zeek_files": ["core", "dmz"],
+            }
+
+            x509_emitter.emit(event)
+            files_emitter.emit(event)
+            x509_emitter.close()
+            files_emitter.close()
+
+            rows = {
+                sensor: {
+                    "x509": json.loads((base / sensor / "x509.json").read_text()),
+                    "files": json.loads((base / sensor / "files.json").read_text()),
+                }
+                for sensor in ("core", "dmz")
+            }
+
+            assert rows["core"]["x509"]["id"] == rows["core"]["files"]["fuid"]
+            assert rows["dmz"]["x509"]["id"] == rows["dmz"]["files"]["fuid"]
+            core_gap = rows["core"]["files"]["ts"] - rows["core"]["x509"]["ts"]
+            dmz_gap = rows["dmz"]["files"]["ts"] - rows["dmz"]["x509"]["ts"]
+            assert dmz_gap == core_gap
+
     def test_second_sensor_observation_preserves_lossless_packetization(self):
         """Lossless multi-sensor rows keep canonical packet counts and bytes."""
         fmt = load_format("zeek_conn")
@@ -95,6 +156,9 @@ class TestPerSensorDirectoryRouting:
                     "orig_ip_bytes": 25204,
                     "resp_ip_bytes": 83881,
                     "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 0,
+                    "_allow_sensor_observation_variance": True,
                     "_sensor_hostnames": ["core", "dmz"],
                 }
             )
@@ -107,7 +171,7 @@ class TestPerSensorDirectoryRouting:
                 assert core[field] == dmz[field]
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
-            assert abs(core["ts"] - dmz["ts"]) <= 0.005
+            assert abs(core["ts"] - dmz["ts"]) <= 0.16
             assert core["orig_bytes"] == dmz["orig_bytes"] == 23124
             assert core["resp_bytes"] == dmz["resp_bytes"] == 80921
             assert core["orig_pkts"] == dmz["orig_pkts"] == 52
@@ -118,6 +182,109 @@ class TestPerSensorDirectoryRouting:
             for row in (core, dmz):
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (40 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (40 * row["resp_pkts"])
+
+    def test_sensor_observation_preserves_icmp_echo_accounting(self):
+        """ICMP echo payload and IP-byte accounting should not vary by sensor."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestIcmp1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 8,
+                    "id.resp_h": "10.0.0.2",
+                    "id.resp_p": 0,
+                    "proto": "icmp",
+                    "service": "icmp",
+                    "duration": 0.04,
+                    "orig_bytes": 120,
+                    "resp_bytes": 120,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "orig_ip_bytes": 148,
+                    "resp_ip_bytes": 148,
+                    "conn_state": "SF",
+                    "history": "Dd",
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert core["uid"] != dmz["uid"]
+            assert core["ts"] != dmz["ts"]
+            for row in (core, dmz):
+                assert row["orig_bytes"] == row["resp_bytes"] == 120
+                assert row["orig_ip_bytes"] == row["resp_ip_bytes"] == 148
+                assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
+                assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+
+    def test_udp_dns_ip_bytes_use_valid_header_accounting(self):
+        """UDP DNS rows should not render impossible IP-header deltas."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = Path(tmpdir) / "conn.json"
+            emitter = ZeekEmitter(fmt, output_file)
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestDns1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 41710,
+                    "id.resp_h": "10.0.0.53",
+                    "id.resp_p": 53,
+                    "proto": "udp",
+                    "service": "dns",
+                    "duration": 0.02,
+                    "orig_bytes": 80,
+                    "resp_bytes": 177,
+                    "orig_pkts": 1,
+                    "resp_pkts": 1,
+                    "orig_ip_bytes": 113,
+                    "resp_ip_bytes": 211,
+                    "conn_state": "SF",
+                    "history": "Dd",
+                }
+            )
+            emitter.close()
+
+            row = json.loads(output_file.read_text().splitlines()[0])
+            assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
+            assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+
+    def test_non_finite_numeric_timestamp_does_not_crash_multi_sensor_emit(self):
+        """Raw Zeek timestamps may be NaN or infinity; multi-sensor drift must not crash."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            for idx, ts in enumerate((float("nan"), float("inf"), float("-inf"))):
+                emitter.emit_event(
+                    {
+                        "ts": ts,
+                        "uid": f"CTestNonFinite{idx}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 50000 + idx,
+                        "id.resp_h": "8.8.8.8",
+                        "id.resp_p": 443,
+                        "proto": "tcp",
+                        "conn_state": "SF",
+                        "_sensor_hostnames": ["core", "dmz"],
+                    }
+                )
+            emitter.close()
+
+            for sensor in ("core", "dmz"):
+                assert len((base / sensor / "conn.json").read_text().splitlines()) == 3
 
     def test_sensor_timestamp_offsets_vary_by_flow(self):
         """Cross-sensor timestamps should not collapse into one fixed offset band."""
@@ -161,9 +328,56 @@ class TestPerSensorDirectoryRouting:
                 for port in sorted(core_by_port)
             ]
 
-            assert max(offsets) - min(offsets) > 0.0005
+            assert any(offset < 0 for offset in offsets)
+            assert any(offset > 0 for offset in offsets)
+            assert max(offsets) - min(offsets) > 0.005
             assert len(set(offsets)) > 30
-            assert max(abs(offset) for offset in offsets) <= 0.005
+            assert max(abs(offset) for offset in offsets) <= 0.16
+
+    def test_second_sensor_observation_skips_huge_numeric_jitter(self):
+        """Huge raw numeric counters should not crash multi-sensor Zeek jitter."""
+        fmt = load_format("zeek_conn")
+        huge_value = 10**400
+        huge_ip_bytes = huge_value * 41
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHuge1234567",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 443,
+                    "proto": "tcp",
+                    "duration": huge_value,
+                    "orig_bytes": huge_value,
+                    "resp_bytes": huge_value,
+                    "orig_pkts": huge_value,
+                    "resp_pkts": huge_value,
+                    "orig_ip_bytes": huge_ip_bytes,
+                    "resp_ip_bytes": huge_ip_bytes,
+                    "conn_state": "SF",
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert core["uid"] != dmz["uid"]
+            for row in (core, dmz):
+                assert row["duration"] == huge_value
+                assert row["orig_bytes"] == huge_value
+                assert row["resp_bytes"] == huge_value
+                assert row["orig_pkts"] == huge_value
+                assert row["resp_pkts"] == huge_value
+                assert row["orig_ip_bytes"] == huge_ip_bytes
+                assert row["resp_ip_bytes"] == huge_ip_bytes
 
     def test_second_sensor_observation_preserves_http_body_lengths(self):
         """HTTP body sizes are transaction facts, not per-sensor packet-counter jitter."""
@@ -236,6 +450,102 @@ class TestPerSensorDirectoryRouting:
 
             for sensor in ("core", "dmz"):
                 row = json.loads((base / sensor / "conn.json").read_text().splitlines()[0])
+                assert row["orig_bytes"] >= 1024
+                assert row["resp_bytes"] >= 65536
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_lossless_conn_observation_preserves_http_backed_payload_counters(self):
+        """Lossless dual-sensor rows keep the same source-owned flow accounting."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHttpClone12",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "duration": 0.25,
+                    "orig_bytes": 1400,
+                    "resp_bytes": 70_000,
+                    "orig_pkts": 8,
+                    "resp_pkts": 60,
+                    "orig_ip_bytes": 1720,
+                    "resp_ip_bytes": 72_400,
+                    "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 0,
+                    "_http_request_body_len": 1024,
+                    "_http_response_body_len": 65536,
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert dmz["duration"] == core["duration"]
+            assert dmz["orig_bytes"] == core["orig_bytes"]
+            assert dmz["resp_bytes"] == core["resp_bytes"]
+            assert dmz["orig_pkts"] == core["orig_pkts"]
+            assert dmz["resp_pkts"] == core["resp_pkts"]
+            assert dmz["orig_ip_bytes"] == core["orig_ip_bytes"]
+            assert dmz["resp_ip_bytes"] == core["resp_ip_bytes"]
+            for row in (core, dmz):
+                assert row["orig_bytes"] >= 1024
+                assert row["resp_bytes"] >= 65536
+                assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
+                assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_lossy_conn_observation_varies_http_backed_payload_counters(self):
+        """Declared lossy sensor rows may vary counters while preserving body floors."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+
+            emitter.emit_event(
+                {
+                    "ts": datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    "uid": "CTestHttpLoss12",
+                    "id.orig_h": "10.0.0.1",
+                    "id.orig_p": 50000,
+                    "id.resp_h": "8.8.8.8",
+                    "id.resp_p": 80,
+                    "proto": "tcp",
+                    "duration": 1800.0,
+                    "orig_bytes": 1400,
+                    "resp_bytes": 70_000,
+                    "orig_pkts": 8,
+                    "resp_pkts": 60,
+                    "orig_ip_bytes": 1720,
+                    "resp_ip_bytes": 72_400,
+                    "conn_state": "SF",
+                    "history": "ShADadfF",
+                    "missed_bytes": 256,
+                    "_http_request_body_len": 1024,
+                    "_http_response_body_len": 65536,
+                    "_allow_sensor_observation_variance": True,
+                    "_sensor_hostnames": ["core", "dmz"],
+                }
+            )
+            emitter.close()
+
+            core = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+
+            assert dmz["orig_bytes"] != core["orig_bytes"]
+            assert dmz["resp_bytes"] != core["resp_bytes"]
+            assert abs(dmz["duration"] - core["duration"]) <= 2.0
+            for row in (core, dmz):
                 assert row["orig_bytes"] >= 1024
                 assert row["resp_bytes"] >= 65536
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])

@@ -19,6 +19,14 @@ san:
     - net.au
     - org.au
     - org.uk
+  profile_weights:
+    apex_exact: 34
+    apex_www: 26
+    apex_wildcard: 14
+    subdomain_exact: 34
+    subdomain_parent: 18
+    subdomain_wildcard: 16
+    subdomain_sibling: 12
 
 serial_numbers:
   byte_lengths:
@@ -102,6 +110,7 @@ certificate_chains:
         - "CN=Baltimore CyberTrust Root*"
         - "CN=GlobalSign Root CA*"
         - "CN=GlobalSign Root R3*"
+        - "CN=GlobalSign Atlas R3*"
         - "CN=USERTrust RSA Certification Authority*"
         - "CN=Enterprise Root CA*"
       issuer_family: rsa_public_ca
@@ -139,10 +148,13 @@ certificate_chains:
       key_length: 4096
       child_signature_algorithms: ["sha384WithRSAEncryption"]
   templates:
-    - name: lets_encrypt
-      issuer_patterns: ["*Let's Encrypt*"]
+    - name: lets_encrypt_rsa
+      issuer_patterns: ["CN=R3, O=Let's Encrypt, C=US"]
       intermediates:
         - "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+    - name: lets_encrypt_ecdsa
+      issuer_patterns: ["CN=E1, O=Let's Encrypt, C=US"]
+      intermediates:
         - "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
     - name: digicert
       issuer_patterns: ["*DigiCert*"]

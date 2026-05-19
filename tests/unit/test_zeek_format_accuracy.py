@@ -209,11 +209,8 @@ class TestZeekConnFormatAccuracy:
             if output_file.exists():
                 output_file.unlink()
 
-    def test_duration_full_precision(self):
-        """Verify conn.log duration uses full float precision, not rounded to 6 decimals.
-
-        Real Zeek duration example: 0.0002410411834716797 (19 decimal digits).
-        """
+    def test_duration_uses_microsecond_precision(self):
+        """Verify conn.log duration is rendered at native-looking microsecond precision."""
         from evidenceforge.formats import load_format
         from evidenceforge.generation.emitters.zeek import ZeekEmitter
 
@@ -257,17 +254,13 @@ class TestZeekConnFormatAccuracy:
                 raw_line = f.readline()
                 generated = json.loads(raw_line)
 
-            # Duration must NOT be rounded to 6 decimal places
-            assert generated["duration"] == test_duration, (
-                f"Duration should preserve full precision: "
-                f"expected {test_duration}, got {generated['duration']}"
-            )
+            assert generated["duration"] == 0.000241
 
-            # Verify the raw JSON string has more than 6 decimal digits for duration
+            # Verify the raw JSON string does not expose raw Python float precision.
             duration_str = raw_line.split('"duration":')[1].split(",")[0]
             decimal_part = duration_str.split(".")[1]
-            assert len(decimal_part) > 6, (
-                f"Duration should have >6 decimal digits in JSON, got: {duration_str}"
+            assert len(decimal_part) <= 6, (
+                f"Duration should have <=6 decimal digits in JSON, got: {duration_str}"
             )
 
         finally:
@@ -404,6 +397,11 @@ class TestZeekDnsFormatAccuracy:
 
             # Verify rtt is float
             assert isinstance(generated["rtt"], float)
+            rtt_str = line.split('"rtt":')[1].split(",")[0]
+            decimal_part = rtt_str.split(".")[1]
+            assert len(decimal_part) <= 6, (
+                f"RTT should have <=6 decimal digits in JSON, got: {rtt_str}"
+            )
 
         finally:
             if output_file.exists():

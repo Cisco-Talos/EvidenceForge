@@ -116,11 +116,6 @@ class TestProxyUriOsFiltering:
             "crl.microsoft.com": {"application/pkix-crl"},
             "settings-win.data.microsoft.com": {"application/json"},
             "update.googleapis.com": {"application/json", "application/octet-stream"},
-            "packages.microsoft.com": {
-                "application/vnd.debian.binary-package",
-                "application/x-gzip",
-                "text/plain",
-            },
             "archive.ubuntu.com": {"application/x-gzip", "text/plain"},
         }
         for host, allowed_types in infra_domains.items():
@@ -134,6 +129,58 @@ class TestProxyUriOsFiltering:
             assert not path.endswith((".css", ".js", ".ico", ".webp"))
             assert content_type in allowed_types
             assert referrer_policy == "none"
+
+        path, content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
+            random.Random(42),
+            "packages.microsoft.com",
+            ["background"],
+            source_os="linux",
+        )
+        assert "/ubuntu/" in path or path.endswith(".deb")
+        assert content_type in {
+            "application/vnd.debian.binary-package",
+            "application/x-gzip",
+            "text/plain",
+        }
+        assert referrer_policy == "none"
+
+    def test_linux_package_templates_do_not_apply_to_windows_sources(self):
+        """OS-scoped exact templates should fall back instead of pairing Windows hosts with apt paths."""
+        from evidenceforge.generation.activity.dns_registry import get_domains_by_tag
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        path, content_type, _method, ua_override, _referrer_policy = pick_proxy_uri(
+            random.Random(42),
+            "packages.microsoft.com",
+            ["background"],
+            source_os="windows",
+        )
+        assert "/ubuntu/" not in path
+        assert not path.endswith((".deb", "Packages.gz"))
+        assert content_type not in {
+            "application/vnd.debian.binary-package",
+            "application/x-gzip",
+        }
+        assert ua_override is None
+
+        windows_background_domains = {
+            entry["domain"] for entry in get_domains_by_tag("background", "windows")
+        }
+        assert "packages.microsoft.com" not in windows_background_domains
+
+    def test_standalone_static_proxy_paths_do_not_claim_same_origin_referrers(self):
+        """Single proxy asset requests should not imply an unseen page load."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        path, _content_type, _method, _ua_override, referrer_policy = pick_proxy_uri(
+            random.Random(0),
+            "example.org",
+            ["web"],
+            source_os="windows",
+        )
+
+        assert path == "/favicon.ico"
+        assert referrer_policy == "none"
 
     def test_non_browser_proxy_domains_are_not_browser_session_targets(self):
         """Proxy domain_class controls whether a host can use browser-style site maps."""
@@ -241,6 +288,14 @@ class TestProxyUriOsFiltering:
         assert "Google" in update_ua
         assert "Darwin" not in update_ua
         assert "Windows-Update-Agent" not in update_ua
+
+        internal_ocsp_ua = pick_proxy_user_agent(
+            random.Random(42),
+            source,
+            hostname="ocsp.meridianhcs.local",
+        )
+
+        assert internal_ocsp_ua == "Microsoft-CryptoAPI/10.0"
 
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
         """Domain-specific proxy UA rules should override inherited browser session UAs."""

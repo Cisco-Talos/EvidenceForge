@@ -58,7 +58,10 @@ from evidenceforge.evaluation.storyline import (
 )
 from evidenceforge.evaluation.visibility import VisibilityModel
 from evidenceforge.events.observation import source_family_for_format
-from evidenceforge.events.observation_manifest import ObservationManifestEvent
+from evidenceforge.events.observation_manifest import (
+    ObservationManifestEvent,
+    observation_manifest_matches_scenario,
+)
 from evidenceforge.models.scenario import Scenario
 from evidenceforge.utils.time import parse_duration
 
@@ -78,6 +81,10 @@ class CausalityScorer(DimensionScorer):
         progress: ProgressCallback = _noop_callback,
     ) -> PillarScore:
         context = context or EvaluationContext()
+        if context.observation_manifest is not None and not observation_manifest_matches_scenario(
+            context.observation_manifest, scenario
+        ):
+            context = EvaluationContext(observation_manifest=None)
         storyline = scenario.storyline or []
         resolved: list[ResolvedEvent] = []
 

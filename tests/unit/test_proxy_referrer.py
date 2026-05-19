@@ -138,9 +138,12 @@ class TestProxyEmitterReferrer:
         emitter.close()
 
         lines = (tmp_path / "PROXY-01" / "proxy_access.log").read_text().splitlines()
-        assert lines[0].startswith("2024-03-15 10:01:00")
-        assert lines[1].startswith("2024-03-15 10:03:00")
-        assert lines[2].startswith("2024-03-15 10:05:00")
+        assert lines[0] == "#Software: Meridian Secure Web Gateway"
+        assert lines[2].endswith("x-proxy-action")
+        data_lines = [line for line in lines if not line.startswith("#")]
+        assert data_lines[0].startswith("2024-03-15 10:01:00")
+        assert data_lines[1].startswith("2024-03-15 10:03:00")
+        assert data_lines[2].startswith("2024-03-15 10:05:00")
 
 
 class TestConnectTunnelBehavior:
@@ -318,9 +321,11 @@ class TestConnectTunnelBehavior:
         assert fields[4] == "CONNECT"
         assert fields[5] == "example.com:443"
         assert fields[6] == "HTTP/1.1"
+        assert fields[-1] == "tunnel-setup"
         inspected_fields = rendered_lines[1].split()
         assert inspected_fields[4] == "GET"
         assert inspected_fields[5] == "https://example.com/page"
+        assert inspected_fields[-1] == "ssl-inspect"
 
     def test_connect_setup_row_differs_from_inspected_request_accounting(self):
         from pathlib import Path
@@ -362,6 +367,8 @@ class TestConnectTunnelBehavior:
         inspected_fields = rendered_lines[1].split()
         assert connect_fields[4] == "CONNECT"
         assert inspected_fields[4] == "GET"
+        assert connect_fields[-1] == "tunnel-setup"
+        assert inspected_fields[-1] == "ssl-inspect"
         assert connect_fields[0:2] <= inspected_fields[0:2]
         assert connect_fields[7:10] != inspected_fields[7:10]
         assert connect_fields[7] == "200"
@@ -411,8 +418,10 @@ class TestConnectTunnelBehavior:
         denied_fields = rendered_lines[1].split()
         assert connect_fields[4] == "CONNECT"
         assert connect_fields[7] == "200"
+        assert connect_fields[-1] == "tunnel-setup"
         assert denied_fields[4] == "GET"
         assert denied_fields[7] == "403"
+        assert denied_fields[-1] == "deny"
 
     def test_denied_connect_does_not_emit_inspected_request(self):
         from pathlib import Path
@@ -456,6 +465,7 @@ class TestConnectTunnelBehavior:
         denied_fields = rendered_lines[0].split()
         assert denied_fields[4] == "CONNECT"
         assert denied_fields[7] == "403"
+        assert denied_fields[-1] == "deny"
 
     def test_tunnel_reuse_within_timeout(self):
         """TLS-intercepting proxies log one CONNECT plus inspected HTTPS requests."""

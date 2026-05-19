@@ -30,7 +30,6 @@ from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
 from evidenceforge.output_targets import (
     FORMAT_TARGET_POLICIES,
     OutputTarget,
-    external_parser_unsupported_formats,
     normalize_output_target,
     read_output_target_marker,
     target_dependent_formats,
@@ -65,11 +64,10 @@ def test_every_emitted_canonical_format_has_target_policy() -> None:
     assert set(_build_emitter_classes()) == set(FORMAT_TARGET_POLICIES)
 
 
-def test_target_policy_identifies_v1_target_dependent_and_unsupported_formats() -> None:
+def test_target_policy_identifies_v1_target_dependent_formats() -> None:
     assert target_dependent_formats() == {
         "windows_event_security",
         "windows_event_sysmon",
         "syslog",
         "cisco_asa",
     }
-    assert external_parser_unsupported_formats() == {"ecar", "bash_history"}

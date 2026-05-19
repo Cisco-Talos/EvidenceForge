@@ -644,6 +644,72 @@ class TestSslUidCorrelation:
         assert "id.orig_h" not in ocsp_file_row
         assert ocsp_file_row["mime_type"] == "application/ocsp-response"
 
+    def test_x509_timestamp_stays_inside_parent_connection(self):
+        """x509 analyzer rows should not outlive their owning connection interval."""
+        x509_fmt = load_format("zeek_x509")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="CShortX509UID12",
+                    duration=0.01,
+                ),
+                x509=X509Context(
+                    fuid="Fshortx50912345",
+                    fingerprint="abc123",
+                    certificate_serial="01",
+                    certificate_subject="CN=short.example.com",
+                    certificate_issuer="CN=Example CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                ),
+            )
+
+            x509_emitter.emit(event)
+            x509_emitter.close()
+            x509_row = json.loads((out_dir / "x509.json").read_text().splitlines()[0])
+
+        assert base_ts.timestamp() <= x509_row["ts"] <= base_ts.timestamp() + 0.01
+
+    def test_raw_ocsp_event_defaults_missing_optional_revocation_fields(self):
+        """Raw OCSP rows may omit optional revocation details without crashing."""
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "ocsp.json"
+            emitter = ZeekOcspEmitter(ocsp_fmt, output)
+            emitter.emit_raw(
+                {
+                    "ts": 1705312800.0,
+                    "id": "Frawocsp1234567",
+                    "hashAlgorithm": "sha1",
+                    "issuerNameHash": "issuer-name",
+                    "issuerKeyHash": "issuer-key",
+                    "serialNumber": "01",
+                    "certStatus": "good",
+                    "thisUpdate": 1705310000.0,
+                    "nextUpdate": 1705900000.0,
+                }
+            )
+            emitter.close()
+
+            row = json.loads(output.read_text().splitlines()[0])
+
+        assert row["certStatus"] == "good"
+        assert "revoketime" not in row
+        assert "revokereason" not in row
+
     def test_revoked_ocsp_status_renders_revocation_metadata(self):
         """Revoked OCSP rows should include source-native revocation details."""
         ocsp_fmt = load_format("zeek_ocsp")
@@ -705,7 +771,8 @@ class TestSslUidCorrelation:
 
             conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
 
-        assert conn_row["duration"] >= 0.8
+        assert conn_row["duration"] > 0.8
+        assert conn_row["duration"] != 0.8
 
     def test_x509_rejects_partial_handshake(self):
         """x509.log should not emit certificates for incomplete TLS handshakes."""

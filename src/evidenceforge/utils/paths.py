@@ -28,7 +28,9 @@ Prevents path traversal, symlink attacks, and arbitrary file writes.
 """
 
 import logging
+import os
 import re
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -104,3 +106,50 @@ def reject_symlink(path: Path) -> None:
     """
     if path.is_symlink():
         raise PermissionError(f"Refusing to use symlinked path: {path}")
+
+
+def safe_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Atomically write text to a regular file without following target symlinks.
+
+    The destination path itself is never opened for writing, so a symlink at
+    that location cannot redirect output outside the intended directory. A
+    temporary regular file is created in the destination directory and then
+    atomically replaces the destination path. Dangling symlinks are rejected
+    before the temporary file is created; if a symlink appears before the final
+    replace, the replace unlinks the symlink rather than following it.
+
+    Args:
+        path: Destination file path.
+        content: Text content to write.
+        encoding: Text encoding to use.
+
+    Raises:
+        PermissionError: If the destination path is a symlink.
+        OSError: If the temporary file cannot be created, written, or moved.
+    """
+    reject_symlink(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    temp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding=encoding,
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_name = temp_file.name
+            temp_file.write(content)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+
+        os.replace(temp_name, path)
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            try:
+                Path(temp_name).unlink()
+            except FileNotFoundError:
+                pass

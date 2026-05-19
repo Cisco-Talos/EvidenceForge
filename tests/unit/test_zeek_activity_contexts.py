@@ -445,7 +445,7 @@ class TestSslContextPopulation:
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
 
-    def test_ssh_syslog_sub_events_are_second_ordered(self, activity_gen):
+    def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -477,11 +477,23 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert times == [
-            base_time - timedelta(seconds=1),
-            base_time,
-            base_time + timedelta(seconds=1),
+        assert base_time < times[0] < times[1] < times[2]
+        assert timedelta(milliseconds=25) <= times[0] - base_time <= timedelta(milliseconds=120)
+        assert timedelta(milliseconds=60) <= times[1] - base_time <= timedelta(milliseconds=215)
+        assert timedelta(milliseconds=105) <= times[2] - base_time <= timedelta(milliseconds=325)
+        assert times[2] - times[0] != timedelta(seconds=1)
+        assert len({timestamp.microsecond % 1000 for timestamp in times}) == len(times)
+
+        logind_events = [
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "systemd-logind"
         ]
+        assert len(logind_events) == 1
+        assert logind_events[0].timestamp - times[2] >= timedelta(milliseconds=420)
+        assert logind_events[0].timestamp.microsecond % 1000 not in {
+            timestamp.microsecond % 1000 for timestamp in times
+        }
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen
@@ -1259,6 +1271,56 @@ class TestHttpContextPopulation:
 
 class TestFileTransferContext:
     """Verify FileTransferContext populated probabilistically for HTTP."""
+
+    def test_redirect_asset_response_does_not_attach_asset_file_transfer(
+        self, activity_gen, monkeypatch
+    ):
+        """Redirect bodies keep text/html MIME instead of asset extension MIME."""
+        gen, events = activity_gen
+
+        class LowRandom(random.Random):
+            def random(self) -> float:
+                return 0.05
+
+        import evidenceforge.generation.activity.generator as generator_module
+        import evidenceforge.generation.activity.proxy_uri as proxy_uri_module
+
+        monkeypatch.setattr(generator_module, "_get_rng", lambda: LowRandom(7))
+        monkeypatch.setattr(
+            generator_module,
+            "_get_http_status",
+            lambda _dst_ip, _uri: (301, "Moved Permanently"),
+        )
+        monkeypatch.setattr(
+            proxy_uri_module,
+            "pick_proxy_uri",
+            lambda *_args, **_kwargs: (
+                "/assets/app.js",
+                "application/javascript",
+                "GET",
+                "",
+                "none",
+            ),
+        )
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=200,
+            resp_bytes=5000,
+            conn_state="SF",
+        )
+
+        event = events[-1]
+        assert event.http is not None
+        assert event.http.status_code == 301
+        assert event.http.resp_mime_types == ["text/html"]
+        assert event.file_transfer is None
 
     def test_file_transfer_sometimes_populated(self, activity_gen):
         """Over many HTTP connections, some should have FileTransferContext."""

@@ -119,28 +119,28 @@ relationships:
   web.asset_stylesheet_script_after_page:
     class: burst_fanout
     position: after
-    min_ms: 50
-    max_ms: 200
+    min_ms: 1500
+    max_ms: 2600
   web.asset_image_after_page:
     class: burst_fanout
     position: after
-    min_ms: 200
-    max_ms: 800
+    min_ms: 1700
+    max_ms: 3200
   web.asset_font_after_page:
     class: burst_fanout
     position: after
-    min_ms: 300
-    max_ms: 600
+    min_ms: 1700
+    max_ms: 3000
   web.asset_api_after_page:
     class: burst_fanout
     position: after
-    min_ms: 500
-    max_ms: 2000
+    min_ms: 1800
+    max_ms: 3600
   web.asset_other_after_page:
     class: burst_fanout
     position: after
-    min_ms: 100
-    max_ms: 500
+    min_ms: 1500
+    max_ms: 2800
   web.tool_request_gap:
     class: burst_fanout
     position: after
@@ -148,18 +148,26 @@ relationships:
     max_ms: 1500
 
 network_sensor_observation:
-  # Default assumes security infrastructure with good time sync and local tap
-  # placement. These bounds apply when multiple Zeek sensors observe the same
-  # packet/flow and should stay in the low-millisecond range.
-  default_profile: well_synced
+  # Default assumes distributed security infrastructure where core, DMZ, and
+  # packet-broker taps observe the same flow through different capture paths.
+  # Sensor clocks remain controlled, but buffering and path differences should
+  # not make dual-sensor rows look mechanically cloned.
+  default_profile: distributed_taps
   profiles:
+    distributed_taps:
+      clock_skew_us:
+        min: -18000
+        max: 22000
+      path_delay_us:
+        min: 1200
+        max: 58000
     well_synced:
       clock_skew_us:
-        min: -1500
-        max: 1500
+        min: -4000
+        max: 4000
       path_delay_us:
-        min: 50
-        max: 2000
+        min: 250
+        max: 8000
 
 windows_event_time:
   collision_spacing:

@@ -45,6 +45,8 @@ from evidenceforge.events.contexts import (
     ProcessContext,
     RemoteThreadContext,
 )
+from evidenceforge.formats.loader import load_format
+from evidenceforge.formats.validator import validate_event
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -116,6 +118,69 @@ class TestPidAlwaysPresent:
         assert row["action"] == "LOGIN"
         assert row["logon_type"] == 7
         assert row["objectID"] == "session-1"
+
+        record = json.loads(emitter._render_event(row))
+        assert record["properties"]["logon_type"] == "7"
+
+    def test_linux_ssh_login_renders_session_type_not_windows_logon_type(self, emitter, ts):
+        """Linux eCAR sessions should use OS-native session semantics."""
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="ssh_session",
+            dst_host=HostContext(
+                hostname="LINUX-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+            ),
+            auth=AuthContext(username="alice", logon_id="0x123", logon_type=10),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter.emit_event = Mock()
+        emitter.emit(event)
+
+        row = emitter.emit_event.call_args[0][0]
+        assert row["object"] == "USER_SESSION"
+        assert row["action"] == "LOGIN"
+        assert "logon_type" not in row
+        assert row["session_type"] == "ssh"
+
+        record = json.loads(emitter._render_event(row))
+        assert "logon_type" not in record["properties"]
+        assert record["properties"]["session_type"] == "ssh"
+
+    def test_user_session_logon_type_is_declared_ecar_property(self, emitter, ts, caplog):
+        """Rendered eCAR login logon_type should be accepted by format validation."""
+        record = json.loads(
+            emitter._render_event(
+                {
+                    "timestamp": ts,
+                    "hostname": "WS-01",
+                    "object": "USER_SESSION",
+                    "action": "LOGIN",
+                    "objectID": "session-1",
+                    "principal": "alice",
+                    "logon_type": 7,
+                }
+            )
+        )
+        flattened = {key: value for key, value in record.items() if key != "properties"}
+        flattened.update(record["properties"])
+
+        result = validate_event(
+            load_format("ecar"),
+            flattened,
+            event_context="USER_SESSION/LOGIN",
+        )
+
+        assert result.valid, result.errors
+        assert not [
+            log_record
+            for log_record in caplog.records
+            if "Unknown field in ecar (USER_SESSION/LOGIN): logon_type" in log_record.getMessage()
+        ]
 
     def test_pid_none_becomes_negative_one(self, emitter, ts):
         """Explicit pid=None should become -1."""
@@ -435,6 +500,7 @@ class TestSessionOutcomeRendering:
         rendered = emitter.emit_event.call_args[0][0]
         assert rendered["outcome"] == "failure"
         assert rendered["failure_reason"] == "bad_password"
+        assert rendered["session_type"] == "remote"
         assert "status_code" not in rendered
         assert "sub_status" not in rendered
 
@@ -636,6 +702,100 @@ class TestChronologicalOutput:
 
         assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
 
+    def test_outbound_flow_can_render_user_principal(self, emitter, monkeypatch, ts):
+        """User-owned FLOW records should be able to carry mixed principal attribution."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 1.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 0.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            process=ProcessContext(
+                pid=1234,
+                parent_pid=777,
+                image=r"C:\Program Files\Mozilla Firefox\firefox.exe",
+                command_line="firefox.exe",
+                username="alice",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=1234,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["object"] == "FLOW"
+        assert emitted[0]["direction"] == "OUTBOUND"
+        assert emitted[0]["principal"] == "alice"
+
+    def test_service_flow_can_omit_principal(self, emitter, monkeypatch, ts):
+        """Service-owned FLOW records should still model vendor attribution gaps."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 1.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 0.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="dc01",
+                ip="10.0.0.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc01.example.org",
+            ),
+            process=ProcessContext(
+                pid=444,
+                parent_pid=4,
+                image=r"C:\Windows\System32\svchost.exe",
+                command_line="svchost.exe -k netsvcs",
+                username="SYSTEM",
+                start_time=ts,
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49153,
+                dst_ip="10.0.0.20",
+                dst_port=88,
+                protocol="tcp",
+                initiating_pid=444,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert "principal" not in emitted[0]
+
     def test_inbound_flow_uses_destination_listener_pid(self, emitter, monkeypatch, ts):
         """Inbound host observations should use the local listener PID when known."""
         emitted: list[dict] = []
@@ -667,6 +827,58 @@ class TestChronologicalOutput:
 
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
+
+    def test_inbound_listener_flow_can_render_principal(self, emitter, monkeypatch, ts):
+        """Observed listener-side FLOW rows can carry local service principal context."""
+        monkeypatch.setattr(
+            "evidenceforge.generation.emitters.ecar.ecar_flow_identity_config",
+            lambda: {
+                "user_process_probability": 0.0,
+                "service_process_probability": 0.0,
+                "root_process_probability": 0.0,
+                "inbound_listener_probability": 1.0,
+            },
+        )
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts)
+        pid = state.create_process(
+            "WEB-EXT-01",
+            0,
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"WEB-EXT-01": {"apache2": pid}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="WEB-EXT-01",
+                ip="10.0.0.20",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="web-ext-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="198.51.100.7",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=443,
+                protocol="tcp",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == pid
+        assert emitted[0]["principal"] == "www-data"
 
     def test_rejected_inbound_flow_does_not_claim_listener_pid(self, emitter, monkeypatch, ts):
         """Rejected inbound attempts should not be attributed to a server process."""
@@ -883,6 +1095,57 @@ class TestChronologicalOutput:
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
 
+    def test_parent_order_skips_self_parented_pid_without_hanging(self):
+        """Raw eCAR self-parented PID records should not loop forever."""
+        line = json.dumps(
+            {
+                "timestamp_ms": 1000,
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "self-parent",
+                "pid": 123,
+                "ppid": 123,
+            },
+            separators=(",", ":"),
+        )
+
+        normalized = EcarEmitter._normalize_process_parent_order([line])
+
+        row = json.loads(normalized[0])
+        assert row["timestamp_ms"] == 1000
+
+    def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
+        """Raw eCAR cyclic ppid records should not loop forever."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "first",
+                    "pid": 123,
+                    "ppid": 456,
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "second",
+                    "pid": 456,
+                    "ppid": 123,
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = EcarEmitter._normalize_process_parent_order(lines)
+
+        rows = [json.loads(line) for line in normalized]
+        assert [row["timestamp_ms"] for row in rows] == [1000, 1000]
+
 
 class TestTidAlwaysPresent:
     def test_tid_present_default(self, emitter, ts):
@@ -939,6 +1202,37 @@ class TestTidAlwaysPresent:
 
         row = emitter.emit_event.call_args.args[0]
         assert row["tid"] > 0
+        assert row["tid"] % 4 == 0
+
+    def test_linux_process_create_uses_pid_as_main_thread_id(self, emitter, ts):
+        """Linux eCAR PROCESS/CREATE should use the PID as the main thread ID."""
+        host = HostContext(
+            hostname="APP-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+            fqdn="app-01.example.com",
+        )
+        emitter.emit_event = Mock()
+
+        emitter._render_process_create(
+            SecurityEvent(
+                timestamp=ts,
+                event_type="process_create",
+                src_host=host,
+                process=ProcessContext(
+                    pid=14233,
+                    parent_pid=900,
+                    image="/usr/bin/mysql",
+                    command_line="mysql -u root",
+                    username="root",
+                ),
+            )
+        )
+
+        row = emitter.emit_event.call_args.args[0]
+        assert row["tid"] == 14233
 
 
 class TestPpidOnlyOnProcess:

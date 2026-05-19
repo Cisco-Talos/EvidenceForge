@@ -1,0 +1,148 @@
+# public_dns_profiles.yaml - provider-style public DNS answer profiles.
+#
+# Purpose: Keeps public NS/MX/SOA companion answers from collapsing into
+#          generated-looking ns1/ns2, mail, and hostmaster templates.
+#
+# User customizations go in:
+#   .eforge/config/activity/public_dns_profiles.yaml
+#
+# Overlay behavior: profile lists merge by name.
+
+nameserver_profiles:
+  - name: google
+    weight: 0
+    match_suffixes:
+      - google.com
+      - googleapis.com
+      - gstatic.com
+      - pki.goog
+      - youtube.com
+    answer_sets:
+      - ["ns1.google.com", "ns2.google.com", "ns3.google.com", "ns4.google.com"]
+    soa_rnames: ["dns-admin.google.com"]
+
+  - name: microsoft_azure
+    weight: 0
+    match_suffixes:
+      - azure.com
+      - bing.com
+      - live.com
+      - microsoft.com
+      - microsoftonline.com
+      - msn.com
+      - office.com
+      - office.net
+      - office365.com
+      - windows.net
+      - windowsupdate.com
+    answer_sets:
+      - ["ns1-39.azure-dns.com", "ns2-39.azure-dns.net", "ns3-39.azure-dns.org", "ns4-39.azure-dns.info"]
+      - ["ns1-205.azure-dns.com", "ns2-205.azure-dns.net", "ns3-205.azure-dns.org", "ns4-205.azure-dns.info"]
+    soa_rnames: ["azuredns-hostmaster.microsoft.com"]
+
+  - name: amazon_route53
+    weight: 22
+    match_suffixes:
+      - amazon.com
+      - amazonaws.com
+      - awsstatic.com
+      - cloudfront.net
+    answer_sets:
+      - ["ns-119.awsdns-14.org", "ns-421.awsdns-52.com", "ns-918.awsdns-50.net", "ns-1796.awsdns-32.co.uk"]
+      - ["ns-52.awsdns-06.com", "ns-823.awsdns-38.net", "ns-1374.awsdns-43.org", "ns-1641.awsdns-13.co.uk"]
+      - ["ns-279.awsdns-34.com", "ns-1010.awsdns-62.net", "ns-1178.awsdns-19.org", "ns-1884.awsdns-43.co.uk"]
+    soa_rnames: ["awsdns-hostmaster.amazon.com"]
+
+  - name: cloudflare
+    weight: 20
+    match_suffixes:
+      - cloudflare.com
+    answer_sets:
+      - ["abby.ns.cloudflare.com", "ray.ns.cloudflare.com"]
+      - ["amir.ns.cloudflare.com", "daisy.ns.cloudflare.com"]
+      - ["elsa.ns.cloudflare.com", "hank.ns.cloudflare.com"]
+      - ["jill.ns.cloudflare.com", "norm.ns.cloudflare.com"]
+    soa_rnames: ["dns.cloudflare.com"]
+
+  - name: akamai
+    weight: 11
+    answer_sets:
+      - ["a1-66.akam.net", "a11-67.akam.net", "a16-64.akam.net", "a18-65.akam.net", "a26-66.akam.net"]
+      - ["use1.akam.net", "use2.akam.net", "usw2.akam.net", "eur2.akam.net", "asia1.akam.net"]
+    soa_rnames: ["hostmaster.akamai.com"]
+
+  - name: fastly
+    weight: 9
+    answer_sets:
+      - ["ns1.fastly.net", "ns2.fastly.net", "ns3.fastly.net", "ns4.fastly.net"]
+      - ["ns1.p04.dynect.net", "ns2.p04.dynect.net", "ns3.p04.dynect.net", "ns4.p04.dynect.net"]
+    soa_rnames: ["hostmaster.fastly.com"]
+
+  - name: registrar_dns
+    weight: 17
+    answer_sets:
+      - ["dns1.registrar-servers.com", "dns2.registrar-servers.com"]
+      - ["ns1.dnsimple.com", "ns2.dnsimple-edge.net", "ns3.dnsimple.com", "ns4.dnsimple-edge.org"]
+      - ["ns1.hover.com", "ns2.hover.com"]
+      - ["ns1.name-services.com", "ns2.name-services.com", "ns3.name-services.com", "ns4.name-services.com"]
+    soa_rnames: ["hostmaster.registrar-servers.com", "admin.dnsimple.com"]
+
+  - name: domain_owned
+    weight: 4
+    answer_sets:
+      - ["ns1.{domain}", "ns2.{domain}"]
+      - ["dns1.{domain}", "dns2.{domain}"]
+    soa_rnames: ["dns-admin.{domain}", "hostmaster.{domain}"]
+
+mail_profiles:
+  - name: google_workspace
+    weight: 24
+    match_suffixes:
+      - google.com
+      - gmail.com
+    answer_sets:
+      - ["1 aspmx.l.google.com", "5 alt1.aspmx.l.google.com", "5 alt2.aspmx.l.google.com", "10 alt3.aspmx.l.google.com", "10 alt4.aspmx.l.google.com"]
+
+  - name: microsoft_365
+    weight: 23
+    match_suffixes:
+      - microsoft.com
+      - office.com
+      - office365.com
+      - microsoftonline.com
+    answer_sets:
+      - ["0 {domain_hyphen}.mail.protection.outlook.com"]
+
+  - name: proofpoint
+    weight: 14
+    answer_sets:
+      - ["5 mxa-001b2d01.gslb.pphosted.com", "5 mxb-001b2d01.gslb.pphosted.com"]
+      - ["10 mxa-0023b701.gslb.pphosted.com", "10 mxb-0023b701.gslb.pphosted.com"]
+
+  - name: mimecast
+    weight: 11
+    answer_sets:
+      - ["10 us-smtp-inbound-1.mimecast.com", "10 us-smtp-inbound-2.mimecast.com"]
+      - ["10 eu-smtp-inbound-1.mimecast.com", "10 eu-smtp-inbound-2.mimecast.com"]
+
+  - name: amazon_ses
+    weight: 8
+    answer_sets:
+      - ["10 inbound-smtp.us-east-1.amazonaws.com"]
+      - ["10 feedback-smtp.us-west-2.amazonses.com"]
+
+  - name: fastmail
+    weight: 7
+    answer_sets:
+      - ["10 in1-smtp.messagingengine.com", "20 in2-smtp.messagingengine.com"]
+
+  - name: null_mx
+    weight: 4
+    answer_sets:
+      - ["0 ."]
+
+  - name: domain_owned
+    weight: 5
+    answer_sets:
+      - ["10 mx1.{domain}", "20 mx2.{domain}"]
+      - ["10 mailhost.{domain}"]

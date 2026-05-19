@@ -3,12 +3,15 @@
 
 """Tests for Theme 3 (DHCP jitter) and Theme 4 (certificate realism)."""
 
+import math
 import random
 import re
 from datetime import UTC, datetime
 
+import pytest
 import yaml
 
+from evidenceforge.config.schemas import TlsRealismConfig
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import NetworkContext, X509Context
 from evidenceforge.generation.activity.generator import (
@@ -17,6 +20,7 @@ from evidenceforge.generation.activity.generator import (
     _ntp_stratum_and_ref_id,
     _ocsp_status_for_certificate,
     _tls_certificate_serial,
+    _tls_key_for_certificate_name,
     _tls_san_dns_names,
 )
 from evidenceforge.generation.activity.tls_issuers import (
@@ -28,6 +32,7 @@ from evidenceforge.generation.activity.tls_realism import (
     certificate_chain_config,
     certificate_subject_key_profile,
     chain_template_for_issuer,
+    load_tls_realism,
     multi_label_public_suffixes,
     ocsp_config,
     pick_ocsp_responder,
@@ -157,15 +162,26 @@ class TestTlsIssuers:
             assert observed == {"rsa"}, issuer["name"]
 
     def test_san_dns_never_wildcards_public_suffix(self):
-        """Generated SAN lists should not contain impossible public-suffix wildcards."""
-        assert _tls_san_dns_names("stackoverflow.com") == [
-            "stackoverflow.com",
-            "*.stackoverflow.com",
-        ]
-        assert _tls_san_dns_names("gcr.io") == ["gcr.io", "*.gcr.io"]
-        assert _tls_san_dns_names("www.gstatic.com") == ["www.gstatic.com", "*.gstatic.com"]
-        assert _tls_san_dns_names("example.co.uk") == ["example.co.uk", "*.example.co.uk"]
+        """Generated SAN lists should vary while avoiding public-suffix wildcards."""
+        assert _tls_san_dns_names("stackoverflow.com")[0] == "stackoverflow.com"
+        assert _tls_san_dns_names("gcr.io")[0] == "gcr.io"
+        assert _tls_san_dns_names("www.gstatic.com")[0] == "www.gstatic.com"
+        assert _tls_san_dns_names("example.co.uk")[0] == "example.co.uk"
         assert _tls_san_dns_names("203.0.113.45") == []
+        all_names = {
+            name
+            for domain in [
+                "stackoverflow.com",
+                "gcr.io",
+                "www.gstatic.com",
+                "example.co.uk",
+                "files.pythonhosted.org",
+            ]
+            for name in _tls_san_dns_names(domain)
+        }
+        assert "*.co.uk" not in all_names
+        assert "*.io" not in all_names
+        assert any(not name.startswith("*.") for name in all_names)
 
     def test_ocsp_status_is_stable_by_certificate_but_not_globally_flat(self):
         """OCSP status should be stable per cert while still varying across certs."""
@@ -194,6 +210,46 @@ class TestTlsIssuers:
         assert all(16 <= len(serial) <= 40 for serial in serials)
         assert all(len(serial) % 2 == 0 for serial in serials)
         assert all(re.fullmatch(r"[0-9A-F]+", serial) for serial in serials)
+
+    def test_tls_certificate_serial_ignores_non_finite_overlay_weight(self, tmp_path, monkeypatch):
+        """Non-finite overlay weights should not crash serial generation."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump(
+                {"serial_numbers": {"byte_lengths": [{"bytes": 16, "weight": float("inf")}]}}
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            serial = _tls_certificate_serial("non-finite-overlay")
+        finally:
+            reset_tls_realism_cache()
+
+        assert re.fullmatch(r"[0-9A-F]+", serial)
+        assert 16 <= len(serial) <= 40
+
+    def test_tls_certificate_serial_ignores_oversized_overlay_weight(self, tmp_path, monkeypatch):
+        """Oversized integer overlay weights should not reach random.choices()."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump({"serial_numbers": {"byte_lengths": [{"bytes": 16, "weight": 10**400}]}})
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            serial = _tls_certificate_serial("oversized-overlay")
+            with pytest.raises(ValueError, match="weight must be <="):
+                TlsRealismConfig(**load_tls_realism())
+        finally:
+            reset_tls_realism_cache()
+
+        assert re.fullmatch(r"[0-9A-F]+", serial)
+        assert 16 <= len(serial) <= 40
 
     def test_ocsp_responder_selection_is_issuer_aware(self):
         """OCSP responders should come from issuer-specific config."""
@@ -341,7 +397,7 @@ class TestTlsIssuers:
         }
 
         assert not {domain for domain in windows_domains if "ubuntu.com" in domain}
-        assert "download.windowsupdate.com" not in linux_domains
+        assert not {domain for domain in linux_domains if "windowsupdate.com" in domain}
 
     def test_tls_destination_picker_excludes_cleartext_cert_infra_domains(self):
         """OCSP/CRL responders are HTTP objects, not direct TLS SNI destinations."""
@@ -379,6 +435,14 @@ class TestTlsIssuers:
         assert any(
             "Sectigo" in subject or "USERTrust" in subject for subject in sectigo["intermediates"]
         )
+        lets_encrypt_rsa = chain_template_for_issuer("CN=R3, O=Let's Encrypt, C=US")
+        lets_encrypt_ecdsa = chain_template_for_issuer("CN=E1, O=Let's Encrypt, C=US")
+        assert lets_encrypt_rsa["intermediates"] == [
+            "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
+        ]
+        assert lets_encrypt_ecdsa["intermediates"] == [
+            "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
+        ]
 
     def test_tls_destination_servers_avoid_human_saas_profiles(self):
         """Server-origin TLS background should not pick browser/SaaS-heavy destinations."""
@@ -550,6 +614,58 @@ class TestTlsIssuers:
         finally:
             reset_network_params_cache()
 
+    def test_proxy_connect_status_messages_are_loaded_from_network_params_overlay(
+        self, tmp_path, monkeypatch
+    ):
+        """Proxy CONNECT status text should be project-overlay configurable."""
+        from evidenceforge.generation.activity.network_params import (
+            proxy_connect_status_message,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"proxy_connect_status_messages": {407: ["Custom Proxy Auth Required"]}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            assert proxy_connect_status_message(407, "example.com") == "Custom Proxy Auth Required"
+            assert proxy_connect_status_message(502, "example.com") != "Proxy Error"
+        finally:
+            reset_network_params_cache()
+
+    def test_dns_tunnel_rcode_weights_normalize_overflowing_overlay_total(
+        self, tmp_path, monkeypatch
+    ):
+        """DNS tunnel response-code weights should stay safe for random.choices."""
+        from evidenceforge.generation.activity.network_params import (
+            dns_tunnel_rcode_weights,
+            reset_network_params_cache,
+        )
+
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "network_params.yaml").write_text(
+            yaml.safe_dump(
+                {"dns_tunnel_rcode_weights": {"NOERROR": 1.0e308, "NXDOMAIN": 1.0e308}},
+                sort_keys=False,
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_network_params_cache()
+        try:
+            weights = dns_tunnel_rcode_weights()
+
+            assert weights == {"NOERROR": 1.0, "NXDOMAIN": 1.0}
+            assert math.isfinite(sum(weights.values()))
+        finally:
+            reset_network_params_cache()
+
     def test_dns_tunnel_ttl_choices_are_loaded_from_network_params_overlay(
         self, tmp_path, monkeypatch
     ):
@@ -573,6 +689,42 @@ class TestTlsIssuers:
             assert (9, 5.0) in dns_tunnel_ttl_choices()
         finally:
             reset_network_params_cache()
+
+    def test_dns_tunnel_ttl_choices_ignore_non_finite_overlay_values(self, monkeypatch):
+        """Non-finite overlay TTL values should not crash runtime config loading."""
+        from evidenceforge.generation.activity import network_params
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {"dns_tunnel_ttl_choices": [{"value": float("inf"), "weight": 1}]},
+        )
+
+        assert network_params.dns_tunnel_ttl_choices() == list(
+            network_params._DEFAULT_DNS_TUNNEL_TTL_CHOICES
+        )
+
+    def test_dns_tunnel_ttl_choices_normalize_overflowing_weight_totals(self, monkeypatch):
+        """Huge finite weights should remain usable by random.choices after normalization."""
+        from evidenceforge.generation.activity import network_params
+        from evidenceforge.generation.engine.storyline import _choose_dns_tunnel_campaign_ttl
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {
+                "dns_tunnel_ttl_choices": [
+                    {"value": 9, "weight": 1e308},
+                    {"value": 10, "weight": 1e308},
+                ]
+            },
+        )
+
+        choices = network_params.dns_tunnel_ttl_choices()
+
+        assert choices == [(9, 1.0), (10, 1.0)]
+        assert math.isfinite(sum(weight for _value, weight in choices))
+        assert _choose_dns_tunnel_campaign_ttl(choices, random.Random(7)) in {9, 10}
 
     def test_internal_tls_certificates_use_enterprise_identity(self):
         """Private-IP TLS certificates should use internal DNS names and enterprise CA."""
@@ -822,9 +974,9 @@ class TestTlsIssuers:
     def test_intermediate_signature_algorithm_follows_issuer_key(self):
         """Intermediate certificate signatures should be signed by the issuer key."""
         generator = ActivityGenerator(StateManager(), {})
-        issuer_name = "CN=E1, O=Let's Encrypt, C=US"
+        issuer_name = "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
         intermediate = None
-        for seed in range(1, 50):
+        for seed in range(1, 200):
             chain = generator._build_tls_certificate_chain(
                 leaf=X509Context(
                     fuid="FLeaf",
@@ -837,6 +989,8 @@ class TestTlsIssuers:
                 connection_uid=f"CLeE1{seed}",
                 rng=random.Random(seed),
             )
+            if len(chain) < 2:
+                continue
             candidate = chain[1]
             if (
                 certificate_subject_key_profile(candidate.certificate_subject)[0]
@@ -851,6 +1005,130 @@ class TestTlsIssuers:
         assert intermediate.certificate_issuer != intermediate.certificate_subject
         expected = signature_algorithm_for_issuer(intermediate.certificate_issuer)
         assert intermediate.certificate_sig_alg == expected
+
+    def test_known_ecdsa_chain_names_keep_ecdsa_certificate_metadata(self):
+        """Root-like subject names such as Root R4/X2 should not be coerced to RSA."""
+        generator = ActivityGenerator(StateManager(), {})
+        cases = [
+            (
+                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+                "CN=GTS Root R4, O=Google Trust Services LLC, C=US",
+                "rsa",
+                2048,
+                "ecdsa-with-SHA384",
+            ),
+            (
+                "CN=E1, O=Let's Encrypt, C=US",
+                "CN=E1, O=Let's Encrypt, C=US",
+                "CN=ISRG Root X2, O=Internet Security Research Group, C=US",
+                "ecdsa",
+                256,
+                "ecdsa-with-SHA256",
+            ),
+        ]
+
+        for (
+            issuer_name,
+            expected_subject,
+            expected_issuer,
+            expected_key_type,
+            expected_key_length,
+            expected_sig,
+        ) in cases:
+            chain = None
+            for seed in range(1, 200):
+                candidate = generator._build_tls_certificate_chain(
+                    leaf=X509Context(
+                        fuid="FLeaf",
+                        certificate_subject=f"CN=leaf-{seed}.example",
+                        certificate_issuer=issuer_name,
+                    ),
+                    cert_name=f"leaf-{seed}.example",
+                    issuer_name=issuer_name,
+                    event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                    connection_uid=f"CEcdsaChain{seed}",
+                    rng=random.Random(seed),
+                )
+                if any(
+                    cert.certificate_subject == expected_subject
+                    and cert.certificate_issuer == expected_issuer
+                    for cert in candidate
+                ):
+                    chain = candidate
+                    break
+
+            assert chain is not None, expected_subject
+            cert = next(
+                cert
+                for cert in chain
+                if cert.certificate_subject == expected_subject
+                and cert.certificate_issuer == expected_issuer
+            )
+            assert cert.certificate_key_type == expected_key_type
+            assert cert.certificate_key_alg == (
+                "id-ecPublicKey" if expected_key_type == "ecdsa" else "rsaEncryption"
+            )
+            assert cert.certificate_key_length == expected_key_length
+            assert cert.certificate_sig_alg == expected_sig
+
+    def test_root_like_ecdsa_subject_names_do_not_trigger_rsa_name_override(self):
+        """The name fallback should not treat the word Root as an RSA marker."""
+        cases = [
+            (
+                "CN=ISRG Root X2, O=Internet Security Research Group, C=US",
+                "ecdsa",
+                256,
+            ),
+            ("CN=GTS Root R4, O=Google Trust Services LLC, C=US", "ecdsa", 384),
+        ]
+
+        for subject, expected_key_type, expected_key_length in cases:
+            observed = _tls_key_for_certificate_name(
+                subject, expected_key_type, expected_key_length
+            )
+            assert observed == (expected_key_type, expected_key_length)
+
+    def test_public_ca_chain_signatures_match_rendered_issuer_keys(self):
+        """Rendered adjacent x509 chain rows should agree on issuer key family."""
+        generator = ActivityGenerator(StateManager(), {})
+        issuer_names = [
+            "CN=R3, O=Let's Encrypt, C=US",
+            "CN=E1, O=Let's Encrypt, C=US",
+            "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+            "CN=Amazon RSA 2048 M01, O=Amazon, C=US",
+            "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+        ]
+
+        checked = 0
+        for issuer_name in issuer_names:
+            for seed in range(1, 200):
+                chain = generator._build_tls_certificate_chain(
+                    leaf=X509Context(
+                        fuid="FLeaf",
+                        certificate_subject=f"CN=leaf-{seed}.example",
+                        certificate_issuer=issuer_name,
+                        certificate_sig_alg=signature_algorithm_for_issuer(issuer_name),
+                    ),
+                    cert_name=f"leaf-{seed}.example",
+                    issuer_name=issuer_name,
+                    event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                    connection_uid=f"CPublicCaChain{seed}",
+                    rng=random.Random(seed),
+                )
+                if len(chain) < 2:
+                    continue
+                for child, issuer in zip(chain, chain[1:], strict=False):
+                    signature = child.certificate_sig_alg.lower()
+                    if "ecdsa" in signature:
+                        assert issuer.certificate_key_type == "ecdsa", issuer.certificate_subject
+                    if "rsa" in signature:
+                        assert issuer.certificate_key_type == "rsa", issuer.certificate_subject
+                    checked += 1
+                break
+
+        assert checked >= len(issuer_names)
 
     def test_leaf_signature_algorithm_follows_issuer_not_leaf_key(self):
         """An ECDSA leaf signed by an RSA CA should render an RSA signature algorithm."""
