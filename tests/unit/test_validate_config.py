@@ -1402,6 +1402,25 @@ class TestValidateConfig:
         assert missing_placeholder.endswith("COMMAND=/bin/systemctl status {missing}")
         assert unmatched_brace.endswith("COMMAND=/bin/systemctl status {")
 
+    def test_extra_syslog_explicit_values_override_yaml_params(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        message = render_extra_syslog_message(
+            {
+                "app": "rsyslogd",
+                "params": {"fd": ["695673"]},
+                "messages": [
+                    "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {fd}"
+                ],
+            },
+            random.Random(5),
+            positional_value=123456,
+            values={"fd": 9},
+        )
+
+        assert message.endswith(" fd 9")
+        assert "695673" not in message
+
     def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
         from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
 

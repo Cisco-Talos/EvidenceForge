@@ -916,6 +916,108 @@ class BaselineMixin:
             return False
         return True
 
+    def _next_rsyslog_fd(self, hostname: str, rng: random.Random) -> int:
+        """Return a small process-local fd for rsyslog daemon payloads."""
+        fd_state = getattr(self, "_linux_rsyslog_fds", None)
+        if fd_state is None:
+            fd_state = {}
+            self._linux_rsyslog_fds = fd_state
+        current = fd_state.get(hostname)
+        if current is None:
+            current = 4 + (_stable_seed(f"rsyslog_fd_base:{hostname}") % 8)
+        else:
+            current += rng.choice([1, 1, 2])
+            if current > 64:
+                current = 4 + rng.randint(0, 8)
+        fd_state[hostname] = current
+        return current
+
+    def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
+        """Return a plausible monotonic system bus name suffix for one host."""
+        bus_state = getattr(self, "_linux_dbus_bus_ids", None)
+        if bus_state is None:
+            bus_state = {}
+            self._linux_dbus_bus_ids = bus_state
+        current = bus_state.get(hostname)
+        if current is None:
+            current = 12 + (_stable_seed(f"dbus_bus_id_base:{hostname}") % 80)
+        else:
+            current += rng.choice([1, 1, 2, 3])
+            if current > 980:
+                current = 12 + rng.randint(0, 80)
+        bus_state[hostname] = current
+        return current
+
+    def _polkit_session_pool(self, hostname: str, rng: random.Random) -> list[int]:
+        """Return low, source-native session IDs that can represent pre-existing logind sessions."""
+        pool_state = getattr(self, "_linux_polkit_session_pools", None)
+        if pool_state is None:
+            pool_state = {}
+            self._linux_polkit_session_pools = pool_state
+        pool = pool_state.get(hostname)
+        if pool is None:
+            base = 18 + (_stable_seed(f"polkit_session_base:{hostname}") % 160)
+            pool = [base]
+            for _ in range(3):
+                pool.append(pool[-1] + rng.randint(1, 5))
+            pool_state[hostname] = pool
+        return pool
+
+    def _new_polkit_agent(
+        self,
+        hostname: str,
+        rng: random.Random,
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create source-local polkit agent state for one host."""
+        params = entry.get("params") or {}
+        process_paths = params.get("process_path") or ["/usr/bin/systemctl"]
+        return {
+            "session_id": rng.choice(self._polkit_session_pool(hostname, rng)),
+            "bus_id": self._next_dbus_bus_id(hostname, rng),
+            "process_path": rng.choice(process_paths),
+        }
+
+    def _render_polkit_syslog_message(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        *,
+        system: Any,
+        timestamp: datetime,
+    ) -> str:
+        """Render polkit messages with coherent session and D-Bus state."""
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        hostname = system.hostname
+        active_agents = getattr(self, "_linux_polkit_agents", None)
+        if active_agents is None:
+            active_agents = {}
+            self._linux_polkit_agents = active_agents
+        host_agents = active_agents.setdefault(hostname, [])
+
+        template = rng.choice(entry.get("messages", [""]))
+        if template.startswith("Unregistered") and host_agents:
+            agent = host_agents.pop(0)
+        else:
+            agent = self._new_polkit_agent(hostname, rng, entry)
+            if template.startswith("Registered"):
+                host_agents.append(agent)
+
+        process_id = self.state_manager.allocate_transient_linux_pid(hostname, timestamp)
+        values = {
+            "bus_id": agent["bus_id"],
+            "process_path": agent["process_path"],
+        }
+        positional = agent["session_id"] if "unix-session:{0}" in template else process_id
+        return render_extra_syslog_message(
+            {**entry, "messages": [template]},
+            rng,
+            positional_value=positional,
+            system_services=system.services,
+            values=values,
+        )
+
     def _schedule_foreground_process_termination(
         self,
         *,
@@ -6129,6 +6231,28 @@ class BaselineMixin:
                     elif app == "anacron":
                         self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
                         continue
+                    elif app == "polkitd":
+                        msg = self._render_polkit_syslog_message(
+                            entry,
+                            rng,
+                            system=system,
+                            timestamp=ts,
+                        )
+                    elif app == "rsyslogd":
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(1000, 99999),
+                            system_services=system.services,
+                            values={"fd": self._next_rsyslog_fd(system.hostname, rng)},
+                        )
+                    elif app == "dbus-daemon":
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=self._next_dbus_bus_id(system.hostname, rng),
+                            system_services=system.services,
+                        )
                     else:
                         msg = render_extra_syslog_message(
                             entry,

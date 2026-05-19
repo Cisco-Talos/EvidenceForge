@@ -65,8 +65,13 @@ programs:
         - "1"
         - "2"
         - "3"
+      fd:
+        - "4"
+        - "6"
+        - "7"
+        - "9"
     messages:
-      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {}"
+      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {fd}"
       - "configuration reload completed after SIGHUP, reload id {}"
       - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {}"
       - "action '{action_name}' resumed after retry {}, next retry disabled"

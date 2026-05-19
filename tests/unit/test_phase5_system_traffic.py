@@ -23,6 +23,7 @@
 """Unit tests for Phase 5.4: Background Traffic & System Activity."""
 
 import random
+import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -81,6 +82,73 @@ def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     assert first_stamp == "2333187.345076"
     assert second_stamp == "2333187.997014"
     assert float(second_stamp) > float(first_stamp)
+
+
+def test_rsyslog_fd_state_stays_process_local(linux_system):
+    """Rsyslog file descriptors should look like small per-process integers."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    rng = random.Random(7)
+
+    fds = [engine._next_rsyslog_fd(linux_system.hostname, rng) for _ in range(12)]
+
+    assert min(fds) >= 4
+    assert max(fds) <= 64
+    assert fds == sorted(fds)
+
+
+def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_manager):
+    """Polkit payloads should not contain random six-digit sessions or bus IDs."""
+    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
+    rng = random.Random(11)
+    timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    messages = [
+        engine._render_polkit_syslog_message(
+            entry,
+            rng,
+            system=linux_system,
+            timestamp=timestamp + timedelta(seconds=i),
+        )
+        for i in range(20)
+    ]
+
+    session_ids = [
+        int(match.group(1))
+        for message in messages
+        if (match := re.search(r"unix-session:(\d+)", message))
+    ]
+    bus_ids = [
+        int(match.group(1)) for message in messages if (match := re.search(r":1\.(\d+)", message))
+    ]
+    process_ids = [
+        int(match.group(1))
+        for message in messages
+        if (match := re.search(r"unix-process:(\d+):", message))
+    ]
+
+    assert session_ids
+    assert max(session_ids) < 1000
+    assert bus_ids
+    assert max(bus_ids) < 1000
+    assert len(set(bus_ids)) > 4
+    assert process_ids
+    assert min(process_ids) >= 300
+
+
+def test_dbus_bus_state_stays_source_native(linux_system):
+    """D-Bus bus suffixes should stay in a realistic low integer regime."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    rng = random.Random(13)
+
+    bus_ids = [engine._next_dbus_bus_id(linux_system.hostname, rng) for _ in range(20)]
+
+    assert min(bus_ids) >= 12
+    assert max(bus_ids) < 1000
+    assert bus_ids == sorted(bus_ids)
 
 
 def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
