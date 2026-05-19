@@ -530,19 +530,43 @@ def _observed_web_scan_status(path_entry: dict[str, Any], rng) -> int:
     return status
 
 
+def _web_scan_uri_with_runtime_variation(uri: str, request_count: int, rng) -> str:
+    """Return scanner URI with sparse per-request query noise."""
+    if "?" in uri or rng.random() >= 0.24:
+        return uri
+    separator = "&" if "?" in uri else "?"
+    if rng.random() < 0.34:
+        param = rng.choice(("v", "_", "cache", "rnd"))
+        value = rng.randbytes(rng.randint(2, 5)).hex()
+    elif rng.random() < 0.68:
+        param = rng.choice(("id", "page", "item", "debug"))
+        value = str((request_count * rng.randint(3, 17) + rng.randint(1, 2009)) % 10000)
+    else:
+        param = rng.choice(("return", "next", "url"))
+        value = rng.choice(("%2F", "%2Flogin", "%2Fadmin", "%2Findex.php"))
+    return f"{uri}{separator}{param}={value}"
+
+
 def _dns_tunnel_extra_labels(query_count: int, rng) -> list[str]:
     """Return optional DNS tunnel labels that make query grammar less uniform."""
     roll = rng.random()
-    if roll < 0.42:
+    if roll < 0.34:
         return []
-    edge = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x'))}{rng.randint(1, 99)}"
-    if roll < 0.62:
+    edge = f"{rng.choice(('a', 'b', 'c', 'd', 'e', 'n', 'x', 'u'))}{rng.randint(1, 99)}"
+    region = rng.choice(("iad", "ord", "dfw", "sjc", "lax", "atl", "ewr"))
+    if roll < 0.54:
         return [edge]
-    if roll < 0.78:
-        return [rng.choice(("cdn", "api", "img", "edge", "r")), edge]
-    if roll < 0.9:
-        return [f"s{query_count & 0xFFFF:x}", rng.choice(("a", "b", "r"))]
-    return [edge, f"r{rng.randint(1, 12)}", rng.choice(("cdn", "cache", "svc"))]
+    if roll < 0.72:
+        return [rng.choice(("cdn", "api", "img", "edge", "r", region)), edge]
+    if roll < 0.86:
+        return [f"s{query_count & 0xFFFF:x}", rng.choice(("a", "b", "r", region))]
+    if roll < 0.95:
+        return [edge, f"r{rng.randint(1, 12)}", rng.choice(("cdn", "cache", "svc", region))]
+    return [
+        rng.choice(("api", "cdn", "assets", "edge")),
+        region,
+        f"n{rng.randint(1, 7)}",
+    ]
 
 
 def _dns_tunnel_background_txt_record(rng: random.Random) -> tuple[str, str, int]:
@@ -3223,7 +3247,17 @@ class StorylineMixin:
                 path_entry = _next_scan_path()
 
                 _method = path_entry.get("method", "GET")
-                _uri = path_entry.get("uri", "/")
+                _uri = _web_scan_uri_with_runtime_variation(
+                    str(path_entry.get("uri", "/")),
+                    request_count,
+                    random.Random(
+                        _stable_seed(
+                            "web_scan_uri_variation:"
+                            f"{scan_src_ip}:{scan_dst_ip}:{request_count}:"
+                            f"{tick_time.isoformat()}"
+                        )
+                    ),
+                )
                 _status = _observed_web_scan_status(
                     path_entry,
                     random.Random(

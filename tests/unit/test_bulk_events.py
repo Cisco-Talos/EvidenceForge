@@ -24,6 +24,7 @@ from evidenceforge.generation.engine.storyline import (
     _scan_target_exposes_port,
     _web_scan_connection_profile,
     _web_scan_path_allows_referrer,
+    _web_scan_uri_with_runtime_variation,
 )
 from evidenceforge.models import System, User
 from evidenceforge.models.scenario import (
@@ -579,6 +580,16 @@ class TestWebScanConnectionProfile:
         assert not _web_scan_path_allows_referrer(
             {"uri": "/robots.txt", "status": 200, "ids": {"sid": 1}}
         )
+
+    def test_uri_variation_adds_sparse_query_noise_without_changing_path(self):
+        class AlwaysMutateRng(random.Random):
+            def random(self):
+                return 0.1
+
+        uri = _web_scan_uri_with_runtime_variation("/admin/login.php", 7, AlwaysMutateRng(42))
+
+        assert uri.startswith("/admin/login.php?")
+        assert uri != "/admin/login.php"
 
 
 class TestPortScanPairIteration:

@@ -114,7 +114,7 @@ system_services:
           - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-18 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-18 1"
           - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-19 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-19 1"
           - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-20 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-20 1"
-          - "Global\\UsGthrFltPipeMssGthrPipe_S-1-5-21-397955417-626881126-188441444-1001 Global\\UsGthrCtrlFltPipeMssGthrPipe_S-1-5-21-397955417-626881126-188441444-1001 1"
+          - "Global\\UsGthrFltPipeMssGthrPipe_{host_local_search_sid} Global\\UsGthrCtrlFltPipeMssGthrPipe_{host_local_search_sid} 1"
       parent: search_indexer
     - image: "C:\\Windows\\System32\\SearchFilterHost.exe"
       command_templates:

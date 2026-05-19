@@ -1505,6 +1505,41 @@ class TestActivityGenerator:
         assert event.kerberos.service_name == "krbtgt/example.local"
         assert event.kerberos.service_sid == "S-1-5-21-1-2-3-502"
 
+    def test_machine_account_logon_emits_nearby_dc_kerberos_audit(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Machine Kerberos flows should have matching DC 4768/4769 audit records."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+
+        activity_gen.generate_machine_account_logon(
+            hostname="WKS-01",
+            machine_username="WKS-01$",
+            dc_hostname="DC-01",
+            source_ip="10.0.1.10",
+            dc_ip="10.0.2.10",
+            time=timestamp,
+            domain="EXAMPLE",
+        )
+
+        security_events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        event_types = {event.event_type for event in security_events}
+        kerberos_events = [
+            event
+            for event in security_events
+            if event.event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+
+        assert {"kerberos_tgt", "kerberos_service", "machine_logon"} <= event_types
+        assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
+        assert all(
+            abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+        )
+
     def test_bash_history_preserves_blocking_command_dwell(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -1524,6 +1559,29 @@ class TestActivityGenerator:
         events = [call.args[0] for call in bash_emitter.emit.call_args_list]
         assert events[0].timestamp == timestamp
         assert events[1].timestamp >= timestamp + timedelta(seconds=45)
+
+    def test_same_user_bash_history_avoids_same_second_across_hosts(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Same-user shell entries on different hosts should not land on the same second."""
+        linux_a = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        linux_b = System(hostname="LNX-02", ip="10.0.0.3", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        activity_gen.generate_bash_command(user, linux_a, timestamp, "whoami")
+        activity_gen.generate_bash_command(user, linux_b, timestamp, "id")
+
+        events = [call.args[0] for call in bash_emitter.emit.call_args_list]
+        event_seconds = [int(event.timestamp.timestamp()) for event in events]
+
+        assert len(events) == 2
+        assert len(set(event_seconds)) == 2
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
@@ -3899,6 +3957,112 @@ class TestActivityGenerator:
             "tcp",
             "ssh",
         )
+
+    def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Internal-to-DC Kerberos conn.log rows should have matching DC audit evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.1.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds", "kerberos"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=dc.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            source_system=source,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        tgt = next(event for event in events if event.event_type == "kerberos_tgt")
+        service = next(event for event in events if event.event_type == "kerberos_service")
+        connection = next(event for event in events if event.event_type == "connection")
+
+        assert tgt.kerberos.target_username == "WEB-EXT-01$"
+        assert tgt.kerberos.source_ip == "::ffff:10.0.1.20"
+        assert service.kerberos.target_username == "WEB-EXT-01$@CORP.LOCAL"
+        assert tgt.timestamp < connection.timestamp
+        assert service.timestamp < connection.timestamp
+        assert (connection.timestamp - tgt.timestamp).total_seconds() < 1
+
+    def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Connection-layer KDC audit repair should not duplicate existing nearby audit."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="FILE-SRV-01",
+            ip="10.0.1.20",
+            os="Windows Server 2019",
+            type="server",
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        activity_gen.generate_kerberos_tgt(
+            username="FILE-SRV-01$",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=timestamp - timedelta(milliseconds=200),
+        )
+        activity_gen.generate_kerberos_service_ticket(
+            username="FILE-SRV-01$",
+            service_name=f"ldap/{dc.hostname}",
+            source_ip=source.ip,
+            dc_hostname=dc.hostname,
+            time=timestamp - timedelta(milliseconds=80),
+        )
+        mock_emitters["windows_event_security"].emit.reset_mock()
+
+        activity_gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=dc.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=2500,
+            source_system=source,
+        )
+
+        events = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert events == ["connection"]
 
     def test_generate_connection_clamps_http_depth_for_one_request_connections(
         self, activity_gen, state_manager, mock_emitters

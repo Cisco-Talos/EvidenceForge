@@ -118,7 +118,24 @@ class TestProcessPoolSize:
         params = search_protocol_entries[0]["params"]["search_pipe_args"]
         assert "SearchProtocolHost.exe {search_pipe_args}" == command
         assert all("S-1-5-21 1" not in arg for arg in params)
+        assert all("397955417-626881126-188441444-1001" not in arg for arg in params)
         assert all("UsGthrCtrlFltPipeMssGthrPipe" in arg for arg in params)
+
+    def test_search_pipe_local_sid_placeholder_is_host_specific(self):
+        """SearchProtocolHost local SID pipe args should not repeat across workstations."""
+        template = (
+            "Global\\UsGthrFltPipeMssGthrPipe_{host_local_search_sid} "
+            "Global\\UsGthrCtrlFltPipeMssGthrPipe_{host_local_search_sid} 1"
+        )
+        host_a = SimpleNamespace(hostname="WKS-01", ip="10.0.1.10")
+        host_b = SimpleNamespace(hostname="WKS-02", ip="10.0.1.11")
+
+        resolved_a = _resolve_host_placeholders(template, host_a)
+        resolved_b = _resolve_host_placeholders(template, host_b)
+
+        assert "{host_local_search_sid}" not in resolved_a
+        assert resolved_a != resolved_b
+        assert resolved_a.count("S-1-5-21-") == 2
 
     def test_tiworker_servicing_stack_placeholder_resolves_by_host_build(self):
         """TiWorker WinSxS component paths should follow the host OS family."""

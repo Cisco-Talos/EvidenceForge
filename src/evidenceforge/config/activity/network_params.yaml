@@ -92,6 +92,11 @@ dns_tunnel_response_templates:
   - "ok:{seq}:{token}"
   - "{edge}={token}"
   - "n={seq_hex}.{token}"
+  - "x-{edge}:{seq_hex}:{token}"
+  - "srv.{edge}.{seq_hex}.{token}"
+  - "slot-{seq}-t{ttl}-{token}"
+  - "srv-{edge}-{seq_hex}:{token}"
+  - "xid:{token}:path-{edge}:n{seq}"
 
 dns_tunnel_ttl_choices:
   - value: 0

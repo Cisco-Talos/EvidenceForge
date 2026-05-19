@@ -12,6 +12,7 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
+from evidenceforge.utils.rng import _stable_seed
 
 _PROCESSES_PATH = get_activity_directory() / "system_processes.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -125,12 +126,24 @@ def _windows_servicing_stack_version(host: Any | None) -> str:
     return "10.0.19041.3636"
 
 
+def _host_local_search_sid(host: Any | None) -> str:
+    """Return a stable host-local user SID for Windows Search pipe arguments."""
+    hostname = str(getattr(host, "hostname", "") or "unknown").lower()
+    ip = str(getattr(host, "ip", "") or "")
+    seed = _stable_seed(f"windows_search_sid:{hostname}:{ip}")
+    rng = random.Random(seed)
+    authority = "-".join(str(rng.randint(100_000_000, 999_999_999)) for _ in range(3))
+    rid = 1000 + (seed % 7000)
+    return f"S-1-5-21-{authority}-{rid}"
+
+
 def _resolve_host_placeholders(value: str, host: Any | None = None) -> str:
     """Resolve host-owned placeholders in system-process paths and commands."""
-    return value.replace(
+    resolved = value.replace(
         "{servicing_stack_version}",
         _windows_servicing_stack_version(host),
     )
+    return resolved.replace("{host_local_search_sid}", _host_local_search_sid(host))
 
 
 def pick_scheduled_task(rng: random.Random, host: Any | None = None) -> tuple[str, str, str]:

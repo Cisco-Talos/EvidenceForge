@@ -2042,6 +2042,58 @@ def _proxy_http_response_body_len(
     return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
 
 
+def _proxy_time_taken_ms(
+    duration: float | None,
+    rng: random.Random,
+    *,
+    method: str,
+    status_code: int,
+    cache_result: str = "",
+    minimum_ms: int = 1,
+) -> int:
+    """Return proxy-side service time without mirroring wire duration exactly."""
+    base_ms = max(1, int((duration or 0.0) * 1000))
+    method_upper = method.upper()
+    cache_upper = cache_result.upper()
+    uniform = getattr(rng, "uniform", None)
+    lognormvariate = getattr(rng, "lognormvariate", None)
+
+    def _uniform(low: float, high: float) -> float:
+        if callable(uniform):
+            return float(uniform(low, high))
+        return low + ((high - low) * rng.random())
+
+    def _lognormvariate(mu: float, sigma: float) -> float:
+        if callable(lognormvariate):
+            return float(lognormvariate(mu, sigma))
+        return random.Random(
+            _stable_seed(f"proxy_time_lognorm:{base_ms}:{mu}:{sigma}")
+        ).lognormvariate(mu, sigma)
+
+    if status_code >= 400:
+        if method_upper == "CONNECT":
+            sampled_ms = rng.randint(20, 1500)
+        else:
+            sampled_ms = rng.randint(35, 2400)
+    elif cache_upper == "HIT":
+        sampled_ms = max(8, int(base_ms * _uniform(0.08, 0.42))) + rng.randint(3, 95)
+    elif method_upper == "CONNECT":
+        overhead_ms = rng.randint(19, 420)
+        if base_ms > 10_000:
+            overhead_ms += min(950, int(_lognormvariate(4.1, 0.55)))
+        sampled_ms = base_ms + overhead_ms + rng.randint(-11, 47)
+    else:
+        overhead_ms = rng.randint(7, 180)
+        if base_ms > 5000:
+            overhead_ms += min(500, int(_lognormvariate(3.2, 0.5)))
+        sampled_ms = base_ms + overhead_ms + rng.randint(-9, 35)
+
+    sampled_ms = max(minimum_ms, sampled_ms)
+    if duration is not None and sampled_ms == base_ms:
+        sampled_ms += rng.choice((-7, 11, 17))
+    return max(minimum_ms, sampled_ms)
+
+
 def _proxy_action_for_context(
     *,
     method: str,
@@ -2395,6 +2447,7 @@ class ActivityGenerator:
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
+        self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
         self._foreground_process_finalizers: dict[
             tuple[str, int], tuple[System, str, str, str, datetime]
         ] = {}
@@ -3116,9 +3169,13 @@ class ActivityGenerator:
                 "GATEWAY_ERROR": rng.choice([502, 503, 504]),
             }.get(cache_result, 200)
         )
-        time_taken = int((duration or 0) * 1000)
-        if explicit_mode and proxy_method == "CONNECT" and status_code >= 400:
-            time_taken = rng.randint(20, 1500)
+        time_taken = _proxy_time_taken_ms(
+            duration,
+            rng,
+            method=proxy_method,
+            status_code=status_code,
+            cache_result=cache_result,
+        )
 
         return ProxyContext(
             client_ip=src_ip,
@@ -6472,6 +6529,116 @@ class ActivityGenerator:
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
         )
 
+    def _remember_kerberos_audit(self, source_ip: str, dc_hostname: str, time: datetime) -> None:
+        """Track recently emitted DC audit so connection-layer repair does not duplicate it."""
+        if not source_ip or source_ip == "-" or not dc_hostname:
+            return
+        cache: dict[tuple[str, str], list[float]] = getattr(
+            self,
+            "_kerberos_connection_audit_times",
+            {},
+        )
+        self._kerberos_connection_audit_times = cache
+        key = (source_ip.removeprefix("::ffff:"), dc_hostname.lower())
+        current = time.timestamp()
+        recent = [seen for seen in cache.get(key, []) if abs(current - seen) <= 30.0]
+        recent.append(current)
+        cache[key] = recent[-12:]
+
+    def _has_recent_kerberos_audit(
+        self,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        *,
+        window_seconds: float = 10.0,
+    ) -> bool:
+        if not source_ip or source_ip == "-" or not dc_hostname:
+            return False
+        cache: dict[tuple[str, str], list[float]] = getattr(
+            self,
+            "_kerberos_connection_audit_times",
+            {},
+        )
+        key = (source_ip.removeprefix("::ffff:"), dc_hostname.lower())
+        current = time.timestamp()
+        return any(abs(current - seen) <= window_seconds for seen in cache.get(key, []))
+
+    def _emit_dc_audit_for_kerberos_connection(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        time: datetime,
+        dst_port: int,
+        proto: str,
+        service: str,
+        source_system: System | None,
+    ) -> None:
+        """Ensure visible internal-to-DC Kerberos flows have nearby DC audit evidence."""
+        if proto != "tcp" or dst_port != 88 or service != "kerberos":
+            return
+        if source_system is None:
+            return
+
+        ip_to_system = getattr(self, "_ip_to_system", {})
+        dc_system = ip_to_system.get(dst_ip)
+        if dc_system is None:
+            dc_system = next(
+                (system for system in getattr(self, "_dc_systems", []) if system.ip == dst_ip),
+                None,
+            )
+        if dc_system is None:
+            return
+        dc_roles = set(getattr(dc_system, "roles", []) or [])
+        dc_services = set(getattr(dc_system, "services", []) or [])
+        is_dc = (
+            "domain_controller" in dc_roles
+            or getattr(dc_system, "type", "") == "domain_controller"
+            or "ad-ds" in dc_services
+        )
+        if not is_dc:
+            return
+
+        dc_hostname = dc_system.hostname
+        if self._has_recent_kerberos_audit(src_ip, dc_hostname, time):
+            return
+
+        rng = random.Random(
+            _stable_seed(
+                "kerberos_connection_audit:"
+                f"{src_ip}:{dst_ip}:{source_system.hostname}:{time.timestamp()}"
+            )
+        )
+        tgt_time = time - timedelta(milliseconds=rng.randint(80, 260))
+        tgs_time = time - timedelta(milliseconds=rng.randint(12, 75))
+        if tgs_time <= tgt_time:
+            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+        machine_principal = f"{source_system.hostname}$"
+        self.generate_kerberos_tgt(
+            username=machine_principal,
+            source_ip=src_ip,
+            dc_hostname=dc_hostname,
+            time=tgt_time,
+        )
+        service_name = rng.choices(
+            [
+                f"host/{dc_hostname}",
+                f"ldap/{dc_hostname}",
+                f"cifs/{dc_hostname}",
+                f"DNS/{dc_hostname}",
+            ],
+            weights=[34, 36, 20, 10],
+            k=1,
+        )[0]
+        self.generate_kerberos_service_ticket(
+            username=machine_principal,
+            service_name=service_name,
+            source_ip=src_ip,
+            dc_hostname=dc_hostname,
+            time=tgs_time,
+        )
+
     def generate_connection(
         self,
         src_ip: str,
@@ -6926,7 +7093,19 @@ class ActivityGenerator:
                 )
                 proxy_context.time_taken = max(
                     proxy_context.time_taken,
-                    int(client_duration * 1000),
+                    _proxy_time_taken_ms(
+                        client_duration,
+                        random.Random(
+                            _stable_seed(
+                                "proxy_context_total_time:"
+                                f"{src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
+                                f"{dst_port}:{time.timestamp()}"
+                            )
+                        ),
+                        method=proxy_context.method,
+                        status_code=proxy_context.status_code,
+                        cache_result=proxy_context.cache_result,
+                    ),
                 )
 
             client_pid = pid
@@ -7623,6 +7802,16 @@ class ActivityGenerator:
         ):
             service = ""
 
+        self._emit_dc_audit_for_kerberos_connection(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            time=time,
+            dst_port=dst_port,
+            proto=proto,
+            service=service or "",
+            source_system=resolved_source_system,
+        )
+
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
         src_host_ctx = None
@@ -7983,7 +8172,13 @@ class ActivityGenerator:
                     status_code=proxy_status_code,
                     sc_bytes=_sc,
                     cs_bytes=_cs,
-                    time_taken=int((duration or 0) * 1000),
+                    time_taken=_proxy_time_taken_ms(
+                        duration,
+                        rng,
+                        method=proxy_method,
+                        status_code=proxy_status_code,
+                        cache_result=cache_result,
+                    ),
                     user_agent=user_agent,
                     content_type=proxy_content_type,
                     cache_result=cache_result,
@@ -9037,6 +9232,7 @@ class ActivityGenerator:
         """Preserve foreground command dwell time for one user's shell history."""
         key = (system.hostname, user.username)
         scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
+        scheduled_time = self._reserve_bash_history_second(user, system, scheduled_time, command)
         dwell_seconds = _bash_command_dwell_seconds(command)
         jitter_rng = random.Random(
             _stable_seed(
@@ -9069,6 +9265,38 @@ class ActivityGenerator:
         self._bash_history_command_counts[key] = self._bash_history_command_counts.get(key, 0) + 1
         self._bash_history_next_time[key] = scheduled_time + timedelta(seconds=dwell_seconds)
         return scheduled_time
+
+    def _reserve_bash_history_second(
+        self,
+        user: User,
+        system: System,
+        scheduled_time: datetime,
+        command: str,
+    ) -> datetime:
+        """Avoid exact same-user bash-history seconds across different hosts."""
+        username_key = user.username.lower()
+        candidate = scheduled_time
+        for attempt in range(8):
+            second_key = (username_key, int(candidate.timestamp()))
+            if second_key not in self._bash_history_user_seconds:
+                self._bash_history_user_seconds[second_key] = 1
+                return candidate
+            collision_count = self._bash_history_user_seconds[second_key]
+            self._bash_history_user_seconds[second_key] = collision_count + 1
+            delay_rng = random.Random(
+                _stable_seed(
+                    "bash_user_second_collision:"
+                    f"{username_key}:{system.hostname}:{command}:"
+                    f"{candidate.timestamp()}:{attempt}:{collision_count}"
+                )
+            )
+            candidate += timedelta(seconds=delay_rng.randint(1, 23))
+
+        second_key = (username_key, int(candidate.timestamp()))
+        self._bash_history_user_seconds[second_key] = (
+            self._bash_history_user_seconds.get(second_key, 0) + 1
+        )
+        return candidate
 
     def generate_bash_command_with_noise(
         self,
@@ -10441,6 +10669,33 @@ class ActivityGenerator:
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
         logon_id = self.state_manager.allocate_logon_id(dc_hostname, time)
+        tgt_time = time - timedelta(milliseconds=rng.randint(70, 220))
+        tgs_time = time - timedelta(milliseconds=rng.randint(8, 65))
+        if tgs_time <= tgt_time:
+            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+        self.generate_kerberos_tgt(
+            username=machine_username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=tgt_time,
+        )
+        service_name = rng.choices(
+            [
+                f"host/{dc_hostname}",
+                f"ldap/{dc_hostname}",
+                f"cifs/{dc_hostname}",
+                f"DNS/{dc_hostname}",
+            ],
+            weights=[35, 35, 20, 10],
+            k=1,
+        )[0]
+        self.generate_kerberos_service_ticket(
+            username=machine_username,
+            service_name=service_name,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=tgs_time,
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="machine_logon",
@@ -10530,6 +10785,7 @@ class ActivityGenerator:
             ),
         )
 
+        self._remember_kerberos_audit(source_ip, dc_hostname, time)
         self.dispatcher.dispatch(event)
 
     def generate_kerberos_tgt_renewal(
@@ -10563,6 +10819,7 @@ class ActivityGenerator:
             ),
         )
 
+        self._remember_kerberos_audit(source_ip, dc_hostname, time)
         self.dispatcher.dispatch(event)
 
     def generate_kerberos_service_ticket(
@@ -10606,6 +10863,7 @@ class ActivityGenerator:
             ),
         )
 
+        self._remember_kerberos_audit(source_ip, dc_hostname, time)
         self.dispatcher.dispatch(event)
 
     def generate_ntlm_validation(

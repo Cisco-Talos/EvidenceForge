@@ -3785,6 +3785,54 @@ class BaselineMixin:
                 pid_key = _SERVICE_TO_PID_KEY.get(conn.get("service", ""), "")
                 conn_pid = _pids.get(pid_key, -1) if pid_key else -1
 
+                if (
+                    conn.get("service") == "kerberos"
+                    and conn.get("port") == 88
+                    and os_cat == "windows"
+                ):
+                    dc_ips = self._infra_ips.get("dc", [])
+                    if isinstance(dc_ips, str):
+                        dc_ips = [dc_ips]
+                    dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+                    if isinstance(dc_hostnames, str):
+                        dc_hostnames = [dc_hostnames]
+                    dc_hostname_by_ip = {
+                        dc_ip: dc_hostname
+                        for dc_ip, dc_hostname in zip(dc_ips, dc_hostnames, strict=False)
+                    }
+                    dc_hostname = dc_hostname_by_ip.get(dst_ip)
+                    if dc_hostname is None and dc_hostnames and dst_ip in dc_ips:
+                        dc_hostname = rng.choice(dc_hostnames)
+                    if dc_hostname:
+                        machine_principal = f"{system.hostname}$"
+                        tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
+                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
+                        if tgs_time <= tgt_time:
+                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+                        self.activity_generator.generate_kerberos_tgt(
+                            username=machine_principal,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgt_time,
+                        )
+                        service_name = rng.choices(
+                            [
+                                f"host/{dc_hostname}",
+                                f"ldap/{dc_hostname}",
+                                f"cifs/{dc_hostname}",
+                                f"DNS/{dc_hostname}",
+                            ],
+                            weights=[34, 36, 20, 10],
+                            k=1,
+                        )[0]
+                        self.activity_generator.generate_kerberos_service_ticket(
+                            username=machine_principal,
+                            service_name=service_name,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgs_time,
+                        )
+
                 self.activity_generator.generate_connection(
                     src_ip=system.ip,
                     dst_ip=dst_ip,
@@ -3979,6 +4027,43 @@ class BaselineMixin:
                             emit_dns=False,
                         )
                     else:
+                        if (
+                            conn.get("service") == "kerberos"
+                            and conn.get("port") == 88
+                            and is_internal_src
+                            and src_sys is not None
+                            and os_cat == "windows"
+                        ):
+                            dc_hostname = system.hostname
+                            machine_principal = f"{src_sys.hostname}$"
+                            tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
+                            tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
+                            if tgs_time <= tgt_time:
+                                tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+                            self.activity_generator.generate_kerberos_tgt(
+                                username=machine_principal,
+                                source_ip=src_ip,
+                                dc_hostname=dc_hostname,
+                                time=tgt_time,
+                            )
+                            service_name = rng.choices(
+                                [
+                                    f"host/{dc_hostname}",
+                                    f"ldap/{dc_hostname}",
+                                    f"cifs/{dc_hostname}",
+                                    f"DNS/{dc_hostname}",
+                                ],
+                                weights=[34, 36, 20, 10],
+                                k=1,
+                            )[0]
+                            self.activity_generator.generate_kerberos_service_ticket(
+                                username=machine_principal,
+                                service_name=service_name,
+                                source_ip=src_ip,
+                                dc_hostname=dc_hostname,
+                                time=tgs_time,
+                            )
+
                         self.activity_generator.generate_connection(
                             src_ip=src_ip,
                             dst_ip=effective_dst_ip,
@@ -4506,6 +4591,12 @@ class BaselineMixin:
             dc_ips = self._infra_ips.get("dc", ["10.0.0.1"])
             if isinstance(dc_ips, str):
                 dc_ips = [dc_ips]
+            dc_hostnames = self._infra_ips.get("dc_hostnames", [])
+            if isinstance(dc_hostnames, str):
+                dc_hostnames = [dc_hostnames]
+            dc_hostname_by_ip = {
+                dc_ip: dc_hostname for dc_ip, dc_hostname in zip(dc_ips, dc_hostnames, strict=False)
+            }
             dc_targets = [ip for ip in dc_ips if ip != system.ip]
             if "smb-client" in services and os_cat == "windows":
                 # Include DC SYSVOL/GPO traffic and weight file servers higher
@@ -4604,9 +4695,42 @@ class BaselineMixin:
                     offset = max(0, min(3599, offset))
                     ts = current_hour + timedelta(seconds=offset)
                     self.state_manager.set_current_time(ts)
+                    krb_dst_ip = rng.choice(dc_targets)
+                    dc_hostname = dc_hostname_by_ip.get(krb_dst_ip)
+                    if dc_hostname is None and dc_hostnames:
+                        dc_hostname = rng.choice(dc_hostnames)
+                    if dc_hostname:
+                        machine_principal = f"{system.hostname}$"
+                        tgt_time = ts - timedelta(milliseconds=rng.randint(60, 220))
+                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 55))
+                        if tgs_time <= tgt_time:
+                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(12, 48))
+                        self.activity_generator.generate_kerberos_tgt(
+                            username=machine_principal,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgt_time,
+                        )
+                        service_name = rng.choices(
+                            [
+                                f"host/{dc_hostname}",
+                                f"ldap/{dc_hostname}",
+                                f"cifs/{dc_hostname}",
+                                f"DNS/{dc_hostname}",
+                            ],
+                            weights=[34, 36, 20, 10],
+                            k=1,
+                        )[0]
+                        self.activity_generator.generate_kerberos_service_ticket(
+                            username=machine_principal,
+                            service_name=service_name,
+                            source_ip=system.ip,
+                            dc_hostname=dc_hostname,
+                            time=tgs_time,
+                        )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
-                        dst_ip=rng.choice(dc_targets),
+                        dst_ip=krb_dst_ip,
                         time=ts,
                         dst_port=88,
                         proto="tcp",

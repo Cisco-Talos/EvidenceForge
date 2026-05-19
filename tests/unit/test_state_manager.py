@@ -281,6 +281,19 @@ class TestSessionManagement:
         assert session.logon_guid == guid_a
         assert guid_a != "{00000000-0000-0000-0000-000000000000}"
 
+    def test_generated_logon_guids_do_not_all_look_like_uuidv5(self):
+        """Deterministic LogonGuid values should not expose one RFC version nibble."""
+        sm = StateManager()
+
+        guids = [
+            sm.get_or_create_session_logon_guid(f"0x{value:x}", "WS-01") for value in range(32)
+        ]
+        version_nibbles = {guid[15] for guid in guids}
+
+        assert all(guid.startswith("{") and guid.endswith("}") for guid in guids)
+        assert "5" not in version_nibbles
+        assert len(version_nibbles) > 3
+
     def test_create_session_uses_explicit_start_time_for_luid(self):
         """Explicit session start time should drive LogonID order despite stale state time."""
         sm = StateManager()

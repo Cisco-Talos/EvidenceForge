@@ -261,6 +261,33 @@ class TestBaselineLinuxBashHistory:
         counts = Counter(picked)
         assert max(counts.values()) <= 6
 
+    def test_bash_picker_suppresses_same_user_repeats_across_hosts(self):
+        """A user's command memory should carry across parallel SSH hosts."""
+        from evidenceforge.generation.activity import bash_commands
+
+        bash_commands.reset_bash_command_memory()
+        bash_commands._remember_command("WEB-01", "deploy", "ls")
+
+        class PreferRepeatedThenFresh(random.Random):
+            def __init__(self):
+                super().__init__(3)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                return values[0] if self.calls == 1 else values[1]
+
+        command = bash_commands._choose_template_with_memory(
+            PreferRepeatedThenFresh(),
+            ["ls", "pwd"],
+            {},
+            [],
+            "DB-01",
+            "deploy",
+        )
+
+        assert command == "pwd"
+
 
 class TestBashHistoryChronological:
     """Bash history entries should be chronologically sorted."""

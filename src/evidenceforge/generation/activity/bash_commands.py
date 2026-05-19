@@ -251,12 +251,14 @@ _USER_TOOL_AFFINITY: dict[tuple[str, tuple[str, ...]], list[str]] = {}
 _COMMAND_RECENCY_LIMIT = 14
 _COMMAND_CANDIDATE_ATTEMPTS = 16
 _COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
+_COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
 
 
 def reset_bash_command_memory() -> None:
     """Clear per-generation bash command memory."""
     _COMMAND_RECENCY.clear()
+    _COMMAND_USER_RECENCY.clear()
     _COMMAND_GLOBAL_COUNTS.clear()
 
 
@@ -309,6 +311,11 @@ def _remember_command(system_hostname: str, username: str, command: str) -> None
     key = (system_hostname.lower(), username.lower())
     recent = _COMMAND_RECENCY.setdefault(key, deque(maxlen=_COMMAND_RECENCY_LIMIT))
     recent.append(command)
+    if username:
+        user_recent = _COMMAND_USER_RECENCY.setdefault(
+            username.lower(), deque(maxlen=_COMMAND_RECENCY_LIMIT * 2)
+        )
+        user_recent.append(command)
     _COMMAND_GLOBAL_COUNTS[command] += 1
 
 
@@ -326,6 +333,8 @@ def _choose_template_with_memory(
 
     key = (system_hostname.lower(), username.lower())
     recent = set(_COMMAND_RECENCY.get(key, ()))
+    if username:
+        recent.update(_COMMAND_USER_RECENCY.get(username.lower(), ()))
     soft_cap = max(3, min(6, max(1, len(pool) // 5)))
     attempts = _COMMAND_CANDIDATE_ATTEMPTS
     candidates: list[str] = []

@@ -26,6 +26,7 @@ This module provides the StateManager class for tracking runtime state during
 log generation, ensuring consistency across log formats.
 """
 
+import hashlib
 import logging
 import random
 import uuid
@@ -211,8 +212,14 @@ class StateManager:
     @staticmethod
     def _stable_logon_guid(system: str, logon_id: str) -> str:
         """Return a deterministic Windows LogonGuid for a host-local LogonID."""
-        value = uuid.uuid5(uuid.NAMESPACE_DNS, f"windows_logon_guid:{system}:{logon_id}")
-        return f"{{{value}}}"
+        digest = hashlib.sha256(f"windows_logon_guid:{system}:{logon_id}".encode()).hexdigest()
+        # Windows Security LogonGuid values are provider-owned GUID-shaped tokens, not
+        # RFC UUIDv5 derivations. Preserve deterministic correlation without forcing
+        # the version nibble that made every generated non-zero value look uuid5-like.
+        group3 = digest[12:16]
+        if group3[0] == "5":
+            group3 = ("4" if digest[16] != "4" else "7") + group3[1:]
+        return f"{{{digest[:8]}-{digest[8:12]}-{group3}-{digest[16:20]}-{digest[20:32]}}}"
 
     def allocate_logon_id(self, system: str, event_time: datetime | None = None) -> str:
         """Allocate a standalone host-local LogonID without registering a session."""

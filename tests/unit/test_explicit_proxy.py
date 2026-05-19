@@ -243,6 +243,41 @@ def test_server_ids_http_traffic_keeps_server_proxy_user_agent():
     assert proxy_event.proxy.user_agent
 
 
+def test_generated_proxy_time_taken_does_not_mirror_conn_duration_floor():
+    generator, emitters = _generator(
+        [
+            NetworkSensor(
+                type="network",
+                name="client-tap",
+                monitoring_segments=["workstations"],
+                direction="outbound",
+                log_formats=["zeek"],
+            )
+        ]
+    )
+
+    generator.generate_connection(
+        src_ip="10.0.1.10",
+        dst_ip="93.184.216.34",
+        time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+        dst_port=443,
+        proto="tcp",
+        service="ssl",
+        duration=1.2,
+        orig_bytes=500,
+        resp_bytes=5000,
+        source_system=generator._ip_to_system["10.0.1.10"],
+        hostname="example.com",
+        conn_state="SF",
+    )
+
+    proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+
+    assert proxy_event.proxy.method == "CONNECT"
+    assert proxy_event.proxy.time_taken != 1200
+    assert proxy_event.proxy.time_taken > 0
+
+
 def _system(
     hostname: str,
     ip: str,
