@@ -22,6 +22,7 @@
 
 """Tests for activity generator SSL/HTTP/FileTransfer context population."""
 
+import math
 import random
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
@@ -1212,6 +1213,43 @@ class TestHttpContextPopulation:
 
         event = events[-1]
         assert event.network.resp_bytes > event.http.response_body_len
+
+    def test_large_tcp_transfer_counts_reverse_ack_packets(self, activity_gen):
+        """Large one-way TCP transfers should not keep single-digit ACK-side packet counts."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.20",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=9.0,
+            orig_bytes=314_783_347,
+            resp_bytes=2631,
+            conn_state="SF",
+        )
+        upload = events[-1].network
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.20",
+            time=datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC),
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=9.0,
+            orig_bytes=93_264,
+            resp_bytes=313_934_166,
+            conn_state="SF",
+        )
+        download = events[-1].network
+
+        assert upload.resp_pkts >= math.ceil((upload.orig_bytes or 0) / 1460 / 4)
+        assert upload.resp_ip_bytes >= (upload.resp_bytes or 0) + (upload.resp_pkts * 40)
+        assert download.orig_pkts >= math.ceil((download.resp_bytes or 0) / 1460 / 4)
+        assert download.orig_ip_bytes >= (download.orig_bytes or 0) + (download.orig_pkts * 40)
 
     def test_icmp_accounting_is_echo_like(self, activity_gen):
         """ICMP echo-style flows should not inherit bulk TCP byte/packet accounting."""

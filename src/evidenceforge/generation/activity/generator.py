@@ -1510,6 +1510,38 @@ _UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
 # 40=no options (legacy), 52=timestamps (dominant), 60=SACK+ts, 64=full
 _TCP_OVERHEAD_VALUES = (40, 52, 60, 64)
 _TCP_OVERHEAD_WEIGHTS = (10, 75, 10, 5)
+_TCP_MSS_BYTES = 1460
+_TCP_ACK_FLOOR_PAYLOAD_BYTES = 64 * 1024
+
+
+def _tcp_payload_segment_count(payload_bytes: int | None) -> int:
+    """Return the minimum TCP payload segment count for Zeek packet accounting."""
+    if payload_bytes is None or payload_bytes <= 0:
+        return 0
+    return max(1, math.ceil(payload_bytes / _TCP_MSS_BYTES))
+
+
+def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:
+    """Return a plausible ACK-only packet floor for a peer's large TCP payload."""
+    segments = _tcp_payload_segment_count(peer_payload_bytes)
+    if segments == 0 or (peer_payload_bytes or 0) < _TCP_ACK_FLOOR_PAYLOAD_BYTES:
+        return 0
+    ack_every_segments = rng.choices((2, 3, 4), weights=(70, 20, 10), k=1)[0]
+    return max(16, math.ceil(segments / ack_every_segments))
+
+
+def _apply_tcp_ack_packet_floors(
+    orig_pkts: int,
+    resp_pkts: int,
+    orig_bytes: int | None,
+    resp_bytes: int | None,
+    rng: random.Random,
+) -> tuple[int, int]:
+    """Ensure large one-way TCP transfers include plausible reverse ACK packets."""
+    orig_ack_floor = _tcp_ack_packet_floor(resp_bytes, rng)
+    resp_ack_floor = _tcp_ack_packet_floor(orig_bytes, rng)
+    return max(orig_pkts, orig_ack_floor), max(resp_pkts, resp_ack_floor)
+
 
 # NTP stratum-based timing: (mean_ms, sigma) for lognormal
 _NTP_STRATUM_TIMING = {
@@ -7981,13 +8013,20 @@ class ActivityGenerator:
         elif proto == "tcp" and history and history != "-":
             hist_orig = sum(1 for c in history if c.isupper())
             hist_resp = sum(1 for c in history if c.islower())
-            byte_orig = max(1, (orig_bytes // 1460) + 1) if orig_bytes else 1
-            byte_resp = max(1, (resp_bytes // 1460) + 1) if resp_bytes else 0
+            byte_orig = max(1, _tcp_payload_segment_count(orig_bytes)) if orig_bytes else 1
+            byte_resp = max(1, _tcp_payload_segment_count(resp_bytes)) if resp_bytes else 0
             orig_pkts = max(hist_orig, byte_orig)
             resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
             if dst_port == 443 and conn_state == "SF":
                 orig_pkts += rng.choices([0, 1, 2, 3, 5], weights=[45, 25, 15, 10, 5], k=1)[0]
                 resp_pkts += rng.choices([0, 1, 2, 4, 8], weights=[35, 25, 20, 15, 5], k=1)[0]
+            orig_pkts, resp_pkts = _apply_tcp_ack_packet_floors(
+                orig_pkts,
+                resp_pkts,
+                orig_bytes,
+                resp_bytes,
+                rng,
+            )
         elif proto == "icmp":
             orig_pkts = 1
             resp_pkts = 1 if resp_bytes and resp_bytes > 0 else 0
@@ -8836,6 +8875,13 @@ class ActivityGenerator:
                     weights=[35, 25, 20, 15, 5],
                     k=1,
                 )[0]
+            event.network.orig_pkts, event.network.resp_pkts = _apply_tcp_ack_packet_floors(
+                event.network.orig_pkts,
+                event.network.resp_pkts,
+                event.network.orig_bytes,
+                event.network.resp_bytes,
+                rng,
+            )
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
             orig_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
             resp_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
