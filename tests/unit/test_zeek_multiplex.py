@@ -401,6 +401,57 @@ class TestPerSensorDirectoryRouting:
 
             assert cloned == []
 
+    def test_long_lossless_tcp_duration_texture_does_not_flatline_at_cap(self):
+        """Long lossless observations should not reveal a repeated duration cap."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["core", "dmz"])
+            ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+            for idx in range(60):
+                emitter.emit_event(
+                    {
+                        "ts": ts,
+                        "uid": f"CTestLongSsh{idx:05d}",
+                        "id.orig_h": "10.0.0.1",
+                        "id.orig_p": 52000 + idx,
+                        "id.resp_h": "10.0.0.20",
+                        "id.resp_p": 22,
+                        "proto": "tcp",
+                        "service": "ssh",
+                        "duration": 900.0 + idx,
+                        "orig_bytes": 32000 + idx,
+                        "resp_bytes": 109000 + idx,
+                        "orig_pkts": 210,
+                        "resp_pkts": 320,
+                        "orig_ip_bytes": 40400 + idx,
+                        "resp_ip_bytes": 121800 + idx,
+                        "conn_state": "SF",
+                        "history": "ShADadfF",
+                        "_allow_sensor_observation_variance": True,
+                        "_sensor_hostnames": ["core", "dmz"],
+                    }
+                )
+            emitter.close()
+
+            core_rows = [
+                json.loads(line) for line in (base / "core" / "conn.json").read_text().splitlines()
+            ]
+            dmz_rows = [
+                json.loads(line) for line in (base / "dmz" / "conn.json").read_text().splitlines()
+            ]
+            core_by_port = {row["id.orig_p"]: row for row in core_rows}
+            dmz_by_port = {row["id.orig_p"]: row for row in dmz_rows}
+            deltas = [
+                round(dmz_by_port[port]["duration"] - core_by_port[port]["duration"], 6)
+                for port in sorted(core_by_port)
+            ]
+
+            assert all(0 < delta <= 0.75 for delta in deltas)
+            assert 0.75 not in deltas
+            assert len(set(deltas)) > 50
+
     def test_second_sensor_observation_skips_huge_numeric_jitter(self):
         """Huge raw numeric counters should not crash multi-sensor Zeek jitter."""
         fmt = load_format("zeek_conn")

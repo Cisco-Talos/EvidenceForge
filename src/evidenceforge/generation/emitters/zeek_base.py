@@ -215,7 +215,13 @@ def _extend_lossless_duration_observation(
     seed = _stable_seed(f"zeek_sensor_lossless_duration:{hostname}:{uid}")
     fraction = 0.00075 + ((seed % 1200) / 1_000_000)
     try:
-        delta = min(max_delta_seconds, max(0.000001, value * fraction))
+        raw_delta = max(0.000001, value * fraction)
+        if raw_delta > max_delta_seconds:
+            cap_seed = _stable_seed(f"zeek_sensor_lossless_duration_cap:{hostname}:{uid}")
+            cap_fraction = 0.25 + ((cap_seed % 73_000) / 100_000)
+            delta = max_delta_seconds * cap_fraction
+        else:
+            delta = raw_delta
         render_data["duration"] = value + delta
     except OverflowError:
         logger.debug(
