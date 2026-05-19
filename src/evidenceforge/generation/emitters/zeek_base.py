@@ -199,6 +199,75 @@ def _jitter_duration_observation(
         )
 
 
+def _extend_lossless_duration_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+    *,
+    max_delta_seconds: float,
+) -> None:
+    """Apply small positive end-time texture for a lossless sensor observation."""
+    value = render_data.get("duration")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return
+    if value <= 0:
+        return
+    seed = _stable_seed(f"zeek_sensor_lossless_duration:{hostname}:{uid}")
+    fraction = 0.00075 + ((seed % 1200) / 1_000_000)
+    try:
+        delta = min(max_delta_seconds, max(0.000001, value * fraction))
+        render_data["duration"] = value + delta
+    except OverflowError:
+        logger.debug(
+            "Skipping Zeek lossless sensor duration texture for out-of-range value on %s",
+            hostname,
+        )
+
+
+def _texture_lossless_tcp_packetization(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+) -> None:
+    """Add tiny packetization/IP-byte differences for an independent TCP tap."""
+    if str(render_data.get("proto") or "").lower() != "tcp":
+        return
+    changed = False
+    for side in ("orig", "resp"):
+        packets = render_data.get(f"{side}_pkts")
+        payload = render_data.get(f"{side}_bytes")
+        ip_bytes = render_data.get(f"{side}_ip_bytes")
+        if not all(isinstance(value, int) for value in (packets, payload, ip_bytes)):
+            continue
+        if packets <= 0 or payload < 0 or ip_bytes < 0:
+            continue
+        if packets > 10**18 or payload > 10**18 or ip_bytes > 10**18:
+            continue
+        seed = _stable_seed(f"zeek_sensor_lossless_packets:{hostname}:{uid}:{side}")
+        if seed % 3 == 0:
+            continue
+        extra_packets = 1 + (seed % 2)
+        render_data[f"{side}_pkts"] = packets + extra_packets
+        render_data[f"{side}_ip_bytes"] = ip_bytes + (extra_packets * 40) + (seed % 97)
+        changed = True
+    if changed:
+        return
+    for side in ("orig", "resp"):
+        packets = render_data.get(f"{side}_pkts")
+        payload = render_data.get(f"{side}_bytes")
+        ip_bytes = render_data.get(f"{side}_ip_bytes")
+        if not all(isinstance(value, int) for value in (packets, payload, ip_bytes)):
+            continue
+        if packets <= 0 or payload < 0 or ip_bytes < 0:
+            continue
+        if packets > 10**18 or payload > 10**18 or ip_bytes > 10**18:
+            continue
+        seed = _stable_seed(f"zeek_sensor_lossless_packets:fallback:{hostname}:{uid}:{side}")
+        render_data[f"{side}_pkts"] = packets + 1
+        render_data[f"{side}_ip_bytes"] = ip_bytes + 40 + (seed % 53)
+        return
+
+
 def _jitter_payload_counter_with_floor(
     render_data: dict[str, Any],
     field: str,
@@ -280,6 +349,14 @@ def _apply_sensor_observation_variance(
                 added_missed_bytes = True
                 lossy_observation = True
     if not lossy_observation:
+        if not render_data.get("_lock_duration"):
+            _extend_lossless_duration_observation(
+                render_data,
+                hostname,
+                original_uid,
+                max_delta_seconds=0.75,
+            )
+        _texture_lossless_tcp_packetization(render_data, hostname, original_uid)
         _enforce_http_body_invariants(render_data)
         _enforce_ip_byte_invariants(render_data)
         return
