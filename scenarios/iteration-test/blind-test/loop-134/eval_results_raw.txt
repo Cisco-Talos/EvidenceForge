@@ -1,0 +1,1262 @@
+[05/19/26 17:35:19] WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             User
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             Protocol
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             Initiated
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             SourceIsIpv6
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             SourceIp
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             SourceHostname
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             SourcePort
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             SourcePortName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             DestinationIsIpv6
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             DestinationIp
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             DestinationHostname
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             DestinationPort
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 3):
+                             DestinationPortName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             FileVersion
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             Description
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             Product
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             Company
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             OriginalFileName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             CommandLine
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             CurrentDirectory
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             User
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             LogonGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             LogonId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             TerminalSessionId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             IntegrityLevel
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             Hashes
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             ParentProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             ParentProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             ParentImage
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 1):
+                             ParentCommandLine
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 5):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 5):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 5):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 5):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 5):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 5):
+                             User
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             EventType
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             User
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             TargetObject
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 13):
+                             Details
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             QueryName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             QueryStatus
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             QueryResults
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 22):
+                             User
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             SourceProcessGUID
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             SourceProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             SourceImage
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             SourceThreadId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             SourceUser
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             TargetProcessGUID
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             TargetProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             TargetImage
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             TargetUser
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             GrantedAccess
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 10):
+                             CallTrace
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             ImageLoaded
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             FileVersion
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Description
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Product
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Company
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             OriginalFileName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Hashes
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Signed
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             Signature
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 7):
+                             SignatureStatus
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             SourceProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             SourceProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             SourceImage
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             TargetProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             TargetProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             TargetImage
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             NewThreadId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             StartAddress
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             StartModule
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 8):
+                             StartFunction
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             RuleName
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             UtcTime
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             ProcessGuid
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             ProcessId
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             Image
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             TargetFilename
+                    WARNING  Unknown field in                   validator.py:511
+                             windows_event_sysmon (EventID 11):
+                             CreationUtcTime
+{
+  "scenario_name": "iteration-test",
+  "generated_at": null,
+  "evaluated_at": "2026-05-19T21:35:22.254655Z",
+  "total_records": 80629,
+  "source_counts": {
+    "bash_history": 717,
+    "cisco_asa": 16519,
+    "ecar": 22796,
+    "proxy_access": 1310,
+    "snort_alert": 37,
+    "syslog": 6665,
+    "web_access": 783,
+    "windows_event_security": 7919,
+    "windows_event_sysmon": 4085,
+    "zeek_conn": 11230,
+    "zeek_dhcp": 26,
+    "zeek_dns": 1924,
+    "zeek_files": 1089,
+    "zeek_http": 2580,
+    "zeek_ocsp": 64,
+    "zeek_ssl": 2071,
+    "zeek_x509": 814
+  },
+  "overall_score": 95.72698864995834,
+  "pillars": [
+    {
+      "number": 1,
+      "name": "Parseability",
+      "weight": 0.3,
+      "score": 100.0,
+      "sub_scores": [
+        {
+          "name": "Spec Conformance",
+          "key": "spec_conformance",
+          "weight": 0.55,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "80629/80629 records pass strict spec validation",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Format Constraints",
+          "key": "format_constraints",
+          "weight": 0.45,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "80629/80629 records pass format constraint checks",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 2,
+      "name": "Plausibility",
+      "weight": 0.25,
+      "score": 94.39783744738361,
+      "sub_scores": [
+        {
+          "name": "Value & OS Plausibility",
+          "key": "value_plausibility",
+          "weight": 0.25,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "15301/15301 records pass OS/value plausibility checks",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Co-occurrence Rules",
+          "key": "co_occurrence",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "27496/27496 co-occurrence checks pass",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Distribution Fit",
+          "key": "distribution_fit",
+          "weight": 0.15,
+          "score": 81.31891631589072,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "ecar.object: 75; ecar.action: 70; web_access.method: 88; windows_event_security.EventID: 78; zeek_conn.proto: 100; zeek_conn.conn_state: 87; zeek_dns.qtype_name: 82; zeek_dns.rcode_name: 97; zeek_http.method: 41; zeek_http.status_code: 83; zeek_ssl.version: 83; zeek_ssl.established: 91",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Cross-Source Field Agreement",
+          "key": "field_agreement",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "15508/15508 matched pivot pairs agree",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "User Behavioral Diversity",
+          "key": "user_diversity",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Avg pairwise similarity: 0.16 across 83 users",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Anomaly Rate",
+          "key": "anomaly_rate",
+          "weight": 0.1,
+          "score": 72.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "36/5000 events anomalous (0.7%), target 1-5%",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    },
+    {
+      "number": 3,
+      "name": "Causality",
+      "weight": 0.25,
+      "score": 94.2429740156467,
+      "sub_scores": [
+        {
+          "name": "Causal Ordering",
+          "key": "causal_ordering",
+          "weight": 0.25,
+          "score": 99.90882718607543,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "12054/12065 causal pairs correctly ordered",
+          "sample_failures": [
+            "Rule 'Logon before process creation': after event at line 171 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 174 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 175 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 176 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 177 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 186 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 187 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 189 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 191 precedes all matching before events",
+            "Rule 'Logon before process creation': after event at line 194 precedes all matching before events"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Event Presence",
+          "key": "event_presence",
+          "weight": 0.2,
+          "score": 97.05882352941177,
+          "raw_score": 94.28571428571429,
+          "adjusted": true,
+          "details": "33/34 expected-visible storyline events have traces in logs; raw 33/35 (94.3/100), 1 excluded by observation profile",
+          "sample_failures": [
+            "Event 6: root@WEB-EXT-01 'Harvest database credentials and SSH key material from the w' — no traces"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Indicator Accuracy",
+          "key": "indicator_accuracy",
+          "weight": 0.15,
+          "score": 99.88452655889145,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "865/866 indicator checks correct",
+          "sample_failures": [
+            "Event 12: username mismatch in ecar"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Pivot Linkability",
+          "key": "pivot_linkability",
+          "weight": 0.15,
+          "score": 68.75,
+          "raw_score": 67.6470588235294,
+          "adjusted": true,
+          "details": "22/32 expected-visible consecutive pairs share a pivotable indicator; raw 23/34 (67.6/100), 2 excluded by observation profile",
+          "sample_failures": [
+            "Events 8→9: no shared indicator (root@APP-INT-01 → marcus.chen@WS-MCHEN-01)",
+            "Events 20→21: no shared indicator (root@WEB-EXT-01 → svc_mhsync@FILE-SRV-01)",
+            "Events 21→22: no shared indicator (svc_mhsync@FILE-SRV-01 → root@DB-PROD-01)",
+            "Events 22→23: no shared indicator (root@DB-PROD-01 → aisha.johnson@WS-AJOHNSON-01)",
+            "Events 25→26: no shared indicator (root@WEB-EXT-01 → aisha.johnson@WS-AJOHNSON-01)",
+            "Events 26→27: no shared indicator (aisha.johnson@WS-AJOHNSON-01 → root@WEB-EXT-01)",
+            "Events 28→29: no shared indicator (root@APP-INT-01 → SYSTEM@DC-01)",
+            "Events 31→32: no shared indicator (SYSTEM@DC-01 → aisha.johnson@WS-AJOHNSON-01)",
+            "Events 32→33: no shared indicator (aisha.johnson@WS-AJOHNSON-01 → svc_mhsync@FILE-SRV-01)",
+            "Events 33→34: no shared indicator (svc_mhsync@FILE-SRV-01 → root@APP-INT-01)"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Temporal Integrity",
+          "key": "temporal_integrity",
+          "weight": 0.15,
+          "score": 97.05882352941177,
+          "raw_score": 94.28571428571429,
+          "adjusted": true,
+          "details": "33/34 expected-visible events correctly timed and ordered; raw 33/35 (94.3/100), 1 excluded by observation profile",
+          "sample_failures": [
+            "Event 6: no traces to verify timing"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Storyline Trace Coverage",
+          "key": "storyline_trace_coverage",
+          "weight": 0.1,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "49/49 expected-visible format-traces found",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {
+        "host_log_profile": {
+          "app-int-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 187,
+              "ecar": 975,
+              "syslog": 1082
+            }
+          },
+          "db-prod-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 199,
+              "ecar": 693,
+              "syslog": 989
+            }
+          },
+          "dc-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 5497,
+              "windows_event_security": 3321
+            }
+          },
+          "file-srv-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 2191,
+              "windows_event_security": 1074
+            }
+          },
+          "lt-mrivera-02": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [
+              "bash_history"
+            ],
+            "volume_by_format": {
+              "ecar": 216,
+              "syslog": 179
+            }
+          },
+          "proxy-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "proxy_access",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 117,
+              "ecar": 3899,
+              "proxy_access": 1310,
+              "syslog": 749
+            }
+          },
+          "web-ext-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog",
+              "web_access"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog",
+              "web_access"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 170,
+              "ecar": 2793,
+              "syslog": 3104,
+              "web_access": 783
+            }
+          },
+          "ws-ajohnson-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1176,
+              "windows_event_security": 667
+            }
+          },
+          "ws-dramirez-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1011,
+              "windows_event_security": 644
+            }
+          },
+          "ws-ebrooks-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 862,
+              "windows_event_security": 493
+            }
+          },
+          "ws-lnguyen-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 33,
+              "ecar": 393,
+              "syslog": 317
+            }
+          },
+          "ws-mchen-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 1043,
+              "windows_event_security": 646
+            }
+          },
+          "ws-ohaddad-01": {
+            "expected_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "present_formats": [
+              "bash_history",
+              "ecar",
+              "syslog"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "bash_history": 11,
+              "ecar": 282,
+              "syslog": 245
+            }
+          },
+          "ws-ppatel-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 862,
+              "windows_event_security": 579
+            }
+          },
+          "ws-smartinez-01": {
+            "expected_formats": [
+              "ecar"
+            ],
+            "present_formats": [
+              "ecar",
+              "windows_event_security"
+            ],
+            "missing_formats": [],
+            "volume_by_format": {
+              "ecar": 903,
+              "windows_event_security": 495
+            }
+          }
+        }
+      }
+    },
+    {
+      "number": 4,
+      "name": "Timing",
+      "weight": 0.2,
+      "score": 92.83392892100387,
+      "sub_scores": [
+        {
+          "name": "Attack Chain Timing",
+          "key": "attack_chain_timing",
+          "weight": 0.15,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "34/34 storyline transitions within bounds",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Human Burstiness",
+          "key": "burstiness",
+          "weight": 0.2,
+          "score": 96.9096927619816,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "CV scores for 33 users (target CV 1.0-3.0)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "System Process Regularity",
+          "key": "system_regularity",
+          "weight": 0.15,
+          "score": 65.90972912180173,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Interval CV: 1.341 (7 service groups, 284 events)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Diurnal Pattern",
+          "key": "diurnal_pattern",
+          "weight": 0.2,
+          "score": null,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Scenario spans 7.3h across 1 weekday(s) — too short to measure diurnal pattern (needs ≥24h and ≥2 weekdays)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": true
+        },
+        {
+          "name": "Volume Adequacy",
+          "key": "volume_adequacy",
+          "weight": 0.2,
+          "score": 100.0,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "Noise:signal 2303:1 (target 200:1 for low)",
+          "sample_failures": [],
+          "failure_summary": {},
+          "skipped": false
+        },
+        {
+          "name": "Rate Plausibility",
+          "key": "rate_plausibility",
+          "weight": 0.1,
+          "score": 99.9874521613652,
+          "raw_score": null,
+          "adjusted": false,
+          "details": "15937/15939 timing checks plausible",
+          "sample_failures": [
+            "User 'marcus.chen': 24 events in 5s window at 2024-03-18 15:58:52.281377+00:00",
+            "User 'aisha.johnson': 29 events in 5s window at 2024-03-18 14:27:57.672093+00:00"
+          ],
+          "failure_summary": {},
+          "skipped": false
+        }
+      ],
+      "supplementary": {}
+    }
+  ],
+  "acceptance_passed": true,
+  "acceptance_criteria": [
+    {
+      "name": "parseability.spec_conformance",
+      "pillar": "parseability",
+      "sub_score_key": "spec_conformance",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "plausibility.value_plausibility",
+      "pillar": "plausibility",
+      "sub_score_key": "value_plausibility",
+      "threshold": 95.0,
+      "aspirational": 99.0,
+      "actual": 100.0,
+      "passed": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.causal_ordering",
+      "pillar": "causality",
+      "sub_score_key": "causal_ordering",
+      "threshold": 90.0,
+      "aspirational": 99.0,
+      "actual": 99.90882718607543,
+      "passed": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    },
+    {
+      "name": "causality.event_presence",
+      "pillar": "causality",
+      "sub_score_key": "event_presence",
+      "threshold": 85.0,
+      "aspirational": 95.0,
+      "actual": 97.05882352941177,
+      "passed": true,
+      "meets_aspirational": true,
+      "level": "hard"
+    }
+  ],
+  "aspirational_met": 14,
+  "aspirational_total": 19,
+  "flags": [],
+  "supplementary": {
+    "output_target": "default",
+    "host_log_profile": {
+      "app-int-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 187,
+          "ecar": 975,
+          "syslog": 1082
+        }
+      },
+      "db-prod-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 199,
+          "ecar": 693,
+          "syslog": 989
+        }
+      },
+      "dc-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 5497,
+          "windows_event_security": 3321
+        }
+      },
+      "file-srv-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 2191,
+          "windows_event_security": 1074
+        }
+      },
+      "lt-mrivera-02": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [
+          "bash_history"
+        ],
+        "volume_by_format": {
+          "ecar": 216,
+          "syslog": 179
+        }
+      },
+      "proxy-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "proxy_access",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 117,
+          "ecar": 3899,
+          "proxy_access": 1310,
+          "syslog": 749
+        }
+      },
+      "web-ext-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog",
+          "web_access"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog",
+          "web_access"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 170,
+          "ecar": 2793,
+          "syslog": 3104,
+          "web_access": 783
+        }
+      },
+      "ws-ajohnson-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1176,
+          "windows_event_security": 667
+        }
+      },
+      "ws-dramirez-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1011,
+          "windows_event_security": 644
+        }
+      },
+      "ws-ebrooks-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 862,
+          "windows_event_security": 493
+        }
+      },
+      "ws-lnguyen-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 33,
+          "ecar": 393,
+          "syslog": 317
+        }
+      },
+      "ws-mchen-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 1043,
+          "windows_event_security": 646
+        }
+      },
+      "ws-ohaddad-01": {
+        "expected_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "present_formats": [
+          "bash_history",
+          "ecar",
+          "syslog"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "bash_history": 11,
+          "ecar": 282,
+          "syslog": 245
+        }
+      },
+      "ws-ppatel-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 862,
+          "windows_event_security": 579
+        }
+      },
+      "ws-smartinez-01": {
+        "expected_formats": [
+          "ecar"
+        ],
+        "present_formats": [
+          "ecar",
+          "windows_event_security"
+        ],
+        "missing_formats": [],
+        "volume_by_format": {
+          "ecar": 903,
+          "windows_event_security": 495
+        }
+      }
+    },
+    "observation_profile": {
+      "profile": "enterprise_standard",
+      "manifest_present": true,
+      "source_summary": {
+        "asa": {
+          "delayed": 576,
+          "visible": 5,
+          "dropped": 2,
+          "filtered": 268
+        },
+        "ecar": {
+          "delayed": 951,
+          "dropped": 8
+        },
+        "web": {
+          "delayed": 331,
+          "dropped": 1
+        },
+        "zeek": {
+          "visible": 397,
+          "delayed": 1240,
+          "filtered": 60,
+          "dropped": 4
+        },
+        "ids": {
+          "visible": 1,
+          "delayed": 13,
+          "filtered": 4
+        },
+        "syslog": {
+          "delayed": 15,
+          "visible": 1
+        },
+        "bash_history": {
+          "visible": 16
+        },
+        "sysmon": {
+          "delayed": 91,
+          "dropped": 1
+        },
+        "windows_security": {
+          "delayed": 117,
+          "visible": 1
+        },
+        "proxy": {
+          "delayed": 19
+        }
+      }
+    }
+  },
+  "llm_spot_checks": null
+}
