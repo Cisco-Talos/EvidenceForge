@@ -852,10 +852,25 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _render_event(self, event_data: dict[str, Any]) -> str | None:
         """Render ASA syslog line via the shared RFC3164 syslog-family layer."""
+        severity_value = event_data.get("severity", 6)
+        try:
+            severity = int(severity_value)
+        except (TypeError, ValueError):
+            severity = 6
+
+        pri_value = event_data.get("pri")
+        if pri_value is None:
+            pri = self._pri(severity)
+        else:
+            try:
+                pri = int(pri_value)
+            except (TypeError, ValueError):
+                pri = self._pri(severity)
+
         return render_rfc3164_syslog(
-            pri=int(event_data.get("pri") or self._pri(event_data.get("severity", 6))),
+            pri=pri,
             timestamp=event_data["timestamp"],
             hostname=str(event_data.get("hostname") or ""),
-            app_name=f"%ASA-{event_data.get('severity')}-{event_data.get('msg_id')}",
+            app_name=f"%ASA-{severity}-{event_data.get('msg_id')}",
             message=str(event_data.get("message") or ""),
         )
