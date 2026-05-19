@@ -316,10 +316,10 @@ class TestLinuxLogonSyslog:
     """Test source-native Linux SSH auth syslog generation."""
 
     def test_self_sourced_linux_remote_logon_does_not_emit_accepted_password(
-        self, activity_gen, test_user, linux_system, timestamp, mock_emitters
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
         """Linux sshd auth logs should not claim a host accepted SSH from itself."""
-        activity_gen.generate_logon(
+        logon_id = activity_gen.generate_logon(
             test_user,
             linux_system,
             timestamp,
@@ -332,7 +332,14 @@ class TestLinuxLogonSyslog:
             for call in mock_emitters["syslog"].emit.call_args_list
             if call.args[0].syslog is not None
         ]
+        ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
+        session = state_manager.get_session(logon_id)
+
         assert not any("Accepted password" in event.syslog.message for event in syslog_events)
+        assert ecar_event.auth.logon_type == 2
+        assert ecar_event.auth.source_ip == "-"
+        assert session is not None
+        assert session.session_kind == "interactive"
 
 
 class TestLogoffNoEcar:

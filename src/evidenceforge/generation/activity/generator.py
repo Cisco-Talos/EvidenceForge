@@ -4551,6 +4551,10 @@ class ActivityGenerator:
             LogonID (hex string format, e.g., "0x3e7")
         """
         self.state_manager.set_current_time(time)
+        os_cat = _get_os_category(system.os)
+        if logon_type == 10 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
+            logon_type = 2
+            source_ip = None
         local_logon = logon_type in (2, 5, 7, 11)
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
@@ -4560,7 +4564,6 @@ class ActivityGenerator:
             source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
         # Linux type-10 remote logons are SSH, not RDP
-        os_cat = _get_os_category(system.os)
         if logon_type == 10 and os_cat == "linux":
             session_kind = "ssh"
         else:
