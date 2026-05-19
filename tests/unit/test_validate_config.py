@@ -1503,13 +1503,13 @@ class TestValidateConfig:
 
         assert checked_apps == high_volume_apps
 
-    def test_extra_syslog_linux_maintenance_texture_includes_cron_and_varied_sudo(self):
+    def test_extra_syslog_linux_maintenance_texture_excludes_schedule_native_cron(self):
         from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
 
         programs = load_extra_syslog_messages()
         apps = {entry["app"]: entry for entry in programs}
 
-        assert "cron" in apps
+        assert "cron" not in apps
         assert "anacron" in apps
 
         sudo_entry = next(
@@ -1526,9 +1526,45 @@ class TestValidateConfig:
         assert any("apt-get -s upgrade" in command for command in non_service_commands)
         assert any("vmstat" in command for command in non_service_commands)
 
-        cron_messages = apps["cron"]["messages"]
-        assert any("CMD" in message for message in cron_messages)
-        assert not any("cron.hourly" in message.lower() for message in cron_messages)
+        rendered_messages = []
+        for entry in programs:
+            if entry["app"] == "anacron":
+                continue
+            rendered_messages.extend(entry.get("messages", []))
+            rendered_messages.extend(
+                value
+                for values in (entry.get("params") or {}).values()
+                for value in values
+                if isinstance(value, str)
+            )
+        schedule_native_patterns = (
+            "apt.systemd.daily",
+            "cron.daily",
+            "cron.hourly",
+            "debian-sa1",
+            "logrotate /etc/logrotate.conf",
+            "update-motd-reboot-required",
+            "/tmp -xdev -type f -mtime",
+        )
+        assert not any(
+            pattern in message.lower()
+            for message in rendered_messages
+            for pattern in schedule_native_patterns
+        )
+
+    def test_systemd_schedule_contains_sysstat_cron_cadence(self):
+        from evidenceforge.generation.engine.baseline import _load_systemd_schedules
+
+        debian_sa1 = next(
+            schedule
+            for schedule in _load_systemd_schedules()
+            if schedule["service"] == "debian-sa1"
+        )
+
+        assert debian_sa1["type"] == "cron"
+        assert debian_sa1["frequency"] == "30min"
+        assert debian_sa1["cron_user"] == "sysstat"
+        assert "debian-sa1" in debian_sa1["cron_commands"]["debian"]
 
     def test_extra_syslog_unattended_upgrades_bounds_phased_percentage(self):
         from evidenceforge.generation.activity.extra_syslog import (

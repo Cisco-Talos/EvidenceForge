@@ -145,22 +145,6 @@ programs:
     messages:
       - "{sudo_user} : TTY={tty} ; PWD={cwd} ; USER=root ; COMMAND={sudo_command}"
 
-  - app: cron
-    weight: 1
-    params:
-      cron_user:
-        - root
-        - sysstat
-      cron_command:
-        - /usr/sbin/logrotate /etc/logrotate.conf
-        - test -x /usr/sbin/anacron || run-parts --report /etc/cron.daily
-        - command -v debian-sa1 > /dev/null && debian-sa1 1 1
-        - /usr/lib/apt/apt.systemd.daily
-        - /usr/bin/find /tmp -xdev -type f -mtime +10 -delete
-        - /usr/bin/test -x /usr/lib/update-notifier/update-motd-reboot-required && /usr/lib/update-notifier/update-motd-reboot-required
-    messages:
-      - "({cron_user}) CMD ({cron_command})"
-
   - app: anacron
     distro: ubuntu
     system_types: [server, workstation]
