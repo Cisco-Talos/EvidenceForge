@@ -1273,6 +1273,37 @@ class TestDnsSupportQueryTypes:
             prior = seen.setdefault(query, (answer, ttl))
             assert prior == (answer, ttl)
 
+    def test_external_txt_context_ttls_use_resolver_cache_countdown(self, activity_gen, timestamp):
+        """Caller-provided public TXT TTLs should still age inside the resolver cache."""
+        first = DnsContext(
+            query="zoom.us",
+            query_type="TXT",
+            qtype=16,
+            answers=["v=spf1 include:spf.protection.outlook.com ~all"],
+            TTLs=[1800.0],
+        )
+        second = DnsContext(
+            query=first.query,
+            query_type=first.query_type,
+            qtype=first.qtype,
+            answers=list(first.answers),
+            TTLs=[1800.0],
+        )
+
+        activity_gen._normalize_dns_context_for_resolver(
+            first,
+            resolver_ip="10.0.0.1",
+            time=timestamp,
+        )
+        activity_gen._normalize_dns_context_for_resolver(
+            second,
+            resolver_ip="10.0.0.1",
+            time=timestamp + timedelta(seconds=55),
+        )
+
+        assert second.TTLs[0] < first.TTLs[0]
+        assert second.TTLs[0] <= first.TTLs[0] - 50
+
     def test_forward_proxy_srv_queries_use_internal_resolver(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
     ):

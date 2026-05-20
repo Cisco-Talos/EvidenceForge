@@ -10859,9 +10859,9 @@ class ActivityGenerator:
         if dns.rcode != "NOERROR" or not dns.answers:
             return
         if not is_internal and qtype_name == "TXT" and len(dns.TTLs) == len(dns.answers):
-            return
-
-        base_ttl = _dns_base_ttl(dns.query, is_internal)
+            base_ttl = max(1, int(min(dns.TTLs)))
+        else:
+            base_ttl = _dns_base_ttl(dns.query, is_internal)
         dns.TTLs = self._dns_observed_ttls(
             resolver_ip=resolver_ip,
             query=dns.query,
