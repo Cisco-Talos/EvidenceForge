@@ -66,6 +66,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.network_params import proxy_connect_status_message
 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.proxy_user_agents import (
@@ -10913,6 +10914,16 @@ class ActivityGenerator:
             )
         is_internal = query_is_internal
 
+        if force_address and qtype in (1, 28) and query_is_internal and _is_private_ip(src_ip):
+            self._emit_ad_srv_discovery(
+                src_ip=src_ip,
+                dns_server_ip=dns_server_ip,
+                time=dns_time - timedelta(seconds=2, milliseconds=rng.randint(180, 420)),
+                src_os=_src_os,
+                domain=ad_domain,
+                rng=rng,
+            )
+
         # Internal authoritative names use stable TTLs. External answers may be
         # observed through a resolver cache, so expose realistic countdown TTLs.
         base_ttl = txt_ttl if txt_ttl is not None else _dns_base_ttl(query, is_internal)
@@ -11079,6 +11090,91 @@ class ActivityGenerator:
                 resp_bytes=rng.randint(80, 200),
                 src_port=nx_src_port,
                 dns=nx_ctx,
+            )
+
+    def _emit_ad_srv_discovery(
+        self,
+        *,
+        src_ip: str,
+        dns_server_ip: str,
+        time: datetime,
+        src_os: str,
+        domain: str,
+        rng: random.Random,
+    ) -> None:
+        """Emit low-volume AD SRV service-discovery DNS for domain clients."""
+        dc_systems = list(getattr(self, "_dc_systems", []) or [])
+        if not dc_systems:
+            return
+
+        if not hasattr(self, "_ad_srv_discovery_cache"):
+            self._ad_srv_discovery_cache: set[tuple[str, str, int]] = set()
+        cache_key = (src_ip, domain.lower(), int((time + timedelta(seconds=5)).timestamp() // 3600))
+        if cache_key in self._ad_srv_discovery_cache:
+            return
+        self._ad_srv_discovery_cache.add(cache_key)
+
+        from evidenceforge.events.contexts import DnsContext
+
+        query_templates = [
+            "_ldap._tcp.dc._msdcs.{domain}",
+            "_kerberos._tcp.{domain}",
+            "_ldap._tcp.{domain}",
+            "_kerberos._tcp.dc._msdcs.{domain}",
+        ]
+        start_index = _stable_seed(f"ad_srv_query:{src_ip}:{domain}") % len(query_templates)
+        query_count = 1 + (_stable_seed(f"ad_srv_query_count:{src_ip}:{domain}") % 2)
+        selected_queries = [
+            query_templates[(start_index + index) % len(query_templates)]
+            for index in range(query_count)
+        ]
+        dc_hosts = sorted(
+            (
+                (dc.hostname if "." in dc.hostname else f"{dc.hostname}.{domain}".rstrip("."))
+                for dc in dc_systems
+            ),
+            key=str.lower,
+        )
+        for index, query_template in enumerate(selected_queries):
+            query = query_template.format(domain=domain)
+            service_prefix = query.split(".", 1)[0]
+            port = _SRV_PORT_MAP.get(service_prefix, 389)
+            answers = [f"0 100 {port} {hostname}" for hostname in dc_hosts[:2]]
+            srv_time = time + timedelta(milliseconds=index * rng.randint(35, 95))
+            src_port = self._allocate_ephemeral_port(
+                src_ip,
+                dns_server_ip,
+                53,
+                "udp",
+                srv_time,
+                src_os,
+            )
+            srv_ctx = DnsContext(
+                query=query,
+                trans_id=rng.randint(1, 65535),
+                qtype=33,
+                query_type="SRV",
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=answers,
+                TTLs=[float(_dns_base_ttl(query, True))] * len(answers),
+                rtt=_dns_rtt(rng, dns_server_ip),
+                AA=True,
+                RD=True,
+                RA=True,
+            )
+            self.generate_connection(
+                src_ip=src_ip,
+                dst_ip=dns_server_ip,
+                time=srv_time,
+                dst_port=53,
+                proto="udp",
+                service="dns",
+                duration=rng.uniform(0.001, 0.02),
+                orig_bytes=rng.randint(48, 110),
+                resp_bytes=rng.randint(140, 520),
+                src_port=src_port,
+                dns=srv_ctx,
             )
 
     def get_baseline_pattern(
@@ -13925,18 +14021,19 @@ class ActivityGenerator:
         dispatcher_emitters = getattr(self.dispatcher, "emitters", {})
         if "syslog" in dispatcher_emitters and _get_os_category(system.os) == "linux":
             dhclient_pid = 500 + (_stable_seed(f"dhclient:{system.hostname}") % 59000)
+            interface = linux_primary_interface(system)
             renewal = max(60, int(lease_time / 2))
             if is_initial_acquisition:
                 messages = [
-                    "DHCPDISCOVER on eth0 to 255.255.255.255 port 67 interval 3",
+                    f"DHCPDISCOVER on {interface} to 255.255.255.255 port 67 interval 3",
                     f"DHCPOFFER of {system.ip} from {server_addr}",
-                    f"DHCPREQUEST for {system.ip} on eth0 to {server_addr} port 67",
+                    f"DHCPREQUEST for {system.ip} on {interface} to {server_addr} port 67",
                     f"DHCPACK of {system.ip} from {server_addr}",
                     f"bound to {system.ip} -- renewal in {renewal} seconds.",
                 ]
             else:
                 messages = [
-                    f"DHCPREQUEST for {system.ip} on eth0 to {server_addr} port 67",
+                    f"DHCPREQUEST for {system.ip} on {interface} to {server_addr} port 67",
                     f"DHCPACK of {system.ip} from {server_addr}",
                     f"bound to {system.ip} -- renewal in {renewal} seconds.",
                 ]

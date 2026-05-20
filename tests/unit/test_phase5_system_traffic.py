@@ -30,6 +30,8 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
@@ -90,6 +92,46 @@ def test_networkmanager_message_timestamp_uses_epoch_time():
     ts = datetime(2024, 3, 18, 12, 8, 39, 757990, tzinfo=UTC)
 
     assert _networkmanager_message_timestamp(ts) == "1710763719.7580"
+
+
+def test_linux_primary_interface_is_stable_per_host(linux_system):
+    """Linux interface naming should be host-stable instead of per-message random."""
+    first = linux_primary_interface(linux_system)
+    second = linux_primary_interface(linux_system)
+
+    assert first == second
+    assert first in {"ens160", "ens192", "enp0s3", "eth0", "eno1"}
+
+
+def test_extra_syslog_interface_templates_use_host_primary_interface(linux_system):
+    """Interface-bearing syslog templates should honor the host primary interface."""
+    primary_interface = linux_primary_interface(linux_system)
+
+    networkmanager_msg = render_extra_syslog_message(
+        {
+            "messages": [
+                "<info>  [{}] device ({interface}): state change: disconnected -> prepare"
+            ],
+            "params": {"interface": ["eth0"]},
+        },
+        random.Random(3),
+        positional_value="1710763719.7580",
+        values={"interface": primary_interface},
+    )
+    resolved_msg = render_extra_syslog_message(
+        {
+            "messages": [
+                "Flushed positive cache scope {scope} after DNS server {dns_server} changed features."
+            ],
+            "params": {"scope": ["eth0", "br0"]},
+        },
+        random.Random(3),
+        positional_value=123456,
+        values={"dns_server": "10.0.0.1", "scope": primary_interface},
+    )
+
+    assert f"({primary_interface})" in networkmanager_msg
+    assert f"scope {primary_interface} " in resolved_msg
 
 
 def test_rsyslog_fd_state_stays_process_local(linux_system):

@@ -35,6 +35,7 @@ import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
     _linux_baseline_pam_close_lead,
@@ -913,8 +914,9 @@ class TestDhcpLease:
             and call[0][0].syslog.app_name == "dhclient"
         ]
         syslog_messages = [event.syslog.message for event in syslog_events]
+        interface = linux_primary_interface(linux)
         assert syslog_messages == [
-            "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
+            f"DHCPREQUEST for 10.0.10.2 on {interface} to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
             "bound to 10.0.10.2 -- renewal in 3600 seconds.",
         ]

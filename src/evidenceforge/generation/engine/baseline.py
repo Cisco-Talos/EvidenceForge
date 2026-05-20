@@ -68,6 +68,7 @@ from evidenceforge.generation.activity.ids_signatures import (
     load_ids_signatures,
     render_dns_query_template,
 )
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
@@ -5915,6 +5916,7 @@ class BaselineMixin:
 
             scenario_start = self.scenario.time_window.start
             boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
+            primary_interface = linux_primary_interface(system)
 
             # Generate scheduled tasks (cron/systemd timers) at real frequencies
             self._generate_scheduled_tasks(
@@ -5969,7 +5971,7 @@ class BaselineMixin:
                         ttl = _ufw_block_ttl(src_ip)
                         msg = (
                             f"[{kernel_uptime}] [UFW BLOCK] "
-                            f"IN=ens160 OUT= SRC={src_ip} DST={system.ip} "
+                            f"IN={primary_interface} OUT= SRC={src_ip} DST={system.ip} "
                             f"LEN={packet_len} TOS=0x00 PREC=0x00 TTL={ttl} "
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
@@ -6385,15 +6387,21 @@ class BaselineMixin:
                             rng,
                             positional_value=_networkmanager_message_timestamp(ts),
                             system_services=system.services,
+                            values={"interface": primary_interface},
                         )
                     elif app == "systemd-resolved":
                         dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
+                        scope = "global" if rng.random() < 0.35 else primary_interface
                         msg = render_extra_syslog_message(
                             entry,
                             rng,
                             positional_value=rng.randint(100000, 999999),
                             system_services=system.services,
-                            values={"dns_server": dns_server},
+                            values={
+                                "dns_server": dns_server,
+                                "interface": primary_interface,
+                                "scope": scope,
+                            },
                         )
                     elif app == "anacron":
                         self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
@@ -6426,6 +6434,7 @@ class BaselineMixin:
                             rng,
                             positional_value=rng.randint(100000, 999999),
                             system_services=system.services,
+                            values={"interface": primary_interface},
                         )
                     # Map syslog app names to sys_pids keys for persistent daemons.
                     # Only map to sys_pids entries that are the SAME daemon.

@@ -1309,6 +1309,54 @@ class TestDnsSupportQueryTypes:
         assert event.network.dst_ip == "10.0.0.10"
         assert event.dns.AA is True
 
+    def test_internal_forced_address_lookup_emits_cached_ad_srv_discovery(
+        self, activity_gen, timestamp, mock_emitters
+    ):
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        activity_gen._dc_systems = [dc]
+        activity_gen._dns_server_ips = [dc.ip]
+        activity_gen._ad_domain = "corp.example"
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip=dc.ip,
+            time=timestamp,
+            hostname="DC-01.corp.example",
+            force_address=True,
+        )
+        first_events = [call.args[0] for call in mock_emitters["zeek_dns"].emit.call_args_list]
+        srv_events = [event for event in first_events if event.dns.query_type == "SRV"]
+        address_events = [
+            event
+            for event in first_events
+            if event.dns.query_type == "A" and event.dns.query == "DC-01.corp.example"
+        ]
+
+        assert srv_events
+        assert address_events
+        assert srv_events[0].timestamp < address_events[0].timestamp
+        assert srv_events[0].dns.answers in (
+            ["0 100 88 DC-01.corp.example"],
+            ["0 100 389 DC-01.corp.example"],
+        )
+
+        mock_emitters["zeek_dns"].emit.reset_mock()
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.20",
+            time=timestamp + timedelta(minutes=5),
+            hostname="FILE-01.corp.example",
+            force_address=True,
+        )
+        second_events = [call.args[0] for call in mock_emitters["zeek_dns"].emit.call_args_list]
+
+        assert not [event for event in second_events if event.dns.query_type == "SRV"]
+
     def test_default_ad_site_srv_is_not_nxdomain_noise(self):
         from evidenceforge.generation.activity.generator import _dns_nxdomain_companion_queries
         from evidenceforge.generation.activity.network import _AD_SRV_QUERIES
