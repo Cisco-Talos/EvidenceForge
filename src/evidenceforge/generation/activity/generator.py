@@ -8679,7 +8679,7 @@ class ActivityGenerator:
                 duration = max(duration or 0.0, min_duration)
                 if proto == "udp":
                     history = "Dd" * kerberos_audit_count
-                elif not history or history in {"S", "Sr", "Cc"}:
+                else:
                     history = _tcp_success_history(rng)
 
         # Calculate packet counts — enforce consistency with history

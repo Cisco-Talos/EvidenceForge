@@ -907,6 +907,57 @@ class TestInfrastructureDetection:
         assert event.network.resp_pkts >= len(audit_events)
         assert event.network.history == "DdDd"
 
+    def test_tcp_kerberos_audit_companions_force_successful_packet_shape(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """KDC audit companions should not pair with a reset-only TCP shape."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="APP-01",
+            ip="10.10.2.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+
+        activity_gen.generate_connection(
+            src_ip=client.ip,
+            dst_ip=dc.ip,
+            time=ts,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=0.2,
+            orig_bytes=600,
+            resp_bytes=1600,
+            src_port=56502,
+            source_system=client,
+            conn_state="SF",
+            emit_dns=False,
+        )
+
+        audit_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert len(audit_events) == 2
+        assert event.network.conn_state == "SF"
+        assert event.network.resp_pkts >= len(audit_events)
+        assert event.network.history not in {"ShAR", "Sr", "S"}
+
     def test_service_defaults_windows(self):
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
