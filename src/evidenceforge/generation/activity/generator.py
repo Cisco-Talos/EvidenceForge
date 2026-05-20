@@ -2731,6 +2731,7 @@ class ActivityGenerator:
         self._tls_cert_validity: dict[str, tuple[int, int]] = {}
         self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
+        self._tls_ocsp_response_sizes: dict[tuple[str, str, str, float, float, str], int] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
@@ -4759,11 +4760,26 @@ class ActivityGenerator:
             random.Random(_stable_seed(f"ocsp_responder:{issuer_name}:{ocsp.serial_number}")),
         )
         responder_ip = resolve_domain_ip(responder, src_host=net.src_ip)
-        ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{ocsp.id}")).randint(900, 2500)
         ocsp_time = tls_event.timestamp + timedelta(
             milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
         )
         uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
+        response_profile_key = (
+            responder,
+            f"/{uri_seed}",
+            ocsp.serial_number,
+            ocsp.this_update,
+            ocsp.next_update,
+            ocsp.cert_status,
+        )
+        ocsp_size = self._tls_ocsp_response_sizes.get(response_profile_key)
+        if ocsp_size is None:
+            size_seed = ":".join(str(part) for part in response_profile_key)
+            ocsp_size = random.Random(_stable_seed(f"ocsp_file_size:{size_seed}")).randint(
+                900,
+                2500,
+            )
+            self._tls_ocsp_response_sizes[response_profile_key] = ocsp_size
         source_system = getattr(self, "_ip_to_system", {}).get(net.src_ip)
         source_os = str(getattr(source_system, "os", "") or "")
         user_agent = pick_proxy_user_agent(
@@ -9683,9 +9699,9 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
-            conn_delay_ms = rng.randint(25, 120)
-            accepted_delay_ms = conn_delay_ms + rng.randint(35, 95)
-            pam_delay_ms = accepted_delay_ms + rng.randint(45, 110)
+            conn_delay_ms = rng.randint(35, 160)
+            accepted_delay_ms = conn_delay_ms + rng.randint(450, 3500)
+            pam_delay_ms = accepted_delay_ms + rng.randint(45, 180)
             logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
             ssh_syslog_seed = (
                 target_system.hostname,

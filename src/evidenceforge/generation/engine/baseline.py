@@ -6094,7 +6094,7 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(25, 120)
+                    _msg_offset = rng.randint(35, 160)
                     ssh_syslog_seed = (
                         system.hostname,
                         ip,
@@ -6112,7 +6112,13 @@ class BaselineMixin:
                                 *ssh_syslog_seed,
                             )
                         )
-                        _msg_offset += rng.randint(12, 70)
+                        if _label == "connection":
+                            if auth_msg.startswith("Accepted password"):
+                                _msg_offset += rng.randint(450, 3500)
+                            else:
+                                _msg_offset += rng.randint(90, 550)
+                        else:
+                            _msg_offset += rng.randint(45, 180)
                     # systemd-logind is observed as a different process from
                     # sshd, so source-observation delay can be independent.
                     # Keep enough visible margin that New-session rows cannot

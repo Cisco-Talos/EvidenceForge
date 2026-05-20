@@ -393,6 +393,7 @@ class EcarEmitter(HostMultiplexEmitter):
         event_ts = self._process_create_timestamp(event, proc)
         event_data = {
             "timestamp": event_ts,
+            "_canonical_ms": int((proc.start_time or event.timestamp).timestamp() * 1000),
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "CREATE",
@@ -1187,6 +1188,53 @@ class EcarEmitter(HostMultiplexEmitter):
             return default
 
     @classmethod
+    def _normalize_process_create_canonical_order(cls, lines: list[str]) -> list[str]:
+        """Keep PROCESS/CREATE rows ordered by canonical process start time."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        create_indexes = [
+            index
+            for index, record in enumerate(records)
+            if record is not None
+            and record.get("object") == "PROCESS"
+            and record.get("action") == "CREATE"
+            and "_canonical_ms" in record
+        ]
+        create_indexes.sort(
+            key=lambda index: (
+                cls._ecar_int(records[index].get("_canonical_ms"), 0)
+                if records[index] is not None
+                else 0,
+                cls._ecar_int(records[index].get("pid"), 0) if records[index] is not None else 0,
+            )
+        )
+
+        latest_render_ms = 0
+        for index in create_indexes:
+            record = records[index]
+            if record is None:
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if latest_render_ms and timestamp_ms <= latest_render_ms:
+                timestamp_ms = latest_render_ms + 1
+                record["timestamp_ms"] = timestamp_ms
+            latest_render_ms = timestamp_ms
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            record.pop("_canonical_ms", None)
+            normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
+    @classmethod
     def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
         """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
         records: list[dict[str, Any] | None] = []
@@ -1407,6 +1455,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
+                    writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)
@@ -1473,6 +1522,8 @@ class EcarEmitter(HostMultiplexEmitter):
             "action": event_data["action"],
             "objectID": event_data.get("objectID") or str(uuid.uuid4()),
         }
+        if "_canonical_ms" in event_data:
+            record["_canonical_ms"] = event_data["_canonical_ms"]
 
         if event_data.get("actorID"):
             record["actorID"] = event_data["actorID"]

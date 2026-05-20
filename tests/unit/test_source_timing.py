@@ -207,6 +207,46 @@ def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> N
     assert terminate_time >= process_time + timedelta(seconds=6)
 
 
+def test_ecar_process_create_normalization_preserves_canonical_order() -> None:
+    """eCAR PROCESS/CREATE rows should not invert canonical same-chain process order."""
+    first = {
+        "timestamp_ms": 1_710_783_739_979,
+        "_canonical_ms": 1_710_783_736_520,
+        "id": "event-a",
+        "hostname": "dc-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "proc-a",
+        "actorID": "parent",
+        "pid": 6340,
+        "ppid": 6200,
+    }
+    second = {
+        "timestamp_ms": 1_710_783_737_093,
+        "_canonical_ms": 1_710_783_737_022,
+        "id": "event-b",
+        "hostname": "dc-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "proc-b",
+        "actorID": "parent",
+        "pid": 6352,
+        "ppid": 6200,
+    }
+
+    normalized = EcarEmitter._normalize_process_create_canonical_order(
+        [
+            json.dumps(first, separators=(",", ":")),
+            json.dumps(second, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[1]["timestamp_ms"] > rows[0]["timestamp_ms"]
+    assert "_canonical_ms" not in rows[0]
+    assert "_canonical_ms" not in rows[1]
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

@@ -2687,7 +2687,7 @@ class TestWindowsEventEmitter:
         assert '<Data Name="PrivilegeList">-</Data>' in content
 
     def test_emit_account_changed(self, format_def, temp_output):
-        """Test emitting 4738 (user account changed) with Dummy field."""
+        """Test emitting 4738 (user account changed) with native account fields."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4738,
@@ -2714,7 +2714,8 @@ class TestWindowsEventEmitter:
         emitter.close()
         content = temp_output.read_text()
         assert "<EventID>4738</EventID>" in content
-        assert '<Data Name="Dummy">-</Data>' in content  # 4738 unique Dummy field
+        assert '<Data Name="Dummy">' not in content
+        assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
     def test_emit_event_with_unsafe_computer_routes_to_flat_output(self, format_def, tmp_path):
         """Unsafe Computer values must not create traversing per-host paths."""

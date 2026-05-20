@@ -1366,9 +1366,6 @@ output:
         <Data Name="SubjectLogonId">{{ SubjectLogonId }}</Data>
         <Data Name="PrivilegeList">{{ PrivilegeList | default('-') }}</Data>
         {% elif EventID in [4720, 4738] %}
-        {% if EventID == 4738 %}
-        <Data Name="Dummy">-</Data>
-        {% endif %}
         <Data Name="TargetUserName">{{ TargetUserName }}</Data>
         <Data Name="TargetDomainName">{{ TargetDomainName }}</Data>
         <Data Name="TargetSid">{{ TargetSid }}</Data>

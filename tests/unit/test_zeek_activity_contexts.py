@@ -30,7 +30,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
+from evidenceforge.events.contexts import (
+    HttpContext,
+    NetworkContext,
+    OcspContext,
+    ProxyContext,
+    X509Context,
+)
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
@@ -482,9 +488,9 @@ class TestSslContextPopulation:
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
         assert base_time < times[0] < times[1] < times[2]
-        assert timedelta(milliseconds=25) <= times[0] - base_time <= timedelta(milliseconds=120)
-        assert timedelta(milliseconds=60) <= times[1] - base_time <= timedelta(milliseconds=215)
-        assert timedelta(milliseconds=105) <= times[2] - base_time <= timedelta(milliseconds=325)
+        assert timedelta(milliseconds=35) <= times[0] - base_time <= timedelta(milliseconds=160)
+        assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(milliseconds=3501)
+        assert timedelta(milliseconds=45) <= times[2] - times[1] <= timedelta(milliseconds=181)
         assert times[2] - times[0] != timedelta(seconds=1)
         assert len({timestamp.microsecond % 1000 for timestamp in times}) == len(times)
 
@@ -498,6 +504,67 @@ class TestSslContextPopulation:
         assert logind_events[0].timestamp.microsecond % 1000 not in {
             timestamp.microsecond % 1000 for timestamp in times
         }
+
+    def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen):
+        gen, _events = activity_gen
+        calls = []
+
+        def capture_connection(**kwargs):
+            calls.append(kwargs)
+
+        gen.generate_connection = capture_connection
+        tls_event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51111,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                zeek_uid="CsslOcspStable",
+                conn_state="SF",
+            ),
+            x509=X509Context(
+                fuid="Fcert",
+                certificate_serial="789E942DD4A61EF31D",
+                certificate_subject="CN=example.com",
+                certificate_issuer="CN=DigiCert TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            ),
+        )
+        ocsp_a = OcspContext(
+            id="FocspA",
+            serial_number="789E942DD4A61EF31D",
+            cert_status="good",
+            this_update=1710762449.0,
+            next_update=1711055820.0,
+        )
+        ocsp_b = OcspContext(
+            id="FocspB",
+            serial_number="789E942DD4A61EF31D",
+            cert_status="good",
+            this_update=1710762449.0,
+            next_update=1711055820.0,
+        )
+
+        gen._emit_ocsp_http_response(
+            tls_event,
+            cert_name="example.com",
+            ocsp=ocsp_a,
+            rng=random.Random(1),
+        )
+        gen._emit_ocsp_http_response(
+            tls_event,
+            cert_name="example.com",
+            ocsp=ocsp_b,
+            rng=random.Random(2),
+        )
+
+        assert len(calls) == 2
+        assert calls[0]["http"].response_body_len == calls[1]["http"].response_body_len
+        assert calls[0]["file_transfer"].total_bytes == calls[1]["file_transfer"].total_bytes
+        assert calls[0]["http"].tags == calls[1]["http"].tags == ["ocsp"]
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen
