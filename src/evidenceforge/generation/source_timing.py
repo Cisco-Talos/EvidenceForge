@@ -93,6 +93,41 @@ class SourceTimingPlanner:
         effective_seed = seed_parts or self._event_seed_parts(event)
         plan.source_times[self._cache_key(source_key, effective_seed)] = timestamp
 
+    def source_time_after_source(
+        self,
+        event: SecurityEvent,
+        source_key: str,
+        *,
+        after_source_key: str,
+        gap_key: str,
+        seed_parts: tuple[Any, ...] = (),
+        after_seed_parts: tuple[Any, ...] = (),
+        after_not_before: datetime | None = None,
+        not_before: datetime | None = None,
+        not_after: datetime | None = None,
+        within: tuple[datetime, datetime] | None = None,
+    ) -> datetime:
+        """Return a source timestamp constrained after another source observation."""
+        effective_seed = seed_parts or self._event_seed_parts(event)
+        anchor_seed = after_seed_parts or effective_seed
+        anchor_time = self.source_time(
+            event,
+            after_source_key,
+            seed_parts=anchor_seed,
+            not_before=after_not_before,
+        )
+        lower_bound = anchor_time + sample_timing_delta(gap_key, seed_parts=effective_seed)
+        if not_before is not None:
+            lower_bound = max(lower_bound, not_before)
+        return self.source_time(
+            event,
+            source_key,
+            seed_parts=effective_seed,
+            not_before=lower_bound,
+            not_after=not_after,
+            within=within,
+        )
+
     def ordered_pair(
         self,
         before_event: SecurityEvent,

@@ -7156,7 +7156,7 @@ class ActivityGenerator:
                         sysmon_not_before,
                         parent_visible_time + timedelta(milliseconds=1),
                     )
-            sysmon_time = self._source_timing_planner.source_time(
+            self._source_timing_planner.source_time(
                 event,
                 "source.sysmon_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
@@ -7168,7 +7168,16 @@ class ActivityGenerator:
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
             )
-            ecar_not_before = sysmon_time + timedelta(milliseconds=5)
+            self._source_timing_planner.source_time_after_source(
+                event,
+                "source.ecar_process_create",
+                after_source_key="source.sysmon_process_create",
+                gap_key="source.ecar_after_sysmon_process_create_gap",
+                seed_parts=(host.hostname, proc.pid, process_start_time),
+                after_not_before=sysmon_not_before,
+                not_before=process_start_time,
+            )
+            return
         else:
             ecar_not_before = process_start_time
 

@@ -111,6 +111,11 @@ relationships:
     position: after
     min_ms: 8
     max_ms: 950
+  source.ecar_after_sysmon_process_create_gap:
+    class: source_latency
+    position: after
+    min_ms: 120
+    max_ms: 420
   source.ecar_dependent_after_process_create:
     class: source_latency
     position: after

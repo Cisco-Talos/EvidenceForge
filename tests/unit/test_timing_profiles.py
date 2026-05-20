@@ -85,11 +85,18 @@ def test_timing_profiles_load_default_relationship():
         default_max_ms=0,
         default_position="after",
     )
+    ecar_after_sysmon_window = get_timing_window(
+        "source.ecar_after_sysmon_process_create_gap",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
     assert security_process_window.max_ms >= 4000
     assert 0 < security_terminate_window.min_ms < security_terminate_window.max_ms
     assert sysmon_process_window.max_ms >= 2000
     assert 0 < sysmon_terminate_window.min_ms < sysmon_terminate_window.max_ms
     assert ecar_process_window.max_ms >= 900
+    assert 0 < ecar_after_sysmon_window.min_ms < ecar_after_sysmon_window.max_ms
     security_gap_window = get_timing_window(
         "source.windows_security_after_sysmon_process_create_gap",
         default_min_ms=0,
@@ -276,7 +283,11 @@ def test_windows_process_source_timing_respects_visible_parent_create():
 
     assert sysmon_time >= parent_visible_time + timedelta(milliseconds=1)
     assert security_time >= parent_visible_time + timedelta(milliseconds=1)
-    assert ecar_time >= sysmon_time + timedelta(milliseconds=5)
+    expected_ecar_gap = sample_timing_delta(
+        "source.ecar_after_sysmon_process_create_gap",
+        seed_parts=("WS-01", 1200, event_time),
+    )
+    assert ecar_time >= sysmon_time + expected_ecar_gap
 
     order_deltas: list[float] = []
     for pid in range(1200, 1250):

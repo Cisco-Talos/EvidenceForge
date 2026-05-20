@@ -868,12 +868,15 @@ class EcarEmitter(HostMultiplexEmitter):
         start_time = proc.start_time or event.timestamp
         not_before = start_time
         if host is not None and host.os_category == "windows":
-            not_before = _SOURCE_TIMING.source_time(
+            return _SOURCE_TIMING.source_time_after_source(
                 event,
-                "source.sysmon_process_create",
+                "source.ecar_process_create",
+                after_source_key="source.sysmon_process_create",
+                gap_key="source.ecar_after_sysmon_process_create_gap",
                 seed_parts=(hostname, proc.pid, start_time),
+                after_not_before=start_time,
                 not_before=start_time,
-            ) + timedelta(milliseconds=5)
+            )
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_process_create",
