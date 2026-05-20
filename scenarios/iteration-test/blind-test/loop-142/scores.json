@@ -1,0 +1,178 @@
+{
+  "artifacts": {
+    "detection_engineer_report": "scenarios/iteration-test/blind-test/loop-142/detection-engineer-report.md",
+    "eval_results": "scenarios/iteration-test/blind-test/loop-142/eval_results.json",
+    "eval_verbose": "scenarios/iteration-test/blind-test/loop-142/eval_verbose.txt",
+    "hard_probe_results": "scenarios/iteration-test/blind-test/loop-142/hard_probe_results.json",
+    "host_forensics_report": "scenarios/iteration-test/blind-test/loop-142/host-forensics-report.md",
+    "network_forensics_report": "scenarios/iteration-test/blind-test/loop-142/network-forensics-report.md",
+    "report": "scenarios/iteration-test/blind-test/loop-142/REPORT.md",
+    "threat_hunter_report": "scenarios/iteration-test/blind-test/loop-142/threat-hunter-report.md"
+  },
+  "assessment_commit": null,
+  "automated_eval": {
+    "acceptance_passed": true,
+    "overall_score": 96.68085075616064,
+    "pillars": {
+      "causality": 94.18693488096886,
+      "parseability": 100.0,
+      "plausibility": 98.22309508473917,
+      "timing": 94.31337305893454
+    },
+    "total_records": 79847
+  },
+  "blind_review": {
+    "raw_verdicts": {
+      "detection_engineer": {
+        "assessment": "Synthetic",
+        "confidence": 72
+      },
+      "host_forensics": {
+        "assessment": "Synthetic",
+        "confidence": 72
+      },
+      "network_forensics": {
+        "assessment": "Synthetic",
+        "confidence": 64
+      },
+      "threat_hunter": {
+        "assessment": "Synthetic",
+        "confidence": 66
+      }
+    },
+    "realism_scores": {
+      "detection_engineer": {
+        "behavioral_realism": 8,
+        "cross_source_correlation": 7,
+        "environmental_consistency": 7,
+        "field_format_accuracy": 8,
+        "temporal_patterns": 7
+      },
+      "host_forensics": {
+        "behavioral_realism": 6,
+        "cross_source_correlation": 8,
+        "environmental_consistency": 7,
+        "field_format_accuracy": 7,
+        "temporal_patterns": 7
+      },
+      "network_forensics": {
+        "behavioral_realism": 7,
+        "cross_source_correlation": 9,
+        "environmental_consistency": 8,
+        "field_format_accuracy": 8,
+        "temporal_patterns": 7
+      },
+      "threat_hunter": {
+        "behavioral_realism": 6,
+        "cross_source_correlation": 9,
+        "environmental_consistency": 8,
+        "field_format_accuracy": 8,
+        "temporal_patterns": 7
+      }
+    },
+    "synthetic_confidence": {
+      "average": 68.5,
+      "detection_engineer": 72,
+      "host_forensics": 72,
+      "network_forensics": 64,
+      "threat_hunter": 66
+    }
+  },
+  "code_fix_commit": "249f3c09",
+  "hard_probes": {
+    "corp_local_ldap_base_hits": 0,
+    "dns_rtt_outside_conn_lifetime": 0,
+    "ldap_base_placeholder_hits": 0,
+    "ldapsearch_long_lived_or_unterminated": 0,
+    "ldapsearch_processes": 0,
+    "literal_user_placeholder_hits": 0,
+    "literal_username_placeholder_hits": 0,
+    "samples": {
+      "corp_base_hits": [],
+      "dns_outside": [],
+      "ldapsearch_long_lived": [],
+      "username_hits": []
+    }
+  },
+  "loop": 142,
+  "top_findings": [
+    {
+      "priority": "P0",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "detection_engineer"
+      ],
+      "score_impact": "high",
+      "title": "Linux eCAR SSH LOGOUT records do not align with syslog PAM session closes and may use different object IDs"
+    },
+    {
+      "priority": "P1",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "host_forensics"
+      ],
+      "score_impact": "high",
+      "title": "Command-agnostic eCAR process/network semantics make local commands like docker ps emit proxy flows and long runtimes"
+    },
+    {
+      "priority": "P1",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "host_forensics"
+      ],
+      "score_impact": "high",
+      "title": "Linux sudo denied-command messages omit source-native PWD= and repeat a small service-account/command pool"
+    },
+    {
+      "priority": "P1",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "threat_hunter",
+        "network_forensics"
+      ],
+      "score_impact": "medium",
+      "title": "DNS tunnel TXT payloads are readable and semantically tidy instead of opaque encoded payloads"
+    },
+    {
+      "priority": "P2",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "threat_hunter"
+      ],
+      "score_impact": "medium",
+      "title": "Attack storyline remains compact and training-complete with clean breadcrumbs"
+    },
+    {
+      "priority": "P2",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "network_forensics"
+      ],
+      "score_impact": "medium",
+      "title": "HTTP response sizes and user-agent/application pools repeat in curated ways"
+    },
+    {
+      "priority": "P3",
+      "reviewer_ratings": [
+        "not labeled"
+      ],
+      "reviewers": [
+        "threat_hunter"
+      ],
+      "score_impact": "low",
+      "title": "DB exfil transfer size is small for the implied production EHR data narrative"
+    }
+  ]
+}
