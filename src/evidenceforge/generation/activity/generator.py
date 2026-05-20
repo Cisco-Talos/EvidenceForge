@@ -7133,21 +7133,32 @@ class ActivityGenerator:
         if host is None or proc is None:
             return
 
+        process_start_time = proc.start_time or event.timestamp
+
         if host.os_category == "windows":
+            sysmon_not_before = event.timestamp
+            if proc.parent_pid > 0:
+                parent_visible_time = self.process_source_create_time(
+                    host.hostname, proc.parent_pid
+                )
+                if parent_visible_time is not None:
+                    sysmon_not_before = max(
+                        sysmon_not_before,
+                        parent_visible_time + timedelta(milliseconds=1),
+                    )
             sysmon_time = self._source_timing_planner.source_time(
                 event,
                 "source.sysmon_process_create",
-                seed_parts=(host.hostname, proc.pid, event.timestamp),
-                not_before=event.timestamp,
+                seed_parts=(host.hostname, proc.pid, process_start_time),
+                not_before=sysmon_not_before,
             )
             self._source_timing_planner.source_time(
                 event,
                 "source.windows_security_process_create",
-                seed_parts=(host.hostname, proc.pid, event.timestamp),
-                not_before=sysmon_time + timedelta(milliseconds=25),
+                seed_parts=(host.hostname, proc.pid, process_start_time),
+                not_before=sysmon_time + timedelta(milliseconds=250),
             )
 
-        process_start_time = proc.start_time or event.timestamp
         self._source_timing_planner.source_time(
             event,
             "source.ecar_process_create",

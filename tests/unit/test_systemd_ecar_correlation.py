@@ -32,7 +32,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.emitters.syslog import _syslog_sort_key
+from evidenceforge.generation.emitters.syslog import SyslogEmitter, _syslog_sort_key
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System
 
@@ -285,3 +285,22 @@ def test_syslog_sort_orders_same_second_systemd_start_before_finish():
     assert sorted(lines, key=_syslog_sort_key)[0].endswith(
         "Starting phpsessionclean.service - Clean PHP session files."
     )
+
+
+def test_syslog_sudo_lifecycle_normalizer_orders_same_pid_pam_session():
+    """Sudo COMMAND rows should stay between same-PID PAM open and close rows."""
+    lines = [
+        "<85>1 2024-03-18T12:00:00.100000Z WEB-EXT-01 sudo 701258 - - "
+        "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/id",
+        "<86>1 2024-03-18T12:00:00.140000Z WEB-EXT-01 sudo 701258 - - "
+        "pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)",
+        "<86>1 2024-03-18T12:00:00.450000Z WEB-EXT-01 sudo 701258 - - "
+        "pam_unix(sudo:session): session closed for user root",
+    ]
+
+    normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
+
+    assert "session opened" in normalized[0]
+    assert "COMMAND=/usr/bin/id" in normalized[1]
+    assert "session closed" in normalized[2]
+    assert "2024-03-18T12:00:00.099000Z" in normalized[0]

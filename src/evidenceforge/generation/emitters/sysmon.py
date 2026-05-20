@@ -882,11 +882,12 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
+        process_start_time = proc.start_time or event.timestamp
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.sysmon_process_create",
-            seed_parts=(host.hostname, proc.pid, event.timestamp),
-            not_before=event.timestamp,
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
         )
 
         utc_time = _format_sysmon_utc_time(render_time)

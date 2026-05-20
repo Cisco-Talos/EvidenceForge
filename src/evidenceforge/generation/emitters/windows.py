@@ -740,17 +740,18 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        process_start_time = proc.start_time or event.timestamp
         sysmon_time = _SOURCE_TIMING.source_time(
             event,
             "source.sysmon_process_create",
-            seed_parts=(host.hostname, proc.pid, event.timestamp),
-            not_before=event.timestamp,
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
         )
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
-            seed_parts=(host.hostname, proc.pid, event.timestamp),
-            not_before=sysmon_time + timedelta(milliseconds=25),
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=sysmon_time + timedelta(milliseconds=250),
         )
 
         event_data = {
@@ -812,17 +813,18 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        process_start_time = proc.start_time or event.timestamp
         sysmon_time = _SOURCE_TIMING.source_time(
             event,
             "source.sysmon_process_create",
-            seed_parts=(host.hostname, proc.pid, event.timestamp),
-            not_before=event.timestamp,
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
         )
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
-            seed_parts=(host.hostname, proc.pid, event.timestamp),
-            not_before=sysmon_time + timedelta(milliseconds=25),
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=sysmon_time + timedelta(milliseconds=250),
         )
 
         event_data = {

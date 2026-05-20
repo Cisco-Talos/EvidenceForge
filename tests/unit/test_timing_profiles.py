@@ -3,10 +3,14 @@
 
 """Tests for data-driven timing profile loading."""
 
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from evidenceforge.events.base import SecurityEvent
+from evidenceforge.events.contexts import HostContext, ProcessContext
+from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.timing_profiles import (
     get_timing_window,
     network_sensor_observation_timing,
@@ -14,6 +18,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     sample_timing_delta,
     windows_collision_spacing_config,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 
 @pytest.fixture(autouse=True)
@@ -190,6 +195,59 @@ def test_sample_timing_delta_is_deterministic_and_bounded():
 
     assert first == second
     assert timedelta(milliseconds=20) <= first <= timedelta(milliseconds=1500)
+
+
+def test_windows_process_source_timing_respects_visible_parent_create():
+    """Child process source-create times should not sort before visible parent create."""
+    generator = object.__new__(ActivityGenerator)
+    generator._source_timing_planner = SourceTimingPlanner()
+    parent_visible_time = datetime(2024, 3, 18, 12, 0, 4, tzinfo=UTC)
+    generator._process_source_create_times = {("WS-01", 1000): parent_visible_time}
+    event_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    event = SecurityEvent(
+        timestamp=event_time,
+        event_type="process_create",
+        src_host=HostContext(
+            hostname="WS-01",
+            ip="10.10.1.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+        ),
+        process=ProcessContext(
+            pid=1200,
+            parent_pid=1000,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c whoami",
+            username="alice",
+        ),
+    )
+
+    generator._plan_process_source_create_times(event)
+    assert event.source_timing is not None
+    source_times = event.source_timing.source_times
+    sysmon_time = next(
+        value
+        for key, value in source_times.items()
+        if key.startswith("source.sysmon_process_create|")
+    )
+    security_time = next(
+        value
+        for key, value in source_times.items()
+        if key.startswith("source.windows_security_process_create|")
+    )
+
+    assert sysmon_time >= parent_visible_time + timedelta(milliseconds=1)
+    assert security_time >= sysmon_time + timedelta(milliseconds=250)
+
+    delayed_event = replace(event, timestamp=event.timestamp + timedelta(seconds=3))
+    delayed_sysmon_time = generator._source_timing_planner.source_time(
+        delayed_event,
+        "source.sysmon_process_create",
+        seed_parts=("WS-01", 1200, event_time),
+        not_before=event_time,
+    )
+    assert delayed_sysmon_time == sysmon_time
 
 
 def test_timing_profiles_overlay_invalid_values_fall_back_safely(tmp_path, monkeypatch):

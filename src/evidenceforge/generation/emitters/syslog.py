@@ -185,6 +185,14 @@ def _syslog_sort_key(line: str) -> tuple[int, int, int, int, int, int, str]:
 
 
 _RFC5424_TS_RE = re.compile(r"^<\d{1,3}>1\s+(?P<timestamp>\S+)")
+_RFC5424_LINE_RE = re.compile(
+    r"^<(?P<pri>\d{1,3})>1\s+"
+    r"(?P<timestamp>\S+)\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<app_name>\S+)\s+"
+    r"(?P<pid>\S+)\s+-\s+-\s+"
+    r"(?P<message>.*)$"
+)
 
 
 def _rfc5424_syslog_sort_key(line: str) -> tuple[str, int, str]:
@@ -197,6 +205,14 @@ def _rfc5424_syslog_sort_key(line: str) -> tuple[str, int, str]:
     match = _RFC5424_TS_RE.match(line)
     timestamp = match.group("timestamp") if match is not None else ""
     return (timestamp, lifecycle_priority, line)
+
+
+def _replace_rfc5424_timestamp(line: str, timestamp: Any) -> str:
+    """Return ``line`` with its RFC5424 timestamp replaced."""
+    parts = line.split(maxsplit=2)
+    if len(parts) != 3:
+        return line
+    return f"{parts[0]} {_format_rfc5424_timestamp(timestamp)} {parts[2]}"
 
 
 class SyslogEmitter(HostMultiplexEmitter):
@@ -321,6 +337,7 @@ class SyslogEmitter(HostMultiplexEmitter):
             self.stop_thread()
         self._normalize_logind_session_ids()
         self._backfill_missing_logind_pam_openers()
+        self._normalize_sudo_session_lifecycles()
         self._normalize_kernel_uptime_stamps()
         self._normalize_sshd_child_pids()
         self.flush(force=True)
@@ -416,6 +433,13 @@ class SyslogEmitter(HostMultiplexEmitter):
                 )
                 if len(normalized) != len(lines):
                     self._replace_host_buffers_with_lines(rows, normalized)
+
+    def _normalize_sudo_session_lifecycles(self) -> None:
+        """Keep same-PID sudo PAM session rows around COMMAND rows."""
+        for rows in self._sorted_lines_by_host().values():
+            lines = [row[3] for row in rows]
+            normalized = self._normalize_sudo_session_lifecycles_for_lines(lines)
+            self._replace_buffers_by_sorted_rows(rows, normalized)
 
     def _normalize_kernel_uptime_stamps(self) -> None:
         """Clamp visible kernel bracket uptime values to final syslog order."""
@@ -631,6 +655,87 @@ class SyslogEmitter(HostMultiplexEmitter):
             pid=pid,
             message=message,
         )
+
+    @staticmethod
+    def _normalize_sudo_session_lifecycles_for_lines(lines: list[str]) -> list[str]:
+        """Return RFC5424 syslog lines with sudo open/command/close order repaired."""
+        parsed: dict[int, dict[str, Any]] = {}
+        rows_by_pid: dict[str, dict[str, list[int]]] = {}
+        for index, line in enumerate(lines):
+            match = _RFC5424_LINE_RE.match(line)
+            if match is None or match.group("app_name") != "sudo":
+                continue
+            timestamp = _parse_rfc5424_timestamp(match.group("timestamp"))
+            message = match.group("message")
+            pid = match.group("pid")
+            parsed[index] = {
+                "timestamp": timestamp,
+                "pid": pid,
+                "message": message,
+            }
+            bucket = rows_by_pid.setdefault(pid, {"open": [], "command": [], "close": []})
+            if "pam_unix(sudo:session): session opened" in message:
+                bucket["open"].append(index)
+            elif "COMMAND=" in message and "command not allowed" not in message:
+                bucket["command"].append(index)
+            elif "pam_unix(sudo:session): session closed" in message:
+                bucket["close"].append(index)
+
+        normalized = list(lines)
+        min_gap = timedelta(milliseconds=1)
+        max_repair_gap = timedelta(seconds=2)
+        for bucket in rows_by_pid.values():
+            open_indices = bucket["open"]
+            close_indices = bucket["close"]
+            for command_index in bucket["command"]:
+                command_time = parsed[command_index]["timestamp"]
+                has_open_before = any(
+                    parsed[open_index]["timestamp"] <= command_time for open_index in open_indices
+                )
+                if not has_open_before:
+                    future_opens = [
+                        open_index
+                        for open_index in open_indices
+                        if command_time
+                        < parsed[open_index]["timestamp"]
+                        <= command_time + max_repair_gap
+                    ]
+                    if future_opens:
+                        open_index = min(
+                            future_opens,
+                            key=lambda index: parsed[index]["timestamp"],
+                        )
+                        repaired_time = command_time - min_gap
+                        parsed[open_index]["timestamp"] = repaired_time
+                        normalized[open_index] = _replace_rfc5424_timestamp(
+                            normalized[open_index],
+                            repaired_time,
+                        )
+
+                has_close_after = any(
+                    parsed[close_index]["timestamp"] >= command_time
+                    for close_index in close_indices
+                )
+                if not has_close_after:
+                    prior_closes = [
+                        close_index
+                        for close_index in close_indices
+                        if command_time - max_repair_gap
+                        <= parsed[close_index]["timestamp"]
+                        < command_time
+                    ]
+                    if prior_closes:
+                        close_index = max(
+                            prior_closes,
+                            key=lambda index: parsed[index]["timestamp"],
+                        )
+                        repaired_time = command_time + min_gap
+                        parsed[close_index]["timestamp"] = repaired_time
+                        normalized[close_index] = _replace_rfc5424_timestamp(
+                            normalized[close_index],
+                            repaired_time,
+                        )
+        return sorted(normalized, key=_rfc5424_syslog_sort_key)
 
     @staticmethod
     def _normalize_kernel_uptime_stamps_for_lines(lines: list[str]) -> list[str]:
