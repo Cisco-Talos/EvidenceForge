@@ -114,6 +114,24 @@ def _ufw_block_ttl(src_ip: str) -> int:
     return max(32, initial - hops)
 
 
+def _sample_lock_duration(rng: random.Random, kind: str) -> timedelta:
+    """Return a human-shaped workstation lock duration with non-minute texture."""
+    if kind == "lunch":
+        seconds = int(rng.triangular(22 * 60, 76 * 60, 43 * 60))
+        seconds += rng.randint(-95, 125)
+    else:
+        bucket = rng.random()
+        if bucket < 0.18:
+            seconds = rng.randint(65, 260)
+        elif bucket < 0.82:
+            seconds = int(rng.triangular(4 * 60, 24 * 60, 9 * 60))
+        else:
+            seconds = int(rng.triangular(18 * 60, 52 * 60, 31 * 60))
+        seconds += rng.randint(-35, 85)
+    seconds = max(127, seconds)
+    return timedelta(seconds=seconds, milliseconds=rng.randint(17, 987))
+
+
 def _plan_http_request_groups(
     requests: list[Any],
     *,
@@ -3572,7 +3590,11 @@ class BaselineMixin:
 
         # Lunch lock at hour 12
         if local_hour == 12 and rng.random() < 0.85:
-            lock_t = current_hour + timedelta(minutes=rng.randint(0, 15))
+            lock_t = current_hour + timedelta(
+                minutes=rng.randint(0, 15),
+                seconds=rng.randint(0, 59),
+                milliseconds=rng.randint(11, 973),
+            )
             if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
                 return
             self.state_manager.set_current_time(lock_t)
@@ -3582,7 +3604,7 @@ class BaselineMixin:
                 time=lock_t,
                 logon_id=session.logon_id,
             )
-            unlock_t = lock_t + timedelta(minutes=rng.randint(30, 60))
+            unlock_t = lock_t + _sample_lock_duration(rng, "lunch")
             logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
             if logoff_time and unlock_t >= logoff_time:
                 return
@@ -3594,7 +3616,10 @@ class BaselineMixin:
 
         # Random meeting-break lock/unlock
         if rng.random() < lock_prob:
-            lock_t = current_hour + timedelta(seconds=rng.randint(60, 3500))
+            lock_t = current_hour + timedelta(
+                seconds=rng.randint(60, 3500),
+                milliseconds=rng.randint(11, 973),
+            )
             if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
                 return
             self.state_manager.set_current_time(lock_t)
@@ -3604,7 +3629,7 @@ class BaselineMixin:
                 time=lock_t,
                 logon_id=session.logon_id,
             )
-            unlock_t = lock_t + timedelta(minutes=rng.randint(2, 15))
+            unlock_t = lock_t + _sample_lock_duration(rng, "meeting")
             logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
             if logoff_time and unlock_t >= logoff_time:
                 return

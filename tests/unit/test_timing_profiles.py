@@ -47,6 +47,28 @@ def test_timing_profiles_load_default_relationship():
     assert source_window.relationship_class == "source_latency"
     assert source_window.min_ms > 0
 
+    security_process_window = get_timing_window(
+        "source.windows_security_process_create",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    sysmon_process_window = get_timing_window(
+        "source.sysmon_process_create",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    ecar_process_window = get_timing_window(
+        "source.ecar_process_create",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert security_process_window.max_ms >= 900
+    assert sysmon_process_window.max_ms >= 2000
+    assert ecar_process_window.max_ms >= 5000
+
     tls_window = get_timing_window(
         "network.tls_completed_min_duration",
         default_min_ms=0,

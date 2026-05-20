@@ -74,18 +74,18 @@ relationships:
   source.windows_security_process_create:
     class: source_latency
     position: after
-    min_ms: 0
-    max_ms: 25
+    min_ms: 5
+    max_ms: 950
   source.sysmon_process_create:
     class: source_latency
     position: after
-    min_ms: 3
-    max_ms: 85
+    min_ms: 18
+    max_ms: 2400
   source.ecar_process_create:
     class: source_latency
     position: after
-    min_ms: 12
-    max_ms: 250
+    min_ms: 70
+    max_ms: 5200
   source.ecar_dependent_after_process_create:
     class: source_latency
     position: after

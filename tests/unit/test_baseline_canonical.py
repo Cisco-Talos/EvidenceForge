@@ -39,6 +39,7 @@ from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
     _materialize_registry_value_for_time,
     _module_matches_process,
+    _sample_lock_duration,
     _ufw_block_syn_packet_len,
     _ufw_block_ttl,
     _windows_scheduled_task_offsets,
@@ -71,6 +72,20 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
+    """Lock/unlock durations should carry human-scale second and millisecond texture."""
+    rng = random.Random(7)
+    meeting_durations = [_sample_lock_duration(rng, "meeting") for _ in range(50)]
+    lunch_durations = [_sample_lock_duration(rng, "lunch") for _ in range(50)]
+
+    assert all(duration.total_seconds() >= 127 for duration in meeting_durations)
+    assert any(duration.microseconds for duration in meeting_durations + lunch_durations)
+    assert any(duration.total_seconds() % 60 for duration in meeting_durations + lunch_durations)
+    assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
+    assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
+    assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
 
 
 @pytest.fixture
