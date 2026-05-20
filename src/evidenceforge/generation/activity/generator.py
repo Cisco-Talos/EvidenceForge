@@ -2718,6 +2718,7 @@ class ActivityGenerator:
         ] = {}
         self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
+        self._process_source_create_times: dict[tuple[str, int], datetime] = {}
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -6604,6 +6605,7 @@ class ActivityGenerator:
 
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
+        self._record_process_source_create_time(system.hostname, pid, event)
         self._emit_process_command_network_effects(
             user=user,
             system=system,
@@ -6901,6 +6903,34 @@ class ActivityGenerator:
 
         logger.debug(f"Generated process: {process_name} (PID: {pid}) on {system.hostname}")
         return pid
+
+    def _record_process_source_create_time(
+        self,
+        hostname: str,
+        pid: int,
+        event: SecurityEvent,
+    ) -> None:
+        """Remember the latest rendered source timestamp for a process create."""
+        source_timing = event.source_timing
+        if source_timing is None:
+            return
+        source_create_times = [
+            timestamp
+            for key, timestamp in source_timing.source_times.items()
+            if key.startswith(
+                (
+                    "source.windows_security_process_create|",
+                    "source.sysmon_process_create|",
+                    "source.ecar_process_create|",
+                )
+            )
+        ]
+        if source_create_times:
+            self._process_source_create_times[(hostname, pid)] = max(source_create_times)
+
+    def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
+        """Return the latest rendered source-create timestamp for a process."""
+        return self._process_source_create_times.get((hostname, pid))
 
     def _emit_process_command_network_effects(
         self,

