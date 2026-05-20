@@ -310,6 +310,41 @@ class TestBaselineLinuxBashHistory:
 
         assert Counter(picked)[target] <= 2
 
+    def test_high_signal_admin_check_variants_share_repeat_budget(self):
+        """Equivalent diagnostic command variants should not bypass repeat caps."""
+        from evidenceforge.generation.activity import bash_commands
+
+        targets = ("systemctl status sshd", "systemctl status sshd --no-pager")
+        pool = [*targets, *(f"echo host-check-{index}" for index in range(12))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(11)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 4 in (1, 2):
+                    return targets[self.calls % len(targets)]
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(30)
+        ]
+
+        counts = Counter(picked)
+        assert counts["systemctl status sshd"] + counts["systemctl status sshd --no-pager"] <= 2
+
     def test_bash_picker_suppresses_same_user_repeats_across_hosts(self):
         """A user's command memory should carry across parallel SSH hosts."""
         from evidenceforge.generation.activity import bash_commands

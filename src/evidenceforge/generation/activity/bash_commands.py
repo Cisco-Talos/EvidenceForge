@@ -259,6 +259,7 @@ _COMMAND_CANDIDATE_ATTEMPTS = 32
 _COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
 _COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
+_COMMAND_GLOBAL_LOW_REPEAT_COUNTS: Counter[str] = Counter()
 _LOW_REPEAT_EXACT_COMMANDS = {
     "cat /proc/cpuinfo | grep 'model name' | head -1",
     "df -h /tmp",
@@ -306,6 +307,7 @@ def reset_bash_command_memory() -> None:
     _COMMAND_RECENCY.clear()
     _COMMAND_USER_RECENCY.clear()
     _COMMAND_GLOBAL_COUNTS.clear()
+    _COMMAND_GLOBAL_LOW_REPEAT_COUNTS.clear()
 
 
 def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
@@ -390,11 +392,29 @@ def _remember_command(system_hostname: str, username: str, command: str) -> None
         )
         user_recent.append(command)
     _COMMAND_GLOBAL_COUNTS[command] += 1
+    if low_repeat_key := _low_repeat_group(command):
+        _COMMAND_GLOBAL_LOW_REPEAT_COUNTS[low_repeat_key] += 1
+
+
+def _low_repeat_group(command: str) -> str | None:
+    """Return a canonical low-repeat budget key for equivalent diagnostic commands."""
+    normalized = " ".join(command.split())
+    if normalized.startswith("cat /proc/cpuinfo | grep 'model name'"):
+        return "cpuinfo_model_name"
+    if normalized == "df -h /tmp":
+        return "df_tmp"
+    if normalized.startswith("journalctl -p err"):
+        return "journalctl_errors"
+    if normalized.startswith("systemctl --failed"):
+        return "systemctl_failed"
+    if normalized == "systemctl status sshd" or normalized.startswith("systemctl status sshd "):
+        return "systemctl_sshd"
+    return None
 
 
 def _global_repeat_limit(command: str, pool_size: int) -> int:
     """Return the generation-wide soft repeat limit for an exact command."""
-    if command in _LOW_REPEAT_EXACT_COMMANDS:
+    if _low_repeat_group(command):
         return 2
     return max(3, min(6, max(1, pool_size // 5)))
 
@@ -402,8 +422,9 @@ def _global_repeat_limit(command: str, pool_size: int) -> int:
 def _below_global_repeat_limit(command: str, pool_size: int, *, slack: int = 0) -> bool:
     """Return whether a command is still below its global repeat budget."""
     limit = _global_repeat_limit(command, pool_size)
-    if command in _LOW_REPEAT_EXACT_COMMANDS:
+    if low_repeat_key := _low_repeat_group(command):
         slack = 0
+        return _COMMAND_GLOBAL_LOW_REPEAT_COUNTS[low_repeat_key] < limit
     return _COMMAND_GLOBAL_COUNTS[command] < limit + slack
 
 
@@ -443,8 +464,10 @@ def _choose_template_with_memory(
         candidates,
         key=lambda candidate: (
             not _below_global_repeat_limit(candidate, len(pool), slack=2),
-            candidate in _LOW_REPEAT_EXACT_COMMANDS,
-            _COMMAND_GLOBAL_COUNTS[candidate],
+            _low_repeat_group(candidate) is not None,
+            _COMMAND_GLOBAL_LOW_REPEAT_COUNTS[_low_repeat_group(candidate)]
+            if _low_repeat_group(candidate)
+            else _COMMAND_GLOBAL_COUNTS[candidate],
         ),
     )
     _remember_command(system_hostname, username, command)
