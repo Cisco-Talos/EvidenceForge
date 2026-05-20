@@ -3350,9 +3350,10 @@ class TestActivityGenerator:
             dst_port=88,
             proto="tcp",
             service="kerberos",
-            duration=0.02,
-            orig_bytes=400,
-            resp_bytes=900,
+            duration=3.0,
+            orig_bytes=5000,
+            resp_bytes=32000,
+            conn_state="RSTR",
             pid=pid,
             source_system=test_system,
             emit_dns=False,
@@ -3365,6 +3366,10 @@ class TestActivityGenerator:
         )
         assert connection_event.network.protocol == "udp"
         assert connection_event.network.ip_proto == 17
+        assert connection_event.network.duration <= 0.16
+        assert connection_event.network.orig_bytes <= 1300
+        assert connection_event.network.resp_bytes <= 1400
+        assert connection_event.network.conn_state == "SF"
         wfp_event = next(
             call.args[0]
             for call in mock_emitters["windows_event_security"].emit.call_args_list

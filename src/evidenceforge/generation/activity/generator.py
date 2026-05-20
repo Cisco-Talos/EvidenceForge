@@ -7071,6 +7071,27 @@ class ActivityGenerator:
                     )
                 )
             )
+        if service == "kerberos" and dst_port == 88 and proto == "udp":
+            udp_kerberos_rng = random.Random(
+                _stable_seed(
+                    "kerberos_udp_shape:"
+                    f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
+                )
+            )
+            duration = min(
+                duration if duration is not None else udp_kerberos_rng.uniform(0.003, 0.075),
+                udp_kerberos_rng.uniform(0.035, 0.16),
+            )
+            orig_bytes = min(
+                max(orig_bytes or udp_kerberos_rng.randint(180, 900), 160),
+                udp_kerberos_rng.randint(700, 1300),
+            )
+            resp_bytes = min(
+                max(resp_bytes or udp_kerberos_rng.randint(120, 1200), 80),
+                udp_kerberos_rng.randint(600, 1400),
+            )
+            if conn_state not in {None, "SF", "S0", "REJ", "OTH"}:
+                conn_state = "SF" if resp_bytes else "S0"
 
         if (
             http is None
