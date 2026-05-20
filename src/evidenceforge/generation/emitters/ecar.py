@@ -1382,6 +1382,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 writers = list(self._writers.values())
             for writer in writers:
                 with writer._lock:
+                    writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
