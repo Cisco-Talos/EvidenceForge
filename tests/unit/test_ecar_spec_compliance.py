@@ -1249,6 +1249,73 @@ class TestChronologicalOutput:
         row = json.loads(normalized[0])
         assert row["timestamp_ms"] == 1000
 
+    def test_linux_pid_morphology_rewrites_later_lower_process_pids(self):
+        """Linux eCAR PID rendering should not move backward over source time."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "parent",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/bin/sh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "shell",
+                    "pid": 450,
+                    "tid": 450,
+                    "properties": {"image_path": "/usr/bin/journalctl"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "FILE",
+                    "action": "READ",
+                    "actorID": "shell",
+                    "pid": 450,
+                    "properties": {"file_path": "/var/log/syslog"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2200,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "child",
+                    "actorID": "shell",
+                    "pid": 440,
+                    "tid": 440,
+                    "ppid": 450,
+                    "properties": {"image_path": "/usr/bin/tail"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        parent = next(row for row in normalized if row.get("objectID") == "parent")
+        shell = next(row for row in normalized if row.get("objectID") == "shell")
+        file_row = next(row for row in normalized if row.get("object") == "FILE")
+        child = next(row for row in normalized if row.get("objectID") == "child")
+        assert shell["pid"] > parent["pid"]
+        assert file_row["pid"] == shell["pid"]
+        assert child["pid"] > shell["pid"]
+        assert child["ppid"] == shell["pid"]
+
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""
         lines = [

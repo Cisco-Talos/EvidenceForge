@@ -938,6 +938,116 @@ class EcarEmitter(HostMultiplexEmitter):
                 refs.add(str(value))
         return refs
 
+    @staticmethod
+    def _looks_like_linux_process(record: dict[str, Any]) -> bool:
+        """Return whether a PROCESS row is rendering a POSIX process image."""
+        props = record.get("properties") or {}
+        image_path = str(props.get("image_path") or "")
+        return image_path.startswith("/")
+
+    @classmethod
+    def _normalize_linux_pid_morphology(cls, lines: list[str]) -> list[str]:
+        """Keep Linux eCAR process PIDs increasing in source timestamp order."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        create_indexes = [
+            index
+            for index, record in enumerate(records)
+            if record is not None
+            and record.get("object") == "PROCESS"
+            and record.get("action") == "CREATE"
+            and cls._looks_like_linux_process(record)
+            and cls._ecar_int(record.get("pid")) > 0
+        ]
+        create_indexes.sort(
+            key=lambda index: (
+                cls._ecar_int(records[index].get("timestamp_ms"), 0)
+                if records[index] is not None
+                else 0,
+                cls._ecar_int(records[index].get("pid")),
+            )
+        )
+
+        new_pid_by_object_id: dict[str, int] = {}
+        old_to_new_candidates: dict[int, set[int]] = {}
+        latest_pid = 0
+        for index in create_indexes:
+            record = records[index]
+            if record is None:
+                continue
+            old_pid = cls._ecar_int(record.get("pid"))
+            new_pid = old_pid
+            if latest_pid and new_pid <= latest_pid:
+                seed_text = ":".join(
+                    [
+                        str(record.get("objectID", "")),
+                        str(record.get("timestamp_ms", "")),
+                        str(old_pid),
+                    ]
+                )
+                new_pid = latest_pid + 1 + (sum(ord(ch) for ch in seed_text) % 17)
+            latest_pid = new_pid
+            object_id = str(record.get("objectID") or "")
+            if object_id:
+                new_pid_by_object_id[object_id] = new_pid
+            old_to_new_candidates.setdefault(old_pid, set()).add(new_pid)
+
+        old_pid_map = {
+            old_pid: next(iter(new_pids))
+            for old_pid, new_pids in old_to_new_candidates.items()
+            if len(new_pids) == 1
+        }
+
+        def rewrite_pid_field(record: dict[str, Any]) -> None:
+            object_id = str(record.get("objectID") or "")
+            actor_id = str(record.get("actorID") or "")
+            new_pid = new_pid_by_object_id.get(object_id) or new_pid_by_object_id.get(actor_id)
+            if new_pid is None:
+                old_pid = cls._ecar_int(record.get("pid"))
+                new_pid = old_pid_map.get(old_pid)
+            if new_pid is None:
+                return
+            old_pid = cls._ecar_int(record.get("pid"))
+            record["pid"] = new_pid
+            if cls._ecar_int(record.get("tid")) == old_pid:
+                record["tid"] = new_pid
+
+        def rewrite_parent_field(record: dict[str, Any]) -> None:
+            parent_id = str(record.get("actorID") or "")
+            parent_pid = cls._ecar_int(record.get("ppid"))
+            new_parent_pid = new_pid_by_object_id.get(parent_id) or old_pid_map.get(parent_pid)
+            if new_parent_pid is not None:
+                record["ppid"] = new_parent_pid
+
+        def rewrite_property_pid(record: dict[str, Any], pid_key: str, object_key: str) -> None:
+            props = record.get("properties")
+            if not isinstance(props, dict):
+                return
+            object_id = str(props.get(object_key) or "")
+            old_pid = cls._ecar_int(props.get(pid_key))
+            new_pid = new_pid_by_object_id.get(object_id) or old_pid_map.get(old_pid)
+            if new_pid is not None:
+                props[pid_key] = new_pid
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            rewrite_pid_field(record)
+            if record.get("object") == "PROCESS":
+                rewrite_parent_field(record)
+            rewrite_property_pid(record, "target_pid", "target_process_uuid")
+            rewrite_property_pid(record, "target_pid", "target_process_object_id")
+            rewrite_property_pid(record, "source_pid", "source_process_object_id")
+            normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
     @classmethod
     def _normalize_process_termination_order(cls, lines: list[str]) -> list[str]:
         """Move PROCESS/TERMINATE rows after later same-process references."""
@@ -1272,6 +1382,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 writers = list(self._writers.values())
             for writer in writers:
                 with writer._lock:
+                    writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
