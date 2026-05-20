@@ -81,6 +81,7 @@ from evidenceforge.generation.activity.windows_auth_realism import (
 )
 from evidenceforge.generation.causal.engine import CausalExpansionEngine, ExpansionContext
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
@@ -2719,6 +2720,7 @@ class ActivityGenerator:
         self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int], datetime] = {}
+        self._source_timing_planner = SourceTimingPlanner()
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
         self._causal_engine = causal_engine or CausalExpansionEngine()
@@ -6603,6 +6605,8 @@ class ActivityGenerator:
             storyline_origin=from_storyline,
         )
 
+        self._record_process_source_create_time(system.hostname, pid, event)
+
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
         self._record_process_source_create_time(system.hostname, pid, event)
@@ -6911,6 +6915,7 @@ class ActivityGenerator:
         event: SecurityEvent,
     ) -> None:
         """Remember the latest rendered source timestamp for a process create."""
+        self._plan_process_source_create_times(event)
         source_timing = event.source_timing
         if source_timing is None:
             return
@@ -6931,6 +6936,35 @@ class ActivityGenerator:
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         """Return the latest rendered source-create timestamp for a process."""
         return self._process_source_create_times.get((hostname, pid))
+
+    def _plan_process_source_create_times(self, event: SecurityEvent) -> None:
+        """Precompute source-create timestamps before threaded emitters render."""
+        host = event.src_host
+        proc = event.process
+        if host is None or proc is None:
+            return
+
+        if host.os_category == "windows":
+            self._source_timing_planner.source_time(
+                event,
+                "source.windows_security_process_create",
+                seed_parts=(host.hostname, proc.pid, event.timestamp),
+                not_before=event.timestamp,
+            )
+            self._source_timing_planner.source_time(
+                event,
+                "source.sysmon_process_create",
+                seed_parts=(host.hostname, proc.pid, event.timestamp),
+                not_before=event.timestamp,
+            )
+
+        process_start_time = proc.start_time or event.timestamp
+        self._source_timing_planner.source_time(
+            event,
+            "source.ecar_process_create",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
+        )
 
     def _emit_process_command_network_effects(
         self,

@@ -211,11 +211,14 @@ class TestStorylineCommandNetworks:
                 return event.event_type == "process_create"
 
             def emit(self, event: Any) -> None:
+                host = event.src_host
+                proc = event.process
+                process_start_time = proc.start_time or event.timestamp
                 self.render_time = SourceTimingPlanner().source_time(
                     event,
                     "source.ecar_process_create",
-                    seed_parts=("test",),
-                    not_before=event.timestamp,
+                    seed_parts=(host.hostname, proc.pid, process_start_time),
+                    not_before=process_start_time,
                 )
 
         emitter = _ProcessTimingEmitter()
@@ -243,6 +246,48 @@ class TestStorylineCommandNetworks:
 
         assert emitter.render_time is not None
         assert generator.process_source_create_time(system.hostname, pid) == emitter.render_time
+
+    def test_activity_generator_preplans_process_create_time_before_threaded_dispatch(self):
+        captured: dict[str, Any] = {}
+
+        class _CapturingDispatcher:
+            @staticmethod
+            def dispatch(event: Any) -> None:
+                if event.event_type == "process_create":
+                    captured["event"] = event
+
+        state_manager = StateManager()
+        generator = ActivityGenerator(state_manager, {})
+        generator.dispatcher = _CapturingDispatcher()
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        system = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        state_manager.set_current_time(event_time)
+
+        pid = generator.generate_process(
+            actor,
+            system,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            "powershell.exe -NoProfile -EncodedCommand SQBFAFgA",
+            parent_pid=4,
+        )
+
+        event = captured["event"]
+        assert event.source_timing is not None
+        source_keys = set(event.source_timing.source_times)
+        assert any(key.startswith("source.windows_security_process_create|") for key in source_keys)
+        assert any(key.startswith("source.sysmon_process_create|") for key in source_keys)
+        assert any(key.startswith("source.ecar_process_create|") for key in source_keys)
+        assert generator.process_source_create_time(system.hostname, pid) == max(
+            event.source_timing.source_times.values()
+        )
 
 
 class _FakeActivityGenerator:
