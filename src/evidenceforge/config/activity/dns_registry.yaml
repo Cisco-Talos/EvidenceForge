@@ -761,18 +761,30 @@ ipv6_map:
 # When a domain's IPv4 isn't in the explicit ipv6_map above, the engine
 # derives an IPv6 address using the first octet of the IPv4 to select a
 # provider-appropriate prefix. This prevents Microsoft domains from getting
-# Google IPv6 prefixes, etc.
+# Google IPv6 prefixes, etc. Unknown public allocations use a stable fallback
+# pool instead of one project-wide prefix so unrelated vendors do not collapse
+# onto the same synthetic IPv6 range.
 #
 # Format: {lo: N, hi: M, prefix: "..."}
 # Matches IPs whose first octet falls in [lo, hi] inclusive.
 # Source: WHOIS lookups on major cloud/CDN provider IP allocations.
 # Extend via .eforge/config/activity/dns_registry.yaml overlay (ranges are concatenated).
 ipv6_prefixes:
-  default: "2a09:bac0"
+  default: "2600:1407"
+  default_pool:
+    - "2600:1407"  # Akamai-style fallback
+    - "2600:1f18"  # AWS-style fallback
+    - "2606:4700"  # Cloudflare-style fallback
+    - "2a04:4e42"  # Fastly-style fallback
+    - "2620:1ec"   # Microsoft-style fallback
+    - "2607:f8b0"  # Google-style fallback
+    - "2a03:2880"  # Meta-style fallback
+    - "2606:50c0"  # GitHub-style fallback
   ranges:
     - {lo: 13, hi: 13, prefix: "2620:1ec"}
     - {lo: 20, hi: 20, prefix: "2620:1ec"}
     - {lo: 23, hi: 23, prefix: "2a02:26f0"}
+    - {lo: 44, hi: 44, prefix: "2600:1f18"}
     - {lo: 40, hi: 40, prefix: "2603:1000"}
     - {lo: 52, hi: 54, prefix: "2600:1f18"}
     - {lo: 74, hi: 74, prefix: "2607:f8b0"}
