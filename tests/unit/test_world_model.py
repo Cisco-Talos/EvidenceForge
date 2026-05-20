@@ -333,6 +333,55 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].source_system == "WKS-01"
 
 
+def test_connection_owner_process_uses_scenario_internal_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+    systems: dict[str, System],
+    users: dict[str, User],
+    state_manager: StateManager,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Catalog-owned connection processes should not leak default corp.local URLs."""
+    world_model = WorldModel(scenario, "meridianhcs.local")
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=users["dev.user"].username,
+        system=systems["WKS-02"].hostname,
+        logon_type=2,
+        source_ip=systems["WKS-02"].ip,
+        session_kind="interactive",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    monkeypatch.setattr(
+        "evidenceforge.generation.world_model.get_service_to_exes",
+        lambda: {"ssl": ["firefox.exe"]},
+    )
+
+    pid = planner.ensure_connection_process(
+        user=users["dev.user"],
+        system=systems["WKS-02"],
+        session=session,
+        time=session_time,
+        service="ssl",
+        rng=random.Random(3),
+    )
+
+    proc = state_manager.get_process(systems["WKS-02"].hostname, pid)
+    assert proc is not None
+    assert "meridianhcs.local" in proc.command_line
+    assert "corp.local" not in proc.command_line
+
+
 def test_find_user_session_handles_mixed_timezone_start_times(
     planner: WorldPlanner,
     state_manager: StateManager,

@@ -862,7 +862,6 @@ class WorldPlanner:
             load_catalog,
             resolve_image_path,
         )
-        from evidenceforge.generation.activity.helpers import _parameterize_command
 
         os_cat = self.world_model.hosts[system.hostname].os_category
         # _server_admin is a policy overlay: use the user's real persona for
@@ -921,7 +920,12 @@ class WorldPlanner:
                 templates = plat.get("command_templates", [])
                 if templates:
                     command_line = rng.choice(templates)
-                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = self.activity_generator._parameterize_command_for_system(
+                        rng,
+                        command_line,
+                        username=user.username,
+                        system=system,
+                    )
                 break
 
         # Backdate the process slightly, but never before the session started
