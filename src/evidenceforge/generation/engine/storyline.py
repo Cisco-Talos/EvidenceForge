@@ -4388,9 +4388,16 @@ class StorylineMixin:
             command_line=f"sshd: {target_user}@notty",
             username=target_user,
         )
+        file_time = transfer_time + timedelta(seconds=rng.uniform(1.2, 3.0))
+        source_time_getter = getattr(self.activity_generator, "process_source_create_time", None)
+        if callable(source_time_getter):
+            source_process_time = source_time_getter(source_system.hostname, source_pid)
+            if isinstance(source_process_time, datetime) and file_time <= source_process_time:
+                file_time = source_process_time + timedelta(milliseconds=rng.randint(250, 1400))
+
         self.dispatcher.dispatch(
             SecurityEvent(
-                timestamp=transfer_time + timedelta(seconds=rng.uniform(1.2, 3.0)),
+                timestamp=file_time,
                 event_type="file_create",
                 src_host=host_ctx,
                 auth=AuthContext(username=target_user),

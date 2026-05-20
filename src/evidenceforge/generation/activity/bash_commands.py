@@ -259,6 +259,13 @@ _COMMAND_CANDIDATE_ATTEMPTS = 32
 _COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
 _COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
+_LOW_REPEAT_EXACT_COMMANDS = {
+    "cat /proc/cpuinfo | grep 'model name' | head -1",
+    "df -h /tmp",
+    "journalctl -p err --no-pager -n 10",
+    "systemctl --failed --no-pager",
+    "systemctl status sshd",
+}
 _NON_WORKSTATION_SERVICE_HINTS = {
     "ad-ds",
     "apache2",
@@ -385,6 +392,21 @@ def _remember_command(system_hostname: str, username: str, command: str) -> None
     _COMMAND_GLOBAL_COUNTS[command] += 1
 
 
+def _global_repeat_limit(command: str, pool_size: int) -> int:
+    """Return the generation-wide soft repeat limit for an exact command."""
+    if command in _LOW_REPEAT_EXACT_COMMANDS:
+        return 2
+    return max(3, min(6, max(1, pool_size // 5)))
+
+
+def _below_global_repeat_limit(command: str, pool_size: int, *, slack: int = 0) -> bool:
+    """Return whether a command is still below its global repeat budget."""
+    limit = _global_repeat_limit(command, pool_size)
+    if command in _LOW_REPEAT_EXACT_COMMANDS:
+        slack = 0
+    return _COMMAND_GLOBAL_COUNTS[command] < limit + slack
+
+
 def _choose_template_with_memory(
     rng: random.Random,
     pool: list[str],
@@ -402,23 +424,29 @@ def _choose_template_with_memory(
     recent = set(_COMMAND_RECENCY.get(key, ()))
     if username:
         recent.update(_COMMAND_USER_RECENCY.get(username.lower(), ()))
-    soft_cap = max(3, min(6, max(1, len(pool) // 5)))
     attempts = _COMMAND_CANDIDATE_ATTEMPTS
     candidates: list[str] = []
     for _ in range(attempts):
         template = rng.choice(pool)
         command = _resolve_template(template, rng, params, system_services)
         candidates.append(command)
-        if command not in recent and _COMMAND_GLOBAL_COUNTS[command] < soft_cap:
+        if command not in recent and _below_global_repeat_limit(command, len(pool)):
             _remember_command(system_hostname, username, command)
             return command
 
     for command in candidates:
-        if command not in recent and _COMMAND_GLOBAL_COUNTS[command] < soft_cap + 2:
+        if command not in recent and _below_global_repeat_limit(command, len(pool), slack=2):
             _remember_command(system_hostname, username, command)
             return command
 
-    command = min(candidates, key=lambda candidate: _COMMAND_GLOBAL_COUNTS[candidate])
+    command = min(
+        candidates,
+        key=lambda candidate: (
+            not _below_global_repeat_limit(candidate, len(pool), slack=2),
+            candidate in _LOW_REPEAT_EXACT_COMMANDS,
+            _COMMAND_GLOBAL_COUNTS[candidate],
+        ),
+    )
     _remember_command(system_hostname, username, command)
     return command
 

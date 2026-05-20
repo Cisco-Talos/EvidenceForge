@@ -276,6 +276,40 @@ class TestBaselineLinuxBashHistory:
         counts = Counter(picked)
         assert max(counts.values()) <= 6
 
+    def test_high_signal_admin_checks_have_low_global_repeat_budget(self):
+        """Exact diagnostic commands should not repeat broadly across users/hosts."""
+        from evidenceforge.generation.activity import bash_commands
+
+        target = "systemctl --failed --no-pager"
+        pool = [target, *(f"echo host-check-{index}" for index in range(12))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(7)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 3 and target in values:
+                    return target
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(30)
+        ]
+
+        assert Counter(picked)[target] <= 2
+
     def test_bash_picker_suppresses_same_user_repeats_across_hosts(self):
         """A user's command memory should carry across parallel SSH hosts."""
         from evidenceforge.generation.activity import bash_commands

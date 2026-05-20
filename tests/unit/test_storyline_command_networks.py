@@ -862,6 +862,56 @@ class TestStorylineCommandSideEffects:
         )
         assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
 
+    def test_scp_receiver_file_waits_for_visible_source_process_create(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="DST",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        file_events: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            dispatch=lambda event: (
+                file_events.append(event) if event.event_type == "file_create" else None
+            )
+        )
+        transfer_time = datetime(2024, 3, 18, 17, 15, 2, 638000, tzinfo=UTC)
+        visible_source_process_time = transfer_time + timedelta(seconds=5)
+        engine.activity_generator.process_source_times[(source.hostname, 4242)] = (
+            visible_source_process_time
+        )
+
+        engine._emit_scp_receiver_artifacts(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            target_user="root",
+            target_path="/var/tmp/archive.tar.gz",
+            transfer_time=transfer_time,
+            source_port=40117,
+            rng=random.Random(7),
+        )
+
+        assert file_events
+        assert file_events[0].timestamp > visible_source_process_time
+
     def test_linux_process_uses_scheduled_bash_history_time(self):
         source = System(
             hostname="SRC",
