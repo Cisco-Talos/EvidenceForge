@@ -2196,6 +2196,7 @@ class TestExplicitProxyVisibility:
         dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
         assert dns_events
         assert all(event.network.src_ip == "10.0.3.10" for event in dns_events)
+        assert all(event.network.dst_ip == "10.0.0.1" for event in dns_events)
         assert all("10.0.0.1" not in event.dns.answers for event in dns_events)
         assert all(event.dns.query != "PROXY-01.example.org" for event in dns_events)
         assert any(event.dns.query == "example.com" for event in dns_events)

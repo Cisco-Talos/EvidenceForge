@@ -6489,7 +6489,15 @@ class BaselineMixin:
 
                     if sig_direction == "out":
                         src_ip = local_sys.ip
-                        dst_ip = ext_ip
+                        if alert_proto in {"udp", "tcp"} and alert_dst_port == 53:
+                            dns_ips = getattr(
+                                self.activity_generator,
+                                "_dns_server_ips",
+                                ["10.0.0.1"],
+                            )
+                            dst_ip = rng.choice(dns_ips)
+                        else:
+                            dst_ip = ext_ip
                         source_system = local_sys
                     else:
                         if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:

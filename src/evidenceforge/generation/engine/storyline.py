@@ -2092,6 +2092,73 @@ class StorylineMixin:
                     )
                     malicious_event["network_url"] = http_url
 
+            remote_db_target = self._extract_database_client_target(command_line, os_category)
+            if remote_db_target is not None:
+                target_host, dst_port, service = remote_db_target
+                target_ip = self._resolve_storyline_network_target(target_host)
+                target_hostname = None if _IPV4_LITERAL_RE.fullmatch(target_host) else target_host
+                if target_ip is None and target_hostname is not None:
+                    ad_domain = getattr(self, "_ad_domain", "")
+                    target_lower = target_hostname.rstrip(".").lower()
+                    unresolved_single_label = "." not in target_lower
+                    looks_internal = target_lower.endswith(".local") or (
+                        bool(ad_domain) and target_lower.endswith(f".{ad_domain.lower()}")
+                    )
+                    if not looks_internal and not unresolved_single_label:
+                        from evidenceforge.generation.activity.dns_registry import (
+                            resolve_domain_ip,
+                        )
+
+                        target_ip = resolve_domain_ip(target_hostname, src_host=system.hostname)
+                if target_ip is not None:
+                    target_system = self._system_for_ip(target_ip)
+                    failed_private_attempt = target_system is None and _is_private_ip(target_ip)
+                    firewall_ctx = None
+                    conn_state = "SF"
+                    duration = rng.uniform(0.6, 8.0)
+                    orig_bytes = rng.randint(180, 900)
+                    resp_bytes = rng.randint(800, 6000)
+                    rendered_service = service
+                    if failed_private_attempt:
+                        from evidenceforge.events.contexts import FirewallContext
+
+                        src_iface = self._resolve_firewall_interface(system.ip)
+                        dst_iface = self._resolve_firewall_interface(target_ip)
+                        firewall_ctx = FirewallContext(
+                            action="deny",
+                            msg_id=106023,
+                            connection_id=0,
+                            src_interface=src_iface,
+                            dst_interface=dst_iface,
+                            access_group=f"{src_iface}_access_in",
+                        )
+                        conn_state = self._get_firewall_deny_conn_state()
+                        duration = rng.uniform(0.02, 0.45)
+                        orig_bytes = 0
+                        resp_bytes = 0
+                        rendered_service = None
+                    self.activity_generator.generate_connection(
+                        src_ip=system.ip,
+                        dst_ip=target_ip,
+                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        dst_port=dst_port,
+                        proto="tcp",
+                        service=rendered_service,
+                        duration=duration,
+                        orig_bytes=orig_bytes,
+                        resp_bytes=resp_bytes,
+                        conn_state=conn_state,
+                        emit_dns=target_hostname is not None,
+                        source_system=system,
+                        pid=pid,
+                        hostname=target_hostname,
+                        process_image=process_name,
+                        firewall=firewall_ctx,
+                    )
+                    malicious_event["network_target"] = target_host
+                    malicious_event["network_target_ip"] = target_ip
+                    malicious_event["network_target_port"] = dst_port
+
             scp_destination = self._extract_scp_destination(command_line, os_category)
             scp_target = scp_destination[0] if scp_destination is not None else None
             if scp_target is not None:
@@ -4123,6 +4190,50 @@ class StorylineMixin:
         """Extract the remote host from a Linux scp command line."""
         destination = StorylineMixin._extract_scp_destination(command_line, os_category)
         return destination[0] if destination is not None else None
+
+    @staticmethod
+    def _extract_database_client_target(
+        command_line: str, os_category: str
+    ) -> tuple[str, int, str] | None:
+        """Extract remote database endpoint details from a storyline command."""
+        if os_category != "windows":
+            return None
+        if not re.search(r"\bsqlcmd(?:\.exe)?\b", command_line, re.IGNORECASE):
+            return None
+
+        match = re.search(
+            r'(?i)\bsqlcmd(?:\.exe)?\b.*?(?:^|\s)-S\s*(?:"([^"]+)"|(\S+))',
+            command_line,
+        )
+        if match is None:
+            match = re.search(
+                r'(?i)\bsqlcmd(?:\.exe)?\b.*?(?:^|\s)-S(?:"([^"]+)"|(\S+))',
+                command_line,
+            )
+        if match is None:
+            return None
+
+        raw_target = (match.group(1) or match.group(2) or "").strip().strip("'\"")
+        if not raw_target:
+            return None
+        target = raw_target
+        if target.lower().startswith("tcp:"):
+            target = target[4:]
+        port = 1433
+        if "," in target:
+            target, port_text = target.rsplit(",", 1)
+            try:
+                parsed_port = int(port_text)
+            except ValueError:
+                parsed_port = 1433
+            if 0 < parsed_port <= 65535:
+                port = parsed_port
+        if "\\" in target:
+            target = target.split("\\", 1)[0]
+        target = target.strip().strip("[]")
+        if target.lower() in {"", ".", "(local)", "localhost", "127.0.0.1", "::1"}:
+            return None
+        return target, port, "tds"
 
     def _system_for_ip(self, ip: str) -> System | None:
         """Return the scenario system with the given IP."""

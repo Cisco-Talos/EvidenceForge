@@ -110,6 +110,22 @@ class TestStorylineCommandNetworks:
 
         assert target == "10.10.2.30"
 
+    def test_extract_sqlcmd_target_from_dash_s_ip(self):
+        target = StorylineMixin._extract_database_client_target(
+            'sqlcmd.exe -S 10.0.2.50 -d hr_records -Q "SELECT name FROM sys.databases"',
+            "windows",
+        )
+
+        assert target == ("10.0.2.50", 1433, "tds")
+
+    def test_extract_sqlcmd_target_accepts_tcp_port_prefix(self):
+        target = StorylineMixin._extract_database_client_target(
+            'sqlcmd.exe -S "tcp:DB-PROD-01,14330" -Q "SELECT 1"',
+            "windows",
+        )
+
+        assert target == ("DB-PROD-01", 14330, "tds")
+
     def test_resolve_storyline_network_target_matches_fqdn(self):
         engine = object.__new__(StorylineMixin)
         engine._ad_domain = "meridianhcs.local"
@@ -351,6 +367,89 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.reserved_ports == [45678]
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
+
+    def test_sqlcmd_remote_private_ip_generates_failed_tcp_attempt(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.1.31",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[], network=None)
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="sqlcmd.exe",
+            command_line=(
+                "sqlcmd.exe -S 10.0.2.50 -d hr_records -Q "
+                '"SELECT name, recovery_model_desc FROM sys.databases"'
+            ),
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="check sql server",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[0]
+        assert conn["src_ip"] == "10.10.1.31"
+        assert conn["dst_ip"] == "10.0.2.50"
+        assert conn["dst_port"] == 1433
+        assert conn["proto"] == "tcp"
+        assert conn["pid"] == 4242
+        assert conn["conn_state"] == "S0"
+        assert conn["firewall"].action == "deny"
+        assert conn["service"] is None
+
+    def test_sqlcmd_local_instance_does_not_generate_network_attempt(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.1.31",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[], network=None)
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="sqlcmd.exe",
+            command_line='sqlcmd.exe -S SQLEXPRESS -Q "SELECT * FROM INFORMATION_SCHEMA.TABLES"',
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="check local sql instance",
+            explicit_types={"process"},
+        )
+
+        assert engine.activity_generator.connections == []
 
 
 class TestStorylineCommandSideEffects:

@@ -10214,13 +10214,27 @@ class ActivityGenerator:
             return  # Cache hit — skip DNS emission
 
         # Determine DNS server IP from network visibility or use default. Forward
-        # proxies often use upstream resolvers for Internet destinations; this
-        # also keeps explicit-proxy DNS visible when the proxy and DC share a
-        # same-segment TAP that would not observe local resolver traffic.
+        # proxies use a sticky configured resolver policy instead of rotating
+        # evenly across unrelated public DNS providers.
         dns_ips = getattr(self, "_dns_server_ips", ["10.0.0.1"])
         src_system = getattr(self, "_ip_to_system", {}).get(src_ip)
         if src_system and "forward_proxy" in (src_system.roles or []) and not is_internal:
-            dns_server_ip = _get_rng().choice(["1.1.1.1", "8.8.8.8", "9.9.9.9"])
+            resolver_pool = [ip for ip in dns_ips if _is_private_ip(ip)] or [
+                "1.1.1.1",
+                "8.8.8.8",
+                "9.9.9.9",
+            ]
+            resolver_rng = random.Random(_stable_seed(f"proxy_dns_policy:{src_ip}"))
+            primary_index = resolver_rng.randrange(len(resolver_pool))
+            secondary_index = (
+                primary_index + 1 + resolver_rng.randrange(max(1, len(resolver_pool) - 1))
+            ) % len(resolver_pool)
+            primary_resolver = resolver_pool[primary_index]
+            secondary_resolver = resolver_pool[secondary_index]
+            resolver_roll = random.Random(
+                _stable_seed(f"proxy_dns_roll:{src_ip}:{hostname}:{int(ts_epoch // 300)}")
+            ).random()
+            dns_server_ip = primary_resolver if resolver_roll < 0.92 else secondary_resolver
         else:
             dns_server_ip = _get_rng().choice(dns_ips)
 
