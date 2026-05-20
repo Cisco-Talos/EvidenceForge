@@ -1234,6 +1234,130 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(json.dumps(record, separators=(",", ":")))
         return normalized
 
+    _LINUX_SHELL_FOREGROUND_EXES = {
+        "cargo",
+        "docker",
+        "emacs",
+        "gcc",
+        "gzip",
+        "kubectl",
+        "make",
+        "mysql",
+        "mysqldump",
+        "nano",
+        "npm",
+        "psql",
+        "python",
+        "python3",
+        "redis-cli",
+        "sqlite3",
+        "tar",
+        "vi",
+        "vim",
+        "zip",
+    }
+
+    @classmethod
+    def _is_linux_shell_foreground_create(cls, record: dict[str, Any]) -> bool:
+        """Return whether an eCAR row is a foreground Linux child of a shell."""
+        if record.get("object") != "PROCESS" or record.get("action") != "CREATE":
+            return False
+        props = record.get("properties") or {}
+        image = str(props.get("image_path") or "")
+        parent_image = str(props.get("parent_image_path") or "")
+        exe = image.rsplit("/", 1)[-1].lower()
+        parent_exe = parent_image.rsplit("/", 1)[-1].lower()
+        return exe in cls._LINUX_SHELL_FOREGROUND_EXES and parent_exe in {"bash", "sh", "zsh"}
+
+    @classmethod
+    def _normalize_linux_shell_foreground_order(cls, lines: list[str]) -> list[str]:
+        """Serialize foreground Linux commands created by the same visible shell."""
+        records: list[dict[str, Any] | None] = []
+        for line in lines:
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                records.append(None)
+
+        terminate_ms_by_object_id: dict[str, int] = {}
+        for record in records:
+            if (
+                record is not None
+                and record.get("object") == "PROCESS"
+                and record.get("action") == "TERMINATE"
+            ):
+                object_id = str(record.get("objectID") or "")
+                if object_id:
+                    terminate_ms_by_object_id[object_id] = max(
+                        terminate_ms_by_object_id.get(object_id, 0),
+                        cls._ecar_int(record.get("timestamp_ms"), 0),
+                    )
+
+        create_indexes_by_shell: dict[tuple[str, str, int, str], list[int]] = {}
+        for index, record in enumerate(records):
+            if record is None or not cls._is_linux_shell_foreground_create(record):
+                continue
+            shell_key = (
+                str(record.get("hostname") or ""),
+                str(record.get("principal") or ""),
+                cls._ecar_int(record.get("ppid")),
+                str(record.get("actorID") or ""),
+            )
+            create_indexes_by_shell.setdefault(shell_key, []).append(index)
+
+        shift_by_object_id: dict[str, int] = {}
+        for indexes in create_indexes_by_shell.values():
+            indexes.sort(
+                key=lambda index: (
+                    cls._ecar_int(records[index].get("timestamp_ms"), 0)
+                    if records[index] is not None
+                    else 0,
+                    cls._ecar_int(records[index].get("pid"), 0)
+                    if records[index] is not None
+                    else 0,
+                )
+            )
+            next_available_ms = 0
+            for index in indexes:
+                record = records[index]
+                if record is None:
+                    continue
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                object_id = str(record.get("objectID") or "")
+                if next_available_ms and timestamp_ms <= next_available_ms:
+                    seed_text = ":".join(
+                        [
+                            object_id,
+                            str(record.get("pid", "")),
+                            str(record.get("id", "")),
+                        ]
+                    )
+                    shifted_ms = next_available_ms + 50 + (sum(ord(ch) for ch in seed_text) % 950)
+                    record["timestamp_ms"] = shifted_ms
+                    if object_id:
+                        shift_by_object_id[object_id] = shifted_ms - timestamp_ms
+                    timestamp_ms = shifted_ms
+                if object_id and object_id in terminate_ms_by_object_id:
+                    next_available_ms = max(next_available_ms, terminate_ms_by_object_id[object_id])
+                else:
+                    next_available_ms = max(next_available_ms, timestamp_ms)
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            object_id = str(record.get("objectID") or "")
+            shift_ms = shift_by_object_id.get(object_id, 0)
+            if (
+                shift_ms
+                and record.get("object") == "PROCESS"
+                and record.get("action") == "TERMINATE"
+            ):
+                record["timestamp_ms"] = cls._ecar_int(record.get("timestamp_ms"), 0) + shift_ms
+            normalized.append(json.dumps(record, separators=(",", ":")))
+        return normalized
+
     @classmethod
     def _normalize_process_parent_order(cls, lines: list[str]) -> list[str]:
         """Move PROCESS/CREATE rows after visible parent PROCESS/CREATE rows."""
@@ -1456,6 +1580,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
+                    writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)

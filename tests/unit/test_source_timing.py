@@ -247,6 +247,79 @@ def test_ecar_process_create_normalization_preserves_canonical_order() -> None:
     assert "_canonical_ms" not in rows[1]
 
 
+def test_ecar_linux_shell_foreground_order_serializes_visible_commands() -> None:
+    """eCAR should not show one shell foreground command starting before the prior exits."""
+    editor_create = {
+        "timestamp_ms": 1_710_780_154_204,
+        "id": "event-editor-create",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "editor-process",
+        "actorID": "bash-process",
+        "pid": 785286,
+        "ppid": 33760,
+        "principal": "lina.nguyen",
+        "properties": {
+            "image_path": "/usr/bin/emacs",
+            "command_line": "emacs -nw deploy.sh",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    next_create = {
+        "timestamp_ms": 1_710_780_209_982,
+        "id": "event-npm-create",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "npm-process",
+        "actorID": "bash-process",
+        "pid": 785296,
+        "ppid": 33760,
+        "principal": "lina.nguyen",
+        "properties": {
+            "image_path": "/usr/bin/npm",
+            "command_line": "npm install",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    editor_terminate = {
+        "timestamp_ms": 1_710_780_284_534,
+        "id": "event-editor-terminate",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "editor-process",
+        "pid": 785286,
+        "principal": "lina.nguyen",
+        "properties": {"image_path": "/usr/bin/emacs"},
+    }
+    next_terminate = {
+        "timestamp_ms": 1_710_780_230_000,
+        "id": "event-npm-terminate",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "npm-process",
+        "pid": 785296,
+        "principal": "lina.nguyen",
+        "properties": {"image_path": "/usr/bin/npm"},
+    }
+
+    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
+        [
+            json.dumps(editor_create, separators=(",", ":")),
+            json.dumps(next_create, separators=(",", ":")),
+            json.dumps(editor_terminate, separators=(",", ":")),
+            json.dumps(next_terminate, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
+    assert rows[3]["timestamp_ms"] > rows[1]["timestamp_ms"]
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
