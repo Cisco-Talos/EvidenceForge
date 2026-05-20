@@ -114,6 +114,25 @@ def _ufw_block_ttl(src_ip: str) -> int:
     return max(32, initial - hops)
 
 
+def _linux_baseline_session_initiator(
+    user: str,
+    *,
+    rng: random.Random,
+) -> tuple[str, str, str]:
+    """Return a plausible PAM initiator for ambient logind session noise."""
+    if user == "root":
+        service = rng.choices(("cron", "sudo", "su"), weights=(72, 18, 10), k=1)[0]
+    else:
+        service = rng.choices(("login", "sudo", "cron"), weights=(55, 28, 17), k=1)[0]
+    app_name = "CRON" if service == "cron" else service
+    opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
+    message = (
+        f"pam_unix({service}:session): session opened for user "
+        f"{user}(uid={_linux_uid_for_user(user)}) by {opener}"
+    )
+    return app_name, service, message
+
+
 def _sample_lock_duration(rng: random.Random, kind: str) -> timedelta:
     """Return a human-shaped workstation lock duration with non-minute texture."""
     if kind == "lunch":
@@ -6000,20 +6019,53 @@ class BaselineMixin:
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
+                    pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
+                        user,
+                        rng=rng,
+                    )
+                    pam_pid = sys_pids.get("cron") if pam_service == "cron" else None
+                    if pam_pid is None:
+                        pam_pid = (
+                            rng.randint(650, 1100)
+                            if pam_service == "cron"
+                            else rng.randint(
+                                1200,
+                                9500,
+                            )
+                        )
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=ts - timedelta(milliseconds=rng.randint(180, 920)),
+                        app_name=pam_app,
+                        message=pam_open,
+                        pid=pam_pid,
+                        facility=10,
+                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="systemd-logind",
                         message=f"New session {sid} of user {user}.",
                         pid=sys_pids.get("logind", rng.randint(400, 800)),
+                        facility=10,
                     )
                     if rng.random() < 0.65:
+                        remove_time = ts + timedelta(seconds=rng.randint(120, 5400))
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + timedelta(seconds=rng.randint(120, 5400)),
+                            time=remove_time - timedelta(milliseconds=rng.randint(80, 650)),
+                            app_name=pam_app,
+                            message=f"pam_unix({pam_service}:session): session closed for user {user}",
+                            pid=pam_pid,
+                            facility=10,
+                        )
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=remove_time,
                             app_name="systemd-logind",
                             message=f"Removed session {sid}.",
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
+                            facility=10,
                         )
                 elif source_roll < 0.34 and sys_type == "server":
                     other_ips = [

@@ -37,6 +37,7 @@ from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
+    _linux_baseline_session_initiator,
     _materialize_registry_value_for_time,
     _module_matches_process,
     _sample_lock_duration,
@@ -86,6 +87,19 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
     assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
     assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
     assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
+
+
+def test_linux_baseline_session_initiator_creates_pam_session_message():
+    """Ambient logind session noise should have a concrete PAM initiator."""
+    app_name, service, message = _linux_baseline_session_initiator(
+        "admin",
+        rng=random.Random(7),
+    )
+
+    assert app_name in {"CRON", "login", "sudo"}
+    assert service in {"cron", "login", "sudo"}
+    assert "pam_unix(" in message
+    assert ":session): session opened for user admin(uid=" in message
 
 
 @pytest.fixture

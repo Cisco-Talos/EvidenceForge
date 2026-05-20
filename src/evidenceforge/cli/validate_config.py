@@ -2130,7 +2130,7 @@ def validate_config() -> ValidationResult:
                 )
             )
         else:
-            allowed_template_fields = {"token", "seq", "seq_hex", "edge", "ttl"}
+            allowed_template_fields = {"token", "seq", "seq_hex", "edge"}
             for idx, template in enumerate(templates):
                 if not isinstance(template, str) or "{token}" not in template:
                     result.issues.append(

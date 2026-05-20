@@ -131,16 +131,21 @@ def _sensor_clock_adjustment_us(hostname: str, ts: Any) -> int:
     return max(timing.clock_skew_min_us, min(timing.clock_skew_max_us, skew))
 
 
-def _sensor_path_delay_us(hostname: str, _original_uid: Any = None) -> int:
+def _sensor_path_delay_us(hostname: str, original_uid: Any = None) -> int:
     """Return stable capture timestamp delay for a sensor observation."""
     timing = network_sensor_observation_timing()
     seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}")
     # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
-    # add a small positive delay. Keep it stable by sensor so duplicate
-    # Core/DMZ observations look like two clocks on the same packet path, not
-    # per-flow random jitter that changes direction from record to record.
+    # add a small positive delay. Keep the baseline stable by sensor, then add
+    # bounded flow-local capture texture so repeated Core/DMZ observations do
+    # not collapse into a tiny set of exact offsets.
     width = timing.path_delay_max_us - timing.path_delay_min_us + 1
-    return timing.path_delay_min_us + (seed % max(1, width))
+    baseline = timing.path_delay_min_us + (seed % max(1, width))
+    if original_uid is None:
+        return baseline
+    jitter_seed = _stable_seed(f"zeek_sensor_path_delay_jitter:{hostname}:{original_uid}")
+    jitter = (jitter_seed % 12001) - 6000
+    return max(timing.path_delay_min_us, min(timing.path_delay_max_us, baseline + jitter))
 
 
 def _jitter_numeric_observation(
