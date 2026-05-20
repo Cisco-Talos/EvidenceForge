@@ -8249,6 +8249,14 @@ class ActivityGenerator:
             and http is None
         ):
             service = ""
+        if (
+            proto == "udp"
+            and conn_state in {"S0", "REJ", "OTH"}
+            and (orig_bytes or 0) == 0
+            and (resp_bytes or 0) == 0
+            and service != "dns"
+        ):
+            service = ""
 
         self._emit_dc_audit_for_kerberos_connection(
             src_ip=src_ip,

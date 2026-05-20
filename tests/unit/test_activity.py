@@ -3409,6 +3409,45 @@ class TestActivityGenerator:
         assert wfp_event.network.protocol == "udp"
         assert wfp_event.network.ip_proto == 17
 
+    def test_udp_kerberos_no_payload_failure_has_no_zeek_service(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Zeek should not analyzer-label zero-payload UDP port 88 attempts as krb."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc_system.ip: dc_system}
+        activity_gen._dc_systems = [dc_system]
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=dc_system.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="udp",
+            service="kerberos",
+            conn_state="S0",
+            source_system=test_system,
+            emit_dns=False,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert connection_event.network.conn_state == "S0"
+        assert connection_event.network.protocol == "udp"
+        assert connection_event.network.orig_bytes == 0
+        assert connection_event.network.resp_bytes == 0
+        assert connection_event.network.service == ""
+
     def test_generate_connection_skips_wfp_for_stale_process_pid(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
