@@ -2104,7 +2104,14 @@ class StorylineMixin:
                     looks_internal = target_lower.endswith(".local") or (
                         bool(ad_domain) and target_lower.endswith(f".{ad_domain.lower()}")
                     )
-                    if not looks_internal and not unresolved_single_label:
+                    if unresolved_single_label:
+                        if self._is_local_database_instance_target(target_hostname):
+                            target_hostname = None
+                        else:
+                            target_ip = self._unresolved_database_target_ip(target_hostname)
+                            if ad_domain:
+                                target_hostname = f"{target_hostname}.{ad_domain}"
+                    elif not looks_internal:
                         from evidenceforge.generation.activity.dns_registry import (
                             resolve_domain_ip,
                         )
@@ -4234,6 +4241,24 @@ class StorylineMixin:
         if target.lower() in {"", ".", "(local)", "localhost", "127.0.0.1", "::1"}:
             return None
         return target, port, "tds"
+
+    @staticmethod
+    def _is_local_database_instance_target(target: str) -> bool:
+        """Return true for SQL Server local-instance shorthands."""
+        lowered = target.strip().strip("[]").lower()
+        return lowered in {
+            "sqlexpress",
+            "mssqllocaldb",
+            "(localdb)",
+            ".\\sqlexpress",
+            ".\\mssqllocaldb",
+        } or lowered.startswith("(localdb)\\")
+
+    @staticmethod
+    def _unresolved_database_target_ip(target: str) -> str:
+        """Return a deterministic unrouted internal IP for unresolved DB hosts."""
+        last_octet = 10 + (_stable_seed(f"storyline_db_target:{target.lower()}") % 220)
+        return f"10.0.2.{last_octet}"
 
     def _system_for_ip(self, ip: str) -> System | None:
         """Return the scenario system with the given IP."""

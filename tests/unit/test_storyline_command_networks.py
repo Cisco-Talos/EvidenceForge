@@ -415,6 +415,48 @@ class TestStorylineScpCorrelation:
         assert conn["firewall"].action == "deny"
         assert conn["service"] is None
 
+    def test_sqlcmd_unresolved_host_generates_unrouted_failed_tcp_attempt(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.1.31",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine._ad_domain = "example.com"
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[], network=None)
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="sqlcmd.exe",
+            command_line='sqlcmd.exe -S sqlprod01 -d hr_records -Q "SELECT 1"',
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="check remote sql host",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[0]
+        assert conn["dst_ip"].startswith("10.0.2.")
+        assert conn["hostname"] == "sqlprod01.example.com"
+        assert conn["dst_port"] == 1433
+        assert conn["conn_state"] == "S0"
+        assert conn["firewall"].action == "deny"
+
     def test_sqlcmd_local_instance_does_not_generate_network_attempt(self):
         source = System(
             hostname="SRC",
