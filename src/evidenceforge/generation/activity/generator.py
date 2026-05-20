@@ -9970,6 +9970,7 @@ class ActivityGenerator:
         if singleton_service_pid is not None:
             return singleton_service_pid
 
+        self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
         pid = self.state_manager.create_process(
             system=system.hostname,
             parent_pid=parent_pid,
@@ -10079,6 +10080,18 @@ class ActivityGenerator:
         if running_proc is not None:
             process_name = running_proc.image
             username = running_proc.username or username
+            if (
+                running_proc.last_activity_time is not None
+                and time <= running_proc.last_activity_time
+            ):
+                delay_ms = 20 + (
+                    _stable_seed(
+                        "system_process_terminate_after_activity:"
+                        f"{system.hostname}:{pid}:{running_proc.last_activity_time.isoformat()}"
+                    )
+                    % 480
+                )
+                time = running_proc.last_activity_time + timedelta(milliseconds=delay_ms)
         process_logon_id = (
             running_proc.logon_id
             if running_proc is not None and running_proc.logon_id
@@ -10086,6 +10099,8 @@ class ActivityGenerator:
                 username, "0x3e7"
             )
         )
+        if parent_pid not in (0, pid):
+            self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
         sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(

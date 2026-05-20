@@ -9,6 +9,7 @@ from collections import Counter
 from evidenceforge.generation.activity.application_catalog import (
     _USER_BROWSER_AFFINITY,
     get_apps_for_persona,
+    get_child_processes,
     get_pe_metadata,
     is_system_type_allowed,
     load_catalog,
@@ -90,6 +91,25 @@ class TestCatalogLoading:
         assert "{{.Size}}" in rendered
         assert "{{{{" not in rendered
         assert "}}}}" not in rendered
+
+    def test_helper_child_processes_use_command_executable_image(self):
+        """Helper children should not retain the parent application's image path."""
+        zoom_children = get_child_processes("windows", "Zoom.exe")
+        cpt_host = next(child for child in zoom_children if "CptHost.exe" in child["command_line"])
+        assert cpt_host["image"].endswith(r"\CptHost.exe")
+        assert not cpt_host["image"].endswith(r"\Zoom.exe")
+
+        webex_children = get_child_processes("windows", "Webex.exe")
+        collab_host = next(
+            child for child in webex_children if "CiscoCollabHost.exe" in child["command_line"]
+        )
+        assert collab_host["image"].endswith(r"\CiscoCollabHost.exe")
+        assert not collab_host["image"].endswith(r"\Webex.exe")
+
+    def test_helper_child_process_pe_metadata_uses_child_original_filename(self):
+        """Child helper PE metadata should not leak the parent's OriginalFileName."""
+        assert get_pe_metadata("CptHost.exe")[4] == "CptHost.exe"
+        assert get_pe_metadata("CiscoCollabHost.exe")[4] == "CiscoCollabHost.exe"
 
 
 class TestPersonaFiltering:
