@@ -28,6 +28,7 @@ just formats the context fields into the syslog template.
 """
 
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +61,23 @@ _LOGIND_REMOVED_SESSION_RE = re.compile(
     r"\s+(?P<pid_token>\d+)\s+\S+\s+\S+)\s+Removed session )"
     r"(?P<session>\d+)(?P<suffix>\.)"
 )
+_RFC5424_LOGIND_NEW_SESSION_RE = re.compile(
+    r"^<(?P<pri>\d{1,3})>1\s+"
+    r"(?P<timestamp>\S+)\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"systemd-logind\s+"
+    r"(?P<pid>\S+)\s+-\s+-\s+"
+    r"New session (?P<session>\d+) of user (?P<user>[A-Za-z0-9_.-]+)\.$"
+)
+_RFC5424_PAM_OPEN_RE = re.compile(
+    r"^<(?P<pri>\d{1,3})>1\s+"
+    r"(?P<timestamp>\S+)\s+"
+    r"(?P<hostname>\S+)\s+"
+    r"(?P<app_name>\S+)\s+"
+    r"(?P<pid>\S+)\s+-\s+-\s+"
+    r"pam_unix\((?P<service>[^:]+):session\): session opened for user "
+    r"(?P<user>[A-Za-z0-9_.-]+)\(uid=(?P<uid>\d+)\)"
+)
 _KERNEL_UPTIME_RE = re.compile(
     r"(?P<prefix>\bkernel(?:\[\d+\])?(?::|\s+-\s+-\s+-)\s+\[)"
     r"(?P<uptime>\d+\.\d{6})"
@@ -72,6 +90,28 @@ _SSHD_PID_RFC5424_RE = re.compile(
     r"(?P<suffix>\s+-\s+-\s+)"
 )
 _MAX_LOGIND_SESSION_ID_DIGITS = 18
+_PAM_OPEN_VISIBLE_WINDOW = timedelta(seconds=20)
+
+
+def _parse_rfc5424_timestamp(value: str) -> Any:
+    """Parse an RFC5424 timestamp string into a datetime-like object."""
+    return coerce_syslog_datetime(value.replace("Z", "+00:00"))
+
+
+def _format_rfc5424_timestamp(value: Any) -> str:
+    """Format a datetime-like value as the project's RFC5424 UTC timestamp."""
+    return value.isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _fallback_linux_uid(user: str) -> int:
+    """Return a source-native fallback UID for a syslog-only PAM backfill."""
+    if user == "root":
+        return 0
+    if user == "ubuntu":
+        return 1000
+    if user == "admin":
+        return 1001
+    return 1000
 
 
 def _parse_logind_session_id(value: str) -> int | None:
@@ -280,6 +320,7 @@ class SyslogEmitter(HostMultiplexEmitter):
         if self.threaded:
             self.stop_thread()
         self._normalize_logind_session_ids()
+        self._backfill_missing_logind_pam_openers()
         self._normalize_kernel_uptime_stamps()
         self._normalize_sshd_child_pids()
         self.flush(force=True)
@@ -321,6 +362,25 @@ class SyslogEmitter(HostMultiplexEmitter):
                 with writer._lock:
                     writer.buffer = buffers_by_route[route_key]
 
+    def _replace_host_buffers_with_lines(
+        self,
+        rows: list[tuple[int, tuple[Any, ...], str, str]],
+        normalized: list[str],
+    ) -> None:
+        """Replace one default-target host buffer when normalization inserts rows."""
+        route_keys = list(dict.fromkeys(row[2] for row in rows))
+        if not route_keys:
+            return
+        for route_key in route_keys:
+            writer = self._writers.get(route_key)
+            if writer is not None:
+                with writer._lock:
+                    writer.buffer = []
+        primary_writer = self._writers.get(route_keys[0])
+        if primary_writer is not None:
+            with primary_writer._lock:
+                primary_writer.buffer = normalized
+
     def _normalize_logind_session_ids(self) -> None:
         """Rewrite visible logind New-session IDs in final rendered order.
 
@@ -340,6 +400,22 @@ class SyslogEmitter(HostMultiplexEmitter):
                     host_key,
                 )
                 self._replace_buffers_by_sorted_rows(rows, normalized)
+
+    def _backfill_missing_logind_pam_openers(self) -> None:
+        """Insert a native PAM opener for orphaned visible logind New-session rows."""
+        if self.output_target == OutputTarget.SOF_ELK:
+            return
+        with self._writers_lock:
+            for host_key, rows in self._sorted_lines_by_host().items():
+                if not rows:
+                    continue
+                lines = [line for _year, _sort_key, _route_key, line in rows]
+                normalized = self._backfill_missing_logind_pam_openers_for_lines(
+                    lines,
+                    host_key,
+                )
+                if len(normalized) != len(lines):
+                    self._replace_host_buffers_with_lines(rows, normalized)
 
     def _normalize_kernel_uptime_stamps(self) -> None:
         """Clamp visible kernel bracket uptime values to final syslog order."""
@@ -475,6 +551,86 @@ class SyslogEmitter(HostMultiplexEmitter):
                     )
             normalized.append(line)
         return normalized
+
+    @staticmethod
+    def _backfill_missing_logind_pam_openers_for_lines(
+        lines: list[str],
+        host_key: str,
+    ) -> list[str]:
+        """Return RFC5424 syslog lines with orphaned logind rows given PAM openers."""
+        uid_by_user: dict[str, int] = {}
+        open_times_by_user: dict[str, list[Any]] = {}
+        for line in lines:
+            pam_match = _RFC5424_PAM_OPEN_RE.match(line)
+            if pam_match is None:
+                continue
+            user = pam_match.group("user")
+            uid_by_user[user] = int(pam_match.group("uid"))
+            open_times_by_user.setdefault(user, []).append(
+                _parse_rfc5424_timestamp(pam_match.group("timestamp"))
+            )
+
+        normalized: list[str] = []
+        for index, line in enumerate(lines):
+            new_match = _RFC5424_LOGIND_NEW_SESSION_RE.match(line)
+            if new_match is None:
+                normalized.append(line)
+                continue
+            if _parse_logind_session_id(new_match.group("session")) is None:
+                normalized.append(line)
+                continue
+
+            user = new_match.group("user")
+            new_time = _parse_rfc5424_timestamp(new_match.group("timestamp"))
+            has_recent_open = any(
+                open_time <= new_time and new_time - open_time <= _PAM_OPEN_VISIBLE_WINDOW
+                for open_time in open_times_by_user.get(user, [])
+            )
+            if not has_recent_open:
+                normalized.append(
+                    SyslogEmitter._render_pam_open_backfill(
+                        host_key=host_key,
+                        hostname=new_match.group("hostname"),
+                        user=user,
+                        uid=uid_by_user.get(user, _fallback_linux_uid(user)),
+                        new_time=new_time,
+                        index=index,
+                    )
+                )
+            normalized.append(line)
+        return sorted(normalized, key=_rfc5424_syslog_sort_key)
+
+    @staticmethod
+    def _render_pam_open_backfill(
+        *,
+        host_key: str,
+        hostname: str,
+        user: str,
+        uid: int,
+        new_time: Any,
+        index: int,
+    ) -> str:
+        """Render a source-native PAM open row for a visible orphaned logind row."""
+        seed = _stable_seed(f"syslog_logind_pam_backfill:{host_key}:{user}:{index}")
+        if user == "root":
+            service = ("cron", "sudo", "su")[seed % 3]
+        else:
+            service = ("login", "sudo", "cron")[seed % 3]
+        app_name = "CRON" if service == "cron" else service
+        pid = 1200 + (seed % 8300)
+        lead = timedelta(milliseconds=1800 + (seed % 2200))
+        opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
+        message = (
+            f"pam_unix({service}:session): session opened for user {user}(uid={uid}) by {opener}"
+        )
+        return render_rfc5424_syslog(
+            pri=86,
+            timestamp=_format_rfc5424_timestamp(new_time - lead),
+            hostname=hostname,
+            app_name=app_name,
+            pid=pid,
+            message=message,
+        )
 
     @staticmethod
     def _normalize_kernel_uptime_stamps_for_lines(lines: list[str]) -> list[str]:

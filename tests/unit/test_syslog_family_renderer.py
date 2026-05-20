@@ -104,3 +104,38 @@ def test_normalize_sshd_child_pids_preserves_session_mapping_and_monotonicity() 
     assert pids[0] == pids[1]
     assert pids[2] == pids[3]
     assert pids[2] > pids[0]
+
+
+def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
+    lines = [
+        "<30>1 2024-03-18T12:00:00.000000Z app unattended-upgr 100 - - Packages checked",
+        "<86>1 2024-03-18T12:00:10.000000Z app systemd-logind 456 - - New session 42 of user ubuntu.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "app.example",
+    )
+
+    assert len(normalized) == 3
+    assert any(
+        "pam_unix(" in line and "session opened for user ubuntu(uid=1000)" in line
+        for line in normalized
+    )
+    pam_index = next(i for i, line in enumerate(normalized) if "pam_unix(" in line)
+    logind_index = next(i for i, line in enumerate(normalized) if "systemd-logind" in line)
+    assert pam_index < logind_index
+
+
+def test_backfill_missing_logind_pam_openers_preserves_existing_opener() -> None:
+    lines = [
+        "<86>1 2024-03-18T12:00:05.000000Z app login 1234 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)",
+        "<86>1 2024-03-18T12:00:10.000000Z app systemd-logind 456 - - New session 42 of user admin.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "app.example",
+    )
+
+    assert normalized == lines
