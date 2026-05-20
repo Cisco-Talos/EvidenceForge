@@ -194,6 +194,10 @@ class _FakeActivityGenerator:
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
         self.bash_commands: list[dict] = []
+        self.account_creates: list[dict] = []
+        self.password_resets: list[dict] = []
+        self.account_changes: list[dict] = []
+        self.sid_registry: dict[str, str] = {}
         self.bash_schedule_offset: timedelta | None = None
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> datetime | None:
@@ -248,6 +252,15 @@ class _FakeActivityGenerator:
 
     def generate_service_installed(self, **kwargs: Any) -> None:
         self.service_installs.append(kwargs)
+
+    def generate_account_created(self, **kwargs: Any) -> None:
+        self.account_creates.append(kwargs)
+
+    def generate_password_reset(self, **kwargs: Any) -> None:
+        self.password_resets.append(kwargs)
+
+    def generate_account_changed(self, **kwargs: Any) -> None:
+        self.account_changes.append(kwargs)
 
     def generate_dhcp_lease(self, **kwargs: Any) -> None:
         self.dhcp_leases.append(kwargs)
@@ -341,6 +354,53 @@ class TestStorylineScpCorrelation:
 
 
 class TestStorylineCommandSideEffects:
+    def test_explicit_account_created_after_net_user_password_add_emits_followups(self):
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        actor = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.local",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[dc], service_accounts=[])
+        )
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None, storyline_cluster_id=None)
+        engine._ensure_account_sid_tracking()
+        create_time = datetime(2024, 3, 18, 16, 14, 33, tzinfo=UTC)
+
+        engine._record_storyline_account_create_command(
+            dc,
+            "net user svc_mhsync MhsSvc!2024 /add /domain",
+        )
+        event = engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="account_created",
+                target_username="svc_mhsync",
+                target_sid="S-1-5-21-1-2-3-2906",
+            ),
+            actor=actor,
+            system=dc,
+            time=create_time,
+            activity="Domain account svc_mhsync created",
+            explicit_types={"account_created"},
+        )
+
+        assert event is not None
+        assert engine.activity_generator.account_creates[0]["target_sid"].endswith("-2906")
+        assert engine.activity_generator.password_resets[0]["target_username"] == "svc_mhsync"
+        account_change = engine.activity_generator.account_changes[0]
+        assert account_change["time"] > engine.activity_generator.password_resets[0]["time"]
+        assert account_change["password_last_set_to_event_time"] is True
+        assert account_change["old_uac_value"] == "0x15"
+        assert account_change["new_uac_value"] == "0x10"
+
     def test_compress_archive_exfil_emits_archive_sized_smb_download(self):
         source = System(
             hostname="WS-AJOHNSON-01",

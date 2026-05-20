@@ -65,6 +65,10 @@ logger = logging.getLogger(__name__)
 
 _MAX_EMBEDDED_COMMAND_B64_CHARS = 16_384
 _IPV4_LITERAL_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+_NET_USER_ADD_WITH_PASSWORD_RE = re.compile(
+    r"\bnet1?\s+user\s+(?P<username>\S+)\s+(?P<password>\S+)\s+/add\b",
+    re.IGNORECASE,
+)
 
 
 def _is_exfil_connection_spec(spec: Any) -> bool:
@@ -1103,6 +1107,90 @@ class StorylineMixin:
         return commands.get(self._scheduled_task_lookup_key(system, task_name), "")
 
     @staticmethod
+    def _account_create_lookup_key(system: System, username: str) -> tuple[str, str]:
+        """Return a normalized lookup key for account-creation command metadata."""
+        return (system.hostname.lower(), username.strip().strip('"').lower())
+
+    def _record_storyline_account_create_command(
+        self,
+        system: System,
+        command_line: str,
+    ) -> None:
+        """Remember password-bearing net user /add commands for explicit 4720 events."""
+        match = _NET_USER_ADD_WITH_PASSWORD_RE.search(command_line)
+        if match is None:
+            return
+        if not hasattr(self, "_storyline_account_create_commands"):
+            self._storyline_account_create_commands: dict[tuple[str, str], str] = {}
+        self._storyline_account_create_commands[
+            self._account_create_lookup_key(system, match.group("username"))
+        ] = command_line
+
+    def _recent_storyline_account_create_command(
+        self,
+        system: System,
+        username: str,
+    ) -> str:
+        """Return the recent net user /add command for an explicit account-created event."""
+        commands = getattr(self, "_storyline_account_create_commands", {})
+        return commands.get(self._account_create_lookup_key(system, username), "")
+
+    def _emit_storyline_account_password_followups(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+        target_username: str,
+        target_sid: str,
+    ) -> None:
+        """Emit password and account-attribute follow-ups for net user password adds."""
+        from evidenceforge.generation.activity.timing_profiles import get_timing_window
+
+        reset_window = get_timing_window(
+            "windows.account_password_reset_from_add",
+            default_min_ms=950,
+            default_max_ms=1800,
+            default_position="after",
+        )
+        change_window = get_timing_window(
+            "windows.account_attributes_from_add",
+            default_min_ms=1850,
+            default_max_ms=3200,
+            default_position="after",
+        )
+        rng = random.Random(
+            _stable_seed(
+                f"storyline_account_followups:{system.hostname}:"
+                f"{target_username}:{time.isoformat()}"
+            )
+        )
+        reset_time = time + timedelta(
+            milliseconds=rng.randint(reset_window.min_ms, reset_window.max_ms)
+        )
+        change_time = time + timedelta(
+            milliseconds=rng.randint(change_window.min_ms, change_window.max_ms)
+        )
+        self.activity_generator.generate_password_reset(
+            actor=actor,
+            system=system,
+            time=reset_time,
+            target_username=target_username,
+            target_sid=target_sid,
+        )
+        self.activity_generator.generate_account_changed(
+            actor=actor,
+            system=system,
+            time=change_time,
+            target_username=target_username,
+            target_sid=target_sid,
+            password_last_set_to_event_time=True,
+            old_uac_value="0x15",
+            new_uac_value="0x10",
+            user_account_control="\n\t\t\t%%2081",
+            primary_group_id="-",
+        )
+
+    @staticmethod
     def _service_lookup_key(system: System, service_name: str) -> tuple[str, str]:
         """Return a normalized lookup key for host-local service metadata."""
         return (system.hostname.lower(), service_name.lower())
@@ -1967,6 +2055,7 @@ class StorylineMixin:
             if task_name and "/create" in command_line.lower():
                 self._record_storyline_scheduled_task_command(system, task_name, command_line)
             self._record_storyline_service_create_command(system, command_line)
+            self._record_storyline_account_create_command(system, command_line)
 
             if output_file:
                 if os_category == "linux" and output_file.startswith("~/"):
@@ -2458,6 +2547,14 @@ class StorylineMixin:
             # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
             self.activity_generator.sid_registry[spec.target_username] = target_sid
+            if self._recent_storyline_account_create_command(dc, spec.target_username):
+                self._emit_storyline_account_password_followups(
+                    actor=actor,
+                    system=dc,
+                    time=time,
+                    target_username=spec.target_username,
+                    target_sid=target_sid,
+                )
             malicious_event["target_username"] = spec.target_username
 
         elif spec.type == "account_deleted":
