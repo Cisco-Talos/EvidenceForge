@@ -66,6 +66,26 @@ def test_linux_trivial_command_lifetime_is_subsecond():
     assert lifetime[1] <= 0.8
 
 
+def test_zeek_connection_observation_time_varies_submillisecond_suffixes():
+    """Burst flows should not preserve one generated microsecond suffix across tuples."""
+    base = datetime(2024, 3, 18, 14, 11, 22, 705641, tzinfo=UTC)
+
+    observed = [
+        _zeek_conn_observation_time(
+            base + timedelta(milliseconds=idx * 307),
+            "10.10.3.10",
+            32768 + idx,
+            "10.10.2.20",
+            port,
+            "tcp",
+            "",
+        )
+        for idx, port in enumerate([22, 80, 445, 443, 3306])
+    ]
+
+    assert len({ts.microsecond % 1000 for ts in observed}) > 1
+
+
 class TestApacheRawSyslogNormalization:
     def test_embedded_timestamp_regex_matches_apache_variants(self):
         """Apache raw syslog timestamp normalization should keep common timestamp variants."""
@@ -4351,6 +4371,78 @@ class TestActivityGenerator:
             "tcp",
             "ssh",
         )
+
+    def test_generate_connection_preserves_public_vip_for_inbound_web_host(
+        self,
+        state_manager,
+    ):
+        """Explicit public-hostname traffic should keep the caller's inbound VIP."""
+        captured = []
+
+        class _Visibility:
+            _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def is_connection_visible(_src_ip, _dst_ip):
+                return True
+
+        class _Dispatcher:
+            visibility_engine = _Visibility()
+
+            @staticmethod
+            def dispatch(event):
+                captured.append(event)
+
+            @staticmethod
+            def record_filtered_network_observation():
+                return None
+
+        generator = ActivityGenerator(state_manager, {}, dispatcher=_Dispatcher())
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+            public_hostnames=["ehr-portal.meridianhcs.com"],
+        )
+        generator._ip_to_system = {web_server.ip: web_server}
+        timestamp = datetime(2024, 3, 18, 13, 20, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        generator.generate_connection(
+            src_ip="185.70.41.45",
+            dst_ip="203.14.220.10",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="http",
+            duration=1.2,
+            orig_bytes=18432,
+            resp_bytes=912,
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="ehr-portal.meridianhcs.com",
+                uri="/ehr/admin/upload.php",
+                user_agent="Mozilla/5.0",
+                request_body_len=18432,
+                response_body_len=912,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/html"],
+            ),
+            hostname="ehr-portal.meridianhcs.com",
+            preserve_dst_ip=True,
+        )
+
+        event = captured[-1]
+        assert event.network.dst_ip == "203.14.220.10"
+        assert event.dst_host is not None
+        assert event.dst_host.hostname == "WEB-EXT-01"
+        assert "web_server" in event.dst_host.roles
+        assert event.http is not None
+        assert event.http.uri == "/ehr/admin/upload.php"
 
     def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters

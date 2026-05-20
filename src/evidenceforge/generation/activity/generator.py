@@ -73,7 +73,11 @@ from evidenceforge.generation.activity.proxy_user_agents import (
     pick_proxy_domain_user_agent,
     pick_proxy_user_agent,
 )
-from evidenceforge.generation.activity.timing_profiles import get_timing_window, sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import (
+    get_timing_window,
+    sample_packet_timing_delta,
+    sample_timing_delta,
+)
 from evidenceforge.generation.activity.windows_auth_realism import (
     failed_logon_config,
     min_unlock_gap_seconds,
@@ -957,7 +961,7 @@ def _zeek_conn_observation_time(
     service: str,
 ) -> datetime:
     """Return a deterministic canonical spacing time for same-scheduled flows."""
-    return base_time + sample_timing_delta(
+    return base_time + sample_packet_timing_delta(
         "network.connection_start_jitter",
         seed_parts=(
             src_ip,
@@ -2726,6 +2730,7 @@ class ActivityGenerator:
         ] = {}
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
+        self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
@@ -7341,7 +7346,14 @@ class ActivityGenerator:
             f"Generated process termination: {process_name} (PID: {pid}) on {system.hostname}"
         )
 
-    def _remember_kerberos_audit(self, source_ip: str, dc_hostname: str, time: datetime) -> None:
+    def _remember_kerberos_audit(
+        self,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        *,
+        source_port: int | None = None,
+    ) -> None:
         """Track recently emitted DC audit so connection-layer repair does not duplicate it."""
         if not source_ip or source_ip == "-" or not dc_hostname:
             return
@@ -7356,6 +7368,39 @@ class ActivityGenerator:
         recent = [seen for seen in cache.get(key, []) if abs(current - seen) <= 30.0]
         recent.append(current)
         cache[key] = recent[-12:]
+        if source_port is None or source_port <= 0:
+            return
+        tuple_cache = self._kerberos_audit_tuple_times
+        tuple_key = (
+            source_ip.removeprefix("::ffff:"),
+            dc_hostname.lower().rstrip("."),
+            source_port,
+        )
+        tuple_recent = [
+            seen for seen in tuple_cache.get(tuple_key, []) if abs(current - seen) <= 30.0
+        ]
+        tuple_recent.append(current)
+        tuple_cache[tuple_key] = tuple_recent[-16:]
+
+    def _kerberos_audit_count_for_connection(
+        self,
+        source_ip: str,
+        dc_hostname: str,
+        source_port: int,
+        time: datetime,
+        *,
+        window_seconds: float = 3.0,
+    ) -> int:
+        """Count nearby DC audit events sharing the visible Kerberos transport tuple."""
+        if not source_ip or source_ip == "-" or not dc_hostname or source_port <= 0:
+            return 0
+        key = (source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."), source_port)
+        current = time.timestamp()
+        return sum(
+            1
+            for seen in self._kerberos_audit_tuple_times.get(key, [])
+            if abs(current - seen) <= window_seconds
+        )
 
     def _has_recent_kerberos_audit(
         self,
@@ -7500,8 +7545,9 @@ class ActivityGenerator:
             emit_dns: If True, emit a DNS lookup for dst_ip before the connection
             ids: Optional IdsContext for IDS alert correlation (Snort emitter)
             http: Optional HttpContext override (skips auto-generation)
-            preserve_dst_ip: Preserve caller-supplied dst_ip when explicit proxy egress
-                renders an authored hostname+IP pair
+            preserve_dst_ip: Preserve caller-supplied dst_ip when the scenario or caller
+                intentionally pairs an authored hostname with a specific address. This keeps
+                static-NAT VIPs and explicit egress destinations from being re-resolved.
             packet_overhead_bytes: Optional IP packet overhead to preserve source-native
                 packet accounting for canonical firewall/syslog companion events.
 
@@ -7641,6 +7687,7 @@ class ActivityGenerator:
         if (
             hostname
             and hostname_was_explicit
+            and not preserve_dst_ip
             and not preserve_explicit_proxy_dst_ip
             and not (service == "dns" and proto in ("udp", "tcp") and dst_port == 53)
         ):
@@ -8592,6 +8639,34 @@ class ActivityGenerator:
             seed_parts=(src_ip, src_port, dst_ip, dst_port, proto, service or "", time),
         )
 
+        kerberos_audit_count = 0
+        if (
+            service == "kerberos"
+            and dst_port == 88
+            and proto in {"tcp", "udp"}
+            and kerberos_dc_hostname
+            and src_port is not None
+            and src_port > 0
+        ):
+            kerberos_audit_count = self._kerberos_audit_count_for_connection(
+                src_ip,
+                kerberos_dc_hostname,
+                src_port,
+                time,
+            )
+            if kerberos_audit_count > 0:
+                conn_state = "SF"
+                min_orig_bytes = kerberos_audit_count * rng.randint(260, 520)
+                min_resp_bytes = kerberos_audit_count * rng.randint(320, 760)
+                orig_bytes = max(orig_bytes or 0, min_orig_bytes)
+                resp_bytes = max(resp_bytes or 0, min_resp_bytes)
+                min_duration = kerberos_audit_count * rng.uniform(0.006, 0.022)
+                duration = max(duration or 0.0, min_duration)
+                if proto == "udp":
+                    history = "Dd" * kerberos_audit_count
+                elif not history or history in {"S", "Sr", "Cc"}:
+                    history = _tcp_success_history(rng)
+
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:
             orig_pkts = max(history.count("D"), math.ceil((orig_bytes or 0) / 1232))
@@ -8625,6 +8700,9 @@ class ActivityGenerator:
         else:
             orig_pkts = max(1, (orig_bytes // 1500)) if orig_bytes else 1
             resp_pkts = max(1, (resp_bytes // 1500)) if resp_bytes else 0
+        if kerberos_audit_count > 0:
+            orig_pkts = max(orig_pkts, kerberos_audit_count)
+            resp_pkts = max(resp_pkts, kerberos_audit_count)
 
         if packet_overhead_bytes is not None:
             overhead = packet_overhead_bytes
@@ -11870,7 +11948,12 @@ class ActivityGenerator:
             ),
         )
 
-        self._remember_kerberos_audit(source_ip, dc_hostname, time)
+        self._remember_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port=source_port,
+        )
         self.dispatcher.dispatch(event)
 
     def generate_kerberos_tgt_renewal(
@@ -11911,7 +11994,12 @@ class ActivityGenerator:
             ),
         )
 
-        self._remember_kerberos_audit(source_ip, dc_hostname, time)
+        self._remember_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port=source_port,
+        )
         self.dispatcher.dispatch(event)
 
     def generate_kerberos_service_ticket(
@@ -11962,7 +12050,12 @@ class ActivityGenerator:
             ),
         )
 
-        self._remember_kerberos_audit(source_ip, dc_hostname, time)
+        self._remember_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port=source_port,
+        )
         self.dispatcher.dispatch(event)
 
     def generate_ntlm_validation(
@@ -12596,6 +12689,12 @@ class ActivityGenerator:
                 source_port=source_port,
                 reporting_pid=reporting_pid,
             ),
+        )
+        self._remember_kerberos_audit(
+            source_ip,
+            dc_hostname,
+            time,
+            source_port=source_port,
         )
         self.dispatcher.dispatch(event)
 

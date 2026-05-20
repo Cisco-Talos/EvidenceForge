@@ -786,6 +786,76 @@ class TestInfrastructureDetection:
         assert infra["dc"] == ["10.0.0.5"]
         assert infra["dns"] == ["10.0.0.5"]  # DC also serves DNS
 
+    def test_kerberos_connection_packets_cover_nearby_dc_audits(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """One visible Kerberos tuple should account for all nearby KDC audit exchanges."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="WS-01",
+            ip="10.10.1.36",
+            os="Windows 10",
+            type="workstation",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        src_port = 50209
+
+        activity_gen.generate_kerberos_tgt(
+            username=f"{client.hostname}$",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts,
+            source_port=src_port,
+        )
+        activity_gen.generate_kerberos_service_ticket(
+            username=f"{client.hostname}$",
+            service_name=f"cifs/{dc.hostname}",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts + timedelta(milliseconds=200),
+            source_port=src_port,
+        )
+        activity_gen.generate_kerberos_preauth_failed(
+            username="expired.user",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts + timedelta(milliseconds=230),
+            source_port=src_port,
+        )
+        mock_emitters["zeek_conn"].reset_mock()
+
+        activity_gen.generate_connection(
+            src_ip=client.ip,
+            dst_ip=dc.ip,
+            time=ts + timedelta(milliseconds=250),
+            dst_port=88,
+            proto="udp",
+            service="kerberos",
+            duration=0.015,
+            orig_bytes=300,
+            resp_bytes=300,
+            src_port=src_port,
+            source_system=client,
+            conn_state="SF",
+            emit_dns=False,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_pkts >= 3
+        assert event.network.resp_pkts >= 3
+        assert event.network.history == "DdDdDd"
+
     def test_service_defaults_windows(self):
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
