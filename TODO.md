@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Analyze iteration-test assessment loops for repeated findings, plateau causes, and durable realism improvements — conclusion: specific hard defects usually stay fixed, but broad source-native model families recur and the automated eval is saturated/misaligned with current expert findings.
 - [x] Loop 163 blind-review deliberation summary — synthesized the four expert reports into `scenarios/iteration-test/blind-test/loop-163/deliberation.md` without introducing outside evidence.
 - [x] Extract license-neutral output target rendering and evaluation support from the SOF-ELK external parser branch while leaving parser pipeline code/docs/tests out of dev.
 - [x] Run the full slow-enabled pytest suite on the output-target extraction branch — `uv run pytest --include-slow --no-cov` passed with `3296 passed, 24 skipped`; no regressions or fixes were needed.
