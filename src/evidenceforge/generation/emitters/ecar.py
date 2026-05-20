@@ -1324,6 +1324,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     continue
                 timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
                 object_id = str(record.get("objectID") or "")
+                shift_ms = 0
                 if next_available_ms and timestamp_ms <= next_available_ms:
                     seed_text = ":".join(
                         [
@@ -1333,12 +1334,16 @@ class EcarEmitter(HostMultiplexEmitter):
                         ]
                     )
                     shifted_ms = next_available_ms + 50 + (sum(ord(ch) for ch in seed_text) % 950)
+                    shift_ms = shifted_ms - timestamp_ms
                     record["timestamp_ms"] = shifted_ms
                     if object_id:
-                        shift_by_object_id[object_id] = shifted_ms - timestamp_ms
+                        shift_by_object_id[object_id] = shift_ms
                     timestamp_ms = shifted_ms
                 if object_id and object_id in terminate_ms_by_object_id:
-                    next_available_ms = max(next_available_ms, terminate_ms_by_object_id[object_id])
+                    next_available_ms = max(
+                        next_available_ms,
+                        terminate_ms_by_object_id[object_id] + shift_ms,
+                    )
                 else:
                     next_available_ms = max(next_available_ms, timestamp_ms)
 

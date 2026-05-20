@@ -305,6 +305,34 @@ def test_ecar_linux_shell_foreground_order_serializes_visible_commands() -> None
         "principal": "lina.nguyen",
         "properties": {"image_path": "/usr/bin/npm"},
     }
+    third_create = {
+        "timestamp_ms": 1_710_780_235_000,
+        "id": "event-vim-create",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "vim-process",
+        "actorID": "bash-process",
+        "pid": 785297,
+        "ppid": 33760,
+        "principal": "lina.nguyen",
+        "properties": {
+            "image_path": "/usr/bin/vim",
+            "command_line": "vim config.yaml",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    third_terminate = {
+        "timestamp_ms": 1_710_780_245_000,
+        "id": "event-vim-terminate",
+        "hostname": "WS-LNGUYEN-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "vim-process",
+        "pid": 785297,
+        "principal": "lina.nguyen",
+        "properties": {"image_path": "/usr/bin/vim"},
+    }
 
     normalized = EcarEmitter._normalize_linux_shell_foreground_order(
         [
@@ -312,12 +340,16 @@ def test_ecar_linux_shell_foreground_order_serializes_visible_commands() -> None
             json.dumps(next_create, separators=(",", ":")),
             json.dumps(editor_terminate, separators=(",", ":")),
             json.dumps(next_terminate, separators=(",", ":")),
+            json.dumps(third_create, separators=(",", ":")),
+            json.dumps(third_terminate, separators=(",", ":")),
         ]
     )
     rows = [json.loads(line) for line in normalized]
 
     assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
     assert rows[3]["timestamp_ms"] > rows[1]["timestamp_ms"]
+    assert rows[4]["timestamp_ms"] > rows[3]["timestamp_ms"]
+    assert rows[5]["timestamp_ms"] > rows[4]["timestamp_ms"]
 
 
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
