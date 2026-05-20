@@ -2816,6 +2816,46 @@ class TestActivityGenerator:
         assert "workstation_unlocked" not in emitted_types
         assert "logon" not in emitted_types
 
+    def test_unlock_reauth_ecar_login_uses_child_session_object(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """eCAR Type 7 re-auth should not reuse the durable session object lifecycle."""
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
+        start = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            start,
+            logon_type=2,
+            source_ip="-",
+        )
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            start + timedelta(minutes=5),
+            logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            start + timedelta(minutes=7),
+            logon_id,
+        )
+
+        ecar_logons = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+
+        assert [event.auth.logon_type for event in ecar_logons] == [2, 7]
+        assert ecar_logons[0].edr.object_id
+        assert ecar_logons[1].edr.object_id
+        assert ecar_logons[1].edr.object_id != ecar_logons[0].edr.object_id
+        assert ecar_logons[1].edr.actor_id == ecar_logons[0].edr.object_id
+
     def test_workstation_lock_unlock_reject_network_session_luid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

@@ -5052,6 +5052,18 @@ class ActivityGenerator:
                 src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
+        session_actor_id = ""
+        if logon_type == 7:
+            # Type 7 is a workstation unlock re-auth against an existing LUID.
+            # eCAR object lifecycles should still be single-login, so model the
+            # re-auth as a child observation linked to the durable session.
+            session_actor_id = session_obj_id
+            session_obj_id = str(
+                uuid.uuid5(
+                    uuid.NAMESPACE_DNS,
+                    f"ecar_unlock_reauth:{system.hostname}:{logon_id}:{time.isoformat()}",
+                )
+            )
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -5076,7 +5088,7 @@ class ActivityGenerator:
                 privilege_list=privilege_list,
                 reporting_pid=self._get_system_pid(system.hostname, "lsass", 0x2E0),
             ),
-            edr=EdrContext(object_id=session_obj_id),
+            edr=EdrContext(object_id=session_obj_id, actor_id=session_actor_id),
         )
 
         # Attach SyslogContext for Linux SSH sessions only (not network/interactive)
