@@ -3,6 +3,7 @@
 
 """Unit tests for new Sysmon events: 3, 7, 11, 12/13, 22."""
 
+import re
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -709,6 +710,53 @@ class TestRenderEvent11:
         assert "payload.exe" in content
         assert "powershell.exe" in content
         assert '<Data Name="User">CORP\\admin</Data>' in content
+
+    def test_file_creation_utc_time_follows_visible_process_create(self, emitter):
+        """Event 11 CreationUtcTime should move with final TimeCreated ordering repairs."""
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process = ProcessContext(
+            pid=4567,
+            parent_pid=1,
+            image=r"C:\Windows\System32\powershell.exe",
+            command_line="powershell Compress-Archive",
+            username="admin",
+            start_time=start_time,
+        )
+        process_event = SecurityEvent(
+            timestamp=start_time,
+            event_type="process_create",
+            src_host=_win_host(),
+            process=process,
+            auth=AuthContext(username="admin"),
+        )
+        file_event = SecurityEvent(
+            timestamp=start_time,
+            event_type="file_create",
+            src_host=_win_host(),
+            process=process,
+            auth=AuthContext(username="admin"),
+            file=FileContext(path=r"C:\Users\admin\AppData\Local\Temp\cache.zip", action="create"),
+        )
+
+        emitter.emit(process_event)
+        emitter.emit(file_event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        event1 = content.split("<EventID>1</EventID>", 1)[1].split("</Event>", 1)[0]
+        event11 = content.split("<EventID>11</EventID>", 1)[1].split("</Event>", 1)[0]
+        event1_match = re.search(r'SystemTime="([^"]+)"', event1)
+        creation_match = re.search(r'<Data Name="CreationUtcTime">([^<]+)</Data>', event11)
+        assert event1_match is not None
+        assert creation_match is not None
+
+        event1_time = datetime.fromisoformat(event1_match.group(1).replace("Z", "+00:00"))
+        creation_time = datetime.strptime(
+            creation_match.group(1),
+            "%Y-%m-%d %H:%M:%S.%f",
+        ).replace(tzinfo=UTC)
+        assert creation_time >= event1_time
 
 
 class TestRenderEventRegistry:

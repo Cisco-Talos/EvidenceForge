@@ -120,7 +120,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             net.protocol == "tcp"
             and net.dst_port == 443
             and net.conn_state == "SF"
-            and event.ssl is not None
+            and (event.ssl is not None or self._render_service_name(net.service) == "ssl")
         ):
             tls_min_window = get_timing_window(
                 "network.tls_completed_min_duration",
@@ -134,6 +134,11 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 duration is None
                 or duration < min_duration
                 or abs(duration - min_duration) < 0.000001
+                or (
+                    event.ssl is None
+                    and self._render_service_name(net.service) == "ssl"
+                    and abs(duration - 1.2) < 0.000001
+                )
             ):
                 duration = _tls_completed_duration_floor(
                     event,

@@ -585,6 +585,7 @@ class TestFilesUidCorrelation:
         assert rows[0]["sha256"] != "a" * 40
         assert rows[0]["md5"] == rows[1]["md5"]
         assert rows[0]["sha1"] == rows[1]["sha1"]
+        assert rows[0]["analyzers"] == ["X509", "MD5", "SHA1", "SHA256"]
 
     def test_certificate_file_sizes_vary_by_certificate_identity(self):
         """Certificate files should not collapse into a few fixed byte buckets."""

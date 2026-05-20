@@ -61,8 +61,20 @@ def test_timing_profiles_load_default_relationship():
         default_max_ms=0,
         default_position="after",
     )
+    security_terminate_window = get_timing_window(
+        "source.windows_security_process_terminate",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
     sysmon_process_window = get_timing_window(
         "source.sysmon_process_create",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    sysmon_terminate_window = get_timing_window(
+        "source.sysmon_process_terminate",
         default_min_ms=0,
         default_max_ms=0,
         default_position="after",
@@ -74,7 +86,9 @@ def test_timing_profiles_load_default_relationship():
         default_position="after",
     )
     assert security_process_window.max_ms >= 4000
+    assert 0 < security_terminate_window.min_ms < security_terminate_window.max_ms
     assert sysmon_process_window.max_ms >= 2000
+    assert 0 < sysmon_terminate_window.min_ms < sysmon_terminate_window.max_ms
     assert ecar_process_window.max_ms >= 900
     security_gap_window = get_timing_window(
         "source.windows_security_after_sysmon_process_create_gap",
@@ -254,25 +268,42 @@ def test_windows_process_source_timing_respects_visible_parent_create():
         for key, value in source_times.items()
         if key.startswith("source.windows_security_process_create|")
     )
+    ecar_time = next(
+        value
+        for key, value in source_times.items()
+        if key.startswith("source.ecar_process_create|")
+    )
 
     assert sysmon_time >= parent_visible_time + timedelta(milliseconds=1)
-    expected_gap = sample_timing_delta(
-        "source.windows_security_after_sysmon_process_create_gap",
-        seed_parts=("WS-01", 1200, event_time),
-    )
-    assert security_time >= sysmon_time + expected_gap
+    assert security_time >= parent_visible_time + timedelta(milliseconds=1)
+    assert ecar_time >= sysmon_time
 
-    sampled_gaps = {
-        sample_timing_delta(
-            "source.windows_security_after_sysmon_process_create_gap",
-            seed_parts=("WS-01", pid, event_time),
+    order_deltas: list[float] = []
+    for pid in range(1200, 1250):
+        sampled_event = replace(
+            event,
+            process=replace(event.process, pid=pid),
+            source_timing=None,
         )
-        for pid in range(1200, 1210)
-    }
-    assert len(sampled_gaps) > 1
-    assert all(
-        timedelta(milliseconds=250) <= gap <= timedelta(milliseconds=1850) for gap in sampled_gaps
-    )
+        sampled_generator = object.__new__(ActivityGenerator)
+        sampled_generator._source_timing_planner = SourceTimingPlanner()
+        sampled_generator._process_source_create_times = {}
+        sampled_generator._plan_process_source_create_times(sampled_event)
+        assert sampled_event.source_timing is not None
+        sampled_source_times = sampled_event.source_timing.source_times
+        sampled_sysmon_time = next(
+            value
+            for key, value in sampled_source_times.items()
+            if key.startswith("source.sysmon_process_create|")
+        )
+        sampled_security_time = next(
+            value
+            for key, value in sampled_source_times.items()
+            if key.startswith("source.windows_security_process_create|")
+        )
+        order_deltas.append((sampled_security_time - sampled_sysmon_time).total_seconds())
+    assert any(delta < 0 for delta in order_deltas)
+    assert any(delta > 0 for delta in order_deltas)
 
     delayed_event = replace(event, timestamp=event.timestamp + timedelta(seconds=3))
     delayed_sysmon_time = generator._source_timing_planner.source_time(

@@ -741,21 +741,11 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
-        sysmon_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=process_start_time,
-        )
-        security_after_sysmon_gap = sample_timing_delta(
-            "source.windows_security_after_sysmon_process_create_gap",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
-        )
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=sysmon_time + security_after_sysmon_gap,
+            not_before=process_start_time,
         )
 
         event_data = {
@@ -792,10 +782,17 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
             return
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_terminate",
+            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
+            not_before=event.timestamp,
+        )
 
         event_data = {
             "EventID": 4689,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -818,21 +815,11 @@ class WindowsEventEmitter(LogEmitter):
         auth = event.auth
         host = self._get_host(event)
         process_start_time = proc.start_time or event.timestamp
-        sysmon_time = _SOURCE_TIMING.source_time(
-            event,
-            "source.sysmon_process_create",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=process_start_time,
-        )
-        security_after_sysmon_gap = sample_timing_delta(
-            "source.windows_security_after_sysmon_process_create_gap",
-            seed_parts=(host.hostname, proc.pid, process_start_time),
-        )
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=sysmon_time + security_after_sysmon_gap,
+            not_before=process_start_time,
         )
 
         event_data = {

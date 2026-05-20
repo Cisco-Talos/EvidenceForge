@@ -119,7 +119,7 @@ class ZeekFilesEmitter(SensorMultiplexEmitter):
                 "source": "SSL",
                 "depth": depth,
                 "filename": None,
-                "analyzers": ["X509"],
+                "analyzers": ["X509", "MD5", "SHA1", "SHA256"],
                 "mime_type": "application/pkix-cert",
                 "duration": None,
                 "local_orig": _is_private_ip(net.dst_ip),

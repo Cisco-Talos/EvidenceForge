@@ -866,11 +866,19 @@ class EcarEmitter(HostMultiplexEmitter):
         host = event.src_host
         hostname = host.hostname if host is not None else ""
         start_time = proc.start_time or event.timestamp
+        not_before = start_time
+        if host is not None and host.os_category == "windows":
+            not_before = _SOURCE_TIMING.source_time(
+                event,
+                "source.sysmon_process_create",
+                seed_parts=(hostname, proc.pid, start_time),
+                not_before=start_time,
+            )
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_process_create",
             seed_parts=(hostname, proc.pid, start_time),
-            not_before=start_time,
+            not_before=not_before,
         )
 
     def _after_process_create_timestamp(
@@ -1586,9 +1594,11 @@ class EcarEmitter(HostMultiplexEmitter):
             for writer in writers:
                 with writer._lock:
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
+                    writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
+                    writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)

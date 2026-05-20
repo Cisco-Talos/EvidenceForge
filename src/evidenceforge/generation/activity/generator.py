@@ -7162,22 +7162,21 @@ class ActivityGenerator:
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
             )
-            security_after_sysmon_gap = sample_timing_delta(
-                "source.windows_security_after_sysmon_process_create_gap",
-                seed_parts=(host.hostname, proc.pid, process_start_time),
-            )
             self._source_timing_planner.source_time(
                 event,
                 "source.windows_security_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
-                not_before=sysmon_time + security_after_sysmon_gap,
+                not_before=sysmon_not_before,
             )
+            ecar_not_before = sysmon_time
+        else:
+            ecar_not_before = process_start_time
 
         self._source_timing_planner.source_time(
             event,
             "source.ecar_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=process_start_time,
+            not_before=ecar_not_before,
         )
 
     def _emit_process_command_network_effects(

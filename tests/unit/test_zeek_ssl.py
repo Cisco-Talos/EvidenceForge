@@ -280,7 +280,7 @@ class TestSslUidCorrelation:
             assert ssl_data["cert_chain_fuids"] == [x509_data["id"]]
             assert files_data["fuid"] == x509_data["id"]
             assert files_data["source"] == "SSL"
-            assert files_data["analyzers"] == ["X509"]
+            assert files_data["analyzers"] == ["X509", "MD5", "SHA1", "SHA256"]
             assert files_data["sha1"] == x509_data["fingerprint"]
             assert files_data["sha256"] != x509_data["fingerprint"]
             assert files_data["md5"] != files_data["sha256"][:32]
@@ -1011,6 +1011,38 @@ class TestSslUidCorrelation:
 
         assert conn_row["duration"] > 0.8
         assert conn_row["duration"] != 0.8
+
+    def test_tls_conn_duration_floor_applies_to_ssl_service_without_ssl_context(self):
+        """Completed ssl service rows should not flatline at the minimum TLS duration."""
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir / "conn.json")
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CServiceOnlyTLS123",
+                    conn_state="SF",
+                    duration=1.2,
+                ),
+            )
+
+            conn_emitter.emit(event)
+            conn_emitter.close()
+
+            conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
+
+        assert conn_row["duration"] > 1.2
+        assert conn_row["duration"] != 1.2
 
     def test_x509_rejects_partial_handshake(self):
         """x509.log should not emit certificates for incomplete TLS handshakes."""

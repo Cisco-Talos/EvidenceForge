@@ -995,13 +995,12 @@ class SysmonEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = event.src_host
-        render_time = event.timestamp + self._source_offset(
-            "process_terminate",
-            host.hostname,
-            proc.pid,
-            event.timestamp,
-            minimum_ms=12,
-            maximum_ms=180,
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.sysmon_process_terminate",
+            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
+            not_before=event.timestamp,
         )
 
         utc_time = _format_sysmon_utc_time(render_time)
@@ -1975,7 +1974,10 @@ class SysmonEventEmitter(LogEmitter):
                 continue
             create_time = process_create_times.get((computer, str(guid)))
             if create_time is not None and ts <= create_time:
-                event["TimeCreated"] = create_time + timedelta(milliseconds=1)
+                shifted_time = create_time + timedelta(milliseconds=1)
+                event["TimeCreated"] = shifted_time
+                if event_id == 11:
+                    event["CreationUtcTime"] = _format_sysmon_utc_time(shifted_time)
 
     def _sync_utc_time_fields(self) -> None:
         """Keep Sysmon EventData UtcTime aligned with final TimeCreated values."""

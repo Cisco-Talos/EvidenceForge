@@ -86,6 +86,11 @@ relationships:
     position: after
     min_ms: 80
     max_ms: 4200
+  source.windows_security_process_terminate:
+    class: source_latency
+    position: after
+    min_ms: 15
+    max_ms: 420
   source.windows_security_after_sysmon_process_create_gap:
     class: source_latency
     position: after
@@ -96,6 +101,11 @@ relationships:
     position: after
     min_ms: 18
     max_ms: 2400
+  source.sysmon_process_terminate:
+    class: source_latency
+    position: after
+    min_ms: 12
+    max_ms: 520
   source.ecar_process_create:
     class: source_latency
     position: after

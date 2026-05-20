@@ -622,6 +622,55 @@ class TestChronologicalOutput:
         )
         assert terminate_ts > module_ts
 
+    def test_close_rewrites_linux_pids_after_canonical_create_ordering(self, tmp_path, ts):
+        """Linux PID morphology should follow final rendered process-create order."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "proc-a",
+                "pid": 5000,
+                "image_path": "/usr/bin/parent",
+                "_canonical_ms": int(ts.replace(second=1).timestamp() * 1000),
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "proc-b",
+                "pid": 1000,
+                "image_path": "/usr/bin/child",
+                "_canonical_ms": int(ts.replace(second=3).timestamp() * 1000),
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "linux01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        creates = sorted(
+            (row for row in rows if row["object"] == "PROCESS" and row["action"] == "CREATE"),
+            key=lambda row: row["timestamp_ms"],
+        )
+        assert [row["pid"] for row in creates] == sorted(row["pid"] for row in creates)
+        assert creates[1]["pid"] > 5000
+
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
