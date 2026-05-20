@@ -1828,6 +1828,7 @@ class SysmonEventEmitter(LogEmitter):
             self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
+        self._sync_utc_time_fields()
         self._sync_process_guids_to_event1_times()
 
         for event in self._event_dicts:
@@ -1957,12 +1958,23 @@ class SysmonEventEmitter(LogEmitter):
                 continue
             ts = event.get("TimeCreated")
             computer = str(event.get("Computer", ""))
-            guid = event.get("ProcessGuid") or event.get("SourceProcessGuid")
+            guid = (
+                event.get("ProcessGuid")
+                or event.get("SourceProcessGuid")
+                or event.get("SourceProcessGUID")
+            )
             if not isinstance(ts, datetime) or not guid:
                 continue
             create_time = process_create_times.get((computer, str(guid)))
             if create_time is not None and ts <= create_time:
                 event["TimeCreated"] = create_time + timedelta(milliseconds=1)
+
+    def _sync_utc_time_fields(self) -> None:
+        """Keep Sysmon EventData UtcTime aligned with final TimeCreated values."""
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if "UtcTime" in event and isinstance(ts, datetime):
+                event["UtcTime"] = _format_sysmon_utc_time(ts)
 
     def _shift_terminations_after_followons(self) -> None:
         """Prevent Event 5 from preceding visible same-process follow-on telemetry."""

@@ -304,6 +304,11 @@ class _FakeActivityGenerator:
         self.account_creates: list[dict] = []
         self.password_resets: list[dict] = []
         self.account_changes: list[dict] = []
+        self.group_memberships: list[dict] = []
+        self.log_clears: list[dict] = []
+        self.process_accesses: list[dict] = []
+        self.remote_threads: list[dict] = []
+        self.scheduled_tasks: list[dict] = []
         self.sid_registry: dict[str, str] = {}
         self.bash_schedule_offset: timedelta | None = None
 
@@ -363,6 +368,9 @@ class _FakeActivityGenerator:
     def generate_service_installed(self, **kwargs: Any) -> None:
         self.service_installs.append(kwargs)
 
+    def generate_scheduled_task(self, **kwargs: Any) -> None:
+        self.scheduled_tasks.append(kwargs)
+
     def generate_account_created(self, **kwargs: Any) -> None:
         self.account_creates.append(kwargs)
 
@@ -371,6 +379,20 @@ class _FakeActivityGenerator:
 
     def generate_account_changed(self, **kwargs: Any) -> None:
         self.account_changes.append(kwargs)
+
+    def generate_group_membership_change(self, **kwargs: Any) -> None:
+        self.group_memberships.append(kwargs)
+
+    def generate_log_cleared(self, **kwargs: Any) -> None:
+        self.log_clears.append(kwargs)
+
+    def generate_process_access(self, **kwargs: Any) -> bool:
+        self.process_accesses.append(kwargs)
+        return True
+
+    def generate_create_remote_thread(self, **kwargs: Any) -> bool:
+        self.remote_threads.append(kwargs)
+        return True
 
     def generate_dhcp_lease(self, **kwargs: Any) -> None:
         self.dhcp_leases.append(kwargs)
@@ -385,6 +407,7 @@ class _FakeActivityGenerator:
 class _FakeStateManager:
     def __init__(self) -> None:
         self.sessions: dict[str, SimpleNamespace] = {}
+        self.processes: dict[tuple[str, int], SimpleNamespace] = {}
 
     def set_current_time(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -399,7 +422,7 @@ class _FakeStateManager:
         return []
 
     def get_process(self, hostname: str, pid: int) -> SimpleNamespace | None:
-        return None
+        return self.processes.get((hostname, pid))
 
     def create_process(self, *args: Any, **kwargs: Any) -> int:
         return 6505
@@ -1075,6 +1098,106 @@ class TestStorylineCommandSideEffects:
         )
 
         assert engine.activity_generator.service_installs[0]["service_start_type"] == "2"
+
+    def test_storyline_effects_wait_for_visible_process_create(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine._ensure_account_sid_tracking()
+        base_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        visible_process_time = base_time + timedelta(seconds=4)
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\sc.exe",
+                command_line=(
+                    r"sc.exe create DeviceSyncSvc binPath= "
+                    r"C:\Windows\System32\DeviceSyncSvc.exe obj= LocalSystem start= auto"
+                ),
+            ),
+            actor=actor,
+            system=source,
+            time=base_time,
+            activity="create service",
+            explicit_types={"process", "service_installed"},
+        )
+        engine.state_manager.processes[(source.hostname, 4242)] = SimpleNamespace(
+            username=actor.username,
+            logon_id="0xabc",
+            start_time=base_time,
+        )
+        engine.activity_generator.process_source_times[(source.hostname, 4242)] = (
+            visible_process_time
+        )
+        effect_time = base_time + timedelta(seconds=2)
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="service_installed",
+                service_name="DeviceSyncSvc",
+                service_file_name=r"C:\Windows\System32\DeviceSyncSvc.exe",
+                service_account="LocalSystem",
+            ),
+            actor=actor,
+            system=source,
+            time=effect_time,
+            activity="service audit",
+            explicit_types={"process", "service_installed"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="group_member_added",
+                scope="domain",
+                group_name="Domain Admins",
+                member_name="svc_mhsync",
+            ),
+            actor=actor,
+            system=source,
+            time=effect_time,
+            activity="add domain admin",
+            explicit_types={"group_member_added"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(type="log_cleared"),
+            actor=actor,
+            system=source,
+            time=effect_time,
+            activity="clear security log",
+            explicit_types={"log_cleared"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process_access",
+                target_process="lsass.exe",
+                access_mask="0x1010",
+            ),
+            actor=actor,
+            system=source,
+            time=effect_time,
+            activity="read lsass",
+            explicit_types={"process_access"},
+        )
+
+        assert engine.activity_generator.service_installs[0]["time"] > visible_process_time
+        assert engine.activity_generator.group_memberships[0]["time"] > visible_process_time
+        assert engine.activity_generator.log_clears[0]["time"] > visible_process_time
+        assert engine.activity_generator.process_accesses[0]["time"] > visible_process_time
 
     def test_process_url_network_reuses_storyline_authored_domain_ip(self):
         source = System(

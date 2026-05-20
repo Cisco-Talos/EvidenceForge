@@ -121,19 +121,33 @@ def _ecar_non_windows_session_type(event: SecurityEvent) -> str:
     if event.event_type == "ssh_session":
         return "ssh"
     if event.event_type == "failed_logon":
-        source_ip = str(getattr(event.auth, "source_ip", "") or "")
+        source_ip = _ecar_session_source_ip(event)
         if source_ip and source_ip != "-":
             return "remote"
     logon_type = getattr(event.auth, "logon_type", 0)
-    if logon_type == 10:
-        return "ssh"
     if logon_type == 5:
         return "service"
+    source_ip = _ecar_session_source_ip(event)
+    if source_ip == "-":
+        return "local"
+    if logon_type == 10:
+        return "ssh"
     if logon_type == 3:
         return "remote"
     if logon_type in {2, 7, 11}:
         return "local"
     return "session"
+
+
+def _ecar_session_source_ip(event: SecurityEvent) -> str:
+    """Return a source IP suitable for endpoint USER_SESSION telemetry."""
+    source_ip = str(getattr(event.auth, "source_ip", "") or "")
+    if not source_ip or source_ip == "-":
+        return "-"
+    host = event.dst_host
+    if host is not None and source_ip == getattr(host, "ip", ""):
+        return "-"
+    return source_ip
 
 
 def _ecar_probability_enabled(key: str, probability: float) -> bool:
@@ -289,7 +303,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "object": "USER_SESSION",
             "action": "LOGIN",
             "principal": event.auth.username,
-            "src_ip": event.auth.source_ip,
+            "src_ip": _ecar_session_source_ip(event),
             "outcome": "success",
             "_host_fqdn": self._host_fqdn(host),
         }
@@ -311,8 +325,9 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._host_fqdn(host),
         }
-        if event.auth.source_ip and event.auth.source_ip != "-":
-            event_data["src_ip"] = event.auth.source_ip
+        source_ip = _ecar_session_source_ip(event)
+        if source_ip != "-":
+            event_data["src_ip"] = source_ip
         if event.auth.source_port:
             event_data["src_port"] = event.auth.source_port
         if getattr(host, "os_category", "") != "windows":
@@ -329,7 +344,7 @@ class EcarEmitter(HostMultiplexEmitter):
             "object": "USER_SESSION",
             "action": "LOGIN",
             "principal": event.auth.username,
-            "src_ip": event.auth.source_ip,
+            "src_ip": _ecar_session_source_ip(event),
             "outcome": "failure",
             "session_lifecycle": "attempt_failed",
             "failure_reason": _ecar_failed_logon_reason(

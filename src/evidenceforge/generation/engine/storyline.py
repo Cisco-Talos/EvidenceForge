@@ -1464,6 +1464,24 @@ class StorylineMixin:
             return network_time
         return process_source_time + timedelta(milliseconds=rng.randint(120, 700))
 
+    def _clamp_after_recent_storyline_process_source_create(
+        self,
+        *,
+        system: System | None,
+        event_time: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Keep storyline effects after the last visible source process creation."""
+        if system is None:
+            return event_time
+        pid, _image = self._last_storyline_process_for_system(system)
+        return self._clamp_after_storyline_process_source_create(
+            system=system,
+            pid=pid,
+            network_time=event_time,
+            rng=rng,
+        )
+
     def _recent_storyline_process_logon_id(
         self,
         actor: User,
@@ -2622,10 +2640,15 @@ class StorylineMixin:
                 or self.activity_generator.sid_registry.get(spec.member_name)
                 or self._make_domain_sid()
             )
+            effect_time = self._clamp_after_recent_storyline_process_source_create(
+                system=dc,
+                event_time=time,
+                rng=rng,
+            )
             self.activity_generator.generate_group_membership_change(
                 actor=actor,
                 system=dc,
-                time=time,
+                time=effect_time,
                 action="add",
                 scope=spec.scope,
                 group_name=spec.group_name,
@@ -2637,10 +2660,15 @@ class StorylineMixin:
             malicious_event["member_name"] = spec.member_name
 
         elif spec.type == "service_installed":
+            effect_time = self._clamp_after_recent_storyline_process_source_create(
+                system=system,
+                event_time=time,
+                rng=rng,
+            )
             self.activity_generator.generate_service_installed(
                 user=actor,
                 system=system,
-                time=time,
+                time=effect_time,
                 service_name=spec.service_name,
                 service_file_name=spec.service_file_name,
                 service_start_type=self._recent_storyline_service_start_type(
@@ -2654,7 +2682,7 @@ class StorylineMixin:
                 service_name=spec.service_name,
                 service_file_name=spec.service_file_name,
                 service_account=spec.service_account,
-                time=time,
+                time=effect_time,
             )
             malicious_event["service_name"] = spec.service_name
             if spec.service_file_name:
@@ -2689,10 +2717,15 @@ class StorylineMixin:
                     f"  </Actions>\n"
                     f"</Task>"
                 )
+            effect_time = self._clamp_after_recent_storyline_process_source_create(
+                system=system,
+                event_time=time,
+                rng=rng,
+            )
             self.activity_generator.generate_scheduled_task(
                 user=actor,
                 system=system,
-                time=time,
+                time=effect_time,
                 task_name=spec.task_name,
                 action="created",
                 task_content=task_content,
@@ -2702,16 +2735,21 @@ class StorylineMixin:
             malicious_event["task_content"] = task_content
 
         elif spec.type == "log_cleared":
+            effect_time = self._clamp_after_recent_storyline_process_source_create(
+                system=system,
+                event_time=time,
+                rng=rng,
+            )
             subject_logon_id = self._recent_storyline_process_logon_id(
                 actor,
                 system,
-                time,
+                effect_time,
                 executable="wevtutil.exe",
             )
             self.activity_generator.generate_log_cleared(
                 user=actor,
                 system=system,
-                time=time,
+                time=effect_time,
                 from_storyline=True,
                 subject_logon_id=subject_logon_id,
             )
@@ -2733,6 +2771,12 @@ class StorylineMixin:
                 malicious_event["target_process"] = target_image
                 malicious_event["skipped_reason"] = "no_live_source_process"
             else:
+                effect_time = self._clamp_after_storyline_process_source_create(
+                    system=system,
+                    pid=source_pid,
+                    network_time=time,
+                    rng=rng,
+                )
                 target_pid = self.activity_generator._get_system_pid(
                     system.hostname,
                     target_name.replace(".exe", ""),
@@ -2741,7 +2785,7 @@ class StorylineMixin:
                 evidence_emitted = self.activity_generator.generate_create_remote_thread(
                     user=actor,
                     system=system,
-                    time=time,
+                    time=effect_time,
                     source_pid=source_pid,
                     source_image=source_image,
                     target_pid=target_pid,
@@ -2755,7 +2799,7 @@ class StorylineMixin:
                 elif "lsass" in target_name:
                     self.activity_generator._expand_and_emit(
                         "create_remote_thread",
-                        time,
+                        effect_time,
                         actor=actor,
                         target_system=system,
                         source_pid=source_pid,
@@ -2788,7 +2832,12 @@ class StorylineMixin:
                 evidence_emitted = self.activity_generator.generate_process_access(
                     user=actor,
                     system=system,
-                    time=time,
+                    time=self._clamp_after_storyline_process_source_create(
+                        system=system,
+                        pid=source_pid,
+                        network_time=time,
+                        rng=rng,
+                    ),
                     source_pid=source_pid,
                     source_image=source_image,
                     target_pid=target_pid,

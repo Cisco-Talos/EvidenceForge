@@ -4,13 +4,22 @@
 """Tests for source-aware timing planning."""
 
 import json
+import xml.etree.ElementTree as ET
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import DnsContext, HostContext, NetworkContext, ProcessContext
+from evidenceforge.events.contexts import (
+    AuthContext,
+    DnsContext,
+    HostContext,
+    NetworkContext,
+    ProcessAccessContext,
+    ProcessContext,
+)
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -177,6 +186,84 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     dependent_time = emitter._after_process_create_timestamp(dependent_event, proc)
 
     assert dependent_time > process_time
+
+
+def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
+    """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    host = _host_context()
+    event = SecurityEvent(
+        timestamp=_base_time(),
+        event_type="logon",
+        dst_host=host,
+        auth=AuthContext(
+            username="alice",
+            logon_id="0x12345",
+            logon_type=3,
+            source_ip=host.ip,
+            source_port=445,
+        ),
+    )
+
+    emitter.emit(event)
+    emitter.close()
+
+    row = json.loads((tmp_path / host.fqdn / "ecar.json").read_text().splitlines()[0])
+    assert row["object"] == "USER_SESSION"
+    assert row["properties"]["src_ip"] == "-"
+
+
+def test_sysmon_process_access_timestamp_follows_process_create(tmp_path: Path) -> None:
+    """Sysmon Event 10 should render after the source process Event 1."""
+    output_path = tmp_path / "sysmon.xml"
+    emitter = SysmonEventEmitter(load_format("windows_event_sysmon"), output_path, threaded=False)
+    base = _base_time()
+    host = _host_context()
+    proc = _process_context(base)
+    auth = AuthContext(username="alice", logon_id=proc.logon_id)
+    process_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+        auth=auth,
+    )
+    access_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_access",
+        src_host=host,
+        process=proc,
+        auth=auth,
+        process_access=ProcessAccessContext(
+            source_pid=proc.pid,
+            source_image=proc.image,
+            target_pid=640,
+            target_image=r"C:\Windows\System32\lsass.exe",
+            granted_access="0x1010",
+        ),
+    )
+
+    emitter.emit(process_event)
+    emitter.emit(access_event)
+    emitter.close()
+
+    root = ET.fromstring(output_path.read_text())
+    ns = {"evt": "http://schemas.microsoft.com/win/2004/08/events/event"}
+    times: dict[int, tuple[str, str]] = {}
+    for event_node in root.findall("evt:Event", ns):
+        event_id = int(event_node.findtext("evt:System/evt:EventID", namespaces=ns) or "0")
+        system_time = event_node.find("evt:System/evt:TimeCreated", ns).attrib["SystemTime"]
+        utc_time = ""
+        for data in event_node.findall("evt:EventData/evt:Data", ns):
+            if data.attrib.get("Name") == "UtcTime":
+                utc_time = data.text or ""
+                break
+        times[event_id] = (system_time, utc_time)
+
+    process_time, process_utc = times[1]
+    access_time, access_utc = times[10]
+    assert access_time > process_time
+    assert access_utc > process_utc
 
 
 def test_zeek_dns_timestamp_stays_inside_rendered_conn_lifetime(tmp_path: Path) -> None:
