@@ -1055,6 +1055,81 @@ class TestChronologicalOutput:
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
 
+    def test_close_moves_parent_termination_after_visible_child_termination(self, tmp_path, ts):
+        """Visible eCAR parents should not terminate before foreground children."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=0),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "shell-process",
+                "pid": 837798,
+                "ppid": 36175,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=80_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "debian-sa1-process",
+                "actorID": "shell-process",
+                "pid": 837826,
+                "ppid": 837798,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=90_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "shell-process",
+                "pid": 837798,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=200_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "debian-sa1-process",
+                "pid": 837826,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "linux01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        shell_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "shell-process" and row["action"] == "TERMINATE"
+        )
+        child_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "debian-sa1-process" and row["action"] == "TERMINATE"
+        )
+        assert shell_ms > child_ms
+
     def test_close_moves_dependent_telemetry_after_reordered_process_create(self, tmp_path, ts):
         """Dependent eCAR records should follow a process create shifted after its parent."""
         fmt = Mock()

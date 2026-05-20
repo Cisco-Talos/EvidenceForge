@@ -958,6 +958,79 @@ class EcarEmitter(HostMultiplexEmitter):
             normalized.append(line)
         return normalized
 
+    @classmethod
+    def _normalize_parent_termination_after_children(cls, lines: list[str]) -> list[str]:
+        """Keep visible parents alive through visible child process lifecycles."""
+        records: list[dict[str, Any] | None] = []
+        object_by_pid: dict[int, str] = {}
+        child_parent: dict[str, tuple[str | None, int, int]] = {}
+        child_last_ms: dict[str, int] = {}
+
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if record.get("object") != "PROCESS":
+                continue
+            action = record.get("action")
+            object_id = str(record.get("objectID", ""))
+            pid = cls._ecar_int(record.get("pid"))
+            if action == "CREATE":
+                if object_id and pid > 0:
+                    object_by_pid[pid] = object_id
+                parent_id = str(record.get("actorID") or "") or None
+                parent_pid = cls._ecar_int(record.get("ppid"))
+                child_parent[object_id] = (parent_id, parent_pid, timestamp_ms)
+                child_last_ms[object_id] = max(child_last_ms.get(object_id, 0), timestamp_ms)
+            elif action == "TERMINATE" and object_id:
+                child_last_ms[object_id] = max(child_last_ms.get(object_id, 0), timestamp_ms)
+
+        latest_child_ms_by_parent_id: dict[str, int] = {}
+        latest_child_ms_by_parent_pid: dict[int, int] = {}
+        for child_id, (parent_id, parent_pid, create_ms) in child_parent.items():
+            latest_child_ms = max(create_ms, child_last_ms.get(child_id, create_ms))
+            if parent_id:
+                latest_child_ms_by_parent_id[parent_id] = max(
+                    latest_child_ms_by_parent_id.get(parent_id, 0),
+                    latest_child_ms,
+                )
+            elif parent_pid > 0:
+                resolved_parent_id = object_by_pid.get(parent_pid)
+                if resolved_parent_id:
+                    latest_child_ms_by_parent_id[resolved_parent_id] = max(
+                        latest_child_ms_by_parent_id.get(resolved_parent_id, 0),
+                        latest_child_ms,
+                    )
+            if parent_pid > 0:
+                latest_child_ms_by_parent_pid[parent_pid] = max(
+                    latest_child_ms_by_parent_pid.get(parent_pid, 0),
+                    latest_child_ms,
+                )
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS" and record.get("action") == "TERMINATE":
+                object_id = str(record.get("objectID", ""))
+                pid = cls._ecar_int(record.get("pid"))
+                timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                latest_child_ms = max(
+                    latest_child_ms_by_parent_id.get(object_id, 0),
+                    latest_child_ms_by_parent_pid.get(pid, 0),
+                )
+                if latest_child_ms >= timestamp_ms:
+                    stable_delay_ms = 20 + (sum(ord(ch) for ch in object_id) % 480)
+                    record["timestamp_ms"] = latest_child_ms + stable_delay_ms
+                    line = json.dumps(record, separators=(",", ":"))
+            normalized.append(line)
+        return normalized
+
     @staticmethod
     def _ecar_int(value: Any, default: int = -1) -> int:
         """Return an integer eCAR field value or a deterministic fallback."""
@@ -1187,6 +1260,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_parent_order(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
+                    writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
         super().flush(force=force)
 
