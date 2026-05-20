@@ -25,6 +25,7 @@ from evidenceforge.generation.activity.generator import (
     _TLS13_CIPHER_WEIGHTS,
     _UDP_OVERHEAD_VALUES,
     _UDP_OVERHEAD_WEIGHTS,
+    _choose_ssl_history,
 )
 from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
 
@@ -99,6 +100,23 @@ class TestSslRealism:
     def test_ssl_history_has_more_than_2_patterns(self):
         assert len(_SSL_HIST_SUCCESS_VALUES) > 2
         assert len(_SSL_HIST_FAILURE_VALUES) >= 2
+
+    def test_established_ssl_histories_include_server_hello(self):
+        """Zeek ssl.log established handshakes should include ServerHello."""
+        allowed_codes = set("^HCSVTXKRNYGFWUAZIBDEOPMJLQ")
+
+        assert all("S" in history for history in _SSL_HIST_SUCCESS_VALUES)
+        assert all(set(history) <= allowed_codes for history in _SSL_HIST_SUCCESS_VALUES)
+        assert all(
+            "S"
+            in _choose_ssl_history(
+                random.Random(seed),
+                tls_version="TLSv13" if seed % 2 else "TLSv12",
+                established=True,
+                resumed=bool(seed % 3),
+            )
+            for seed in range(100)
+        )
 
     def test_ssl_history_sampling_produces_diversity(self):
         rng = random.Random(42)

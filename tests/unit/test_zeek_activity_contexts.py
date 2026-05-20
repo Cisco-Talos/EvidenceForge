@@ -109,6 +109,7 @@ class TestSslContextPopulation:
             assert event.ssl.version in {"TLSv12", "TLSv13"}
             assert event.ssl.cipher != ""
             assert event.ssl.established is True
+            assert "S" in event.ssl.ssl_history
             if event.ssl.version == "TLSv13":
                 assert event.x509 is None
                 assert event.x509_chain == []
@@ -193,6 +194,7 @@ class TestSslContextPopulation:
         assert event.network.resp_bytes >= 1840
         assert event.ssl is not None
         assert event.ssl.established is True
+        assert "S" in event.ssl.ssl_history
 
     def test_http_over_tls_forces_established_ssl_context(self, activity_gen, monkeypatch):
         """Successful HTTP evidence on TLS cannot coexist with failed ssl.log state."""
@@ -237,6 +239,7 @@ class TestSslContextPopulation:
         assert event.ssl is not None
         assert event.ssl.established is True
         assert event.ssl.cipher
+        assert "S" in event.ssl.ssl_history
 
     def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
         """Proxy egress should preserve canonical POST body size for exfil-style uploads."""

@@ -1601,25 +1601,99 @@ _TLS13_CIPHER_DIST = (
 _TLS13_CIPHER_VALUES = tuple(c[0] for c in _TLS13_CIPHER_DIST)
 _TLS13_CIPHER_WEIGHTS = tuple(c[1] for c in _TLS13_CIPHER_DIST)
 
-# SSL history patterns (weighted)
-_SSL_HISTORY_SUCCESS = (
-    ("CsiI", 55),  # normal full handshake
-    ("CsijI", 25),  # handshake with session ticket
-    ("CiI", 10),  # abbreviated/resumed
-    ("CsiIa", 3),  # established then client abort
-    ("CsI", 2),  # no server key exchange
+# SSL history patterns (weighted).  Zeek's ssl_history values are handshake
+# message-type codes, not conn.log-style originator/responder direction flags;
+# established TLS rows should include "S" for the ServerHello.
+_SSL_HISTORY_TLS12_SUCCESS = (
+    ("CSXKNGIFIFD", 34),  # ECDHE full handshake plus encrypted app data
+    ("CSXNGIFIFD", 18),  # RSA/static-key full handshake
+    ("CSXKNGIFIFT", 18),  # full handshake with NewSessionTicket
+    ("CSIFIFD", 20),  # abbreviated/resumed session
+    ("CSXKNGIFIFL", 10),  # established then alert/close
 )
+_SSL_HISTORY_TLS13_SUCCESS = (
+    ("CSOXYFFD", 36),  # full TLS 1.3 handshake plus encrypted app data
+    ("CSOFFD", 26),  # resumed/PSK-style handshake
+    ("CSOXYFFTD", 18),  # full handshake with ticket
+    ("CSJOXYFFD", 8),  # HelloRetryRequest path
+    ("CSOXYFFL", 12),  # established then alert/close
+)
+_SSL_HISTORY_SUCCESS = _SSL_HISTORY_TLS12_SUCCESS + _SSL_HISTORY_TLS13_SUCCESS
 _SSL_HIST_SUCCESS_VALUES = tuple(h[0] for h in _SSL_HISTORY_SUCCESS)
 _SSL_HIST_SUCCESS_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_SUCCESS)
 
 _SSL_HISTORY_FAILURE = (
-    ("Cs", 60),  # client hello only, server didn't complete
-    ("Ch", 40),  # client hello, no server response
+    ("C", 45),  # client hello only, no visible server response
+    ("CS", 30),  # server hello seen, handshake did not complete
+    ("CSL", 25),  # server alert during handshake
 )
 _SSL_HIST_FAILURE_VALUES = tuple(h[0] for h in _SSL_HISTORY_FAILURE)
 _SSL_HIST_FAILURE_WEIGHTS = tuple(h[1] for h in _SSL_HISTORY_FAILURE)
 
 _SSL_FAILURE_RATE = 0.02  # ~2% handshake failure
+
+
+def _choose_ssl_history(
+    rng: random.Random,
+    *,
+    tls_version: str,
+    established: bool,
+    resumed: bool,
+) -> str:
+    """Choose a Zeek ssl_history value that matches TLS version and outcome."""
+    return _choose_ssl_history_from_roll(
+        rng.random(),
+        tls_version=tls_version,
+        established=established,
+        resumed=resumed,
+    )
+
+
+def _choose_ssl_history_from_roll(
+    roll: float,
+    *,
+    tls_version: str,
+    established: bool,
+    resumed: bool,
+) -> str:
+    """Map a pre-drawn random roll onto a Zeek ssl_history value."""
+    if not established:
+        return _weighted_choice_from_roll(
+            _SSL_HIST_FAILURE_VALUES,
+            _SSL_HIST_FAILURE_WEIGHTS,
+            roll,
+        )
+
+    if tls_version == "TLSv13":
+        if resumed:
+            values = ("CSOFFD", "CSOXYFFTD", "CSOXYFFD")
+            weights = (60, 25, 15)
+        else:
+            values = tuple(history for history, _ in _SSL_HISTORY_TLS13_SUCCESS)
+            weights = tuple(weight for _, weight in _SSL_HISTORY_TLS13_SUCCESS)
+    elif resumed:
+        values = ("CSIFIFD", "CSXKNGIFIFT", "CSXKNGIFIFD")
+        weights = (55, 30, 15)
+    else:
+        values = tuple(history for history, _ in _SSL_HISTORY_TLS12_SUCCESS)
+        weights = tuple(weight for _, weight in _SSL_HISTORY_TLS12_SUCCESS)
+
+    return _weighted_choice_from_roll(values, weights, roll)
+
+
+def _weighted_choice_from_roll(
+    values: tuple[str, ...], weights: tuple[int, ...], roll: float
+) -> str:
+    """Return a deterministic weighted choice from an already consumed RNG roll."""
+    total = sum(weights)
+    threshold = max(0.0, min(roll, 0.999999999999)) * total
+    cumulative = 0.0
+    for value, weight in zip(values, weights, strict=True):
+        cumulative += weight
+        if threshold < cumulative:
+            return value
+    return values[-1]
+
 
 # Proxy header overhead ranges (bytes)
 _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
@@ -4243,18 +4317,17 @@ class ActivityGenerator:
             )[0]
 
         ssl_established = (rng.random() > _SSL_FAILURE_RATE) if allow_failure else True
-        if ssl_established:
-            ssl_hist = rng.choices(
-                _SSL_HIST_SUCCESS_VALUES, weights=_SSL_HIST_SUCCESS_WEIGHTS, k=1
-            )[0]
-        else:
-            ssl_hist = rng.choices(
-                _SSL_HIST_FAILURE_VALUES, weights=_SSL_HIST_FAILURE_WEIGHTS, k=1
-            )[0]
+        ssl_history_roll = rng.random()
         tls_name_key = server_name or dst_ip
         first_observed_name = tls_name_key not in self._tls_seen_server_names
         resumed = (rng.random() < 0.45 and not first_observed_name) if ssl_established else False
         self._tls_seen_server_names.add(tls_name_key)
+        ssl_hist = _choose_ssl_history_from_roll(
+            ssl_history_roll,
+            tls_version=tls_version,
+            established=ssl_established,
+            resumed=resumed,
+        )
 
         event.ssl = SslContext(
             version=tls_version,

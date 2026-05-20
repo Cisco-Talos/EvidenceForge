@@ -348,7 +348,7 @@ class SslContext:
     server_name: str = ""  # SNI hostname
     resumed: bool = False
     established: bool = True
-    ssl_history: str = ""  # e.g., "CsiI"
+    ssl_history: str = ""  # e.g., "CSOXYFFD"
     cert_chain_fuids: list[str] = field(default_factory=list)
 
 
