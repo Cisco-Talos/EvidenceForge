@@ -469,11 +469,18 @@ class TestSupplementaryAuditEvents:
             target_system="DC-01",
         )
         result = rule.expand("process_create", ctx)
-        assert len(result) == 1
-        ev = result[0]
-        assert ev.method == "generate_account_created"
-        assert ev.kwargs["target_username"] == "hacker"
-        assert ev.timing.position == "after"
+        assert [ev.method for ev in result] == [
+            "generate_account_created",
+            "generate_password_reset",
+            "generate_account_changed",
+        ]
+        assert all(ev.kwargs["target_username"] == "hacker" for ev in result)
+        assert [ev.timing.position for ev in result] == ["after", "after", "after"]
+        assert result[0].timing.max_ms < result[1].timing.min_ms
+        assert result[1].timing.max_ms < result[2].timing.min_ms
+        assert result[2].kwargs["password_last_set_to_event_time"] is True
+        assert result[2].kwargs["old_uac_value"] == "0x15"
+        assert result[2].kwargs["new_uac_value"] == "0x10"
 
     def test_expand_net_user_delete(self):
         rule = SupplementaryAuditEvents()

@@ -31,6 +31,16 @@ relationships:
     position: after
     min_ms: 100
     max_ms: 900
+  windows.account_password_reset_from_add:
+    class: source_latency
+    position: after
+    min_ms: 950
+    max_ms: 1800
+  windows.account_attributes_from_add:
+    class: source_latency
+    position: after
+    min_ms: 1850
+    max_ms: 3200
   windows.logoff_after_last_activity:
     class: teardown
     position: after

@@ -73,6 +73,22 @@ def test_timing_profiles_load_default_relationship():
     assert asset_window.relationship_class == "burst_fanout"
     assert asset_window.min_ms >= 1500
 
+    account_reset_window = get_timing_window(
+        "windows.account_password_reset_from_add",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    account_change_window = get_timing_window(
+        "windows.account_attributes_from_add",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert account_reset_window.relationship_class == "source_latency"
+    assert account_reset_window.position == "after"
+    assert account_reset_window.max_ms < account_change_window.min_ms
+
     zeek_conn_window = get_timing_window(
         "source.zeek_conn_start",
         default_min_ms=0,

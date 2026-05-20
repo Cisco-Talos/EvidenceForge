@@ -107,6 +107,14 @@ from .network import (
 logger = logging.getLogger(__name__)
 
 
+def _format_windows_account_attribute_time(value: datetime) -> str:
+    """Format account-management attribute timestamps like Event Viewer XML data."""
+    timestamp = ensure_utc(value)
+    hour = timestamp.hour % 12 or 12
+    meridiem = "AM" if timestamp.hour < 12 else "PM"
+    return f"{timestamp.month}/{timestamp.day}/{timestamp.year} {hour}:{timestamp:%M:%S} {meridiem}"
+
+
 @dataclass(slots=True)
 class _HttpPersistentConnection:
     close_deadline: datetime
@@ -13074,6 +13082,11 @@ class ActivityGenerator:
         time: datetime,
         target_username: str,
         target_sid: str,
+        password_last_set_to_event_time: bool = False,
+        old_uac_value: str | None = None,
+        new_uac_value: str | None = None,
+        user_account_control: str | None = None,
+        primary_group_id: str | None = None,
     ) -> None:
         """Generate user account changed event (4738) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
@@ -13081,6 +13094,9 @@ class ActivityGenerator:
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
         host = self._build_host_context(system)
+        password_last_set = (
+            _format_windows_account_attribute_time(time) if password_last_set_to_event_time else "-"
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="account_changed",
@@ -13098,6 +13114,11 @@ class ActivityGenerator:
                 target_domain=host.netbios_domain,
                 target_sid=target_sid,
                 sam_account_name=target_username,
+                old_uac_value=old_uac_value or "0x0",
+                new_uac_value=new_uac_value or "0x15",
+                user_account_control=user_account_control or "-",
+                password_last_set=password_last_set,
+                primary_group_id=primary_group_id or "513",
             ),
         )
         self.dispatcher.dispatch(event)

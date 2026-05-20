@@ -891,6 +891,37 @@ class TestActivityGenerator:
         assert subject_session is not None
         assert subject_session.start_time < timestamp
 
+    def test_account_changed_password_set_uses_event_time(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """4738 password punch-down should render a real PasswordLastSet timestamp."""
+        timestamp = datetime(2024, 3, 18, 16, 14, 35, tzinfo=UTC)
+
+        activity_gen.generate_account_changed(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc-audit",
+            target_sid="S-1-5-21-1-2-3-1109",
+            password_last_set_to_event_time=True,
+            old_uac_value="0x15",
+            new_uac_value="0x10",
+            user_account_control="\n\t\t\t%%2081",
+            primary_group_id="-",
+        )
+
+        account_event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "account_changed"
+        ][0]
+        account_context = account_event.account_management
+        assert account_context.password_last_set == "3/18/2024 4:14:35 PM"
+        assert account_context.old_uac_value == "0x15"
+        assert account_context.new_uac_value == "0x10"
+        assert account_context.user_account_control == "\n\t\t\t%%2081"
+        assert account_context.primary_group_id == "-"
+
     def test_regular_user_logon_is_not_randomly_elevated(
         self, activity_gen, test_user, test_system
     ):
