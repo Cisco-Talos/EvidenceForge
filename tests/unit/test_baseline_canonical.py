@@ -37,6 +37,8 @@ from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
+    _linux_baseline_pam_close_lead,
+    _linux_baseline_pam_open_lead,
     _linux_baseline_session_initiator,
     _materialize_registry_value_for_time,
     _module_matches_process,
@@ -100,6 +102,18 @@ def test_linux_baseline_session_initiator_creates_pam_session_message():
     assert service in {"cron", "login", "sudo"}
     assert "pam_unix(" in message
     assert ":session): session opened for user admin(uid=" in message
+
+
+def test_linux_baseline_pam_leads_leave_visible_ordering_margin():
+    """Ambient PAM rows should lead logind rows by more than timestamp texture."""
+    rng = random.Random(11)
+    open_leads = [_linux_baseline_pam_open_lead(rng) for _ in range(50)]
+    close_leads = [_linux_baseline_pam_close_lead(rng) for _ in range(50)]
+
+    assert min(open_leads) >= timedelta(seconds=3)
+    assert max(open_leads) <= timedelta(seconds=8)
+    assert min(close_leads) >= timedelta(milliseconds=1200)
+    assert max(close_leads) <= timedelta(milliseconds=4200)
 
 
 @pytest.fixture

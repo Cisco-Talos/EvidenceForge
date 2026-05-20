@@ -133,6 +133,16 @@ def _linux_baseline_session_initiator(
     return app_name, service, message
 
 
+def _linux_baseline_pam_open_lead(rng: random.Random) -> timedelta:
+    """Return lead time for ambient PAM open rows before logind records."""
+    return timedelta(milliseconds=rng.randint(3000, 8000))
+
+
+def _linux_baseline_pam_close_lead(rng: random.Random) -> timedelta:
+    """Return lead time for ambient PAM close rows before logind removal records."""
+    return timedelta(milliseconds=rng.randint(1200, 4200))
+
+
 def _sample_lock_duration(rng: random.Random, kind: str) -> timedelta:
     """Return a human-shaped workstation lock duration with non-minute texture."""
     if kind == "lunch":
@@ -6035,7 +6045,7 @@ class BaselineMixin:
                         )
                     self.activity_generator.generate_syslog_event(
                         system=system,
-                        time=ts - timedelta(milliseconds=rng.randint(180, 920)),
+                        time=ts - _linux_baseline_pam_open_lead(rng),
                         app_name=pam_app,
                         message=pam_open,
                         pid=pam_pid,
@@ -6053,7 +6063,7 @@ class BaselineMixin:
                         remove_time = ts + timedelta(seconds=rng.randint(120, 5400))
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=remove_time - timedelta(milliseconds=rng.randint(80, 650)),
+                            time=remove_time - _linux_baseline_pam_close_lead(rng),
                             app_name=pam_app,
                             message=f"pam_unix({pam_service}:session): session closed for user {user}",
                             pid=pam_pid,
