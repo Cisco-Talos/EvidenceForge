@@ -3835,6 +3835,7 @@ class ActivityGenerator:
             command_line=command_line,
             parent_pid=parent_pid,
             suppress_command_file_effect=True,
+            allow_browser_launch_spacing=False,
         )
         self._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
@@ -3930,6 +3931,7 @@ class ActivityGenerator:
             parent_pid=parent_pid,
             suppress_command_file_effect=True,
             allow_existing_browser_reuse=False,
+            allow_browser_launch_spacing=False,
         )
         self._record_user_process(source_system, user, pid, image)
         self.state_manager.update_process_activity_time(source_system.hostname, pid, time)
@@ -6066,6 +6068,7 @@ class ActivityGenerator:
         from_storyline: bool = False,
         suppress_command_file_effect: bool = False,
         allow_existing_browser_reuse: bool = True,
+        allow_browser_launch_spacing: bool = True,
     ) -> int:
         """Generate process creation event across all applicable log formats.
 
@@ -6089,6 +6092,9 @@ class ActivityGenerator:
             allow_existing_browser_reuse: Reuse an already-open browser for repeated
                 navigation requests. Parent-repair paths disable this when they need
                 a concrete same-family browser parent for renderer/utility children.
+            allow_browser_launch_spacing: Apply anti-burst spacing to top-level browser
+                launches. Causal connection-owner processes disable this so process
+                creation stays before the socket evidence they own.
 
         Returns:
             PID of the new process
@@ -6209,17 +6215,18 @@ class ActivityGenerator:
             if spaced_time != time:
                 time = spaced_time
                 self.state_manager.set_current_time(time)
-            spaced_time = self._space_browser_launch(
-                system=system,
-                username=process_username,
-                logon_id=process_logon_id,
-                process_name=process_name,
-                command_line=command_line,
-                time=time,
-            )
-            if spaced_time != time:
-                time = spaced_time
-                self.state_manager.set_current_time(time)
+            if allow_browser_launch_spacing:
+                spaced_time = self._space_browser_launch(
+                    system=system,
+                    username=process_username,
+                    logon_id=process_logon_id,
+                    process_name=process_name,
+                    command_line=command_line,
+                    time=time,
+                )
+                if spaced_time != time:
+                    time = spaced_time
+                    self.state_manager.set_current_time(time)
         if process_username != user.username and process_username not in _SYSTEM_ACCOUNTS:
             _integrity = "Medium"
         if _get_os_category(system.os) == "windows" and process_logon_type == 5:
@@ -11629,15 +11636,7 @@ class ActivityGenerator:
 
         ip_proto = 6 if protocol == "tcp" else 17 if protocol == "udp" else 1
         process = None
-        if application:
-            process = ProcessContext(
-                pid=pid,
-                parent_pid=0,
-                image=application,
-                command_line="",
-                username="",
-            )
-        elif pid > 0:
+        if pid > 0:
             running = self.state_manager.get_process(system.hostname, pid)
             if running is not None:
                 process = ProcessContext(
@@ -11646,7 +11645,21 @@ class ActivityGenerator:
                     image=running.image,
                     command_line=running.command_line,
                     username=running.username,
+                    logon_id=running.logon_id,
+                    start_time=running.start_time,
+                    parent_start_time=self._lookup_parent_start_time(
+                        system.hostname,
+                        running.parent_pid,
+                    ),
                 )
+        if process is None and application and pid <= 0:
+            process = ProcessContext(
+                pid=pid,
+                parent_pid=0,
+                image=application,
+                command_line="",
+                username="",
+            )
         if process is None and pid > 0 and pid != 4:
             logger.debug(
                 "Skipping WFP 5156 for unresolved process image: host=%s pid=%s",
