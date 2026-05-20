@@ -8507,7 +8507,9 @@ class ActivityGenerator:
                     resp_bytes = int(resp_bytes * rng.uniform(0.1, 0.5))
         elif proto == "udp":
             # DNS connections with responses must not be S0 (no-response)
-            if service == "dns" and resp_bytes and resp_bytes > 0:
+            if service == "kerberos" and resp_bytes and resp_bytes > 0:
+                conn_state, history = "SF", "Dd"
+            elif service == "dns" and resp_bytes and resp_bytes > 0:
                 # ~5% retransmissions, ~2% multi-packet responses (large TXT/DNSSEC)
                 dns_roll = rng.random()
                 if dns_roll < 0.05:
@@ -8623,6 +8625,19 @@ class ActivityGenerator:
             http_min_duration = (http_timing.max_ms + 5) / 1000
             if duration is None or duration < http_min_duration:
                 duration = http_min_duration + rng.uniform(0.0, 0.025)
+
+        kerberos_has_response = not (conn_state in {"S0", "REJ", "OTH"} and (resp_bytes or 0) <= 0)
+        if kerberos_has_response:
+            self._emit_dc_audit_for_kerberos_connection(
+                src_ip=src_ip,
+                src_port=src_port,
+                dst_ip=dst_ip,
+                time=time,
+                dst_port=dst_port,
+                proto=proto,
+                service=service or "",
+                source_system=resolved_source_system,
+            )
 
         duration_locked_to_dns_rtt = (
             service == "dns"
@@ -8796,17 +8811,6 @@ class ActivityGenerator:
             and service != "dns"
         ):
             service = ""
-
-        self._emit_dc_audit_for_kerberos_connection(
-            src_ip=src_ip,
-            src_port=src_port,
-            dst_ip=dst_ip,
-            time=time,
-            dst_port=dst_port,
-            proto=proto,
-            service=service or "",
-            source_system=resolved_source_system,
-        )
 
         # Phase 2: Build SecurityEvent with NetworkContext + HostContext
         # Resolve source system for src_host (needed by eCAR emitter for hostname/routing)
