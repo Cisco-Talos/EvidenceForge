@@ -3301,6 +3301,30 @@ class ActivityGenerator:
                 candidates = assigned_candidates
         return max(candidates, key=lambda session: session.start_time)
 
+    def _active_user_interactive_windows_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest active Windows interactive session for this user/host."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if (
+                session.system == system.hostname
+                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+                and session.session_kind not in {"network", "service"}
+                and _session_started_by(session, time)
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.start_time)
+
     def _user_model_for_username(self, username: str) -> User:
         """Resolve a known scenario user, or build a safe fallback user object."""
         known_users = getattr(self, "_users_by_username", {})
@@ -11613,6 +11637,37 @@ class ActivityGenerator:
             else:
                 # Regular users on workstations: Type 3 dominant, no Type 5
                 logon_type = rng.choices([3, 2, 7, 11, 10], weights=[55, 20, 10, 10, 5], k=1)[0]
+
+            active_interactive = None
+            if not is_service_account and sys_type not in ("server", "domain_controller"):
+                active_interactive = self._active_user_interactive_windows_session(
+                    user,
+                    system,
+                    time,
+                )
+            if active_interactive is not None and logon_type in (2, 7, 11):
+                # A baseline "logon" activity while the same user's console
+                # session is already active is continued use, not a new
+                # same-user Type 2/11 session.  If the session is visibly
+                # locked, render the re-authentication as a Type 7 unlock;
+                # otherwise just advance activity time and keep the durable
+                # workstation session.
+                lock_key = (system.hostname, user.username, active_interactive.logon_id)
+                if logon_type == 7 and lock_key in getattr(self, "_last_workstation_lock_time", {}):
+                    self.generate_workstation_unlock(
+                        user,
+                        system,
+                        time,
+                        active_interactive.logon_id,
+                    )
+                else:
+                    active_interactive.last_activity_time = time
+                return
+
+            if active_interactive is None and logon_type == 7:
+                # Type 7 is an unlock of an existing session, not a fresh
+                # session-establishing event.
+                logon_type = 2
 
             # Type 3 (network) logons are standalone events, not interactive sessions
             if logon_type in (3, 4, 5, 8, 9):

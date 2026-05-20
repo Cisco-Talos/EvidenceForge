@@ -5056,6 +5056,45 @@ class TestActivityGenerator:
         first_event = emitter.emit.call_args_list[0][0][0]
         assert first_event.event_type in ("logon", "failed_logon")
 
+    def test_execute_baseline_activity_logon_reuses_active_workstation_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Baseline logon activity should not mint same-user Type 2 bursts."""
+        session_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        activity_time = session_time + timedelta(seconds=20)
+        state_manager.set_current_time(session_time)
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            session_time,
+            logon_type=2,
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        class FixedInteractiveRng(random.Random):
+            def random(self) -> float:
+                return 0.5
+
+            def choices(self, population, weights=None, *, cum_weights=None, k=1):
+                return [2]
+
+        with patch.object(generator_module, "_get_rng", return_value=FixedInteractiveRng()):
+            activity_gen.execute_baseline_activity(
+                test_user,
+                test_system,
+                activity_time,
+                "logon",
+            )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert sessions[0].last_activity_time == activity_time
+        emitted_types = [
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "logon" not in emitted_types
+
     def test_execute_baseline_activity_process_creates_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
