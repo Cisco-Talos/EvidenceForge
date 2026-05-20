@@ -9376,6 +9376,16 @@ class ActivityGenerator:
         )
         pid = event.network.initiating_pid
         process_ctx = event.process
+        if pid > 0 and resolved_source_system is not None and process_ctx is not None:
+            adjusted_time = self._clamp_after_visible_process_create(
+                resolved_source_system,
+                pid,
+                event.timestamp,
+                "source.windows_wfp_connection",
+            )
+            if adjusted_time > event.timestamp:
+                event.timestamp = adjusted_time
+                time = adjusted_time
 
         # Automatic weird.log synthesis is intentionally disabled for now. The
         # Zeek weird type space is broad and state-sensitive; poorly matched
