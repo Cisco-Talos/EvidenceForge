@@ -3311,6 +3311,68 @@ class TestActivityGenerator:
         assert event.network.initiating_pid == pid
         assert event.process.image.endswith("powershell.exe")
 
+    def test_kerberos_connection_can_render_udp_transport(
+        self, activity_gen, test_system, state_manager, mock_emitters, monkeypatch
+    ):
+        """Kerberos/88 network evidence should not be forced to TCP-only."""
+        from evidenceforge.generation.activity import kerberos_realism
+
+        monkeypatch.setattr(
+            kerberos_realism,
+            "load_kerberos_realism",
+            lambda: {"transport_profiles": {"default": {"udp": 1, "tcp": 0}}},
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc_system.ip: dc_system}
+        activity_gen._dc_systems = [dc_system]
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=dc_system.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=0.02,
+            orig_bytes=400,
+            resp_bytes=900,
+            pid=pid,
+            source_system=test_system,
+            emit_dns=False,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert connection_event.network.protocol == "udp"
+        assert connection_event.network.ip_proto == 17
+        wfp_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        )
+        assert wfp_event.network.protocol == "udp"
+        assert wfp_event.network.ip_proto == 17
+
     def test_generate_connection_skips_wfp_for_stale_process_pid(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):

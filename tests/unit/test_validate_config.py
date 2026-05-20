@@ -477,6 +477,30 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_empty_kerberos_transport_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        real_loader = kerberos_realism.load_kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            data = real_loader()
+            transport_profiles = dict(data["transport_profiles"])
+            transport_profiles["default"] = {"udp": 0, "tcp": 0}
+            return {**data, "transport_profiles": transport_profiles}
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "transport profile must have a positive total weight" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_browser_like_proxy_infra_template(self, monkeypatch):
         from evidenceforge.generation.activity import proxy_uri
 

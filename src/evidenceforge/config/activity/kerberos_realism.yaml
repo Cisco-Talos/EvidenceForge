@@ -79,3 +79,20 @@ certificate_profiles:
       - "CN=Acme Enterprise Smartcard CA, O=Acme Corp, C=US"
     serial_hex_bytes: 16
     thumbprint_hex_chars: 40
+
+transport_profiles:
+  default:
+    udp: 68
+    tcp: 32
+  tgt:
+    udp: 72
+    tcp: 28
+  service_ticket:
+    udp: 58
+    tcp: 42
+  machine_logon:
+    udp: 64
+    tcp: 36
+  preauth_failed:
+    udp: 82
+    tcp: 18

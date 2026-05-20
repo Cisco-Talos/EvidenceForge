@@ -6922,7 +6922,7 @@ class ActivityGenerator:
         source_system: System | None,
     ) -> None:
         """Ensure visible internal-to-DC Kerberos flows have nearby DC audit evidence."""
-        if proto != "tcp" or dst_port != 88 or service != "kerberos":
+        if proto not in {"tcp", "udp"} or dst_port != 88 or service != "kerberos":
             return
         if source_system is None:
             return
@@ -6937,6 +6937,7 @@ class ActivityGenerator:
             dc_hostname,
             time,
             dst_ip=dst_ip,
+            proto=proto,
             exclude_active_tuple=False,
         )
         if self._has_recent_kerberos_audit(src_ip, dc_hostname, time) and reserved_port == src_port:
@@ -7057,6 +7058,19 @@ class ActivityGenerator:
         is_tcp_probe = process_exe in {"nmap", "nmap.exe"}
         if source_system is None and hasattr(self, "_ip_to_system"):
             source_system = self._ip_to_system.get(src_ip)
+        if service == "kerberos" and dst_port == 88 and proto == "tcp":
+            from evidenceforge.generation.activity.kerberos_realism import (
+                pick_kerberos_transport,
+            )
+
+            proto = pick_kerberos_transport(
+                random.Random(
+                    _stable_seed(
+                        "kerberos_transport:"
+                        f"{src_ip}:{dst_ip}:{time.isoformat()}:{src_port or ''}:{pid}"
+                    )
+                )
+            )
 
         if (
             http is None
@@ -7692,7 +7706,7 @@ class ActivityGenerator:
                     http = replace(http, trans_depth=1)
 
         kerberos_dc_hostname = None
-        if proto == "tcp" and dst_port == 88:
+        if proto in {"tcp", "udp"} and dst_port == 88:
             kerberos_dc = self._dc_system_for_ip(dst_ip)
             if kerberos_dc is not None:
                 kerberos_dc_hostname = str(getattr(kerberos_dc, "hostname", "") or "")

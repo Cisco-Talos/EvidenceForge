@@ -763,12 +763,33 @@ class KerberosCertificateProfile(BaseModel, extra="forbid"):
         return v
 
 
+class KerberosTransportProfile(BaseModel, extra="forbid"):
+    """TCP/UDP transport weights for Kerberos network exchanges."""
+
+    udp: int = 0
+    tcp: int = 0
+
+    @field_validator("udp", "tcp")
+    @classmethod
+    def weight_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("transport weights must be non-negative")
+        return v
+
+    @model_validator(mode="after")
+    def has_positive_weight(self) -> KerberosTransportProfile:
+        if self.udp + self.tcp <= 0:
+            raise ValueError("transport profile must have a positive total weight")
+        return self
+
+
 class KerberosRealismConfig(BaseModel, extra="forbid"):
     """Root schema for kerberos_realism.yaml."""
 
     tgt_success: KerberosTgtSuccessConfig
     tgt_failure: KerberosTgtFailureConfig
     certificate_profiles: dict[str, KerberosCertificateProfile] = Field(default_factory=dict)
+    transport_profiles: dict[str, KerberosTransportProfile] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def referenced_certificate_profiles_exist(self) -> KerberosRealismConfig:
@@ -782,6 +803,8 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
         )
         if missing:
             raise ValueError(f"unknown certificate_profile references: {missing}")
+        if self.transport_profiles and "default" not in self.transport_profiles:
+            raise ValueError("transport_profiles must include a default profile")
         return self
 
 

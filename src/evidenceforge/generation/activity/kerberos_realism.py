@@ -67,6 +67,23 @@ def pick_tgt_failure_fields(rng: random.Random) -> dict[str, Any]:
     }
 
 
+def pick_kerberos_transport(rng: random.Random, profile: str = "default") -> str:
+    """Pick TCP or UDP for a Kerberos network exchange."""
+    cfg = load_kerberos_realism()
+    profiles = cfg.get("transport_profiles", {})
+    weights = profiles.get(profile) or profiles.get("default") or {}
+    entries = [
+        (proto, int(weight))
+        for proto, weight in weights.items()
+        if proto in {"udp", "tcp"} and int(weight) > 0
+    ]
+    if not entries:
+        return "tcp"
+    protocols = [entry[0] for entry in entries]
+    protocol_weights = [entry[1] for entry in entries]
+    return rng.choices(protocols, weights=protocol_weights, k=1)[0]
+
+
 def _pick_weighted_value(profiles: dict[str, dict[str, Any]], rng: random.Random) -> str:
     """Pick a configured weighted profile and return its value."""
     profile = _pick_weighted_profile(profiles, rng)
