@@ -369,6 +369,11 @@ class EcarEmitter(HostMultiplexEmitter):
         """Return the eCAR render timestamp for a user-session observation."""
         auth = event.auth
         edr = event.edr
+        canonical_timestamp = (
+            event.source_timing.canonical_timestamp
+            if event.source_timing is not None
+            else event.timestamp
+        )
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_session",
@@ -381,8 +386,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 getattr(auth, "logon_id", ""),
                 getattr(auth, "logon_type", ""),
                 getattr(edr, "object_id", ""),
-                event.storyline_cluster_id or "",
-                event.timestamp,
+                canonical_timestamp,
             ),
         )
 

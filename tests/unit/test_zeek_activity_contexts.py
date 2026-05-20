@@ -24,6 +24,7 @@
 
 import math
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -40,6 +41,7 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -504,6 +506,66 @@ class TestSslContextPopulation:
         assert logind_events[0].timestamp.microsecond % 1000 not in {
             timestamp.microsecond % 1000 for timestamp in times
         }
+
+    def test_ssh_ecar_login_source_time_follows_accepted_syslog(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            sshd_pid=6505,
+        )
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        accepted_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Accepted password")
+        )
+        ecar_login_time = gen._source_timing_planner.source_time(
+            ssh_event,
+            "source.ecar_session",
+            seed_parts=(
+                "login",
+                ssh_event.dst_host.hostname,
+                user.username,
+                "10.0.10.50",
+                51111,
+                "",
+                10,
+                "",
+                ssh_event.timestamp,
+            ),
+        )
+
+        assert ecar_login_time > accepted_event.timestamp
+        assert ecar_login_time > accepted_event.timestamp + timedelta(milliseconds=250)
+        delayed_for_observation_profile = replace(
+            ssh_event,
+            timestamp=ssh_event.timestamp + timedelta(milliseconds=750),
+            storyline_cluster_id="storyline-ssh",
+        )
+        delayed_ecar_time = EcarEmitter._session_timestamp(
+            object.__new__(EcarEmitter),
+            delayed_for_observation_profile,
+            delayed_for_observation_profile.dst_host,
+            "login",
+        )
+
+        assert delayed_ecar_time == ecar_login_time
 
     def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen):
         gen, _events = activity_gen

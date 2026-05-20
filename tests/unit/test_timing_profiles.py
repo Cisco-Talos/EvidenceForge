@@ -18,7 +18,10 @@ from evidenceforge.generation.activity.timing_profiles import (
     sample_timing_delta,
     windows_collision_spacing_config,
 )
+from evidenceforge.generation.causal.engine import ExpandedEvent
+from evidenceforge.generation.causal.timing import TimingSpec
 from evidenceforge.generation.source_timing import SourceTimingPlanner
+from evidenceforge.models.scenario import System
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +76,21 @@ def test_timing_profiles_load_default_relationship():
     assert security_process_window.max_ms >= 4000
     assert sysmon_process_window.max_ms >= 2000
     assert ecar_process_window.max_ms >= 900
+    security_gap_window = get_timing_window(
+        "source.windows_security_after_sysmon_process_create_gap",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert security_gap_window.min_ms >= 250
+    assert security_gap_window.max_ms > security_gap_window.min_ms
+    audit_after_command_window = get_timing_window(
+        "windows.audit_after_visible_admin_command",
+        default_min_ms=0,
+        default_max_ms=0,
+        default_position="after",
+    )
+    assert audit_after_command_window.min_ms > 0
 
     tls_window = get_timing_window(
         "network.tls_completed_min_duration",
@@ -238,7 +256,23 @@ def test_windows_process_source_timing_respects_visible_parent_create():
     )
 
     assert sysmon_time >= parent_visible_time + timedelta(milliseconds=1)
-    assert security_time >= sysmon_time + timedelta(milliseconds=250)
+    expected_gap = sample_timing_delta(
+        "source.windows_security_after_sysmon_process_create_gap",
+        seed_parts=("WS-01", 1200, event_time),
+    )
+    assert security_time >= sysmon_time + expected_gap
+
+    sampled_gaps = {
+        sample_timing_delta(
+            "source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=("WS-01", pid, event_time),
+        )
+        for pid in range(1200, 1210)
+    }
+    assert len(sampled_gaps) > 1
+    assert all(
+        timedelta(milliseconds=250) <= gap <= timedelta(milliseconds=1850) for gap in sampled_gaps
+    )
 
     delayed_event = replace(event, timestamp=event.timestamp + timedelta(seconds=3))
     delayed_sysmon_time = generator._source_timing_planner.source_time(
@@ -248,6 +282,56 @@ def test_windows_process_source_timing_respects_visible_parent_create():
         not_before=event_time,
     )
     assert delayed_sysmon_time == sysmon_time
+
+
+def test_process_causal_audit_expansion_waits_for_visible_command_create():
+    """Command-derived audit effects should not beat the visible 4688 command row."""
+
+    class _Engine:
+        def expand(self, _event_type, _ctx):
+            return [
+                ExpandedEvent(
+                    method="_capture_expanded_audit",
+                    kwargs={},
+                    timing=TimingSpec(min_ms=100, max_ms=100, position="after"),
+                )
+            ]
+
+    generator = object.__new__(ActivityGenerator)
+    generator._causal_engine = _Engine()
+    generator._expanding_types = set()
+    generator._dns_cache = {}
+    generator._kerberos_cache = {}
+    generator._dc_systems = []
+    generator._created_account_sids = {}
+    generator.sid_registry = {}
+    visible_process_time = datetime(2024, 3, 18, 12, 0, 2, tzinfo=UTC)
+    generator._process_source_create_times = {("WS-01", 4321): visible_process_time}
+    captured: list[datetime] = []
+
+    def _capture_expanded_audit(**kwargs):
+        captured.append(kwargs["time"])
+
+    generator._capture_expanded_audit = _capture_expanded_audit
+    system = System(hostname="WS-01", ip="10.10.1.10", os="Windows 11", type="workstation")
+
+    generator._expand_and_emit(
+        "process_create",
+        datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC),
+        target_system=system,
+        source_pid=4321,
+    )
+
+    expected_gap = sample_timing_delta(
+        "windows.audit_after_visible_admin_command",
+        seed_parts=(
+            system.hostname,
+            4321,
+            visible_process_time,
+            datetime(2024, 3, 18, 12, 0, 0, 100000, tzinfo=UTC),
+        ),
+    )
+    assert captured == [visible_process_time + expected_gap]
 
 
 def test_timing_profiles_overlay_invalid_values_fall_back_safely(tmp_path, monkeypatch):

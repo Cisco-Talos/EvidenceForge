@@ -747,11 +747,15 @@ class WindowsEventEmitter(LogEmitter):
             seed_parts=(host.hostname, proc.pid, process_start_time),
             not_before=process_start_time,
         )
+        security_after_sysmon_gap = sample_timing_delta(
+            "source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+        )
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=sysmon_time + timedelta(milliseconds=250),
+            not_before=sysmon_time + security_after_sysmon_gap,
         )
 
         event_data = {
@@ -820,11 +824,15 @@ class WindowsEventEmitter(LogEmitter):
             seed_parts=(host.hostname, proc.pid, process_start_time),
             not_before=process_start_time,
         )
+        security_after_sysmon_gap = sample_timing_delta(
+            "source.windows_security_after_sysmon_process_create_gap",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+        )
         render_time = _SOURCE_TIMING.source_time(
             event,
             "source.windows_security_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
-            not_before=sysmon_time + timedelta(milliseconds=250),
+            not_before=sysmon_time + security_after_sysmon_gap,
         )
 
         event_data = {

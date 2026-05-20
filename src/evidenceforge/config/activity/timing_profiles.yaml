@@ -61,6 +61,11 @@ relationships:
     position: after
     min_ms: 25
     max_ms: 350
+  windows.audit_after_visible_admin_command:
+    class: source_latency
+    position: after
+    min_ms: 120
+    max_ms: 900
   source.windows_wfp_connection:
     class: source_latency
     position: after
@@ -81,6 +86,11 @@ relationships:
     position: after
     min_ms: 80
     max_ms: 4200
+  source.windows_security_after_sysmon_process_create_gap:
+    class: source_latency
+    position: after
+    min_ms: 250
+    max_ms: 1850
   source.sysmon_process_create:
     class: source_latency
     position: after
@@ -111,6 +121,11 @@ relationships:
     position: after
     min_ms: 1
     max_ms: 11
+  source.ecar_ssh_session_after_accept:
+    class: source_latency
+    position: after
+    min_ms: 275
+    max_ms: 650
   source.ecar_remote_thread:
     class: source_latency
     position: after

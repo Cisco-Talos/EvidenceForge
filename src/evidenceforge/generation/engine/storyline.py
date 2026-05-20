@@ -2290,6 +2290,7 @@ class StorylineMixin:
                     target_system=system,
                     command_line=command_line,
                     os_category=os_category,
+                    source_pid=pid,
                     logon_id=process_logon_id,
                     skip_types=explicit_types,
                 )
@@ -2586,10 +2587,15 @@ class StorylineMixin:
                 system,
             )
             target_sid = spec.target_sid or self._make_domain_sid()
+            effect_time = self._clamp_after_recent_storyline_process_source_create(
+                system=system,
+                event_time=time,
+                rng=rng,
+            )
             self.activity_generator.generate_account_created(
                 actor=actor,
                 system=dc,
-                time=time,
+                time=effect_time,
                 target_username=spec.target_username,
                 target_sid=target_sid,
             )
@@ -2601,7 +2607,7 @@ class StorylineMixin:
                 self._emit_storyline_account_password_followups(
                     actor=actor,
                     system=dc,
-                    time=time,
+                    time=effect_time,
                     target_username=spec.target_username,
                     target_sid=target_sid,
                 )
@@ -2617,10 +2623,15 @@ class StorylineMixin:
                 or self._created_account_sids.get(spec.target_username)
                 or self._make_domain_sid()
             )
+            effect_time = self._clamp_after_recent_storyline_process_source_create(
+                system=system,
+                event_time=time,
+                rng=rng,
+            )
             self.activity_generator.generate_account_deleted(
                 actor=actor,
                 system=dc,
-                time=time,
+                time=effect_time,
                 target_username=spec.target_username,
                 target_sid=target_sid,
                 from_storyline=True,

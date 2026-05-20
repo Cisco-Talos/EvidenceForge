@@ -5262,6 +5262,16 @@ class ActivityGenerator:
                     ev.kwargs["time"] = timestamp - offset
                 else:
                     ev.kwargs["time"] = timestamp + offset
+                    if event_type == "process_create":
+                        process_system = kwargs.get("target_system") or kwargs.get("source_system")
+                        source_pid = kwargs.get("source_pid")
+                        if process_system is not None and isinstance(source_pid, int):
+                            ev.kwargs["time"] = self._clamp_after_visible_process_create(
+                                process_system,
+                                source_pid,
+                                ev.kwargs["time"],
+                                "windows.audit_after_visible_admin_command",
+                            )
 
                 method = getattr(self, ev.method)
                 method(**ev.kwargs)
@@ -7152,11 +7162,15 @@ class ActivityGenerator:
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
             )
+            security_after_sysmon_gap = sample_timing_delta(
+                "source.windows_security_after_sysmon_process_create_gap",
+                seed_parts=(host.hostname, proc.pid, process_start_time),
+            )
             self._source_timing_planner.source_time(
                 event,
                 "source.windows_security_process_create",
                 seed_parts=(host.hostname, proc.pid, process_start_time),
-                not_before=sysmon_time + timedelta(milliseconds=250),
+                not_before=sysmon_time + security_after_sysmon_gap,
             )
 
         self._source_timing_planner.source_time(
@@ -9911,6 +9925,7 @@ class ActivityGenerator:
             edr=EdrContext(object_id=session_obj_id),
         )
 
+        accepted_time: datetime | None = None
         # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
@@ -9925,6 +9940,12 @@ class ActivityGenerator:
                 src_port,
                 sshd_pid,
                 time.isoformat(),
+            )
+            accepted_time = _ssh_syslog_time(
+                time,
+                "accepted",
+                accepted_delay_ms,
+                *ssh_syslog_seed,
             )
 
             # sshd connection message (precedes auth in real SSH lifecycle)
@@ -9949,14 +9970,36 @@ class ActivityGenerator:
             )
             self.dispatcher.dispatch(conn_msg_event)
 
+            ecar_after_accept_gap = sample_timing_delta(
+                "source.ecar_ssh_session_after_accept",
+                seed_parts=ssh_syslog_seed,
+            )
+            self._source_timing_planner.source_time(
+                event,
+                "source.ecar_session",
+                seed_parts=(
+                    "login",
+                    event.dst_host.hostname,
+                    user.username,
+                    source_ip,
+                    src_port,
+                    logon_id,
+                    10,
+                    session_obj_id,
+                    event.timestamp,
+                ),
+                not_before=accepted_time + ecar_after_accept_gap,
+            )
+
         self.dispatcher.dispatch(event)
 
         # Emit follow-up syslog entries (pam_unix + systemd-logind)
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
 
+            assert accepted_time is not None
             accepted_event = SecurityEvent(
-                timestamp=_ssh_syslog_time(time, "accepted", accepted_delay_ms, *ssh_syslog_seed),
+                timestamp=accepted_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
