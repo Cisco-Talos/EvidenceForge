@@ -3469,18 +3469,28 @@ class ActivityGenerator:
             if abs(current - seen_at) <= window_seconds
         ]
         if dst_ip and exclude_active_tuple:
-            reservations = [
-                (seen_at, port)
-                for seen_at, port in reservations
-                if self._recent_connection_tuples.get(
-                    (source_ip, port, dst_ip, dst_port, proto),
+            filtered_reservations = []
+            for seen_at, port in reservations:
+                recent_connection_at = max(
                     self._recent_connection_tuples.get(
-                        (source_ip.removeprefix("::ffff:"), port, dst_ip, dst_port, proto),
-                        0.0,
-                    ),
+                        (source_ip, port, dst_ip, dst_port, candidate_proto),
+                        self._recent_connection_tuples.get(
+                            (
+                                source_ip.removeprefix("::ffff:"),
+                                port,
+                                dst_ip,
+                                dst_port,
+                                candidate_proto,
+                            ),
+                            0.0,
+                        ),
+                    )
+                    for candidate_proto in {proto, "tcp", "udp"}
                 )
-                <= current
-            ]
+                reuse_cooldown = min(window_seconds, 2.0)
+                if not recent_connection_at or current - recent_connection_at > reuse_cooldown:
+                    filtered_reservations.append((seen_at, port))
+            reservations = filtered_reservations
         if not reservations:
             return None
         return min(reservations, key=lambda item: abs(current - item[0]))[1]
@@ -3516,6 +3526,21 @@ class ActivityGenerator:
                     time,
                     self._os_for_ip(source_ip),
                 )
+                for candidate_proto in ("tcp", "udp"):
+                    self._recent_connection_tuples.pop(
+                        (source_ip, source_port, dc_ip, 88, candidate_proto),
+                        None,
+                    )
+                    self._recent_connection_tuples.pop(
+                        (
+                            source_ip.removeprefix("::ffff:"),
+                            source_port,
+                            dc_ip,
+                            88,
+                            candidate_proto,
+                        ),
+                        None,
+                    )
             else:
                 source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 

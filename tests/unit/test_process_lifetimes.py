@@ -323,7 +323,7 @@ def test_reserved_kerberos_port_skips_active_connection_tuple() -> None:
         generator._find_reserved_kerberos_source_port(
             source_ip,
             dc_hostname,
-            start + timedelta(seconds=8),
+            start + timedelta(seconds=10),
             dst_ip=dc_ip,
             window_seconds=10.0,
         )

@@ -958,6 +958,59 @@ class TestInfrastructureDetection:
         assert event.network.resp_pkts >= len(audit_events)
         assert event.network.history not in {"ShAR", "Sr", "S"}
 
+    def test_standalone_kerberos_audit_avoids_recent_used_connection_port(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """A later standalone audit should not attach to an already rendered flow tuple."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="WS-01",
+            ip="10.10.1.32",
+            os="Windows 10",
+            type="workstation",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        src_port = 59885
+
+        activity_gen.generate_connection(
+            src_ip=client.ip,
+            dst_ip=dc.ip,
+            time=ts,
+            dst_port=88,
+            proto="udp",
+            service="kerberos",
+            duration=0.015,
+            orig_bytes=260,
+            resp_bytes=260,
+            src_port=src_port,
+            source_system=client,
+            conn_state="SF",
+            emit_dns=False,
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_kerberos_service_ticket(
+            username=f"{client.hostname}$",
+            service_name="cifs/FILE-SRV-01",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts + timedelta(seconds=1),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.kerberos.source_port != src_port
+
     def test_service_defaults_windows(self):
         from evidenceforge.generation.engine import GenerationEngine
         from evidenceforge.models.scenario import (
