@@ -177,20 +177,26 @@ programs:
     transient: true
     roles: [web_server, forward_proxy]
     weight: 1
+    max_per_host_window: 1
     params:
       web_user:
         - www-data
         - nginx
         - apache
       denied_command:
-        - /bin/cat /etc/shadow
-        - /usr/bin/head /etc/shadow
-        - /usr/bin/tail /var/log/auth.log
+        - /usr/bin/tail -n 50 /var/log/nginx/error.log
+        - /usr/bin/tail -n 80 /var/log/apache2/error.log
         - /usr/bin/find /root -maxdepth 1
+        - /usr/bin/find /var/www -maxdepth 2 -name .env
+        - /usr/bin/find /srv -maxdepth 2 -type f -name backup*.tar.gz
         - /usr/bin/id
-        - /usr/bin/curl -s http://169.254.169.254/latest/meta-data/
         - /bin/ls /root
-        - /usr/bin/grep -R password /etc
+        - /usr/bin/grep -R DB_PASSWORD /var/www
+        - /usr/bin/grep -R password /var/www
+        - /usr/bin/journalctl -u nginx -n 20
+        - /usr/bin/journalctl -u apache2 -n 20
+        - /usr/bin/stat /etc/passwd
+        - /usr/bin/ls -la /etc/ssl/private
       denied_tty:
         - unknown
         - pts/0

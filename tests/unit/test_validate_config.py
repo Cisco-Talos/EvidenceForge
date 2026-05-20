@@ -1626,6 +1626,22 @@ class TestValidateConfig:
             for pattern in schedule_native_patterns
         )
 
+    def test_extra_syslog_web_sudo_denial_profile_is_sparse_and_not_over_thematic(self):
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        programs = load_extra_syslog_messages()
+        web_sudo = next(
+            entry
+            for entry in programs
+            if entry["app"] == "sudo" and entry.get("roles") == ["web_server", "forward_proxy"]
+        )
+        denied_commands = web_sudo["params"]["denied_command"]
+
+        assert web_sudo["max_per_host_window"] == 1
+        assert not any("169.254.169.254" in command for command in denied_commands)
+        assert not any("/etc/shadow" in command for command in denied_commands)
+        assert any("/var/www" in command for command in denied_commands)
+
     def test_systemd_schedule_contains_sysstat_cron_cadence(self):
         from evidenceforge.generation.engine.baseline import _load_systemd_schedules
 

@@ -239,6 +239,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     system_types: list[str] | None = None
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
+    max_per_host_window: int | None = Field(default=None, gt=0)
 
 
 # --- TLS Issuers ---

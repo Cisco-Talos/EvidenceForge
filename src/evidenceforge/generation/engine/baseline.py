@@ -132,6 +132,13 @@ def _sample_lock_duration(rng: random.Random, kind: str) -> timedelta:
     return timedelta(seconds=seconds, milliseconds=rng.randint(17, 987))
 
 
+def _extra_syslog_limit_key(system_hostname: str, entry: dict[str, Any]) -> str:
+    """Return the per-host generation-limit key for an extra syslog entry."""
+    messages = entry.get("messages") if isinstance(entry.get("messages"), list) else []
+    marker = "|".join(str(message) for message in messages[:2])
+    return f"{system_hostname}:{entry.get('app', '<unknown>')}:{marker}"
+
+
 def _plan_http_request_groups(
     requests: list[Any],
     *,
@@ -6285,6 +6292,14 @@ class BaselineMixin:
                         k=1,
                     )[0]
                     app = entry["app"]
+                    limit = entry.get("max_per_host_window")
+                    limit_key = ""
+                    if isinstance(limit, int) and limit > 0:
+                        if not hasattr(self, "_extra_syslog_entry_counts"):
+                            self._extra_syslog_entry_counts = {}
+                        limit_key = _extra_syslog_limit_key(system.hostname, entry)
+                        if self._extra_syslog_entry_counts.get(limit_key, 0) >= limit:
+                            continue
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         # DHCP syslog must be tied to the canonical lease
@@ -6384,6 +6399,10 @@ class BaselineMixin:
                         facility=facility,
                         severity=severity,
                     )
+                    if limit_key:
+                        self._extra_syslog_entry_counts[limit_key] = (
+                            self._extra_syslog_entry_counts.get(limit_key, 0) + 1
+                        )
 
         # ICMP ping between systems on same subnet
         systems = self.scenario.environment.systems
