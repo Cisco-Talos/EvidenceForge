@@ -1229,7 +1229,7 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "example.com"
         assert event.dns.answers == ["v=spf1 include:_spf.example.com ~all"]
-        assert event.dns.TTLs and event.dns.TTLs[0] >= 900
+        assert event.dns.TTLs and 0 < event.dns.TTLs[0] <= 1800
 
     def test_mx_roll_on_cdn_hostname_falls_back_to_txt(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
@@ -1248,7 +1248,7 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "cloudfront.net"
         assert event.dns.answers == ["v=spf1 include:_spf.cloudfront.net ~all"]
-        assert event.dns.TTLs and event.dns.TTLs[0] >= 900
+        assert event.dns.TTLs and 0 < event.dns.TTLs[0] <= 1800
 
     def test_txt_answers_are_stable_and_dkim_keys_are_source_native(self):
         from evidenceforge.generation.activity.dns_txt import (
@@ -1303,6 +1303,37 @@ class TestDnsSupportQueryTypes:
 
         assert second.TTLs[0] < first.TTLs[0]
         assert second.TTLs[0] <= first.TTLs[0] - 50
+
+    def test_external_rrset_ttl_countdown_is_generation_order_independent(
+        self, activity_gen, timestamp
+    ):
+        """Resolver TTL aging should follow event time even if generation order differs."""
+        common = {
+            "resolver_ip": "10.0.0.1",
+            "query": "zoom.us",
+            "qtype_name": "TXT",
+            "answers": ["v=spf1 include:spf.protection.outlook.com include:amazonses.com ~all"],
+            "is_internal": False,
+            "base_ttl": 1800,
+        }
+        early = timestamp
+        late = timestamp + timedelta(seconds=55)
+        for offset_seconds in range(0, 1800, 30):
+            candidate = timestamp + timedelta(seconds=offset_seconds)
+            first = activity_gen._dns_observed_ttls(**common, time=candidate)[0]
+            second = activity_gen._dns_observed_ttls(
+                **common,
+                time=candidate + timedelta(seconds=55),
+            )[0]
+            if first - second >= 50:
+                early = candidate
+                late = candidate + timedelta(seconds=55)
+                break
+
+        late_first = activity_gen._dns_observed_ttls(**common, time=late)[0]
+        early_second = activity_gen._dns_observed_ttls(**common, time=early)[0]
+
+        assert early_second - late_first >= 50
 
     def test_forward_proxy_srv_queries_use_internal_resolver(
         self, activity_gen, timestamp, mock_emitters, monkeypatch

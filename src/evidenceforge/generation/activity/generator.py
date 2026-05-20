@@ -10788,57 +10788,15 @@ class ActivityGenerator:
         if is_internal:
             return [float(bounded_ttl)] * len(answers)
 
-        if not hasattr(self, "_dns_resolver_rrset_cache"):
-            self._dns_resolver_rrset_cache = {}
-
         ts_epoch = time.timestamp()
-        if len(self._dns_resolver_rrset_cache) > 50_000:
-            cutoff = ts_epoch - 86_400
-            self._dns_resolver_rrset_cache = {
-                key: value
-                for key, value in self._dns_resolver_rrset_cache.items()
-                if value[0] >= cutoff
-            }
-            if len(self._dns_resolver_rrset_cache) > 50_000:
-                sorted_items = sorted(
-                    self._dns_resolver_rrset_cache.items(),
-                    key=lambda item: item[1][0],
-                    reverse=True,
-                )
-                self._dns_resolver_rrset_cache = dict(sorted_items[:50_000])
-
         normalized_query = query.rstrip(".").lower()
         normalized_answers = tuple(sorted(str(answer) for answer in answers))
         cache_key = (resolver_ip, normalized_query, qtype_name.upper(), normalized_answers)
-        cached = self._dns_resolver_rrset_cache.get(cache_key)
-        if cached is not None:
-            first_seen_epoch, authoritative_ttl = cached
-            remaining = int(authoritative_ttl - max(0.0, ts_epoch - first_seen_epoch))
-            if remaining > 0:
-                return [float(max(1, remaining))] * len(answers)
-
-        max_initial_age = min(bounded_ttl - 1, max(1, int(bounded_ttl * 0.35)))
-        if max_initial_age <= 0:
-            initial_age = 0
-        else:
-            seed_parts = ":".join(
-                [
-                    resolver_ip,
-                    normalized_query,
-                    qtype_name.upper(),
-                    "|".join(normalized_answers),
-                    str(int(ts_epoch // bounded_ttl)),
-                ]
-            )
-            initial_age = random.Random(_stable_seed(f"dns_rrset_cache:{seed_parts}")).randint(
-                0,
-                max_initial_age,
-            )
-        self._dns_resolver_rrset_cache[cache_key] = (
-            ts_epoch - initial_age,
-            float(bounded_ttl),
-        )
-        return [float(max(1, bounded_ttl - initial_age))] * len(answers)
+        offset = _stable_seed(f"dns_rrset_cache_cycle:{cache_key}") % bounded_ttl
+        cycle_start = math.floor((ts_epoch - offset) / bounded_ttl) * bounded_ttl + offset
+        age = max(0.0, ts_epoch - cycle_start)
+        remaining = max(1, int(bounded_ttl - age))
+        return [float(remaining)] * len(answers)
 
     def _normalize_dns_context_for_resolver(
         self,
