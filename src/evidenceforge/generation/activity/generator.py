@@ -14078,6 +14078,7 @@ class ActivityGenerator:
 
     # Process names that can spawn child processes
     _WINDOWS_SHELLS = {"cmd.exe", "powershell.exe", "pwsh.exe", "WindowsTerminal.exe"}
+    _WINDOWS_SHELL_NAMES = {"cmd.exe", "powershell.exe", "pwsh.exe", "windowsterminal.exe"}
     _WINDOWS_SPAWNERS = {
         "cmd.exe",
         "powershell.exe",
@@ -14111,6 +14112,21 @@ class ActivityGenerator:
     _LINUX_SHELLS = {"/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/bash", "/usr/bin/zsh"}
     _LINUX_SERVICE_USERS = {"apache", "www-data", "nginx", "httpd"}
     _LINUX_SERVICE_PARENT_KEYS = ("apache2", "httpd", "nginx", "php-fpm")
+
+    @staticmethod
+    def _is_one_shot_shell_command(process_name: str, command_line: str) -> bool:
+        """Return whether a shell command is a short-lived command wrapper."""
+        exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if exe_name not in {"cmd.exe", "powershell.exe", "pwsh.exe"}:
+            return False
+        return _windows_foreground_lifetime(process_name, command_line) is not None
+
+    def _is_one_shot_shell_parent(self, system: System, pid: int) -> bool:
+        """Return whether PID is a short-lived shell unsuitable as a later parent."""
+        proc = self.state_manager.get_process(system.hostname, pid)
+        if proc is None:
+            return False
+        return self._is_one_shot_shell_command(proc.image, proc.command_line)
 
     def _linux_anchor_pid(self, system: System, time: datetime) -> int:
         """Return a tracked Linux init/systemd process for parent-chain fallbacks."""
@@ -14449,7 +14465,8 @@ class ActivityGenerator:
                 shells = [
                     (pid, name)
                     for pid, name in alive_history
-                    if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SHELLS
+                    if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SHELL_NAMES
+                    and not self._is_one_shot_shell_parent(system, pid)
                 ]
                 if shells and rng.random() < 0.6:
                     return shells[-1][0]
@@ -14508,7 +14525,8 @@ class ActivityGenerator:
             shells = [
                 (pid, name)
                 for pid, name in alive_history
-                if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SHELLS
+                if name.rsplit("\\", 1)[-1].lower() in self._WINDOWS_SHELL_NAMES
+                and not self._is_one_shot_shell_parent(system, pid)
             ]
             if shells and rng.random() < 0.6:
                 return shells[-1][0]
@@ -14629,7 +14647,9 @@ class ActivityGenerator:
                 )
                 if hist_exe in {"psexesvc.exe", "wmiprvse.exe", "healthmonitorsvc.exe"}:
                     remote_wrappers.append(pid)
-                elif hist_exe in self._WINDOWS_SHELLS:
+                elif hist_exe in self._WINDOWS_SHELL_NAMES and not (
+                    self._is_one_shot_shell_parent(system, pid)
+                ):
                     shells.append(pid)
             if remote_wrappers:
                 return remote_wrappers[-1]
@@ -14697,6 +14717,12 @@ class ActivityGenerator:
                 if "\\" in name
                 else name.rsplit("/", 1)[-1].lower()
             )
+            if (
+                os_cat == "windows"
+                and hist_exe in self._WINDOWS_SHELL_NAMES
+                and self._is_one_shot_shell_parent(system, pid)
+            ):
+                continue
             if hist_exe in possible_parents:
                 alive_parents.append((pid, name))
 
@@ -14823,6 +14849,7 @@ class ActivityGenerator:
                     logon_id=logon_id,
                     os_category=os_category,
                 )
+                and not self._is_one_shot_shell_parent(system, parent_pid)
             ):
                 return parent_pid
         elif parent_proc is not None and self._is_pid_active_at(system, parent_pid, time):

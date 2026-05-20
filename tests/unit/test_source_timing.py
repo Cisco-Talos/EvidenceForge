@@ -213,6 +213,33 @@ def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> No
     assert row["properties"]["src_ip"] == "-"
 
 
+def test_ecar_logoff_does_not_render_orphaned_self_sourced_port(tmp_path: Path) -> None:
+    """Endpoint LOGOUT rows should not keep a port after suppressing local source IP."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    host = _host_context()
+    event = SecurityEvent(
+        timestamp=_base_time(),
+        event_type="logoff",
+        dst_host=host,
+        auth=AuthContext(
+            username="alice",
+            logon_id="0x12345",
+            logon_type=3,
+            source_ip=host.ip,
+            source_port=60456,
+        ),
+    )
+
+    emitter.emit(event)
+    emitter.close()
+
+    row = json.loads((tmp_path / host.fqdn / "ecar.json").read_text().splitlines()[0])
+    assert row["object"] == "USER_SESSION"
+    assert row["action"] == "LOGOUT"
+    assert "src_ip" not in row["properties"]
+    assert "src_port" not in row["properties"]
+
+
 def test_sysmon_process_access_timestamp_follows_process_create(tmp_path: Path) -> None:
     """Sysmon Event 10 should render after the source process Event 1."""
     output_path = tmp_path / "sysmon.xml"

@@ -4221,6 +4221,73 @@ class TestActivityGenerator:
         assert child.process.parent_pid != wrong_parent_pid
         assert child.process.logon_id == new_logon_id
 
+    def test_generate_process_rejects_one_shot_shell_parent(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Short-lived shell wrappers should not parent unrelated later commands."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x33333"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=20))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line="explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        activity_gen._system_pids = {
+            test_system.hostname: {
+                "explorer": explorer_pid,
+                "winlogon": 4,
+                "services": 4,
+                "svchost_dcom": 4,
+            }
+        }
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        one_shot_parent_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=explorer_pid,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line='powershell.exe -NoProfile -Command "Get-LocalUser"',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        activity_gen._record_user_process(
+            test_system,
+            test_user,
+            one_shot_parent_pid,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Windows\System32\whoami.exe",
+            "whoami.exe",
+            parent_pid=one_shot_parent_pid,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid != one_shot_parent_pid
+
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)

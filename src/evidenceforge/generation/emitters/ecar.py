@@ -328,7 +328,7 @@ class EcarEmitter(HostMultiplexEmitter):
         source_ip = _ecar_session_source_ip(event)
         if source_ip != "-":
             event_data["src_ip"] = source_ip
-        if event.auth.source_port:
+        if source_ip != "-" and event.auth.source_port:
             event_data["src_port"] = event.auth.source_port
         if getattr(host, "os_category", "") != "windows":
             event_data["session_type"] = _ecar_non_windows_session_type(event)

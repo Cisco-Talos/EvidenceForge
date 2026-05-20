@@ -685,12 +685,24 @@ class StateManager:
         self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
         pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
-        pid += (slot * 29) + ordinal
+        pid += (slot * 2) + ordinal
         pid = self._normalize_linux_pid(pid)
 
         running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
         used = self._linux_pid_used_ids.setdefault(system, set())
         allocations = self._linux_pid_allocations.setdefault(system, [])
+        prior_visible_pid = max(
+            (
+                allocated_pid
+                for allocated_time, allocated_pid in allocations
+                if allocated_time <= current_time
+            ),
+            default=None,
+        )
+        if prior_visible_pid is not None and (
+            minimum_pid_exclusive is None or prior_visible_pid > minimum_pid_exclusive
+        ):
+            minimum_pid_exclusive = prior_visible_pid
         collision_salt = 0
         while (
             pid in running

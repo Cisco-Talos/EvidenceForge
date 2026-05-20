@@ -205,6 +205,60 @@ class TestStateManagerInit:
 
         assert 8_000 <= pid < 180_000
 
+    def test_linux_pids_increase_across_time_bucket_boundary(self):
+        """Linux PIDs should not sawtooth downward at five-minute boundaries."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+
+        sm.set_current_time(boot_time + timedelta(minutes=4, seconds=59))
+        first_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 first.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(minutes=5, seconds=1))
+        second_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 second.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+
+        assert second_pid > first_pid
+
+    def test_linux_pids_keep_chronological_shape_when_allocated_out_of_order(self):
+        """Out-of-order generation should not make earlier Linux PIDs look newer."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+
+        sm.set_current_time(boot_time + timedelta(minutes=5, seconds=1))
+        later_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 later.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(minutes=4, seconds=59))
+        earlier_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 earlier.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+
+        assert earlier_pid < later_pid
+
     def test_linux_transient_syslog_pids_share_process_namespace(self):
         """Syslog-only transient PIDs should not come from a separate low random pool."""
         sm = StateManager()
