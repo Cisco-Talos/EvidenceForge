@@ -321,6 +321,45 @@ class TestObservationProfiles:
         assert delay == policy.decide("syslog", accepted).delay
         assert connection.timestamp + delay < accepted.timestamp + delay
 
+    def test_syslog_ssh_pam_lifecycle_rows_are_not_dropped(self, monkeypatch):
+        """PAM SSH open/close rows should not orphan visible endpoint session lifecycle."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "syslog": {
+                        "missingness": 1.0,
+                        "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("syslog_drop_test")
+        host = HostContext(
+            hostname="APP-01",
+            ip="10.0.3.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        event = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="logoff",
+            dst_host=host,
+            syslog=SyslogContext(
+                app_name="sshd",
+                pid=5158,
+                message="pam_unix(sshd:session): session closed for user admin",
+            ),
+        )
+
+        assert policy.decide("syslog", event).status == "visible"
+
     def test_network_visibility_records_filtered_source_status(self):
         """Network visibility filtering is reflected in source evidence status."""
         sm = MagicMock(spec=StateManager)

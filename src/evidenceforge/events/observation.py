@@ -146,6 +146,8 @@ class ObservationPolicy:
     def _effective_missingness(
         self, source: str, event: SecurityEvent, settings: dict[str, Any]
     ) -> float:
+        if self._preserve_ssh_session_lifecycle(source, event):
+            return 0.0
         host = self._host_key_for_event(event)
         return self._effective_missingness_for_host(source, host, settings)
 
@@ -249,6 +251,15 @@ class ObservationPolicy:
         if source == "zeek" and (group.startswith("uid:") or group.startswith("dns:")):
             return True
         return False
+
+    @staticmethod
+    def _preserve_ssh_session_lifecycle(source: str, event: SecurityEvent) -> bool:
+        """Preserve SSH PAM lifecycle rows that correlate with endpoint session rows."""
+        if source != "syslog" or event.syslog is None:
+            return False
+        if event.syslog.app_name != "sshd":
+            return False
+        return "pam_unix(sshd:session): session " in event.syslog.message
 
     def _host_key_for_event(self, event: SecurityEvent) -> str:
         host = event.dst_host or event.src_host

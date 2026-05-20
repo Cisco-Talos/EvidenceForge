@@ -311,6 +311,10 @@ class EcarEmitter(HostMultiplexEmitter):
             "principal": event.auth.username,
             "_host_fqdn": self._host_fqdn(host),
         }
+        if event.auth.source_ip and event.auth.source_ip != "-":
+            event_data["src_ip"] = event.auth.source_ip
+        if event.auth.source_port:
+            event_data["src_port"] = event.auth.source_port
         if getattr(host, "os_category", "") != "windows":
             event_data["session_type"] = _ecar_non_windows_session_type(event)
         self._apply_edr_context(event_data, event)

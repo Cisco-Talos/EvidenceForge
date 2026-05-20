@@ -5709,6 +5709,8 @@ class ActivityGenerator:
 
         # Build SecurityEvent (StateManager.apply() handles end_session)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
+        session_source_ip = session.source_ip if session is not None else ""
+        session_source_port = session.source_port if session is not None else 0
         event = SecurityEvent(
             timestamp=time,
             event_type="logoff",
@@ -5718,6 +5720,8 @@ class ActivityGenerator:
                 user_sid=self._get_sid(user.username),
                 logon_id=logon_id,
                 logon_type=logon_type,
+                source_ip=session_source_ip,
+                source_port=session_source_port,
             ),
             edr=EdrContext(object_id=session_obj_id),
             storyline_origin=from_storyline,
@@ -5725,7 +5729,10 @@ class ActivityGenerator:
 
         # Attach SyslogContext for Linux SSH sessions only (sshd session closed).
         # Non-SSH sessions (interactive, network) don't produce sshd evidence.
-        is_ssh_session = session and session.session_kind == "ssh"
+        is_ssh_session = session and (
+            session.session_kind == "ssh"
+            or (event.dst_host and event.dst_host.os_category == "linux" and logon_type == 10)
+        )
         if event.dst_host and event.dst_host.os_category == "linux" and is_ssh_session:
             from evidenceforge.events.contexts import SyslogContext
 
@@ -5735,28 +5742,15 @@ class ActivityGenerator:
                 else self.state_manager.allocate_transient_linux_pid(system.hostname, time)
             )
             source_port = session.source_port if session else 0
-            close_aligned = False
-            if source_port and session:
-                if session.source_ip == system.ip:
-                    close_aligned = False
-                elif session.network_close_time is None:
-                    close_aligned = True
-                else:
-                    close_gap_seconds = abs((time - session.network_close_time).total_seconds())
-                    close_aligned = close_gap_seconds <= 60.0
-            if not close_aligned:
+            if not source_port or not session or session.source_ip == system.ip:
                 event.syslog = None
             else:
-                message = (
-                    f"Received disconnect from {session.source_ip} port {source_port}:11:  "
-                    "[preauth]"
-                )
                 event.syslog = SyslogContext(
                     app_name="sshd",
                     pid=sshd_pid,
                     facility=10,
                     severity=6,
-                    message=message,
+                    message=f"pam_unix(sshd:session): session closed for user {user.username}",
                 )
 
         # Phase 3: Dispatch to matching emitters
