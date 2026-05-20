@@ -5304,6 +5304,82 @@ class TestActivityGenerator:
         assert gzip_create.process.parent_pid == bash_pid
         assert gzip_create.timestamp > mysqldump_terminate.timestamp
 
+    def test_linux_process_activity_reserves_busy_foreground_shell(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Baseline Linux process activity should wait for the active foreground command."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc789"
+        state_manager.set_current_time(process_time - timedelta(seconds=60))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=process_time - timedelta(seconds=30),
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+        blocked_until = process_time + timedelta(seconds=30)
+        activity_gen._foreground_shell_next_time[
+            (linux.hostname, test_user.username, logon_id, bash_pid)
+        ] = blocked_until
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/bin/npm", "npm install")]},
+        ):
+            activity_gen.execute_baseline_activity(test_user, linux, process_time, "process_system")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        npm_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/npm"
+        )
+
+        assert npm_create.process.parent_pid == bash_pid
+        assert npm_create.timestamp > blocked_until
+
     def test_process_user_apps_bash_pool_respects_database_role(
         self, activity_gen, test_user, monkeypatch, mock_emitters
     ):

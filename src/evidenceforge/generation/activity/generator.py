@@ -11418,6 +11418,15 @@ class ActivityGenerator:
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
+                    if os_category == "linux":
+                        process_time = self._reserve_foreground_shell_time(
+                            system=system,
+                            username=user.username,
+                            logon_id=logon_id,
+                            parent_pid=parent_pid,
+                            requested_time=process_time,
+                            seed_text=command_line,
+                        )
                     pid = self.generate_process(
                         user,
                         system,
@@ -11587,6 +11596,14 @@ class ActivityGenerator:
                     )
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
+                    )
+                    process_time = self._reserve_foreground_shell_time(
+                        system=system,
+                        username=user.username,
+                        logon_id=logon_id,
+                        parent_pid=parent_pid,
+                        requested_time=process_time,
+                        seed_text=command_line,
                     )
                     pid = self.generate_process(
                         user,
