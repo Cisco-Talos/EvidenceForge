@@ -2738,6 +2738,7 @@ class ActivityGenerator:
         self._dns_cache: dict[tuple[str, str, str], float] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
+        self._tls_seen_client_server_pairs: set[tuple[str, str, int, str]] = set()
         self._tls_cert_validity: dict[str, tuple[int, int]] = {}
         self._tls_intermediate_profiles: dict[tuple[str, str], dict[str, Any]] = {}
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
@@ -4613,8 +4614,15 @@ class ActivityGenerator:
         ssl_history_roll = rng.random()
         tls_name_key = server_name or dst_ip
         first_observed_name = tls_name_key not in self._tls_seen_server_names
-        resumed = (rng.random() < 0.45 and not first_observed_name) if ssl_established else False
+        pair_key = (net.src_ip, net.dst_ip, net.dst_port, tls_name_key)
+        first_observed_pair = pair_key not in self._tls_seen_client_server_pairs
+        resumed = (
+            rng.random() < 0.45 and not first_observed_name and not first_observed_pair
+            if ssl_established
+            else False
+        )
         self._tls_seen_server_names.add(tls_name_key)
+        self._tls_seen_client_server_pairs.add(pair_key)
         ssl_hist = _choose_ssl_history_from_roll(
             ssl_history_roll,
             tls_version=tls_version,
@@ -7126,17 +7134,17 @@ class ActivityGenerator:
             return
 
         if host.os_category == "windows":
-            self._source_timing_planner.source_time(
+            sysmon_time = self._source_timing_planner.source_time(
                 event,
-                "source.windows_security_process_create",
+                "source.sysmon_process_create",
                 seed_parts=(host.hostname, proc.pid, event.timestamp),
                 not_before=event.timestamp,
             )
             self._source_timing_planner.source_time(
                 event,
-                "source.sysmon_process_create",
+                "source.windows_security_process_create",
                 seed_parts=(host.hostname, proc.pid, event.timestamp),
-                not_before=event.timestamp,
+                not_before=sysmon_time + timedelta(milliseconds=25),
             )
 
         process_start_time = proc.start_time or event.timestamp

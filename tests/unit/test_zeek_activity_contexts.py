@@ -1008,6 +1008,29 @@ class TestSslContextPopulation:
             assert event.x509 is None
             assert event.ssl.cert_chain_fuids == []
 
+    def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
+        """TLS resumption should require prior client/server pair state."""
+        gen, events = activity_gen
+
+        for offset in range(20):
+            gen.generate_connection(
+                src_ip=f"198.51.100.{offset + 1}",
+                dst_ip="203.14.220.10",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(seconds=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="ehr-portal.example.org",
+                conn_state="SF",
+            )
+
+        tls_events = [event for event in events if event.ssl is not None]
+        assert len(tls_events) == 20
+        assert all(event.ssl.resumed is False for event in tls_events)
+
     def test_ocsp_status_and_update_window_are_cached_per_certificate(self, activity_gen):
         """OCSP responses should not expire at observation time or flip status per serial."""
         gen, events = activity_gen

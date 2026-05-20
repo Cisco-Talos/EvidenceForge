@@ -297,6 +297,30 @@ class TestProxyUriOsFiltering:
 
         assert internal_ocsp_ua == "Microsoft-CryptoAPI/10.0"
 
+    def test_vendor_update_user_agents_stay_domain_specific(self):
+        """Updater/security-client UAs should not cross vendor domains."""
+        from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+        from evidenceforge.models.scenario import System
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+        )
+        expected = {
+            "dellupdater.dell.com": "Dell Command Update/5.1",
+            "download.lenovo.com": "Lenovo System Update",
+            "hpia.hpcloud.hp.com": "HP Image Assistant",
+            "secure-client-updates.cisco.com": "Cisco Secure Client/5.1.4 Windows",
+            "updates.paloaltonetworks.com": "GlobalProtect/6.2.3 Windows",
+            "config.zscaler.net": "Zscaler Client Connector/4.3.0",
+            "gateway.zscaler.net": "Zscaler Client Connector/4.3.0",
+        }
+
+        for hostname, user_agent in expected.items():
+            assert pick_proxy_user_agent(random.Random(42), source, hostname=hostname) == user_agent
+
     def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
         """Domain-specific proxy UA rules should override inherited browser session UAs."""
         from evidenceforge.events.contexts import HttpContext

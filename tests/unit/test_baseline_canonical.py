@@ -41,6 +41,7 @@ from evidenceforge.generation.engine.baseline import (
     _linux_baseline_pam_close_lead,
     _linux_baseline_pam_open_lead,
     _linux_baseline_session_initiator,
+    _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
     _module_matches_process,
     _sample_lock_duration,
@@ -115,6 +116,29 @@ def test_linux_baseline_pam_leads_leave_visible_ordering_margin():
     assert max(open_leads) <= timedelta(seconds=8)
     assert min(close_leads) >= timedelta(milliseconds=1200)
     assert max(close_leads) <= timedelta(milliseconds=4200)
+
+
+def test_linux_transient_syslog_pid_uses_host_pid_allocator():
+    """Short-lived PAM/sudo syslog records should use one invocation PID per call."""
+    state_manager = Mock()
+    state_manager.allocate_transient_linux_pid.side_effect = [24123, 24171]
+    event_time = datetime(2024, 3, 18, 12, 5, tzinfo=UTC)
+
+    first = _linux_transient_syslog_pid(
+        state_manager,
+        "WEB-EXT-01",
+        event_time,
+        random.Random(3),
+    )
+    second = _linux_transient_syslog_pid(
+        state_manager,
+        "WEB-EXT-01",
+        event_time + timedelta(seconds=20),
+        random.Random(3),
+    )
+
+    assert [first, second] == [24123, 24171]
+    assert state_manager.allocate_transient_linux_pid.call_count == 2
 
 
 @pytest.fixture

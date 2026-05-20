@@ -144,6 +144,19 @@ def _linux_baseline_pam_close_lead(rng: random.Random) -> timedelta:
     return timedelta(milliseconds=rng.randint(1200, 4200))
 
 
+def _linux_transient_syslog_pid(
+    state_manager: Any,
+    system_hostname: str,
+    event_time: datetime,
+    rng: random.Random,
+) -> int:
+    """Allocate a source-native PID for one short-lived Linux syslog invocation."""
+    allocator = getattr(state_manager, "allocate_transient_linux_pid", None)
+    if callable(allocator):
+        return allocator(system_hostname, event_time)
+    return rng.randint(1200, 9500)
+
+
 def _sample_lock_duration(rng: random.Random, kind: str) -> timedelta:
     """Return a human-shaped workstation lock duration with non-minute texture."""
     if kind == "lunch":
@@ -6035,19 +6048,16 @@ class BaselineMixin:
                         user,
                         rng=rng,
                     )
-                    pam_pid = sys_pids.get("cron") if pam_service == "cron" else None
-                    if pam_pid is None:
-                        pam_pid = (
-                            rng.randint(650, 1100)
-                            if pam_service == "cron"
-                            else rng.randint(
-                                1200,
-                                9500,
-                            )
-                        )
+                    pam_open_time = ts - _linux_baseline_pam_open_lead(rng)
+                    pam_pid = _linux_transient_syslog_pid(
+                        self.state_manager,
+                        system.hostname,
+                        pam_open_time,
+                        rng,
+                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
-                        time=ts - _linux_baseline_pam_open_lead(rng),
+                        time=pam_open_time,
                         app_name=pam_app,
                         message=pam_open,
                         pid=pam_pid,
@@ -6450,28 +6460,47 @@ class BaselineMixin:
                     # Transient processes (forked per invocation) get random PIDs;
                     # persistent daemons get stable PIDs.
                     _TRANSIENT_APPS = {"sudo", "cron"}
-                    pid_key = _APP_TO_PID_KEY.get(app)
-                    if pid_key and pid_key in sys_pids:
-                        pid = sys_pids[pid_key]
-                    elif app in _TRANSIENT_APPS:
+                    if app in _TRANSIENT_APPS:
                         pid = self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             ts,
                         )
                     else:
-                        # Derive a stable per-host PID for persistent daemons not in sys_pids
-                        import hashlib as _hl
+                        pid_key = _APP_TO_PID_KEY.get(app)
+                        if pid_key and pid_key in sys_pids:
+                            pid = sys_pids[pid_key]
+                        else:
+                            # Derive a stable per-host PID for persistent daemons not in sys_pids.
+                            import hashlib as _hl
 
-                        _h = int(
-                            _hl.md5(
-                                f"{system.hostname}:{app}".encode(),
-                                usedforsecurity=False,
-                            ).hexdigest(),
-                            16,
-                        )
-                        pid = 500 + (_h % 59500)  # range 500-59999
+                            _h = int(
+                                _hl.md5(
+                                    f"{system.hostname}:{app}".encode(),
+                                    usedforsecurity=False,
+                                ).hexdigest(),
+                                16,
+                            )
+                            pid = 500 + (_h % 59500)  # range 500-59999
                     facility = 10 if app == "sudo" else 3
                     severity = 5 if app == "sudo" else 6
+                    sudo_has_session = (
+                        app == "sudo" and "COMMAND=" in msg and "command not allowed" not in msg
+                    )
+                    if sudo_has_session:
+                        sudo_user = (msg.split(" : ", 1)[0] or "admin").strip()
+                        uid = _linux_uid_for_user(sudo_user)
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts - timedelta(milliseconds=rng.randint(80, 420)),
+                            app_name="sudo",
+                            message=(
+                                "pam_unix(sudo:session): session opened for user "
+                                f"root(uid=0) by {sudo_user}(uid={uid})"
+                            ),
+                            pid=pid,
+                            facility=10,
+                            severity=6,
+                        )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -6481,6 +6510,16 @@ class BaselineMixin:
                         facility=facility,
                         severity=severity,
                     )
+                    if sudo_has_session:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(milliseconds=rng.randint(90, 900)),
+                            app_name="sudo",
+                            message="pam_unix(sudo:session): session closed for user root",
+                            pid=pid,
+                            facility=10,
+                            severity=6,
+                        )
                     if limit_key:
                         self._extra_syslog_entry_counts[limit_key] = (
                             self._extra_syslog_entry_counts.get(limit_key, 0) + 1

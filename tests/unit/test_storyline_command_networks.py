@@ -285,6 +285,17 @@ class TestStorylineCommandNetworks:
         assert any(key.startswith("source.windows_security_process_create|") for key in source_keys)
         assert any(key.startswith("source.sysmon_process_create|") for key in source_keys)
         assert any(key.startswith("source.ecar_process_create|") for key in source_keys)
+        sysmon_time = next(
+            value
+            for key, value in event.source_timing.source_times.items()
+            if key.startswith("source.sysmon_process_create|")
+        )
+        security_time = next(
+            value
+            for key, value in event.source_timing.source_times.items()
+            if key.startswith("source.windows_security_process_create|")
+        )
+        assert security_time >= sysmon_time + timedelta(milliseconds=25)
         assert generator.process_source_create_time(system.hostname, pid) == max(
             event.source_timing.source_times.values()
         )
