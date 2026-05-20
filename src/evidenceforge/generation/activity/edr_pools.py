@@ -27,6 +27,13 @@ _CACHED: dict[str, Any] | None = None
 logger = logging.getLogger(__name__)
 
 _DEFENDER_PLATFORM_VERSIONS = ("4.18.2301.6-0", "4.18.24010.12-0", "4.18.24030.9-0")
+_DEFAULT_RUNMRU_COMMANDS = (
+    "cmd.exe /k dir",
+    "cmd.exe /k whoami",
+    "cmd.exe /c ipconfig",
+    "powershell.exe -NoExit Get-ChildItem",
+    "notepad.exe",
+)
 _USERASSIST_RUNPATHS = (
     r"C:\Program Files\Google\Chrome\Application\chrome.exe",
     r"C:\Program Files\Mozilla Firefox\firefox.exe",
@@ -93,6 +100,7 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "file_paths_windows": _is_valid_string_list,
         "file_paths_linux": _is_valid_string_list,
         "dll_pool": _is_valid_string_list,
+        "runmru_commands": _is_valid_string_list,
         "registry_keys_hkcu": _is_valid_registry_pool,
         "registry_keys_hklm": _is_valid_registry_pool,
     }
@@ -224,6 +232,18 @@ def _userassist_binary_details(rng: random.Random) -> str:
     return " ".join(f"{rng.getrandbits(8):02X}" for _ in range(byte_count))
 
 
+def _runmru_value_name(rng: random.Random) -> str:
+    """Return a plausible RunMRU value slot."""
+    return chr(ord("a") + rng.randint(0, 15))
+
+
+def _runmru_command(rng: random.Random, user: str) -> str:
+    """Return a varied RunMRU command with the source-native terminator."""
+    commands = load_edr_pools().get("runmru_commands", _DEFAULT_RUNMRU_COMMANDS)
+    command = str(rng.choice(commands)).format(user=user or "Default")
+    return command if command.endswith("\\1") else f"{command}\\1"
+
+
 def materialize_edr_template(
     template: str,
     rng: random.Random,
@@ -261,6 +281,8 @@ def materialize_edr_template(
             f"{rng.getrandbits(48):012X}"
         ),
         "mru": str(rng.randint(0, 24)),
+        "runmru_name": _runmru_value_name(rng),
+        "runmru_command": _runmru_command(rng, user),
         "doc": str(rng.randint(1, 80)),
         "userassist_value": _userassist_value_name(rng, user),
         "userassist_binary": _userassist_binary_details(rng),
@@ -322,6 +344,8 @@ def materialize_edr_template_group(
             f"{rng.getrandbits(48):012X}"
         ),
         "mru": str(rng.randint(0, 24)),
+        "runmru_name": _runmru_value_name(rng),
+        "runmru_command": _runmru_command(rng, user),
         "doc": str(rng.randint(1, 80)),
         "userassist_value": _userassist_value_name(rng, user),
         "userassist_binary": _userassist_binary_details(rng),

@@ -242,6 +242,7 @@ def validate_config() -> ValidationResult:
                 "file_paths_windows",
                 "file_paths_linux",
                 "dll_pool",
+                "runmru_commands",
             },
         },
         "activity/endpoint_noise.yaml": {

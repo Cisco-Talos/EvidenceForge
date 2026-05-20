@@ -133,8 +133,24 @@ file_paths_linux:
 
 # Registry keys for EDR events. Format: [key, value_name, details].
 # TargetObject in Sysmon = key\value_name. Details = data written.
+runmru_commands:
+  - "cmd.exe /k dir"
+  - "cmd.exe /k whoami"
+  - "cmd.exe /c ipconfig"
+  - "cmd.exe /c net use"
+  - "cmd.exe /c hostname"
+  - "powershell.exe -NoExit Get-ChildItem"
+  - "powershell.exe -NoProfile Get-Process"
+  - "notepad.exe"
+  - "calc.exe"
+  - "control.exe printers"
+  - "mstsc.exe /v:DC-01"
+  - "explorer.exe C:\\Users\\{user}\\Documents"
+  - "explorer.exe \\\\FILE-SRV-01\\Shared"
+  - "cmd.exe /k cd C:\\Users\\{user}\\Downloads"
+
 registry_keys_hkcu:
-  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "a", "cmd.exe /k dir\\1"]
+  - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU", "{runmru_name}", "{runmru_command}"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "HideFileExt", "DWORD (0x00000001)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "Hidden", "DWORD (0x00000002)"]
   - ["HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced", "ShowSuperHidden", "DWORD (0x00000000)"]
