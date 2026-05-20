@@ -887,21 +887,48 @@ class TestTlsIssuers:
 
     def test_known_public_ca_profiles_use_historical_authority_validity(self):
         """Public root/intermediate rows should not be minted around the observation window."""
+        lets_encrypt_r3 = certificate_authority_profile("CN=R3, O=Let's Encrypt, C=US")
+        lets_encrypt_e1 = certificate_authority_profile("CN=E1, O=Let's Encrypt, C=US")
         digicert_root = certificate_authority_profile(
             "CN=DigiCert Global Root CA, OU=www.digicert.com, O=DigiCert Inc, C=US"
         )
         globalsign_atlas = certificate_authority_profile(
             "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
         )
+        jan_1_2024 = int(datetime(2024, 1, 1, tzinfo=UTC).timestamp())
+        jan_1_2026 = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp())
 
+        assert lets_encrypt_r3 is not None
+        assert lets_encrypt_r3["not_valid_after"] == int(
+            datetime(2025, 9, 15, 16, 0, tzinfo=UTC).timestamp()
+        )
+        assert lets_encrypt_e1 is not None
+        assert lets_encrypt_e1["not_valid_after"] == lets_encrypt_r3["not_valid_after"]
         assert digicert_root is not None
         assert digicert_root["not_valid_before"] < int(datetime(2010, 1, 1, tzinfo=UTC).timestamp())
         assert digicert_root["issuer"] == digicert_root["subject"]
         assert globalsign_atlas is not None
-        assert globalsign_atlas["not_valid_before"] >= int(
-            datetime(2024, 1, 1, tzinfo=UTC).timestamp()
-        )
+        assert globalsign_atlas["not_valid_before"] > jan_1_2024
+        assert globalsign_atlas["not_valid_before"] != jan_1_2024
+        assert globalsign_atlas["not_valid_after"] != jan_1_2026
         assert "2024 Q1" in globalsign_atlas["subject"]
+
+    def test_public_globalsign_atlas_issuers_have_quarterly_variety(self):
+        """GlobalSign Atlas should not collapse every random leaf onto one Q1 CA profile."""
+        data = load_tls_issuers()
+        atlas_issuers = [
+            issuer
+            for issuer in data["issuers"]
+            if issuer["name"].startswith("CN=GlobalSign Atlas R3 DV TLS CA 20")
+            and issuer.get("weight", 0) > 0
+        ]
+
+        assert {issuer["name"] for issuer in atlas_issuers} == {
+            "CN=GlobalSign Atlas R3 DV TLS CA 2023 Q3, O=GlobalSign nv-sa, C=BE",
+            "CN=GlobalSign Atlas R3 DV TLS CA 2023 Q4, O=GlobalSign nv-sa, C=BE",
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+        }
+        assert sum(int(issuer["weight"]) for issuer in atlas_issuers) == 13
 
     def test_chain_generation_uses_stable_authority_profiles(self):
         """Configured public CA rows should use stable profile metadata instead of runtime windows."""
@@ -926,7 +953,7 @@ class TestTlsIssuers:
         assert intermediate.certificate_subject == issuer_name
         assert intermediate.certificate_issuer == "CN=GlobalSign Root R3, O=GlobalSign nv-sa, C=BE"
         assert intermediate.certificate_not_valid_before == int(
-            datetime(2024, 1, 1, tzinfo=UTC).timestamp()
+            datetime(2024, 1, 17, 9, 32, 41, tzinfo=UTC).timestamp()
         )
         assert intermediate.certificate_key_type == "rsa"
         assert intermediate.certificate_key_length == 2048

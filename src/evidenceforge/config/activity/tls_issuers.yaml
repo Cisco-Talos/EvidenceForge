@@ -64,7 +64,25 @@ issuers:
       - {type: "rsa", length: 2048, weight: 100}
 
   - name: "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
-    weight: 13
+    weight: 6
+    validity_days_min: 90
+    validity_days_max: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "rsa", length: 2048, weight: 50}
+      - {type: "ecdsa", length: 256, weight: 50}
+
+  - name: "CN=GlobalSign Atlas R3 DV TLS CA 2023 Q4, O=GlobalSign nv-sa, C=BE"
+    weight: 4
+    validity_days_min: 90
+    validity_days_max: 397
+    not_before_max_days: 300
+    key_types:
+      - {type: "rsa", length: 2048, weight: 50}
+      - {type: "ecdsa", length: 256, weight: 50}
+
+  - name: "CN=GlobalSign Atlas R3 DV TLS CA 2023 Q3, O=GlobalSign nv-sa, C=BE"
+    weight: 3
     validity_days_min: 90
     validity_days_max: 397
     not_before_max_days: 300

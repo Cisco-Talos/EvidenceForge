@@ -151,13 +151,13 @@ certificate_chains:
     - subject: "CN=R3, O=Let's Encrypt, C=US"
       issuer: "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
       not_valid_before: 1599177600   # 2020-09-04
-      not_valid_after: 2231452800    # 2040-09-17
+      not_valid_after: 1757952000    # 2025-09-15 16:00:00Z
       key_type: rsa
       key_length: 2048
     - subject: "CN=E1, O=Let's Encrypt, C=US"
       issuer: "CN=ISRG Root X2, O=Internet Security Research Group, C=US"
-      not_valid_before: 1616371200   # 2021-03-22
-      not_valid_after: 2089670400    # 2036-03-21
+      not_valid_before: 1631059200   # 2021-09-08
+      not_valid_after: 1757952000    # 2025-09-15 16:00:00Z
       key_type: ecdsa
       key_length: 256
     - subject: "CN=ISRG Root X1, O=Internet Security Research Group, C=US"
@@ -198,8 +198,20 @@ certificate_chains:
       key_length: 2048
     - subject: "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
       issuer: "CN=GlobalSign Root R3, O=GlobalSign nv-sa, C=BE"
-      not_valid_before: 1704067200   # 2024-01-01
-      not_valid_after: 1767225600    # 2026-01-01
+      not_valid_before: 1705483961   # 2024-01-17 09:32:41Z
+      not_valid_after: 1768642361    # 2026-01-17 09:32:41Z
+      key_type: rsa
+      key_length: 2048
+    - subject: "CN=GlobalSign Atlas R3 DV TLS CA 2023 Q4, O=GlobalSign nv-sa, C=BE"
+      issuer: "CN=GlobalSign Root R3, O=GlobalSign nv-sa, C=BE"
+      not_valid_before: 1697628129   # 2023-10-18 11:22:09Z
+      not_valid_after: 1760786529    # 2025-10-18 11:22:09Z
+      key_type: rsa
+      key_length: 2048
+    - subject: "CN=GlobalSign Atlas R3 DV TLS CA 2023 Q3, O=GlobalSign nv-sa, C=BE"
+      issuer: "CN=GlobalSign Root R3, O=GlobalSign nv-sa, C=BE"
+      not_valid_before: 1689747517   # 2023-07-19 06:18:37Z
+      not_valid_after: 1752905917    # 2025-07-19 06:18:37Z
       key_type: rsa
       key_length: 2048
     - subject: "CN=GlobalSign Root CA, O=GlobalSign nv-sa, C=BE"
