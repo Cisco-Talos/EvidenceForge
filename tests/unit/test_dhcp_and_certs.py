@@ -1223,6 +1223,40 @@ class TestTlsIssuers:
 
         assert checked >= len(issuer_names)
 
+    def test_public_ca_chain_issuer_subject_adjacency_is_coherent(self):
+        """Rendered x509 chain rows should be ordered by child issuer to parent subject."""
+        generator = ActivityGenerator(StateManager(), {})
+        issuer_names = [
+            "CN=R3, O=Let's Encrypt, C=US",
+            "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE",
+            "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+        ]
+
+        checked = 0
+        for issuer_name in issuer_names:
+            for seed in range(1, 300):
+                chain = generator._build_tls_certificate_chain(
+                    leaf=X509Context(
+                        fuid="FLeaf",
+                        certificate_subject=f"CN=leaf-{seed}.example",
+                        certificate_issuer=issuer_name,
+                    ),
+                    cert_name=f"leaf-{seed}.example",
+                    issuer_name=issuer_name,
+                    event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                    connection_uid=f"CPublicCaAdjacency{seed}",
+                    rng=random.Random(seed),
+                )
+                if len(chain) < 2:
+                    continue
+                for child, issuer in zip(chain, chain[1:], strict=False):
+                    assert child.certificate_issuer == issuer.certificate_subject
+                    checked += 1
+                break
+
+        assert checked >= len(issuer_names)
+
     def test_leaf_signature_algorithm_follows_issuer_not_leaf_key(self):
         """An ECDSA leaf signed by an RSA CA should render an RSA signature algorithm."""
         state_manager = StateManager()

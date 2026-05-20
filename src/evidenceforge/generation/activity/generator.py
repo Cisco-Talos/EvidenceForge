@@ -2736,6 +2736,9 @@ class ActivityGenerator:
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
         self._dns_cache: dict[tuple[str, str, str], float] = {}
+        self._dns_resolver_rrset_cache: dict[
+            tuple[str, str, str, tuple[str, ...]], tuple[float, float]
+        ] = {}
         self._dns_cache_last_prune = 0.0
         self._tls_seen_server_names: set[str] = set()
         self._tls_seen_client_server_pairs: set[tuple[str, str, int, str]] = set()
@@ -5041,22 +5044,19 @@ class ActivityGenerator:
             return chain
 
         chain_rng = random.Random(_stable_seed(f"tls_chain:{cert_name}:{issuer_name}"))
-        selected_subjects = [chain_rng.choice(intermediate_subjects)]
         second_probability = float(config.get("include_second_intermediate_probability", 0.08))
-        remaining_subjects = [
-            subject for subject in intermediate_subjects if subject != selected_subjects[0]
-        ]
-        if remaining_subjects and chain_rng.random() < second_probability:
-            selected_subjects.append(chain_rng.choice(remaining_subjects))
+        issuer_authority_profile = certificate_authority_profile(issuer_name)
+        if issuer_authority_profile is not None:
+            parent_issuer = str(issuer_authority_profile["issuer"])
+        else:
+            parent_issuer = chain_rng.choice(intermediate_subjects)
 
-        parent_issuer = selected_subjects[1] if len(selected_subjects) > 1 else selected_subjects[0]
-        for idx, subject in enumerate(selected_subjects):
-            certificate_issuer = (
-                selected_subjects[idx + 1] if idx + 1 < len(selected_subjects) else subject
-            )
-            if idx == 0:
-                subject = issuer_name
-            resolved_issuer = certificate_issuer or parent_issuer
+        selected_certificates = [(issuer_name, parent_issuer)]
+        if parent_issuer != issuer_name and chain_rng.random() < second_probability:
+            selected_certificates.append((parent_issuer, parent_issuer))
+
+        for subject, certificate_issuer in selected_certificates:
+            resolved_issuer = certificate_issuer
             authority_profile = certificate_authority_profile(subject)
             if authority_profile is not None:
                 resolved_issuer = str(authority_profile["issuer"])
@@ -8987,6 +8987,12 @@ class ActivityGenerator:
                 event.network.resp_bytes = 0
                 event.network.resp_pkts = 0
                 event.network.resp_ip_bytes = None
+            else:
+                self._normalize_dns_context_for_resolver(
+                    event.dns,
+                    resolver_ip=dst_ip,
+                    time=time,
+                )
         elif (
             service == "dns"
             and proto in ("udp", "tcp")
@@ -8995,6 +9001,11 @@ class ActivityGenerator:
             and not is_fw_deny
         ):
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
+            dns_is_internal = _dns_is_internal_name(
+                dns_query,
+                getattr(self, "_ad_domain", ""),
+            )
+            dns_answers = [dst_ip] if resp_bytes else []
             event.dns = DnsContext(
                 query=dns_query,
                 trans_id=rng.randint(1, 65535),
@@ -9002,19 +9013,18 @@ class ActivityGenerator:
                 query_type="A",
                 rcode="NOERROR" if resp_bytes else "SERVFAIL",
                 rcode_num=0 if resp_bytes else 2,
-                answers=[dst_ip] if resp_bytes else [],
-                TTLs=[
-                    float(
-                        _dns_base_ttl(
-                            dns_query,
-                            _dns_is_internal_name(dns_query, getattr(self, "_ad_domain", "")),
-                        )
-                    )
-                ]
-                if resp_bytes
-                else [],
+                answers=dns_answers,
+                TTLs=self._dns_observed_ttls(
+                    resolver_ip=dst_ip,
+                    query=dns_query,
+                    qtype_name="A",
+                    answers=dns_answers,
+                    is_internal=dns_is_internal,
+                    base_ttl=_dns_base_ttl(dns_query, dns_is_internal),
+                    time=time,
+                ),
                 rtt=_dns_rtt(rng, dst_ip) if resp_bytes else None,
-                AA=_dns_is_internal_name(dns_query, getattr(self, "_ad_domain", "")),
+                AA=dns_is_internal,
             )
             if not resp_bytes:
                 event.network.conn_state = "SF"
@@ -10752,6 +10762,108 @@ class ActivityGenerator:
 
         self.dispatcher.dispatch(event)
 
+    def _dns_observed_ttls(
+        self,
+        *,
+        resolver_ip: str,
+        query: str,
+        qtype_name: str,
+        answers: list[str],
+        is_internal: bool,
+        base_ttl: int,
+        time: datetime,
+    ) -> list[float]:
+        """Return resolver-consistent TTLs for a DNS RRset observation."""
+        if not answers:
+            return []
+        bounded_ttl = max(1, int(base_ttl))
+        if is_internal:
+            return [float(bounded_ttl)] * len(answers)
+
+        if not hasattr(self, "_dns_resolver_rrset_cache"):
+            self._dns_resolver_rrset_cache = {}
+
+        ts_epoch = time.timestamp()
+        if len(self._dns_resolver_rrset_cache) > 50_000:
+            cutoff = ts_epoch - 86_400
+            self._dns_resolver_rrset_cache = {
+                key: value
+                for key, value in self._dns_resolver_rrset_cache.items()
+                if value[0] >= cutoff
+            }
+            if len(self._dns_resolver_rrset_cache) > 50_000:
+                sorted_items = sorted(
+                    self._dns_resolver_rrset_cache.items(),
+                    key=lambda item: item[1][0],
+                    reverse=True,
+                )
+                self._dns_resolver_rrset_cache = dict(sorted_items[:50_000])
+
+        normalized_query = query.rstrip(".").lower()
+        normalized_answers = tuple(sorted(str(answer) for answer in answers))
+        cache_key = (resolver_ip, normalized_query, qtype_name.upper(), normalized_answers)
+        cached = self._dns_resolver_rrset_cache.get(cache_key)
+        if cached is not None:
+            first_seen_epoch, authoritative_ttl = cached
+            remaining = int(authoritative_ttl - max(0.0, ts_epoch - first_seen_epoch))
+            if remaining > 0:
+                return [float(max(1, remaining))] * len(answers)
+
+        max_initial_age = min(bounded_ttl - 1, max(1, int(bounded_ttl * 0.35)))
+        if max_initial_age <= 0:
+            initial_age = 0
+        else:
+            seed_parts = ":".join(
+                [
+                    resolver_ip,
+                    normalized_query,
+                    qtype_name.upper(),
+                    "|".join(normalized_answers),
+                    str(int(ts_epoch // bounded_ttl)),
+                ]
+            )
+            initial_age = random.Random(_stable_seed(f"dns_rrset_cache:{seed_parts}")).randint(
+                0,
+                max_initial_age,
+            )
+        self._dns_resolver_rrset_cache[cache_key] = (
+            ts_epoch - initial_age,
+            float(bounded_ttl),
+        )
+        return [float(max(1, bounded_ttl - initial_age))] * len(answers)
+
+    def _normalize_dns_context_for_resolver(
+        self,
+        dns: DnsContext,
+        *,
+        resolver_ip: str,
+        time: datetime,
+    ) -> None:
+        """Normalize caller-provided DNS context through shared resolver semantics."""
+        ad_domain = getattr(self, "_ad_domain", "corp.local")
+        qtype_name = (dns.query_type or "").upper()
+        is_internal = qtype_name == "SRV" or _dns_is_internal_name(dns.query, ad_domain)
+        if is_internal:
+            dns.AA = True
+        elif qtype_name != "TXT":
+            dns.AA = False
+
+        if dns.rcode != "NOERROR" or not dns.answers:
+            return
+        if not is_internal and qtype_name == "TXT" and len(dns.TTLs) == len(dns.answers):
+            return
+
+        base_ttl = _dns_base_ttl(dns.query, is_internal)
+        dns.TTLs = self._dns_observed_ttls(
+            resolver_ip=resolver_ip,
+            query=dns.query,
+            qtype_name=qtype_name or str(dns.qtype),
+            answers=dns.answers,
+            is_internal=is_internal,
+            base_ttl=base_ttl,
+            time=time,
+        )
+
     def _emit_dns_lookup(
         self,
         src_ip: str,
@@ -10795,7 +10907,7 @@ class ActivityGenerator:
         if not hasattr(self, "_dns_cache_last_prune"):
             self._dns_cache_last_prune = 0.0
 
-        cache_key = (src_ip, hostname)
+        cache_key = (src_ip, hostname, "ADDR")
         ts_epoch = time.timestamp()
 
         # Keep the cache bounded: drop entries older than the max TTL horizon,
@@ -10989,12 +11101,15 @@ class ActivityGenerator:
         # Internal authoritative names use stable TTLs. External answers may be
         # observed through a resolver cache, so expose realistic countdown TTLs.
         base_ttl = txt_ttl if txt_ttl is not None else _dns_base_ttl(query, is_internal)
-        if is_internal:
-            shared_ttl = float(base_ttl)
-        else:
-            cache_age = rng.randint(0, max(1, base_ttl - 1))
-            shared_ttl = float(max(1, base_ttl - cache_age))
-        ttls = [shared_ttl] * len(answers)
+        ttls = self._dns_observed_ttls(
+            resolver_ip=dns_server_ip,
+            query=query,
+            qtype_name=qtype_name,
+            answers=answers,
+            is_internal=is_internal,
+            base_ttl=base_ttl,
+            time=dns_time,
+        )
 
         # Only address lookups for the requested hostname populate the client
         # DNS cache. PTR/SRV/MX companions should not hide future A/AAAA
@@ -11081,6 +11196,18 @@ class ActivityGenerator:
                     companion_answers = [f"ns1.{companion_query} hostmaster.{companion_query}"]
                 else:
                     companion_answers = _public_dns_soa_answers(companion_query)
+            companion_is_internal = _dns_is_internal_name(companion_query, ad_domain) or (
+                companion_kind == "PTR" and _is_private_ip(dst_ip)
+            )
+            companion_ttls = self._dns_observed_ttls(
+                resolver_ip=dns_server_ip,
+                query=companion_query,
+                qtype_name=companion_kind,
+                answers=companion_answers,
+                is_internal=companion_is_internal,
+                base_ttl=_dns_base_ttl(companion_query, companion_is_internal),
+                time=companion_time,
+            )
             companion_ctx = DnsContext(
                 query=companion_query,
                 trans_id=rng.randint(1, 65535),
@@ -11089,9 +11216,9 @@ class ActivityGenerator:
                 rcode="NOERROR",
                 rcode_num=0,
                 answers=companion_answers,
-                TTLs=[float(_dns_base_ttl(companion_query, is_internal))] * len(companion_answers),
+                TTLs=companion_ttls,
                 rtt=_dns_rtt(rng, dns_server_ip),
-                AA=is_internal,
+                AA=companion_is_internal,
                 RD=True,
                 RA=True,
             )

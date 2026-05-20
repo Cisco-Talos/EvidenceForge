@@ -346,6 +346,33 @@ class TestHostnameConsistency:
         ]
         assert ttls == [float(_dns_base_ttl("dc01.example.org", is_internal=True))]
 
+    def test_resolver_rrset_ttl_is_shared_across_clients(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """A resolver should not expose unrelated TTL ages for the same external RRset."""
+        state_manager.set_current_time(timestamp)
+
+        for idx, src_ip in enumerate(("10.0.1.50", "10.0.1.51")):
+            activity_gen._emit_dns_lookup(
+                src_ip=src_ip,
+                dst_ip="93.184.216.34",
+                time=timestamp + timedelta(seconds=idx * 10),
+                hostname="cdn.example.net",
+                force_address=True,
+            )
+
+        dns_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns and call.args[0].dns.query == "cdn.example.net"
+        ]
+        assert len(dns_events) == 2
+        assert {event.network.dst_ip for event in dns_events} == {"10.0.0.1"}
+
+        first_ttl = dns_events[0].dns.TTLs[0]
+        second_ttl = dns_events[1].dns.TTLs[0]
+        assert 0 <= first_ttl - second_ttl <= 15
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""
@@ -846,6 +873,8 @@ class TestWeirdProtocolConstraint:
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
         """Internal names should not flip AA on otherwise equivalent rows."""
+        from evidenceforge.generation.activity.generator import _dns_base_ttl
+
         state_manager.set_current_time(timestamp)
         activity_gen._ad_domain = "example.org"
 
@@ -872,6 +901,7 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_dns"].emit.call_args[0][0]
         assert event.dns.AA is True
+        assert event.dns.TTLs[0] == float(_dns_base_ttl("DC-01.example.org", True))
 
     def test_sensor_duration_jitter_respects_dns_rtt(self, timestamp, tmp_path):
         fmt = load_format("zeek_conn")
