@@ -1133,6 +1133,63 @@ variants:
       - name: SubjectLogonId
         type: hex_string
         required: true
+      - name: SamAccountName
+        type: string
+        required: false
+      - name: DisplayName
+        type: string
+        required: false
+      - name: UserPrincipalName
+        type: string
+        required: false
+      - name: HomeDirectory
+        type: string
+        required: false
+      - name: HomePath
+        type: string
+        required: false
+      - name: ScriptPath
+        type: string
+        required: false
+      - name: ProfilePath
+        type: string
+        required: false
+      - name: UserWorkstations
+        type: string
+        required: false
+      - name: PasswordLastSet
+        type: string
+        required: false
+      - name: AccountExpires
+        type: string
+        required: false
+      - name: PrimaryGroupId
+        type: string
+        required: false
+      - name: AllowedToDelegateTo
+        type: string
+        required: false
+      - name: OldUacValue
+        type: string
+        required: false
+      - name: NewUacValue
+        type: string
+        required: false
+      - name: UserAccountControl
+        type: string
+        required: false
+      - name: UserParameters
+        type: string
+        required: false
+      - name: SidHistory
+        type: string
+        required: false
+      - name: LogonHours
+        type: string
+        required: false
+      - name: PrivilegeList
+        type: string
+        required: false
 
 # Output template in Windows Event Log XML format
 output:

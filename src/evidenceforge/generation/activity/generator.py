@@ -170,10 +170,14 @@ _BASH_BLOCKING_PREFIXES = (
     "emacs -nw ",
     "code ",
     "make",
+    "mysqldump",
+    "npm ",
     "npm run",
     "docker build",
     "cargo build",
     "python3 -m pytest",
+    "python3 ",
+    "python ",
     "pytest",
     "apt ",
     "apt-get ",
@@ -182,7 +186,7 @@ _BASH_BLOCKING_PREFIXES = (
     "pip install",
     "tail -f ",
 )
-_BASH_MEDIUM_PREFIXES = ("curl ", "wget ", "scp ", "ssh ", "mysql ", "psql ", "git ")
+_BASH_MEDIUM_PREFIXES = ("curl ", "wget ", "scp ", "ssh ", "mysql ", "psql ", "git ", "gzip ")
 _BASH_BUILTIN_COMMANDS = {
     ".",
     "alias",
@@ -2737,6 +2741,7 @@ class ActivityGenerator:
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
+        self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_process_finalizers: dict[
             tuple[str, int], tuple[System, str, str, str, datetime]
         ] = {}
@@ -2837,7 +2842,7 @@ class ActivityGenerator:
         logon_id: str,
         lifetime: tuple[float, float],
         rng: random.Random,
-    ) -> None:
+    ) -> datetime:
         """Emit and track termination for a bounded foreground command process."""
         termination_time = start_time + timedelta(seconds=rng.uniform(*lifetime))
         self._remember_foreground_process_finalizer(
@@ -2855,6 +2860,90 @@ class ActivityGenerator:
             pid=pid,
             process_name=process_name,
             logon_id=logon_id,
+        )
+        return termination_time
+
+    def _foreground_shell_key(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+    ) -> tuple[str, str, str, int] | None:
+        """Return the interactive shell key that serializes foreground Linux children."""
+        proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if proc is None:
+            return None
+        image = (proc.image or "").rsplit("/", 1)[-1].lower()
+        if image not in {"bash", "sh", "zsh"}:
+            return None
+        return (system.hostname, username, logon_id, parent_pid)
+
+    def _reserve_foreground_shell_time(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        seed_text: str,
+    ) -> datetime:
+        """Delay a new foreground command until the same interactive shell is free."""
+        key = self._foreground_shell_key(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+        )
+        if key is None:
+            return requested_time
+        next_time = self._foreground_shell_next_time.get(key)
+        if next_time is None or requested_time >= next_time:
+            return requested_time
+        rng = random.Random(
+            _stable_seed(
+                f"foreground_shell_gap:{system.hostname}:{username}:{logon_id}:"
+                f"{parent_pid}:{seed_text}:{next_time.timestamp()}"
+            )
+        )
+        return next_time + timedelta(milliseconds=rng.randint(120, 900))
+
+    def _remember_foreground_shell_available(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        termination_time: datetime,
+        seed_text: str,
+    ) -> None:
+        """Remember when an interactive Linux shell can plausibly accept more input."""
+        key = self._foreground_shell_key(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+        )
+        if key is None:
+            return
+        rng = random.Random(
+            _stable_seed(
+                f"foreground_shell_release:{system.hostname}:{username}:{logon_id}:"
+                f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
+            )
+        )
+        release_time = termination_time + timedelta(milliseconds=rng.randint(180, 1400))
+        self._foreground_shell_next_time[key] = max(
+            release_time,
+            self._foreground_shell_next_time.get(key, release_time),
+        )
+        bash_key = (system.hostname, username)
+        self._bash_history_next_time[bash_key] = max(
+            self._bash_history_next_time.get(bash_key, release_time),
+            release_time,
         )
 
     def _ntp_association_profile(self, src_ip: str, dst_ip: str) -> dict[str, float | int]:
@@ -10030,6 +10119,7 @@ class ActivityGenerator:
             "ssh ",
             "nmap",
             "mysqldump",
+            "gzip",
             "python ",
             "python3 ",
             "tar ",
@@ -10048,9 +10138,20 @@ class ActivityGenerator:
         ):
             return
 
+        shell_release_times: list[tuple[int, datetime, str]] = []
+        base_process_time: datetime | None = None
         for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
-            process_time = time + timedelta(milliseconds=rng.randint(20, 180) + index * 35)
+            if base_process_time is None:
+                base_process_time = self._reserve_foreground_shell_time(
+                    system=system,
+                    username=user.username,
+                    logon_id=session.logon_id,
+                    parent_pid=parent_pid,
+                    requested_time=time + timedelta(milliseconds=rng.randint(20, 180)),
+                    seed_text=command,
+                )
+            process_time = base_process_time + timedelta(milliseconds=index * 35)
             network_close_time = getattr(session, "network_close_time", None)
             if network_close_time is not None:
                 if network_close_time.tzinfo is None:
@@ -10072,7 +10173,7 @@ class ActivityGenerator:
             self._record_user_process(system, user, pid, image)
             lifetime = _linux_foreground_lifetime(image, process_command_line)
             if lifetime is not None:
-                self._generate_bounded_foreground_process_termination(
+                termination_time = self._generate_bounded_foreground_process_termination(
                     user=user,
                     system=system,
                     start_time=process_time,
@@ -10082,6 +10183,16 @@ class ActivityGenerator:
                     lifetime=lifetime,
                     rng=rng,
                 )
+                shell_release_times.append((parent_pid, termination_time, process_command_line))
+        for parent_pid, termination_time, process_command_line in shell_release_times:
+            self._remember_foreground_shell_available(
+                system=system,
+                username=user.username,
+                logon_id=session.logon_id,
+                parent_pid=parent_pid,
+                termination_time=termination_time,
+                seed_text=process_command_line,
+            )
 
     def _schedule_bash_history_time(
         self,
@@ -11405,15 +11516,25 @@ class ActivityGenerator:
                             effect_command_line,
                         )
                         if lifetime is not None:
-                            self._generate_bounded_foreground_process_termination(
-                                user=user,
+                            termination_time = (
+                                self._generate_bounded_foreground_process_termination(
+                                    user=user,
+                                    system=system,
+                                    start_time=process_time,
+                                    pid=pid,
+                                    process_name=effect_process_name,
+                                    logon_id=logon_id,
+                                    lifetime=lifetime,
+                                    rng=rng,
+                                )
+                            )
+                            self._remember_foreground_shell_available(
                                 system=system,
-                                start_time=process_time,
-                                pid=pid,
-                                process_name=effect_process_name,
+                                username=user.username,
                                 logon_id=logon_id,
-                                lifetime=lifetime,
-                                rng=rng,
+                                parent_pid=parent_pid,
+                                termination_time=termination_time,
+                                seed_text=effect_command_line,
                             )
 
             # Legacy PROCESS_TEMPLATES only for process_system (not user apps/code/build/query)
@@ -11482,7 +11603,7 @@ class ActivityGenerator:
                     self._emit_bash_command_event(user, system, process_time, command_line)
                     lifetime = _linux_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
-                        self._generate_bounded_foreground_process_termination(
+                        termination_time = self._generate_bounded_foreground_process_termination(
                             user=user,
                             system=system,
                             start_time=process_time,
@@ -11491,6 +11612,14 @@ class ActivityGenerator:
                             logon_id=logon_id,
                             lifetime=lifetime,
                             rng=rng,
+                        )
+                        self._remember_foreground_shell_available(
+                            system=system,
+                            username=user.username,
+                            logon_id=logon_id,
+                            parent_pid=parent_pid,
+                            termination_time=termination_time,
+                            seed_text=command_line,
                         )
 
         # Connection activities

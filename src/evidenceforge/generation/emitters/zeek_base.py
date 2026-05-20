@@ -131,13 +131,14 @@ def _sensor_clock_adjustment_us(hostname: str, ts: Any) -> int:
     return max(timing.clock_skew_min_us, min(timing.clock_skew_max_us, skew))
 
 
-def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
-    """Return per-flow capture timestamp variance for a sensor observation."""
+def _sensor_path_delay_us(hostname: str, _original_uid: Any = None) -> int:
+    """Return stable capture timestamp delay for a sensor observation."""
     timing = network_sensor_observation_timing()
-    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}")
+    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}")
     # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
-    # add a small positive delay. The profile keeps this consistent with a
-    # well-synced sensor fleet instead of synthetic hundreds-of-ms offsets.
+    # add a small positive delay. Keep it stable by sensor so duplicate
+    # Core/DMZ observations look like two clocks on the same packet path, not
+    # per-flow random jitter that changes direction from record to record.
     width = timing.path_delay_max_us - timing.path_delay_min_us + 1
     return timing.path_delay_min_us + (seed % max(1, width))
 
@@ -789,10 +790,10 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Each sensor has independent clock skew/drift plus per-flow
+                # Each sensor has independent clock skew/drift plus stable
                 # capture timing. Apply it to every sensor in a multi-sensor
-                # observation so cross-sensor deltas can be positive or
-                # negative instead of always "secondary = primary + delay".
+                # observation so cross-sensor deltas are sensor/path-shaped
+                # rather than per-record random.
                 ts = render_data.get("ts")
                 if len(targets) > 1 and ts is not None:
                     sensor_delay_us = _sensor_clock_adjustment_us(

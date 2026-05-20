@@ -291,8 +291,8 @@ class TestPerSensorDirectoryRouting:
             for sensor in ("core", "dmz"):
                 assert len((base / sensor / "conn.json").read_text().splitlines()) == 3
 
-    def test_sensor_timestamp_offsets_vary_by_flow(self):
-        """Cross-sensor timestamps should not collapse into one fixed offset band."""
+    def test_sensor_timestamp_offsets_are_stable_by_sensor(self):
+        """Cross-sensor timestamps should keep a stable sensor/path offset."""
         fmt = load_format("zeek_conn")
         with tempfile.TemporaryDirectory() as tmpdir:
             base = Path(tmpdir)
@@ -333,10 +333,7 @@ class TestPerSensorDirectoryRouting:
                 for port in sorted(core_by_port)
             ]
 
-            assert any(offset < 0 for offset in offsets)
-            assert any(offset > 0 for offset in offsets)
-            assert max(offsets) - min(offsets) > 0.005
-            assert len(set(offsets)) > 30
+            assert len(set(offsets)) == 1
             assert max(abs(offset) for offset in offsets) <= 0.16
 
     def test_sensor_conn_metrics_do_not_clone_across_lossless_tcp_flows(self):

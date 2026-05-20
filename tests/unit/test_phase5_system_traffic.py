@@ -296,6 +296,7 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     )
     term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
     assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
+    assert term_calls[0].kwargs["time"] >= ts + timedelta(seconds=1)
 
 
 @pytest.fixture

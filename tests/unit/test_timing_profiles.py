@@ -67,7 +67,7 @@ def test_timing_profiles_load_default_relationship():
     )
     assert security_process_window.max_ms >= 900
     assert sysmon_process_window.max_ms >= 2000
-    assert ecar_process_window.max_ms >= 5000
+    assert ecar_process_window.max_ms <= 250
 
     tls_window = get_timing_window(
         "network.tls_completed_min_duration",

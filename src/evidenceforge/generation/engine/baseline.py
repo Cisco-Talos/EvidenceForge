@@ -790,7 +790,7 @@ def _cron_workload_process(
     """Resolve the concrete workload process normally spawned by a cron shell."""
     command_lower = command.lower()
     if "debian-sa1" in command_lower:
-        return "/usr/lib/sysstat/debian-sa1", "debian-sa1 1 1", (0.05, 0.45)
+        return "/usr/lib/sysstat/debian-sa1", "debian-sa1 1 1", (1.05, 2.4)
     if "logrotate" in command_lower:
         return "/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf", (0.8, 4.5)
     if "run-parts" in command_lower:

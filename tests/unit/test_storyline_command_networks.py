@@ -245,7 +245,7 @@ class TestStorylineCommandNetworks:
         )
 
         assert emitter.render_time is not None
-        assert generator.process_source_create_time(system.hostname, pid) == emitter.render_time
+        assert generator.process_source_create_time(system.hostname, pid) >= emitter.render_time
 
     def test_activity_generator_preplans_process_create_time_before_threaded_dispatch(self):
         captured: dict[str, Any] = {}

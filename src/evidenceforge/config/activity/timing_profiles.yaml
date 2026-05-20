@@ -89,8 +89,8 @@ relationships:
   source.ecar_process_create:
     class: source_latency
     position: after
-    min_ms: 70
-    max_ms: 5200
+    min_ms: 8
+    max_ms: 180
   source.ecar_dependent_after_process_create:
     class: source_latency
     position: after

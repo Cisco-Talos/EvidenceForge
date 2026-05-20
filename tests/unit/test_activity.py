@@ -5210,6 +5210,100 @@ class TestActivityGenerator:
         assert terminate_events
         assert process_events[-1].timestamp < terminate_events[-1].timestamp
 
+    def test_generate_bash_command_serializes_foreground_children(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Sequential foreground commands in one shell should not overlap."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.2.50",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc456"
+        state_manager.set_current_time(command_time - timedelta(seconds=60))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=30),
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "mysqldump --defaults-extra-file=/home/alice/.my.cnf webapp > /tmp/webapp.sql",
+        )
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time + timedelta(seconds=1),
+            "gzip /tmp/webapp.sql",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        mysqldump_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/mysqldump"
+        )
+        gzip_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/gzip"
+        )
+        mysqldump_terminate = next(
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == mysqldump_create.process.pid
+        )
+
+        assert mysqldump_create.process.parent_pid == bash_pid
+        assert gzip_create.process.parent_pid == bash_pid
+        assert gzip_create.timestamp > mysqldump_terminate.timestamp
+
     def test_process_user_apps_bash_pool_respects_database_role(
         self, activity_gen, test_user, monkeypatch, mock_emitters
     ):
