@@ -29,8 +29,8 @@ from evidenceforge.generation.activity.tls_issuers import (
     pick_key_type,
 )
 from evidenceforge.generation.activity.tls_realism import (
+    certificate_authority_profile,
     certificate_chain_config,
-    certificate_subject_key_profile,
     chain_template_for_issuer,
     load_tls_realism,
     multi_label_public_suffixes,
@@ -885,6 +885,81 @@ class TestTlsIssuers:
         assert age_seconds > 0
         assert age_seconds % 86400 != 0
 
+    def test_known_public_ca_profiles_use_historical_authority_validity(self):
+        """Public root/intermediate rows should not be minted around the observation window."""
+        digicert_root = certificate_authority_profile(
+            "CN=DigiCert Global Root CA, OU=www.digicert.com, O=DigiCert Inc, C=US"
+        )
+        globalsign_atlas = certificate_authority_profile(
+            "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+        )
+
+        assert digicert_root is not None
+        assert digicert_root["not_valid_before"] < int(datetime(2010, 1, 1, tzinfo=UTC).timestamp())
+        assert digicert_root["issuer"] == digicert_root["subject"]
+        assert globalsign_atlas is not None
+        assert globalsign_atlas["not_valid_before"] >= int(
+            datetime(2024, 1, 1, tzinfo=UTC).timestamp()
+        )
+        assert "2024 Q1" in globalsign_atlas["subject"]
+
+    def test_chain_generation_uses_stable_authority_profiles(self):
+        """Configured public CA rows should use stable profile metadata instead of runtime windows."""
+        generator = ActivityGenerator(StateManager(), {})
+        event_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        issuer_name = "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+        chain = generator._build_tls_certificate_chain(
+            leaf=X509Context(
+                fuid="FLeaf",
+                certificate_subject="CN=leaf.example",
+                certificate_issuer=issuer_name,
+            ),
+            cert_name="leaf.example",
+            issuer_name=issuer_name,
+            event_time=event_time,
+            connection_uid="CStableAuthority",
+            rng=random.Random(1),
+        )
+
+        intermediate = chain[1]
+
+        assert intermediate.certificate_subject == issuer_name
+        assert intermediate.certificate_issuer == "CN=GlobalSign Root R3, O=GlobalSign nv-sa, C=BE"
+        assert intermediate.certificate_not_valid_before == int(
+            datetime(2024, 1, 1, tzinfo=UTC).timestamp()
+        )
+        assert intermediate.certificate_key_type == "rsa"
+        assert intermediate.certificate_key_length == 2048
+
+    def test_rendered_public_root_chain_rows_are_not_collection_window_minted(self):
+        """Self-signed public root rows should keep historical validity when included."""
+        generator = ActivityGenerator(StateManager(), {})
+        event_time = datetime(2024, 3, 18, 12, 0, tzinfo=UTC)
+        issuer_name = "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
+        chain = None
+        for seed in range(1, 600):
+            candidate = generator._build_tls_certificate_chain(
+                leaf=X509Context(
+                    fuid="FLeaf",
+                    certificate_subject=f"CN=leaf-{seed}.example",
+                    certificate_issuer=issuer_name,
+                ),
+                cert_name=f"leaf-{seed}.example",
+                issuer_name=issuer_name,
+                event_time=event_time,
+                connection_uid=f"CDigiCertRoot{seed}",
+                rng=random.Random(seed),
+            )
+            if len(candidate) > 2:
+                chain = candidate
+                break
+
+        assert chain is not None
+        root = chain[-1]
+        assert root.certificate_subject.startswith("CN=DigiCert Global Root")
+        assert root.certificate_issuer == root.certificate_subject
+        assert root.certificate_not_valid_before < int(datetime(2015, 1, 1, tzinfo=UTC).timestamp())
+
     def test_same_certificate_fingerprint_has_same_metadata(self):
         """Repeated cert identity should not reuse a fingerprint for conflicting metadata."""
         generator = ActivityGenerator(StateManager(), {})
@@ -974,35 +1049,26 @@ class TestTlsIssuers:
     def test_intermediate_signature_algorithm_follows_issuer_key(self):
         """Intermediate certificate signatures should be signed by the issuer key."""
         generator = ActivityGenerator(StateManager(), {})
-        issuer_name = "CN=Amazon RSA 2048 M01, O=Amazon, C=US"
-        intermediate = None
-        for seed in range(1, 200):
-            chain = generator._build_tls_certificate_chain(
-                leaf=X509Context(
-                    fuid="FLeaf",
-                    certificate_subject="CN=leaf.example",
-                    certificate_issuer=issuer_name,
-                ),
-                cert_name=f"leaf-{seed}.example",
-                issuer_name=issuer_name,
-                event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
-                connection_uid=f"CLeE1{seed}",
-                rng=random.Random(seed),
-            )
-            if len(chain) < 2:
-                continue
-            candidate = chain[1]
-            if (
-                certificate_subject_key_profile(candidate.certificate_subject)[0]
-                != certificate_subject_key_profile(candidate.certificate_issuer)[0]
-            ):
-                intermediate = candidate
-                break
-
-        assert intermediate is not None
+        issuer_name = "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
+        chain = generator._build_tls_certificate_chain(
+            leaf=X509Context(
+                fuid="FLeaf",
+                certificate_subject="CN=leaf.example",
+                certificate_issuer=issuer_name,
+            ),
+            cert_name="leaf.example",
+            issuer_name=issuer_name,
+            event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            connection_uid="CCloudflareIntermediateSig",
+            rng=random.Random(1),
+        )
+        intermediate = chain[1]
 
         assert intermediate.certificate_subject == issuer_name
-        assert intermediate.certificate_issuer != intermediate.certificate_subject
+        assert intermediate.certificate_key_type == "ecdsa"
+        assert intermediate.certificate_issuer == (
+            "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE"
+        )
         expected = signature_algorithm_for_issuer(intermediate.certificate_issuer)
         assert intermediate.certificate_sig_alg == expected
 
@@ -1011,12 +1077,12 @@ class TestTlsIssuers:
         generator = ActivityGenerator(StateManager(), {})
         cases = [
             (
-                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
-                "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
-                "CN=GTS Root R4, O=Google Trust Services LLC, C=US",
-                "rsa",
-                2048,
-                "ecdsa-with-SHA384",
+                "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+                "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+                "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE",
+                "ecdsa",
+                256,
+                "sha256WithRSAEncryption",
             ),
             (
                 "CN=E1, O=Let's Encrypt, C=US",

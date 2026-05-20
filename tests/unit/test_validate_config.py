@@ -265,6 +265,37 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_inverted_tls_authority_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            certificate_chains = dict(data.get("certificate_chains", {}))
+            certificate_chains["authority_profiles"] = [
+                {
+                    "subject": "CN=Bad Root CA, O=Example, C=US",
+                    "issuer": "CN=Bad Root CA, O=Example, C=US",
+                    "not_valid_before": 200,
+                    "not_valid_after": 100,
+                    "key_type": "rsa",
+                    "key_length": 2048,
+                }
+            ]
+            return {**data, "certificate_chains": certificate_chains}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "authority profile not_valid_after must be after not_valid_before" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_public_dns_profile(self, monkeypatch):
         from evidenceforge.generation.activity import public_dns_profiles
 

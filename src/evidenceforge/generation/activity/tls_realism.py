@@ -101,6 +101,16 @@ def _subject_key_profile(subject_name: str) -> dict[str, Any] | None:
     return None
 
 
+def certificate_authority_profile(subject_name: str) -> dict[str, Any] | None:
+    """Return stable metadata for a known CA subject, when configured."""
+    for profile in certificate_chain_config().get("authority_profiles", []):
+        if not isinstance(profile, dict):
+            continue
+        if str(profile.get("subject", "")) == subject_name:
+            return profile
+    return None
+
+
 def certificate_subject_key_profile(
     subject_name: str,
     fallback_type: str = "rsa",

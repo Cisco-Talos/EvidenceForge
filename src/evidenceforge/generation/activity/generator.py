@@ -4621,6 +4621,7 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import X509Context
         from evidenceforge.generation.activity.tls_realism import (
+            certificate_authority_profile,
             certificate_chain_config,
             certificate_subject_key_profile,
             chain_template_for_issuer,
@@ -4659,40 +4660,51 @@ class ActivityGenerator:
             if idx == 0:
                 subject = issuer_name
             resolved_issuer = certificate_issuer or parent_issuer
+            authority_profile = certificate_authority_profile(subject)
+            if authority_profile is not None:
+                resolved_issuer = str(authority_profile["issuer"])
             profile_key = (subject, resolved_issuer)
             profile = self._tls_intermediate_profiles.get(profile_key)
             if profile is None:
                 profile_rng = random.Random(
                     _stable_seed(f"tls_intermediate_profile:{subject}:{resolved_issuer}")
                 )
-                validity = self._tls_cert_validity.get(subject)
-                if validity is None:
-                    min_days = int(config.get("intermediate_validity_days_min", 1825))
-                    max_days = int(config.get("intermediate_validity_days_max", 3650))
-                    max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
-                    validity = _certificate_validity_window(
-                        event_time,
-                        profile_rng,
-                        validity_days_min=min_days,
-                        validity_days_max=max_days,
-                        not_before_max_days=max_not_before,
-                        not_before_min_days=30,
+                if authority_profile is not None:
+                    validity = (
+                        int(authority_profile["not_valid_before"]),
+                        int(authority_profile["not_valid_after"]),
                     )
-                    self._tls_cert_validity[subject] = validity
+                    key_type = str(authority_profile["key_type"])
+                    key_length = int(authority_profile["key_length"])
+                else:
+                    validity = self._tls_cert_validity.get(subject)
+                    if validity is None:
+                        min_days = int(config.get("intermediate_validity_days_min", 1825))
+                        max_days = int(config.get("intermediate_validity_days_max", 3650))
+                        max_not_before = int(config.get("intermediate_not_before_max_days", 1460))
+                        validity = _certificate_validity_window(
+                            event_time,
+                            profile_rng,
+                            validity_days_min=min_days,
+                            validity_days_max=max_days,
+                            not_before_max_days=max_not_before,
+                            not_before_min_days=30,
+                        )
+                        self._tls_cert_validity[subject] = validity
 
-                key_types = config.get(
-                    "key_types",
-                    [{"type": "rsa", "length": 2048, "weight": 100}],
-                )
-                weights = [int(entry.get("weight", 0)) for entry in key_types]
-                selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
-                key_type = str(selected_key.get("type", "rsa"))
-                key_length = int(selected_key.get("length", 2048))
-                key_type, key_length = certificate_subject_key_profile(
-                    subject,
-                    fallback_type=key_type,
-                    fallback_length=key_length,
-                )
+                    key_types = config.get(
+                        "key_types",
+                        [{"type": "rsa", "length": 2048, "weight": 100}],
+                    )
+                    weights = [int(entry.get("weight", 0)) for entry in key_types]
+                    selected_key = profile_rng.choices(key_types, weights=weights, k=1)[0]
+                    key_type = str(selected_key.get("type", "rsa"))
+                    key_length = int(selected_key.get("length", 2048))
+                    key_type, key_length = certificate_subject_key_profile(
+                        subject,
+                        fallback_type=key_type,
+                        fallback_length=key_length,
+                    )
                 key_type, key_length = _tls_key_for_certificate_name(subject, key_type, key_length)
                 serial_seed = "|".join(
                     [

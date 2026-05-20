@@ -448,6 +448,45 @@ class TlsSubjectKeyProfile(BaseModel, extra="forbid"):
         return self
 
 
+class TlsAuthorityProfile(BaseModel, extra="forbid"):
+    """Stable metadata for a known public or enterprise certificate authority."""
+
+    subject: str
+    issuer: str
+    not_valid_before: int
+    not_valid_after: int
+    key_type: Literal["rsa", "ecdsa"]
+    key_length: int
+
+    @field_validator("subject", "issuer")
+    @classmethod
+    def distinguished_name_non_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("authority profile distinguished names must be non-empty")
+        return v
+
+    @field_validator("not_valid_before", "not_valid_after")
+    @classmethod
+    def validity_epoch_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("authority profile validity epochs must be positive")
+        return v
+
+    @field_validator("key_length")
+    @classmethod
+    def key_length_valid(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("authority profile key_length must be positive")
+        return v
+
+    @model_validator(mode="after")
+    def validity_window_ordered(self) -> Self:
+        """Reject public CA profiles with inverted validity windows."""
+        if self.not_valid_after <= self.not_valid_before:
+            raise ValueError("authority profile not_valid_after must be after not_valid_before")
+        return self
+
+
 class TlsCertificateChainConfig(BaseModel, extra="forbid"):
     """Certificate-chain behavior settings in tls_realism.yaml."""
 
@@ -458,6 +497,7 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
     intermediate_not_before_max_days: int
     key_types: list[TlsKeyType]
     subject_key_profiles: list[TlsSubjectKeyProfile] = Field(default_factory=list)
+    authority_profiles: list[TlsAuthorityProfile] = Field(default_factory=list)
     templates: list[TlsChainTemplate]
 
     @field_validator(
