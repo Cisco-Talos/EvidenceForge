@@ -974,6 +974,7 @@ class TestWindowsEventEmitter:
             "Computer": "DC-01.corp.local",
             "TargetUserName": "alice@CORP.LOCAL",
             "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
         }
         tgt = {
             "EventID": 4768,
@@ -981,12 +982,48 @@ class TestWindowsEventEmitter:
             "Computer": "DC-01.corp.local",
             "TargetUserName": "alice",
             "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
         }
         emitter._event_dicts = [tgs, tgt]
 
         emitter._shift_kerberos_tgts_before_service_tickets()
 
         assert tgt["TimeCreated"] < tgs["TimeCreated"]
+
+    def test_kerberos_tgt_shift_uses_source_port_specific_key(self, format_def, temp_output):
+        """An older TGT on a different client port should not satisfy a later TGS."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        tgs_time = datetime(2024, 1, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        previous_tgt = {
+            "EventID": 4768,
+            "TimeCreated": tgs_time - timedelta(seconds=30),
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice",
+            "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "49152",
+        }
+        tgs = {
+            "EventID": 4769,
+            "TimeCreated": tgs_time,
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice@CORP.LOCAL",
+            "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
+        }
+        matching_tgt = {
+            "EventID": 4768,
+            "TimeCreated": tgs_time + timedelta(milliseconds=50),
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice",
+            "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
+        }
+        emitter._event_dicts = [previous_tgt, tgs, matching_tgt]
+
+        emitter._shift_kerberos_tgts_before_service_tickets()
+
+        assert matching_tgt["TimeCreated"] < tgs["TimeCreated"]
+        assert previous_tgt["TimeCreated"] < matching_tgt["TimeCreated"]
 
     def test_spooled_kerberos_tgt_shifted_before_visible_service_ticket(
         self,
@@ -1003,6 +1040,7 @@ class TestWindowsEventEmitter:
                 "Computer": "DC-01.corp.local",
                 "TargetUserName": "alice@CORP.LOCAL",
                 "IpAddress": "::ffff:10.0.0.25",
+                "IpPort": "51234",
             },
             {
                 "EventID": 4768,
@@ -1010,6 +1048,7 @@ class TestWindowsEventEmitter:
                 "Computer": "DC-01.corp.local",
                 "TargetUserName": "alice",
                 "IpAddress": "::ffff:10.0.0.25",
+                "IpPort": "51234",
             },
         ]
         emitter._spool_event_dicts_unlocked()

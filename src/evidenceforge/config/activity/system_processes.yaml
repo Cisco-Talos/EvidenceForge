@@ -88,7 +88,7 @@ scheduled_tasks:
 
 system_services:
   all:
-    - image: "C:\\Windows\\System32\\WmiPrvSE.exe"
+    - image: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
       command_templates:
         - "WmiPrvSE.exe -Embedding"
         - "WmiPrvSE.exe -secured -Embedding"
@@ -136,7 +136,7 @@ system_services:
       parent: services
 
   server:
-    - image: "C:\\Windows\\System32\\WmiPrvSE.exe"
+    - image: "C:\\Windows\\System32\\wbem\\WmiPrvSE.exe"
       command_templates:
         - "WmiPrvSE.exe -secured -Embedding"
       parent: svchost_dcom

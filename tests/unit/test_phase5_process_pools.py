@@ -99,6 +99,19 @@ class TestProcessPoolSize:
             "SearchFilterHost.exe": "search_indexer",
         }
 
+    def test_wmi_provider_host_uses_wbem_path(self):
+        """WMI Provider Host process templates should use the native wbem directory."""
+        data = load_system_processes()
+        wmi_paths = [
+            entry["image"]
+            for entries in data["system_services"].values()
+            for entry in entries
+            if entry["image"].lower().endswith("\\wmiprvse.exe")
+        ]
+
+        assert wmi_paths
+        assert all(path.endswith(r"\System32\wbem\WmiPrvSE.exe") for path in wmi_paths)
+
     def test_system_process_templates_avoid_windows_internal_path_artifacts(self):
         """Windows internal maintenance paths and pipe args should look source-native."""
         data = load_system_processes()

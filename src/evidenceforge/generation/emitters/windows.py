@@ -225,16 +225,17 @@ def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
 
 
-def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Return the same-user/source key for DC Kerberos ticket ordering checks."""
+def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Return the same-user/source-port key for DC Kerberos ticket ordering checks."""
     if event.get("EventID") not in {4768, 4769}:
         return None
     username = str(event.get("TargetUserName") or "").split("@", 1)[0].lower()
     source_ip = str(event.get("IpAddress") or "")
+    source_port = str(event.get("IpPort") or "")
     computer = str(event.get("Computer") or "")
-    if not username or not source_ip or source_ip == "-" or not computer:
+    if not username or not source_ip or source_ip == "-" or not source_port or not computer:
         return None
-    return (computer, username, source_ip)
+    return (computer, username, source_ip, source_port)
 
 
 def _special_privilege_fallback(username: str) -> str:
@@ -1605,7 +1606,9 @@ class WindowsEventEmitter(LogEmitter):
                 row[0],
             ),
         )
-        tgts_by_key: dict[tuple[str, str, str], list[tuple[int, dict[str, Any], datetime]]] = {}
+        tgts_by_key: dict[
+            tuple[str, str, str, str], list[tuple[int, dict[str, Any], datetime]]
+        ] = {}
         for rowid, event in ordered:
             if event.get("EventID") != 4768:
                 continue
@@ -1614,7 +1617,7 @@ class WindowsEventEmitter(LogEmitter):
             if key is not None and isinstance(ts, datetime):
                 tgts_by_key.setdefault(key, []).append((rowid, event, ensure_utc(ts)))
 
-        prior_tgt_by_key: dict[tuple[str, str, str], datetime] = {}
+        prior_tgt_by_key: dict[tuple[str, str, str, str], datetime] = {}
         moved: set[int] = set()
         for rowid, event in ordered:
             ts = event.get("TimeCreated")
