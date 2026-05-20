@@ -124,6 +124,12 @@ class TestPersonaFiltering:
         app_ids = {a["id"] for a in apps}
         assert "kubectl" in app_ids
 
+    def test_kubectl_and_internal_curl_are_workstation_scoped_on_linux(self):
+        assert is_system_type_allowed("kubectl", "linux", "workstation")
+        assert not is_system_type_allowed("kubectl", "linux", "server")
+        assert is_system_type_allowed("curl", "linux", "workstation")
+        assert not is_system_type_allowed("curl", "linux", "server")
+
     def test_executive_gets_office_apps(self):
         apps = get_apps_for_persona("executive", "windows", "user_app")
         app_ids = {a["id"] for a in apps}

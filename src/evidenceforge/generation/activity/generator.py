@@ -10883,7 +10883,12 @@ class ActivityGenerator:
                     rng = _get_rng()
                     process_name, command_line = rng.choice(PROCESS_TEMPLATES[activity_type])
                     process_name = process_name.replace("{username}", user.username)
-                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = self._parameterize_command_for_system(
+                        rng,
+                        command_line,
+                        username=user.username,
+                        system=system,
+                    )
                     parent_pid = self._resolve_parent(system, user, time, logon_id, process_name)
                     pid = self.generate_process(
                         user,
@@ -10910,7 +10915,12 @@ class ActivityGenerator:
                 elif os_category == "linux" and activity_type in PROCESS_TEMPLATES_LINUX:
                     rng = _get_rng()
                     process_name, command_line = rng.choice(PROCESS_TEMPLATES_LINUX[activity_type])
-                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = self._parameterize_command_for_system(
+                        rng,
+                        command_line,
+                        username=user.username,
+                        system=system,
+                    )
                     command_line = _background_linux_shell_command_if_needed(command_line)
                     process_time = self._schedule_bash_history_time(
                         user, system, time, command_line

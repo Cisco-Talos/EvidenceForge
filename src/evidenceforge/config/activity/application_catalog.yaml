@@ -508,10 +508,10 @@ applications:
         command_templates:
           - "kubectl get pods -n {k8s_namespace}"
           - "kubectl logs {k8s_pod} --tail=100"
-          - "kubectl get nodes -o wide"
+          - "kubectl get node {k8s_node} -o wide"
     categories: [user_app]
     personas: [developer, sysadmin]
-    system_types: [workstation, server]
+    system_types: [workstation]
 
   - id: ssh
     display_name: "OpenSSH Client"
@@ -546,7 +546,7 @@ applications:
           - "curl -X GET {internal_url} -H 'Accept: application/json'"
     categories: [user_app]
     personas: [developer, analyst, sysadmin, default]
-    system_types: [workstation, server]
+    system_types: [workstation]
 
   - id: pytest
     display_name: "pytest"
