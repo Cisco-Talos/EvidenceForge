@@ -57,7 +57,7 @@ signatures:
 
   # ===== TCP Inbound (external -> internal) =====
   # TLS/SSL anomalies
-  - {sid: 2024364, rev: 3, message: "ET INFO TLS Handshake Failure", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: in}
+  - {sid: 2024364, rev: 3, message: "ET INFO TLS Handshake Failure", classification: "misc-activity", priority: 3, proto: tcp, dst_port: 443, direction: in, baseline_fp_allowed: false}
   - {sid: 2019876, rev: 2, message: "ET INFO Packed Executable Download", classification: "misc-activity", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
 
   # Scanning activity
@@ -69,7 +69,7 @@ signatures:
   - {sid: 2000537, rev: 8, message: "ET SCAN NMAP -sS window 2048", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 80, direction: in, baseline_fp_allowed: false}
   - {sid: 2000545, rev: 8, message: "ET SCAN NMAP -f -sV", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 443, direction: in, baseline_fp_allowed: false}
   - {sid: 2010939, rev: 3, message: "ET SCAN Suspicious inbound to PostgreSQL port 5432", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 5432, direction: in}
-  - {sid: 2002106, rev: 6, message: "ET SCAN Rapid POP3 Connection - Possible Brute Force Attack", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 110, direction: in}
+  - {sid: 2002106, rev: 6, message: "ET SCAN Rapid POP3 Connection - Possible Brute Force Attack", classification: "attempted-recon", priority: 2, proto: tcp, dst_port: 110, direction: in, baseline_fp_allowed: false}
 
   # Web application attacks (inbound to web servers)
   - {sid: 2009582, rev: 3, message: "ET WEB_SERVER SQL Injection Attempt SELECT FROM", classification: "web-application-attack", priority: 1, proto: tcp, dst_port: 80, direction: in, target_services: [http, nginx, apache, iis]}
