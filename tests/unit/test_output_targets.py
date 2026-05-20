@@ -29,6 +29,7 @@ import pytest
 from evidenceforge.generation.engine.emitter_setup import _build_emitter_classes
 from evidenceforge.output_targets import (
     FORMAT_TARGET_POLICIES,
+    MAX_OUTPUT_TARGET_MARKER_BYTES,
     OutputTarget,
     normalize_output_target,
     read_output_target_marker,
@@ -58,6 +59,33 @@ def test_output_target_marker_round_trips_from_scenario_root_or_data_dir(tmp_pat
 def test_invalid_output_target_raises_clear_error() -> None:
     with pytest.raises(ValueError, match="expected one of: default, sof-elk"):
         normalize_output_target("splunk")
+
+
+def test_invalid_output_target_error_does_not_echo_input_value() -> None:
+    secret = "CI_SECRET_TOKEN=super-secret-value"
+
+    with pytest.raises(ValueError, match="invalid output target value") as exc_info:
+        normalize_output_target(secret)
+
+    assert secret not in str(exc_info.value)
+
+
+def test_output_target_marker_rejects_symlink(tmp_path: Path) -> None:
+    marker = tmp_path / "OUTPUT_TARGET.txt"
+    secret = tmp_path.parent / "secret.txt"
+    secret.write_text("sof-elk", encoding="utf-8")
+    marker.symlink_to(secret)
+
+    with pytest.raises(ValueError, match="symlinks are not allowed"):
+        read_output_target_marker(tmp_path)
+
+
+def test_output_target_marker_enforces_size_limit(tmp_path: Path) -> None:
+    marker = tmp_path / "OUTPUT_TARGET.txt"
+    marker.write_text("a" * (MAX_OUTPUT_TARGET_MARKER_BYTES + 1), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="file is too large"):
+        read_output_target_marker(tmp_path)
 
 
 def test_every_emitted_canonical_format_has_target_policy() -> None:

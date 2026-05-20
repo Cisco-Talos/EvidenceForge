@@ -43,6 +43,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.formats.format_def import FormatDefinition
 from evidenceforge.generation.emitters.syslog_family import (
+    bounded_syslog_int,
     make_syslog_family_route_key,
     render_rfc3164_syslog,
     rfc3164_timestamp_sort_key,
@@ -852,10 +853,19 @@ class CiscoAsaEmitter(SensorMultiplexEmitter):
 
     def _render_event(self, event_data: dict[str, Any]) -> str | None:
         """Render ASA syslog line via the shared RFC3164 syslog-family layer."""
+        severity = bounded_syslog_int(
+            event_data.get("severity", 6), default=6, minimum=0, maximum=7
+        )
+        pri = bounded_syslog_int(
+            event_data.get("pri"),
+            default=self._pri(severity),
+            minimum=0,
+            maximum=191,
+        )
         return render_rfc3164_syslog(
-            pri=int(event_data.get("pri") or self._pri(event_data.get("severity", 6))),
+            pri=pri,
             timestamp=event_data["timestamp"],
             hostname=str(event_data.get("hostname") or ""),
-            app_name=f"%ASA-{event_data.get('severity')}-{event_data.get('msg_id')}",
+            app_name=f"%ASA-{severity}-{event_data.get('msg_id')}",
             message=str(event_data.get("message") or ""),
         )
