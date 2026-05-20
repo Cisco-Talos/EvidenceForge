@@ -276,7 +276,7 @@ def test_windows_process_source_timing_respects_visible_parent_create():
 
     assert sysmon_time >= parent_visible_time + timedelta(milliseconds=1)
     assert security_time >= parent_visible_time + timedelta(milliseconds=1)
-    assert ecar_time >= sysmon_time
+    assert ecar_time >= sysmon_time + timedelta(milliseconds=5)
 
     order_deltas: list[float] = []
     for pid in range(1200, 1250):

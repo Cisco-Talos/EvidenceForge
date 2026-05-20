@@ -873,7 +873,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 "source.sysmon_process_create",
                 seed_parts=(hostname, proc.pid, start_time),
                 not_before=start_time,
-            )
+            ) + timedelta(milliseconds=5)
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_process_create",
@@ -1600,6 +1600,7 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_create_canonical_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
+                    writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)

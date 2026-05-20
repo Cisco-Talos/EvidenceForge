@@ -1044,6 +1044,39 @@ class TestSslUidCorrelation:
         assert conn_row["duration"] > 1.2
         assert conn_row["duration"] != 1.2
 
+    def test_tls_conn_duration_floor_breaks_ssl_context_duration_sentinel(self):
+        """Completed TLS rows with SSL context should not keep the generic 1.2s duration."""
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir / "conn.json")
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CContextTLS123456",
+                    conn_state="SF",
+                    duration=1.2,
+                ),
+                ssl=SslContext(version="TLSv12", cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"),
+            )
+
+            conn_emitter.emit(event)
+            conn_emitter.close()
+
+            conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
+
+        assert conn_row["duration"] > 1.2
+        assert conn_row["duration"] != 1.2
+
     def test_x509_rejects_partial_handshake(self):
         """x509.log should not emit certificates for incomplete TLS handshakes."""
         fmt = load_format("zeek_x509")

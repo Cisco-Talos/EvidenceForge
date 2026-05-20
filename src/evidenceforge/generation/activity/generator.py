@@ -7168,7 +7168,7 @@ class ActivityGenerator:
                 seed_parts=(host.hostname, proc.pid, process_start_time),
                 not_before=sysmon_not_before,
             )
-            ecar_not_before = sysmon_time
+            ecar_not_before = sysmon_time + timedelta(milliseconds=5)
         else:
             ecar_not_before = process_start_time
 

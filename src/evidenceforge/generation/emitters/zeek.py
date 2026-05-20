@@ -135,9 +135,8 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 or duration < min_duration
                 or abs(duration - min_duration) < 0.000001
                 or (
-                    event.ssl is None
-                    and self._render_service_name(net.service) == "ssl"
-                    and abs(duration - 1.2) < 0.000001
+                    self._render_service_name(net.service) == "ssl"
+                    and abs(float(duration) - 1.2) < 0.000001
                 )
             ):
                 duration = _tls_completed_duration_floor(
