@@ -5531,7 +5531,7 @@ class BaselineMixin:
                 roster = self._get_server_ssh_users(system)
                 if roster:
                     from evidenceforge.generation.activity.bash_commands import (
-                        pick_bash_command_entry,
+                        pick_bash_session_commands,
                     )
 
                     num_ssh = self._scaled_randint(rng, system, "linux_remote_admin", 1, 3)
@@ -5597,20 +5597,16 @@ class BaselineMixin:
                                 "pip install",
                             ]
                         )
-                        typo_count = 0
-                        for _cmd_i in range(n_cmds):
+                        command_entries = pick_bash_session_commands(
+                            rng,
+                            ssh_user.persona or "",
+                            system.hostname,
+                            system.services,
+                            username=ssh_user.username,
+                            command_count=n_cmds,
+                        )
+                        for cmd, _is_typo in command_entries:
                             cmd_offset = rng.randint(30, 600)
-                            cmd, is_typo = pick_bash_command_entry(
-                                rng,
-                                ssh_user.persona or "",
-                                system.hostname,
-                                system.services,
-                                username=ssh_user.username,
-                                session_command_count=n_cmds,
-                                prior_typo_count=typo_count,
-                            )
-                            if is_typo:
-                                typo_count += 1
                             # Complexity-aware timing: build/install commands
                             # take longer than simple lookups (ls, cat, pwd)
                             is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)
@@ -5646,7 +5642,7 @@ class BaselineMixin:
                 )
                 if ws_user is not None:
                     from evidenceforge.generation.activity.bash_commands import (
-                        pick_bash_command_entry,
+                        pick_bash_session_commands,
                     )
 
                     n_cmds = self._scaled_randint(
@@ -5660,24 +5656,20 @@ class BaselineMixin:
                     ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     hour_end = current_hour + timedelta(hours=1)
                     cumulative = 0
-                    typo_count = 0
-                    for _ in range(n_cmds):
+                    command_entries = pick_bash_session_commands(
+                        rng,
+                        ws_user.persona or "",
+                        system.hostname,
+                        system.services,
+                        username=ws_user.username,
+                        command_count=n_cmds,
+                    )
+                    for cmd, _is_typo in command_entries:
                         gap = rng.randint(30, 300)
                         cumulative += gap
                         cmd_time = ts0 + timedelta(seconds=cumulative)
                         if cmd_time >= hour_end:
                             break
-                        cmd, is_typo = pick_bash_command_entry(
-                            rng,
-                            ws_user.persona or "",
-                            system.hostname,
-                            system.services,
-                            username=ws_user.username,
-                            session_command_count=n_cmds,
-                            prior_typo_count=typo_count,
-                        )
-                        if is_typo:
-                            typo_count += 1
                         self.state_manager.set_current_time(cmd_time)
                         self.activity_generator.generate_bash_command(
                             ws_user, system, cmd_time, cmd

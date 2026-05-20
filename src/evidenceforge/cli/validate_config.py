@@ -1652,12 +1652,15 @@ def validate_config() -> ValidationResult:
     #   common — shared commands for all roles
     #   params — placeholder pools for template resolution
     #   keyboard_adjacency — typo model data
+    #   workflow_model/workflows — role-specific command sequence model
     #   dba, webadmin, security — sub-role pools mapped from personas by _get_role_pool()
     _BASH_SPECIAL_KEYS = {
         "common",
         "params",
         "keyboard_adjacency",
         "typo_model",
+        "workflow_model",
+        "workflows",
         "dba",
         "webadmin",
         "security",
@@ -1711,6 +1714,107 @@ def validate_config() -> ValidationResult:
                         f'Role "{role_key}" has no matching persona — these commands will never be generated',
                     )
                 )
+        workflow_model = bash_data.get("workflow_model", {})
+        if workflow_model and not isinstance(workflow_model, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "workflow_model must be a mapping")
+            )
+        elif isinstance(workflow_model, dict):
+            selection_probability = workflow_model.get("selection_probability", 0.65)
+            if (
+                not isinstance(selection_probability, int | float)
+                or not 0 <= float(selection_probability) <= 1
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "bash_commands.yaml",
+                        "workflow_model.selection_probability must be a number between 0 and 1",
+                    )
+                )
+        workflows = bash_data.get("workflows", {})
+        if workflows and not isinstance(workflows, dict):
+            result.issues.append(
+                Issue("ERROR", "bash_commands.yaml", "workflows must be a mapping")
+            )
+        elif isinstance(workflows, dict):
+            valid_workflow_roles = set(persona_names) | _BASH_SPECIAL_KEYS
+            for role_key, role_workflows in workflows.items():
+                if role_key not in valid_workflow_roles:
+                    result.issues.append(
+                        Issue(
+                            "INFO",
+                            "bash_commands.yaml",
+                            f'Workflow role "{role_key}" has no matching persona or role mapping',
+                        )
+                    )
+                if not isinstance(role_workflows, list):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "bash_commands.yaml",
+                            f"workflows.{role_key} must be a list",
+                        )
+                    )
+                    continue
+                for index, workflow in enumerate(role_workflows, start=1):
+                    if not isinstance(workflow, dict):
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"workflows.{role_key}[{index}] must be a mapping",
+                            )
+                        )
+                        continue
+                    weight = workflow.get("weight", 1)
+                    if not isinstance(weight, int | float) or float(weight) <= 0:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"workflows.{role_key}[{index}].weight must be a positive number",
+                            )
+                        )
+                    steps = workflow.get("steps")
+                    if not isinstance(steps, list) or not steps:
+                        result.issues.append(
+                            Issue(
+                                "ERROR",
+                                "bash_commands.yaml",
+                                f"workflows.{role_key}[{index}].steps must be a non-empty list",
+                            )
+                        )
+                        continue
+                    for step_index, step in enumerate(steps, start=1):
+                        if isinstance(step, str):
+                            if not step.strip():
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        "bash_commands.yaml",
+                                        f"workflows.{role_key}[{index}].steps[{step_index}] must not be empty",
+                                    )
+                                )
+                            continue
+                        if not isinstance(step, list) or not step:
+                            result.issues.append(
+                                Issue(
+                                    "ERROR",
+                                    "bash_commands.yaml",
+                                    f"workflows.{role_key}[{index}].steps[{step_index}] must be a command string or non-empty list",
+                                )
+                            )
+                            continue
+                        for option_index, option in enumerate(step, start=1):
+                            if not isinstance(option, str) or not option.strip():
+                                result.issues.append(
+                                    Issue(
+                                        "ERROR",
+                                        "bash_commands.yaml",
+                                        f"workflows.{role_key}[{index}].steps[{step_index}][{option_index}] must be a non-empty string",
+                                    )
+                                )
 
     # --- Checks 26-27: Evaluation Rule Integrity ---
     format_names = {f.stem for f in formats_dir.glob("*.yaml")}

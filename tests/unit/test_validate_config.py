@@ -203,6 +203,40 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_bash_workflow_model(self, monkeypatch):
+        from evidenceforge.generation.activity import bash_commands
+
+        real_loader = bash_commands.load_bash_commands
+
+        def load_invalid_bash_commands():
+            data = real_loader()
+            return {
+                **data,
+                "workflow_model": {"selection_probability": 1.5},
+                "workflows": {
+                    **data.get("workflows", {}),
+                    "sysadmin": [{"name": "bad", "weight": 1, "steps": [[]]}],
+                },
+            }
+
+        monkeypatch.setattr(bash_commands, "load_bash_commands", load_invalid_bash_commands)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "bash_commands.yaml"
+            and "workflow_model.selection_probability must be a number between 0 and 1"
+            in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "bash_commands.yaml"
+            and "steps[1] must be a command string or non-empty list" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_third_party_module_with_microsoft_identity(self, monkeypatch):
         from evidenceforge.generation.activity import application_catalog
 

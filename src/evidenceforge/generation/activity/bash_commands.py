@@ -260,6 +260,7 @@ _COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
 _COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
 _COMMAND_GLOBAL_LOW_REPEAT_COUNTS: Counter[str] = Counter()
+_WORKFLOW_SELECTION_PROBABILITY = 0.65
 _LOW_REPEAT_EXACT_COMMANDS = {
     "cat /proc/cpuinfo | grep 'model name' | head -1",
     "df -h /tmp",
@@ -403,10 +404,38 @@ def _low_repeat_group(command: str) -> str | None:
         return "cpuinfo_model_name"
     if normalized == "df -h /tmp":
         return "df_tmp"
+    if normalized == "hostnamectl":
+        return "hostnamectl"
+    if normalized.startswith("ip -br addr"):
+        return "ip_br_addr"
+    if normalized.startswith("ip route get "):
+        return "ip_route_get"
+    if normalized.startswith("journalctl -p warning"):
+        return "journalctl_warnings"
     if normalized.startswith("journalctl -p err"):
         return "journalctl_errors"
+    if normalized.startswith("journalctl -u NetworkManager"):
+        return "journalctl_networkmanager"
+    if normalized.startswith("loginctl "):
+        return normalized.replace(" ", "_")
+    if normalized.startswith("nmcli connection show"):
+        return "nmcli_connection_show"
+    if normalized.startswith("nmcli device status"):
+        return "nmcli_device_status"
+    if normalized.startswith("resolvectl query login.microsoftonline.com"):
+        return "resolvectl_login_microsoftonline"
+    if normalized.startswith("resolvectl status"):
+        return "resolvectl_status"
+    if normalized.startswith("systemctl --user status"):
+        return "systemctl_user_status"
     if normalized.startswith("systemctl --failed"):
         return "systemctl_failed"
+    if normalized.startswith("systemctl status "):
+        parts = normalized.split()
+        if len(parts) >= 3:
+            return f"systemctl_status_{parts[2]}"
+    if normalized == "timedatectl":
+        return "timedatectl"
     if normalized == "systemctl status sshd" or normalized.startswith("systemctl status sshd "):
         return "systemctl_sshd"
     return None
@@ -416,7 +445,7 @@ def _global_repeat_limit(command: str, pool_size: int) -> int:
     """Return the generation-wide soft repeat limit for an exact command."""
     if _low_repeat_group(command):
         return 2
-    return max(3, min(6, max(1, pool_size // 5)))
+    return max(2, min(4, max(1, pool_size // 8)))
 
 
 def _below_global_repeat_limit(command: str, pool_size: int, *, slack: int = 0) -> bool:
@@ -456,14 +485,14 @@ def _choose_template_with_memory(
             return command
 
     for command in candidates:
-        if command not in recent and _below_global_repeat_limit(command, len(pool), slack=2):
+        if command not in recent and _below_global_repeat_limit(command, len(pool), slack=1):
             _remember_command(system_hostname, username, command)
             return command
 
     command = min(
         candidates,
         key=lambda candidate: (
-            not _below_global_repeat_limit(candidate, len(pool), slack=2),
+            not _below_global_repeat_limit(candidate, len(pool), slack=1),
             _low_repeat_group(candidate) is not None,
             _COMMAND_GLOBAL_LOW_REPEAT_COUNTS[_low_repeat_group(candidate)]
             if _low_repeat_group(candidate)
@@ -472,6 +501,168 @@ def _choose_template_with_memory(
     )
     _remember_command(system_hostname, username, command)
     return command
+
+
+def _try_choose_fresh_workflow_template(
+    rng: random.Random,
+    pool: list[str],
+    params: dict[str, list[str]],
+    system_services: list[str] | None,
+    system_hostname: str,
+    username: str,
+) -> str | None:
+    """Pick a workflow step only while its exact variants still have repeat budget."""
+    pool = _filter_pool_for_system(pool, system_hostname, system_services)
+    if not pool:
+        return None
+
+    key = (system_hostname.lower(), username.lower())
+    recent = set(_COMMAND_RECENCY.get(key, ()))
+    if username:
+        recent.update(_COMMAND_USER_RECENCY.get(username.lower(), ()))
+
+    candidates: list[str] = []
+    for _ in range(_COMMAND_CANDIDATE_ATTEMPTS):
+        template = rng.choice(pool)
+        command = _resolve_template(template, rng, params, system_services)
+        candidates.append(command)
+        if command not in recent and _below_global_repeat_limit(command, len(pool)):
+            _remember_command(system_hostname, username, command)
+            return command
+
+    fresh_candidates = [
+        command
+        for command in candidates
+        if command not in recent and _below_global_repeat_limit(command, len(pool), slack=1)
+    ]
+    if not fresh_candidates:
+        return None
+    command = min(fresh_candidates, key=lambda candidate: _COMMAND_GLOBAL_COUNTS[candidate])
+    _remember_command(system_hostname, username, command)
+    return command
+
+
+def _workflow_candidates(commands: dict[str, Any], pool_key: str) -> list[dict[str, Any]]:
+    """Return workflow candidates for a role, including shared fallback workflows."""
+    workflows = commands.get("workflows", {})
+    if not isinstance(workflows, dict):
+        return []
+    candidates: list[dict[str, Any]] = []
+    for key in ("common", pool_key):
+        value = workflows.get(key, [])
+        if isinstance(value, list):
+            candidates.extend(item for item in value if isinstance(item, dict))
+    return [item for item in candidates if isinstance(item.get("steps"), list)]
+
+
+def _choose_workflow(rng: random.Random, workflows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Pick one configured shell workflow by weight."""
+    if not workflows:
+        return None
+    weights = [max(0.0, float(workflow.get("weight", 1.0))) for workflow in workflows]
+    if not any(weights):
+        return rng.choice(workflows)
+    return rng.choices(workflows, weights=weights, k=1)[0]
+
+
+def _workflow_step_templates(step: Any) -> list[str]:
+    """Normalize a workflow step to a non-empty list of command templates."""
+    if isinstance(step, str):
+        return [step]
+    if isinstance(step, list):
+        return [item for item in step if isinstance(item, str) and item.strip()]
+    return []
+
+
+def _pick_workflow_commands(
+    rng: random.Random,
+    workflow: dict[str, Any],
+    params: dict[str, list[str]],
+    system_services: list[str] | None,
+    system_hostname: str,
+    username: str,
+    command_count: int,
+) -> list[str]:
+    """Materialize a configured workflow into source-native bash commands."""
+    commands: list[str] = []
+    steps = workflow.get("steps", [])
+    for step in steps:
+        if len(commands) >= command_count:
+            break
+        templates = _workflow_step_templates(step)
+        if not templates:
+            continue
+        command = _try_choose_fresh_workflow_template(
+            rng,
+            templates,
+            params,
+            system_services,
+            system_hostname,
+            username,
+        )
+        if command is not None:
+            commands.append(command)
+    return commands
+
+
+def pick_bash_session_commands(
+    rng: random.Random,
+    persona: str,
+    system_hostname: str,
+    system_services: list[str],
+    username: str,
+    command_count: int,
+) -> list[tuple[str, bool]]:
+    """Pick a coherent shell-session command list.
+
+    Most interactive sessions should read like a short workflow, not a bag of
+    unrelated diagnostics. Configured workflows provide role/host-specific
+    command sequences; any remaining slots fall back to the regular picker.
+    """
+    if command_count <= 0:
+        return []
+
+    commands = load_bash_commands()
+    params = commands.get("params", {})
+    server_role = _resolve_server_role(system_hostname, system_services)
+    pool_key = _get_role_pool(persona, server_role)
+    selected: list[tuple[str, bool]] = []
+
+    workflows = _workflow_candidates(commands, pool_key)
+    selection_probability = float(
+        commands.get("workflow_model", {}).get(
+            "selection_probability", _WORKFLOW_SELECTION_PROBABILITY
+        )
+    )
+    if command_count >= 2 and workflows and rng.random() < selection_probability:
+        workflow = _choose_workflow(rng, workflows)
+        if workflow is not None:
+            for command in _pick_workflow_commands(
+                rng,
+                workflow,
+                params,
+                system_services,
+                system_hostname,
+                username,
+                command_count,
+            ):
+                selected.append((command, False))
+
+    typo_count = 0
+    while len(selected) < command_count:
+        command, is_typo = pick_bash_command_entry(
+            rng,
+            persona,
+            system_hostname,
+            system_services,
+            username=username,
+            session_command_count=command_count,
+            prior_typo_count=typo_count,
+        )
+        selected.append((command, is_typo))
+        if is_typo:
+            typo_count += 1
+    return selected
 
 
 def pick_bash_command(
