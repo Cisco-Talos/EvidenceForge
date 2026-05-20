@@ -326,6 +326,7 @@ zeek_http:
   - name: "HTTP CONNECT must not have response body"
     condition:
       method: "CONNECT"
+      status_code: 200
     checks:
       - field: response_body_len
         equals: 0

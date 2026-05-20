@@ -130,6 +130,50 @@ class TestTierB:
 
 
 class TestTierC:
+    def test_failed_connect_error_bodies_do_not_fail_co_occurrence(self):
+        """Failed CONNECT responses may include proxy error bodies."""
+        records = [
+            _make_record(
+                "zeek_http",
+                {
+                    "method": "CONNECT",
+                    "status_code": 502,
+                    "response_body_len": 1200,
+                },
+            ),
+            _make_record(
+                "zeek_http",
+                {
+                    "method": "CONNECT",
+                    "status_code": 200,
+                    "response_body_len": 0,
+                },
+            ),
+        ]
+
+        scorer = PlausibilityScorer()
+        tier_c = scorer._score_co_occurrence({"zeek_http": records})
+
+        assert tier_c.score == 100.0
+
+    def test_successful_connect_with_body_fails_co_occurrence(self):
+        """Successful CONNECT tunnels should not carry HTTP response bodies."""
+        records = [
+            _make_record(
+                "zeek_http",
+                {
+                    "method": "CONNECT",
+                    "status_code": 200,
+                    "response_body_len": 1200,
+                },
+            ),
+        ]
+
+        scorer = PlausibilityScorer()
+        tier_c = scorer._score_co_occurrence({"zeek_http": records})
+
+        assert tier_c.score < 100.0
+
     def test_matching_distribution_scores_high(self):
         """Records matching reference distribution should score well."""
         # Create records matching the zeek proto distribution (80% tcp, 18% udp, 2% icmp)
