@@ -36,6 +36,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [ ] **IN PROGRESS** Run five family-level iteration-test assessment/fix loops using `eforge-assess`, starting from loop 173 P0/P1 findings.
+- [x] Check regression-test coverage pattern for loop fixes and create a family-level iteration-loop improvement prompt — recent loop-era code fixes overwhelmingly include focused tests (136/138 sampled code `fix:` commits touched tests), so the new prompt emphasizes family-level model changes and probes instead of historical test backfill.
 - [x] Analyze iteration-test assessment loops for repeated findings, plateau causes, and durable realism improvements — conclusion: specific hard defects usually stay fixed, but broad source-native model families recur and the automated eval is saturated/misaligned with current expert findings.
 - [x] Loop 163 blind-review deliberation summary — synthesized the four expert reports into `scenarios/iteration-test/blind-test/loop-163/deliberation.md` without introducing outside evidence.
 - [x] Extract license-neutral output target rendering and evaluation support from the SOF-ELK external parser branch while leaving parser pipeline code/docs/tests out of dev.
