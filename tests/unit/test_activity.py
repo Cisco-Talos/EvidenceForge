@@ -5080,6 +5080,18 @@ class TestActivityGenerator:
             "mysqldump --single-transaction ehr patients",
         )
 
+    def test_linux_shell_process_argv_expands_home_shortcuts_for_user(self):
+        """eCAR process argv should render generated home shortcuts as absolute paths."""
+        process = generator_module._linux_command_process_from_shell(
+            "tail -50 ~/.xsession-errors 2>/dev/null",
+            username="aisha.johnson",
+        )
+
+        assert process == (
+            "/usr/bin/tail",
+            "tail -50 /home/aisha.johnson/.xsession-errors",
+        )
+
     def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
         """Background markers belong to shell history, not child process argv."""
         process = generator_module._linux_command_process_from_shell("tail -f /var/log/syslog &")
@@ -5290,6 +5302,27 @@ class TestActivityGenerator:
         assert "cat /etc/shadow" in command_lines
         assert "head -5" in command_lines
         assert all("|" not in command for command in command_lines)
+
+    def test_parameterize_command_uses_scenario_internal_domain(self, activity_gen, test_user):
+        """Internal URL placeholders should not leak default corp.local vocabulary."""
+        activity_gen._ad_domain = "meridianhcs.local"
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+        )
+
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            "curl -sS -o /dev/null -w '%{http_code}' {internal_url}",
+            username=test_user.username,
+            system=linux,
+        )
+
+        assert "meridianhcs.local" in command
+        assert "corp.local" not in command
 
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters

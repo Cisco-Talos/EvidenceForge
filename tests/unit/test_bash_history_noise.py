@@ -303,6 +303,27 @@ class TestBaselineLinuxBashHistory:
 
         assert command == "pwd"
 
+    def test_bash_picker_keeps_desktop_commands_off_servers(self):
+        """Server SSH sessions should not receive workstation device/home commands."""
+        from evidenceforge.generation.activity import bash_commands
+
+        bash_commands.reset_bash_command_memory()
+
+        command = bash_commands._choose_template_with_memory(
+            random.Random(3),
+            [
+                "bluetoothctl devices 2>/dev/null | head",
+                "tail -50 ~/.xsession-errors 2>/dev/null",
+                "journalctl -u sshd --since '1 hour ago'",
+            ],
+            {},
+            ["ssh", "gunicorn", "systemd-resolved"],
+            "APP-INT-01",
+            "aisha.johnson",
+        )
+
+        assert command == "journalctl -u sshd --since '1 hour ago'"
+
 
 class TestBashHistoryChronological:
     """Bash history entries should be chronologically sorted."""
