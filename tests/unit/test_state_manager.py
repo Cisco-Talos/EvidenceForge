@@ -259,6 +259,42 @@ class TestStateManagerInit:
 
         assert earlier_pid < later_pid
 
+    def test_linux_pids_keep_parent_child_shape_before_future_process(self):
+        """Earlier parent/child allocations should fit below known future PIDs."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+
+        sm.set_current_time(boot_time + timedelta(minutes=5, seconds=1))
+        later_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/journalctl",
+            command_line="journalctl -p warning",
+            username="alice",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(seconds=35))
+        parent_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/bin/sh",
+            command_line="/bin/sh -c debian-sa1",
+            username="sysstat",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(seconds=38))
+        child_pid = sm.create_process(
+            system="linux01",
+            parent_pid=parent_pid,
+            image="/usr/lib/sysstat/debian-sa1",
+            command_line="debian-sa1 1 1",
+            username="sysstat",
+            integrity_level="Medium",
+        )
+
+        assert parent_pid < child_pid < later_pid
+
     def test_linux_transient_syslog_pids_share_process_namespace(self):
         """Syslog-only transient PIDs should not come from a separate low random pool."""
         sm = StateManager()

@@ -703,17 +703,60 @@ class StateManager:
             minimum_pid_exclusive is None or prior_visible_pid > minimum_pid_exclusive
         ):
             minimum_pid_exclusive = prior_visible_pid
-        collision_salt = 0
-        while (
-            pid in running
-            or pid in used
-            or (
-                minimum_pid_exclusive is not None
-                and minimum_pid_exclusive < 4_194_304
-                and pid <= minimum_pid_exclusive
+        future_pid_exclusive = min(
+            (
+                allocated_pid
+                for allocated_time, allocated_pid in allocations
+                if allocated_time > current_time
+            ),
+            default=None,
+        )
+
+        def is_available(candidate: int) -> bool:
+            return (
+                candidate not in running
+                and candidate not in used
+                and (
+                    minimum_pid_exclusive is None
+                    or minimum_pid_exclusive >= 4_194_304
+                    or candidate > minimum_pid_exclusive
+                )
+                and (future_pid_exclusive is None or candidate < future_pid_exclusive)
+                and not self._linux_pid_matches_elapsed_delta(allocations, current_time, candidate)
             )
-            or self._linux_pid_matches_elapsed_delta(allocations, current_time, pid)
-        ):
+
+        def bounded_candidate(salt: int) -> int | None:
+            if future_pid_exclusive is None:
+                return None
+            lower_bound = max(499, minimum_pid_exclusive or 499)
+            if future_pid_exclusive <= lower_bound + 1:
+                return None
+            span = future_pid_exclusive - lower_bound - 1
+            start = (
+                _stable_seed(
+                    f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
+                )
+                % span
+            )
+            for offset in range(min(span, 4096)):
+                candidate = future_pid_exclusive - 1 - ((start + offset) % span)
+                if is_available(candidate):
+                    return candidate
+            return None
+
+        if not is_available(pid):
+            bounded = bounded_candidate(0)
+            if bounded is not None:
+                pid = bounded
+        collision_salt = 0
+        while not is_available(pid):
+            bounded = bounded_candidate(collision_salt + 1)
+            if bounded is not None:
+                pid = bounded
+                if is_available(pid):
+                    break
+            elif future_pid_exclusive is not None and pid >= future_pid_exclusive:
+                future_pid_exclusive = None
             bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
             pid = self._normalize_linux_pid(pid + bump)
             collision_salt += 1
