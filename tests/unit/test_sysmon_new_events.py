@@ -708,6 +708,7 @@ class TestRenderEvent11:
         assert "<EventID>11</EventID>" in content
         assert "payload.exe" in content
         assert "powershell.exe" in content
+        assert '<Data Name="User">CORP\\admin</Data>' in content
 
 
 class TestRenderEventRegistry:

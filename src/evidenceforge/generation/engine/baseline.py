@@ -139,6 +139,12 @@ def _extra_syslog_limit_key(system_hostname: str, entry: dict[str, Any]) -> str:
     return f"{system_hostname}:{entry.get('app', '<unknown>')}:{marker}"
 
 
+def _networkmanager_message_timestamp(ts: datetime) -> str:
+    """Return the source-native NetworkManager bracket timestamp."""
+    timestamp = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
+    return f"{timestamp.timestamp():.4f}"
+
+
 def _plan_http_request_groups(
     requests: list[Any],
     *,
@@ -5908,7 +5914,6 @@ class BaselineMixin:
             )
             for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
-                uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
                 kernel_uptime = _kernel_uptime_stamp(boot_uptime, scenario_start, ts)
 
                 source_roll = rng.random()
@@ -6306,11 +6311,11 @@ class BaselineMixin:
                         # transaction; generic noise can contradict Zeek DHCP.
                         continue
                     elif app == "NetworkManager":
-                        # NM uses monotonic kernel uptime seconds in [brackets]
+                        # NetworkManager logs an epoch-style timestamp in [brackets].
                         msg = render_extra_syslog_message(
                             entry,
                             rng,
-                            positional_value=uptime,
+                            positional_value=_networkmanager_message_timestamp(ts),
                             system_services=system.services,
                         )
                     elif app == "systemd-resolved":

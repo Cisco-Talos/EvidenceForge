@@ -5516,12 +5516,12 @@ class TestActivityGenerator:
     def test_linux_mysql_query_argument_remains_shell_safe(self):
         """SQL passed through mysql -e should keep shell metacharacters quoted."""
         process = generator_module._linux_command_process_from_shell(
-            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'"
+            "mysql --defaults-extra-file=~/.my.cnf -e 'SELECT COUNT(*) FROM appdb.users'"
         )
 
         assert process == (
             "/usr/bin/mysql",
-            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'",
+            "mysql '--defaults-extra-file=~/.my.cnf' -e 'SELECT COUNT(*) FROM appdb.users'",
         )
 
     def test_linux_shell_control_operators_split_process_argv(self):

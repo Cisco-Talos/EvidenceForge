@@ -1508,6 +1508,12 @@ class SysmonEventEmitter(LogEmitter):
         process_guid = self._get_stable_process_guid(
             host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
         )
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc and proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
 
         event_data = {
             "EventID": 11,
@@ -1521,6 +1527,7 @@ class SysmonEventEmitter(LogEmitter):
             "ProcessGuid": process_guid,
             "ProcessId": pid,
             "Image": image,
+            "User": user,
             "TargetFilename": fc.path,
             "CreationUtcTime": utc_time,
         }

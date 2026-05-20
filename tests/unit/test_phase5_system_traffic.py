@@ -40,6 +40,7 @@ from evidenceforge.generation.engine.baseline import (
     _kernel_uptime_stamp,
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
+    _networkmanager_message_timestamp,
     _pick_dc_kerberos_service,
     _pick_dc_kerberos_target,
     _registry_writer_candidates,
@@ -82,6 +83,13 @@ def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     assert first_stamp == "2333187.345076"
     assert second_stamp == "2333187.997014"
     assert float(second_stamp) > float(first_stamp)
+
+
+def test_networkmanager_message_timestamp_uses_epoch_time():
+    """NetworkManager bracket timestamps should be epoch-style source timestamps."""
+    ts = datetime(2024, 3, 18, 12, 8, 39, 757990, tzinfo=UTC)
+
+    assert _networkmanager_message_timestamp(ts) == "1710763719.7580"
 
 
 def test_rsyslog_fd_state_stays_process_local(linux_system):

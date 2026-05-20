@@ -96,6 +96,11 @@ relationships:
     position: after
     min_ms: 1
     max_ms: 35
+  source.ecar_process_terminate:
+    class: source_latency
+    position: after
+    min_ms: 25
+    max_ms: 220
   source.ecar_flow:
     class: source_latency
     position: after

@@ -978,6 +978,23 @@ def _session_started_by(session: Any, time: datetime) -> bool:
     return session_start <= activity_time
 
 
+def _session_active_for_activity(
+    session: Any, time: datetime, *, margin_seconds: float = 0.0
+) -> bool:
+    """Return whether a session can own activity at the given visible time."""
+    if not _session_started_by(session, time):
+        return False
+    network_close_time = getattr(session, "network_close_time", None)
+    if network_close_time is None:
+        return True
+    if network_close_time.tzinfo is None:
+        network_close_time = network_close_time.replace(tzinfo=UTC)
+    else:
+        network_close_time = network_close_time.astimezone(UTC)
+    activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+    return activity_time < network_close_time - timedelta(seconds=margin_seconds)
+
+
 def _extract_image_from_command(command_line: str) -> str:
     """Extract an executable image from a command line without truncating paths with spaces."""
     cleaned = command_line.strip()
@@ -1111,8 +1128,18 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
         return (0.05, 0.8)
     if exe_name in {"sleep", "test"}:
         return (0.2, 2.0)
+    if exe_name in {"mysql", "psql"}:
+        if " -p " in f" {command} " or command.endswith(" -p"):
+            return (8.0, 45.0)
+        return (1.5, 12.0)
+    if exe_name in {"sqlite3", "redis-cli", "pg_isready"}:
+        return (0.8, 8.0)
+    if exe_name in {"systemctl", "journalctl"}:
+        return (0.8, 9.0)
+    if exe_name in {"du", "find"}:
+        return (0.8, 8.0)
     if exe_name in {"grep", "head", "tail", "wc", "env", "printenv", "ss", "ip", "ps"}:
-        return (0.5, 4.0)
+        return (0.35, 5.0)
     if exe_name in {"curl", "wget"}:
         return (0.8, 12.0)
     if exe_name in {"gzip", "tar", "zip", "scp", "kubectl", "docker"}:
@@ -1430,7 +1457,7 @@ PROCESS_TEMPLATES_LINUX = {
         ("/usr/bin/python3", "python3 -m pip install -e {linux_project}"),
     ],
     "process_query": [
-        ("/usr/bin/mysql", "mysql -u root -p {mysql_db}"),
+        ("/usr/bin/mysql", "mysql --defaults-extra-file=~/.my.cnf {mysql_db}"),
         ("/usr/bin/psql", "psql -U postgres -d {psql_db}"),
         ("/usr/bin/redis-cli", "{redis_cmd}"),
     ],
@@ -9810,10 +9837,10 @@ class ActivityGenerator:
                 "curl -I https://api.example.com/health",
             ],
             "process_query": [
-                "mysql -u root -p -e 'SHOW DATABASES'",
+                "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW DATABASES'",
                 "psql -c '\\l'",
                 "redis-cli info",
-                "mysql -u root -p -e 'SHOW PROCESSLIST'",
+                "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW PROCESSLIST'",
                 "psql -c 'SELECT pg_size_pretty(pg_database_size(current_database()))'",
                 "sqlite3 /var/lib/app/data.db '.tables'",
             ],
@@ -9876,7 +9903,7 @@ class ActivityGenerator:
                     command_list = [
                         "ls -la",
                         "tail -f /var/log/mysql/error.log",
-                        "mysql -u root -p -e 'SHOW PROCESSLIST'",
+                        "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW PROCESSLIST'",
                         "pg_isready",
                         "du -sh /var/lib/mysql/*",
                         "systemctl status mysql",
@@ -9972,7 +9999,8 @@ class ActivityGenerator:
         sessions = [
             session
             for session in self.state_manager.get_sessions_for_user(user.username)
-            if session.system == system.hostname and _session_started_by(session, time)
+            if session.system == system.hostname
+            and _session_active_for_activity(session, time, margin_seconds=1.5)
         ]
         if not sessions:
             return
@@ -10007,6 +10035,14 @@ class ActivityGenerator:
         for index, (image, process_command_line) in enumerate(processes):
             parent_pid = self._resolve_parent(system, user, time, session.logon_id, image)
             process_time = time + timedelta(milliseconds=rng.randint(20, 180) + index * 35)
+            network_close_time = getattr(session, "network_close_time", None)
+            if network_close_time is not None:
+                if network_close_time.tzinfo is None:
+                    network_close_time = network_close_time.replace(tzinfo=UTC)
+                else:
+                    network_close_time = network_close_time.astimezone(UTC)
+                if process_time >= network_close_time - timedelta(milliseconds=750):
+                    continue
             pid = self.generate_process(
                 user=user,
                 system=system,

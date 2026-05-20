@@ -423,7 +423,7 @@ class EcarEmitter(HostMultiplexEmitter):
         host = event.src_host
         proc = event.process
         event_data = {
-            "timestamp": event.timestamp,
+            "timestamp": self._process_terminate_timestamp(event, proc),
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "TERMINATE",
@@ -887,6 +887,28 @@ class EcarEmitter(HostMultiplexEmitter):
                 event.timestamp,
             ),
             not_before=process_create_ts + timedelta(milliseconds=1),
+        )
+
+    def _process_terminate_timestamp(
+        self,
+        event: SecurityEvent,
+        proc: Any,
+    ) -> datetime:
+        """Return an eCAR terminate timestamp preserving rendered process lifetime."""
+        if proc is None or proc.start_time is None:
+            return event.timestamp
+        process_create_ts = self._process_create_timestamp(event, proc)
+        canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
+        return _SOURCE_TIMING.source_time(
+            event,
+            "source.ecar_process_terminate",
+            seed_parts=(
+                self._host_name(event.src_host),
+                proc.pid,
+                proc.start_time,
+                event.timestamp,
+            ),
+            not_before=max(event.timestamp, process_create_ts + canonical_lifetime),
         )
 
     def _render_service_installed(self, event: SecurityEvent) -> None:

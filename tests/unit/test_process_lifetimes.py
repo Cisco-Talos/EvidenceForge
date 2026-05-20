@@ -4,6 +4,7 @@
 """Tests for process lifetime realism helpers."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
+    _session_active_for_activity,
     _windows_foreground_lifetime,
 )
 from evidenceforge.generation.engine.baseline import _eligible_for_hourly_module_load
@@ -121,6 +123,39 @@ def test_linux_terminal_editors_have_interactive_lifetimes(image: str, command_l
 
     assert lifetime is not None
     assert lifetime[0] >= 20.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line", "minimum"),
+    [
+        ("/usr/bin/mysql", "mysql -u root -p -e 'SHOW PROCESSLIST'", 8.0),
+        ("/usr/bin/psql", "psql -c 'SELECT count(*) FROM pg_stat_activity'", 1.5),
+        ("/usr/bin/systemctl", "systemctl status mysql --no-pager", 0.8),
+        ("/usr/bin/journalctl", "journalctl -u systemd-resolved -n 20", 0.8),
+        ("/usr/bin/du", "du -sh /var/lib/mysql/*", 0.8),
+    ],
+)
+def test_linux_io_commands_have_source_visible_lifetimes(
+    image: str, command_line: str, minimum: float
+) -> None:
+    lifetime = _linux_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[0] >= minimum
+
+
+def test_ssh_session_activity_stops_before_transport_close() -> None:
+    start = datetime(2024, 3, 18, 20, 20, 0, tzinfo=UTC)
+    close = start + timedelta(minutes=7)
+    session = SimpleNamespace(start_time=start, network_close_time=close)
+
+    assert _session_active_for_activity(session, close - timedelta(seconds=2), margin_seconds=1.5)
+    assert not _session_active_for_activity(
+        session,
+        close - timedelta(milliseconds=500),
+        margin_seconds=1.5,
+    )
+    assert not _session_active_for_activity(session, close + timedelta(milliseconds=1))
 
 
 def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None:

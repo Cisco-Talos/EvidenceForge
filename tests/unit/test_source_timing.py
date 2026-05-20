@@ -188,6 +188,25 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     assert dependent_time > process_time
 
 
+def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> None:
+    """eCAR process-create latency should not collapse visible command duration."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    base = _base_time()
+    host = _host_context()
+    proc = _process_context(base)
+    terminate_event = SecurityEvent(
+        timestamp=base + timedelta(seconds=6),
+        event_type="process_terminate",
+        src_host=host,
+        process=proc,
+    )
+
+    process_time = emitter._process_create_timestamp(terminate_event, proc)
+    terminate_time = emitter._process_terminate_timestamp(terminate_event, proc)
+
+    assert terminate_time >= process_time + timedelta(seconds=6)
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

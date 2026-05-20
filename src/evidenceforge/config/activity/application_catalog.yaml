@@ -728,7 +728,7 @@ applications:
       linux:
         image_path: "/usr/bin/mysql"
         command_templates:
-          - "mysql -u root -p {mysql_db}"
+          - "mysql --defaults-extra-file=~/.my.cnf {mysql_db}"
     categories: [query]
     personas: [developer, analyst, sysadmin]
 
