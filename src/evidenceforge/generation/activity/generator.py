@@ -64,6 +64,7 @@ from evidenceforge.events.contexts import (
     RemoteThreadContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.network_params import proxy_connect_status_message
 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
@@ -1777,17 +1778,7 @@ def _jitter_default_connection_duration(
 
 def _dns_registrable_domain(hostname: str) -> str:
     """Return a practical DNS owner name for mail/TXT companion lookups."""
-    from evidenceforge.generation.activity.tls_realism import multi_label_public_suffixes
-
-    parts = [part.lower() for part in hostname.rstrip(".").split(".") if part]
-    if len(parts) <= 2:
-        return ".".join(parts)
-    lowered = ".".join(parts)
-    for suffix in multi_label_public_suffixes():
-        suffix_parts = suffix.split(".")
-        if lowered.endswith(f".{suffix}") and len(parts) > len(suffix_parts):
-            return ".".join(parts[-(len(suffix_parts) + 1) :])
-    return ".".join(parts[-2:])
+    return dns_registrable_domain(hostname)
 
 
 def _public_dns_profile(kind: str, domain: str) -> dict[str, Any]:
@@ -1852,16 +1843,9 @@ def _public_dns_soa_answers(domain: str) -> list[str]:
     return [f"{nameservers[0]} {rname}"]
 
 
-def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str]:
+def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str, int]:
     """Build a plausible TXT lookup for mail/authentication background noise."""
-    domain = _dns_registrable_domain(hostname)
-    roll = rng.random()
-    if roll < 0.45:
-        return domain, f"v=spf1 include:_spf.{domain} ~all"
-    if roll < 0.75:
-        return f"_dmarc.{domain}", f"v=DMARC1; p=none; rua=mailto:dmarc@{domain}"
-    selector = rng.choice(["selector1", "selector2", "google", "k1"])
-    return f"{selector}._domainkey.{domain}", "v=DKIM1; k=rsa; p=MIIBIjANBgkqh"
+    return choose_dns_txt_query(hostname, roll=rng.random())
 
 
 def _dns_hostname_allows_mx(hostname: str) -> bool:
@@ -10252,6 +10236,7 @@ class ActivityGenerator:
 
         # Determine query type, query string, and answer
         qtype_roll = 0.0 if force_address else rng.random()
+        txt_ttl: int | None = None
 
         if ":" in dst_ip and force_address:
             qtype, qtype_name = 28, "AAAA"
@@ -10315,7 +10300,7 @@ class ActivityGenerator:
         elif qtype_roll < 0.995:
             # TXT record: SPF/DKIM/DMARC-style mail/authentication lookups.
             qtype, qtype_name = 16, "TXT"
-            query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
+            query, txt_answer, txt_ttl = _dns_txt_query_and_answer(rng, hostname)
             answers = [txt_answer]
         else:
             # MX record: domain → mail server
@@ -10328,7 +10313,7 @@ class ActivityGenerator:
                     answers = _public_dns_mx_answers(query)
             else:
                 qtype, qtype_name = 16, "TXT"
-                query, txt_answer = _dns_txt_query_and_answer(rng, hostname)
+                query, txt_answer, txt_ttl = _dns_txt_query_and_answer(rng, hostname)
                 answers = [txt_answer]
 
         query_is_internal = qtype_name == "SRV" or _dns_is_internal_name(query, ad_domain)
@@ -10341,7 +10326,7 @@ class ActivityGenerator:
 
         # Internal authoritative names use stable TTLs. External answers may be
         # observed through a resolver cache, so expose realistic countdown TTLs.
-        base_ttl = _dns_base_ttl(query, is_internal)
+        base_ttl = txt_ttl if txt_ttl is not None else _dns_base_ttl(query, is_internal)
         if is_internal:
             shared_ttl = float(base_ttl)
         else:

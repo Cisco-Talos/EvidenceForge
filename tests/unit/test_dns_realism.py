@@ -1199,6 +1199,7 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "example.com"
         assert event.dns.answers == ["v=spf1 include:_spf.example.com ~all"]
+        assert event.dns.TTLs and event.dns.TTLs[0] >= 900
 
     def test_mx_roll_on_cdn_hostname_falls_back_to_txt(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
@@ -1217,6 +1218,30 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "cloudfront.net"
         assert event.dns.answers == ["v=spf1 include:_spf.cloudfront.net ~all"]
+        assert event.dns.TTLs and event.dns.TTLs[0] >= 900
+
+    def test_txt_answers_are_stable_and_dkim_keys_are_source_native(self):
+        from evidenceforge.generation.activity.dns_txt import (
+            choose_background_dns_txt_record,
+            stable_dns_txt_record,
+        )
+
+        assert stable_dns_txt_record("_dmarc.microsoft.com") == stable_dns_txt_record(
+            "_dmarc.microsoft.com"
+        )
+        dkim_answer, dkim_ttl = stable_dns_txt_record("selector1._domainkey.sendgrid.net")
+        dkim_key = dkim_answer.split("p=", 1)[1]
+
+        assert dkim_answer.startswith("v=DKIM1; k=rsa; p=")
+        assert len(dkim_key) > 180
+        assert not all(char in "0123456789abcdef" for char in dkim_key.lower())
+        assert dkim_ttl >= 900
+
+        seen: dict[str, tuple[str, int]] = {}
+        for seed in range(500):
+            query, answer, ttl = choose_background_dns_txt_record(random.Random(seed))
+            prior = seen.setdefault(query, (answer, ttl))
+            assert prior == (answer, ttl)
 
     def test_forward_proxy_srv_queries_use_internal_resolver(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
