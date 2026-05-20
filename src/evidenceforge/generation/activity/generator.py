@@ -1119,8 +1119,8 @@ def _linux_foreground_lifetime(process_name: str, command_line: str) -> tuple[fl
         return (3.0, 18.0)
     if exe_name in {"make", "gcc", "cargo", "npm", "python", "python3", "mysqldump"}:
         return (8.0, 45.0)
-    if exe_name in {"vim", "vi", "nano"}:
-        return (6.0, 35.0)
+    if exe_name in {"vim", "vi", "nano", "emacs"}:
+        return (20.0, 95.0)
     return (1.0, 8.0)
 
 
@@ -7729,7 +7729,13 @@ class ActivityGenerator:
                     proxy_context.user_agent,
                     time,
                 )
-                client_http.response_body_len = 0
+                client_http.response_body_len = _proxy_http_response_body_len(
+                    proxy_context,
+                    resp_bytes=resp_bytes,
+                )
+                client_http.resp_mime_types = (
+                    [proxy_context.content_type] if proxy_context.content_type else []
+                )
 
             if (
                 proxy_context.host

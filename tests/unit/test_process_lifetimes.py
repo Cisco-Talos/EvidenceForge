@@ -108,6 +108,21 @@ def test_linux_http_cli_commands_have_short_lifetimes(image: str, command_line: 
     assert lifetime[1] <= 12.0
 
 
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        ("/usr/bin/vim", "vim /opt/company/webapp/main.py"),
+        ("/usr/bin/nano", "nano /etc/nginx/nginx.conf"),
+        ("/usr/bin/emacs", "emacs -nw /opt/company/webapp/index.js"),
+    ],
+)
+def test_linux_terminal_editors_have_interactive_lifetimes(image: str, command_line: str) -> None:
+    lifetime = _linux_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[0] >= 20.0
+
+
 def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None:
     start = datetime(2024, 3, 18, 17, 56, 39, tzinfo=UTC)
     state = StateManager()

@@ -1806,6 +1806,10 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.cs_bytes < 1000
         assert proxy_event.proxy.sc_bytes < 2500
         assert proxy_event.proxy.time_taken < 2000
+        http_event = emitters["zeek_http"].emit.call_args.args[0]
+        assert http_event.http.method == "CONNECT"
+        assert http_event.http.status_code == 403
+        assert http_event.http.response_body_len == proxy_event.proxy.sc_bytes
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_cache_hit_request_stops_before_origin_side_sources(self):
@@ -2043,7 +2047,7 @@ class TestExplicitProxyVisibility:
         assert http_event.http.method == "CONNECT"
         assert http_event.http.status_code == 407
         assert http_event.http.request_body_len == 0
-        assert http_event.http.response_body_len == 0
+        assert http_event.http.response_body_len == proxy_event.proxy.sc_bytes
         assert not emitters["zeek_ssl"].emit.called
 
     def test_supplied_denied_proxy_context_stops_before_origin_side_sources(self):
@@ -2145,9 +2149,11 @@ class TestExplicitProxyVisibility:
             )
 
             http_event = emitters["zeek_http"].emit.call_args.args[0]
+            proxy_event = emitters["proxy_access"].emit.call_args.args[0]
             assert http_event.http.status_code == status_code
             assert http_event.http.status_msg in configured_messages[status_code]
             assert http_event.http.status_msg != "Proxy Error"
+            assert http_event.http.response_body_len == proxy_event.proxy.sc_bytes
             assert not emitters["zeek_ssl"].emit.called
 
     def test_port_only_web_connection_resolves_origin_from_proxy(self):

@@ -190,6 +190,43 @@ class TestHttpFormatAccuracy:
             assert "resp_fuids" not in data
             assert "resp_mime_types" not in data
 
+    def test_resp_mime_types_omitted_without_visible_response_file(self):
+        """http.log MIME vectors should not claim missing files.log response IDs."""
+        fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output = Path(tmpdir) / "http.json"
+            emitter = ZeekHttpEmitter(fmt, output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CNoFileUID12345",
+                    duration=1.0,
+                ),
+                http=HttpContext(
+                    method="GET",
+                    host="example.test",
+                    uri="/index.html",
+                    response_body_len=4096,
+                    resp_mime_types=["text/html"],
+                ),
+            )
+
+            emitter.emit(event)
+            emitter.close()
+
+            data = json.loads(output.read_text().splitlines()[0])
+
+        assert data["response_body_len"] == 4096
+        assert "resp_fuids" not in data
+        assert "resp_mime_types" not in data
+
 
 class TestHttpCanHandle:
     """Verify can_handle() filtering."""

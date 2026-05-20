@@ -75,6 +75,24 @@ class SourceTimingPlanner:
         plan.source_times[cache_key] = constrained_time
         return constrained_time
 
+    def record_source_time(
+        self,
+        event: SecurityEvent,
+        source_key: str,
+        timestamp: datetime,
+        seed_parts: tuple[Any, ...] = (),
+    ) -> None:
+        """Record a finalized source timestamp for later correlated renderers.
+
+        Some emitters perform source-native ordering repairs that depend on
+        previously rendered rows from the same log. Once an emitter has chosen
+        that final timestamp, downstream correlated sources should reuse it
+        instead of recomputing the pre-repair preferred time.
+        """
+        plan = self._ensure_plan(event)
+        effective_seed = seed_parts or self._event_seed_parts(event)
+        plan.source_times[self._cache_key(source_key, effective_seed)] = timestamp
+
     def ordered_pair(
         self,
         before_event: SecurityEvent,
