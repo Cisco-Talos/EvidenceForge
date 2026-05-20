@@ -713,6 +713,115 @@ class TestWindowsEventEmitter:
         assert termination["TimeCreated"] == child_time + expected_delta
         emitter._cleanup_spool_unlocked()
 
+    def test_process_termination_shifted_after_same_pid_create(self, format_def, temp_output):
+        """Security 4689 should not visibly precede same-process Security 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        create_time = terminate_time + timedelta(milliseconds=44)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1e1c",
+                "ProcessName": r"C:\Windows\System32\gpupdate.exe",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": create_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "NewProcessId": "0x1e1c",
+                "NewProcessName": r"C:\Windows\System32\gpupdate.exe",
+            },
+        ]
+
+        emitter._shift_process_dependents_after_create()
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_create",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0x1e1c",
+                "gpupdate.exe",
+                create_time,
+            ),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == create_time + expected_delta
+
+    def test_wfp_connection_shifted_after_same_pid_create(self, format_def, temp_output):
+        """Security 5156 should not visibly precede same-process Security 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        wfp_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        create_time = wfp_time + timedelta(milliseconds=245)
+        emitter._event_dicts = [
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 7416,
+                "Application": r"\device\harddiskvolume1\windows\system32\mstsc.exe",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": create_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "NewProcessId": "0x1cf8",
+                "NewProcessName": r"C:\Windows\System32\mstsc.exe",
+            },
+        ]
+
+        emitter._shift_process_dependents_after_create()
+
+        expected_delta = sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0x1cf8",
+                "mstsc.exe",
+                create_time,
+            ),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == create_time + expected_delta
+
+    def test_spooled_wfp_connection_shifted_after_same_pid_create(self, format_def, temp_output):
+        """Spooled Security 5156 fixups should preserve process-before-network order."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        wfp_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        create_time = wfp_time + timedelta(milliseconds=136)
+        emitter._event_dicts = [
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 6136,
+                "Application": r"\device\harddiskvolume1\program files\palo alto\pangpa.exe",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": create_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "NewProcessId": "0x17f8",
+                "NewProcessName": r"C:\Program Files\Palo Alto\pangpa.exe",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_dependents_after_create_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0x17f8",
+                "pangpa.exe",
+                create_time,
+            ),
+        )
+        wfp = next(event for event in events if event["EventID"] == 5156)
+        assert wfp["TimeCreated"] == create_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
     def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
         """Security 4688 should not visibly create a child before its parent 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)

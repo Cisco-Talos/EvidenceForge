@@ -6937,6 +6937,24 @@ class ActivityGenerator:
         """Return the latest rendered source-create timestamp for a process."""
         return self._process_source_create_times.get((hostname, pid))
 
+    def _clamp_after_visible_process_create(
+        self,
+        system: System,
+        pid: int,
+        time: datetime,
+        relationship_key: str,
+    ) -> datetime:
+        """Keep fast same-process dependents after visible Windows process creation."""
+        if pid <= 0 or _get_os_category(system.os) != "windows":
+            return time
+        visible_create_time = self.process_source_create_time(system.hostname, pid)
+        if visible_create_time is None or time > visible_create_time:
+            return time
+        return visible_create_time + sample_timing_delta(
+            relationship_key,
+            seed_parts=(system.hostname, pid, visible_create_time, time),
+        )
+
     def _plan_process_source_create_times(self, event: SecurityEvent) -> None:
         """Precompute source-create timestamps before threaded emitters render."""
         host = event.src_host
@@ -7153,6 +7171,12 @@ class ActivityGenerator:
                 )
                 process_username = resolved_username
                 process_logon_id = resolved_logon_id or logon_id
+        time = self._clamp_after_visible_process_create(
+            system,
+            pid,
+            time,
+            "windows.process_exit_after_visible_create",
+        )
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
             timestamp=time,
@@ -8138,6 +8162,14 @@ class ActivityGenerator:
                     dst_port,
                 )
                 pid = -1
+
+        if pid > 0 and resolved_source_system is not None and resolved_process is not None:
+            time = self._clamp_after_visible_process_create(
+                resolved_source_system,
+                pid,
+                time,
+                "source.windows_wfp_connection",
+            )
 
         if service == "dns" and proto in ("udp", "tcp") and dst_port == 53 and dns is not None:
             ad_domain = getattr(self, "_ad_domain", "corp.local")
@@ -10247,6 +10279,7 @@ class ActivityGenerator:
             edr=EdrContext(object_id=proc_obj_id, actor_id=parent_obj_id),
         )
 
+        self._record_process_source_create_time(system.hostname, pid, event)
         # Attach SyslogContext for Linux hosts
         if emit_linux_syslog and event.src_host and event.src_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
@@ -10278,6 +10311,7 @@ class ActivityGenerator:
                 )
 
         self.dispatcher.dispatch(event)
+        self._record_process_source_create_time(system.hostname, pid, event)
 
         return pid
 
@@ -10323,6 +10357,12 @@ class ActivityGenerator:
         )
         if parent_pid not in (0, pid):
             self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
+        time = self._clamp_after_visible_process_create(
+            system,
+            pid,
+            time,
+            "windows.process_exit_after_visible_create",
+        )
         sid = self.sid_registry.get(username, "S-1-5-18") if self.sid_registry else "S-1-5-18"
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         event = SecurityEvent(
@@ -12069,6 +12109,13 @@ class ActivityGenerator:
                 pid,
             )
             return
+        if process is not None:
+            time = self._clamp_after_visible_process_create(
+                system,
+                pid,
+                time,
+                "source.windows_wfp_connection",
+            )
         event = SecurityEvent(
             timestamp=time,
             event_type="wfp_connection",

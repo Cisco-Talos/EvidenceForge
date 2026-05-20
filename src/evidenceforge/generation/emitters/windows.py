@@ -119,6 +119,38 @@ def _windows_path_basename(path: str) -> str:
     return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
 
 
+def _windows_pid_hex(value: Any) -> str:
+    """Return a normalized lowercase hex PID key from Security event fields."""
+    if isinstance(value, int):
+        return f"0x{value:x}"
+    text = str(value or "").strip().lower()
+    if not text or text == "-":
+        return ""
+    if text.startswith("0x"):
+        return text
+    if text.isdecimal():
+        return f"0x{int(text):x}"
+    return text
+
+
+def _security_process_image_key(value: Any) -> str:
+    """Return a loose image key that matches Win32 and device-path renderings."""
+    return _windows_path_basename(str(value or ""))
+
+
+def _security_process_key(
+    computer: str,
+    pid_value: Any,
+    image_value: Any,
+) -> tuple[str, str, str] | None:
+    """Return a process lifecycle key for Security 4688/4689/5156 rows."""
+    pid = _windows_pid_hex(pid_value)
+    image = _security_process_image_key(image_value)
+    if not computer or not pid or pid in {"0x0", "0x4"} or not image or image == "system":
+        return None
+    return (computer, pid, image)
+
+
 def _normalize_windows_time_created(
     event: dict[str, Any],
     last_by_computer: dict[str, datetime],
@@ -1836,6 +1868,53 @@ class WindowsEventEmitter(LogEmitter):
                     updates.clear()
         self._update_spooled_events_unlocked(updates)
 
+    def _shift_spooled_process_dependents_after_create_unlocked(self) -> None:
+        """Keep spooled same-process Security dependents after visible 4688 rows."""
+        process_create_times: dict[tuple[str, str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("NewProcessId"),
+                event.get("NewProcessName"),
+            )
+            if isinstance(ts, datetime) and key is not None:
+                process_create_times[key] = ts
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            event_id = event.get("EventID")
+            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+                continue
+            if event_id == 4689:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessId"),
+                    event.get("ProcessName"),
+                )
+                relationship_key = "windows.process_exit_after_visible_create"
+            else:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                relationship_key = "source.windows_wfp_connection"
+            create_time = process_create_times.get(key) if key is not None else None
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + sample_timing_delta(
+                    relationship_key,
+                    seed_parts=(key[0], key[1], key[2], create_time),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
     def _suppress_spooled_duplicate_lock_unlock_transitions_unlocked(self) -> None:
         """Keep spooled 4800/4801 as a chronological session state machine."""
         session_state: dict[tuple[str, str, str], str] = {}
@@ -1900,6 +1979,7 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
+            self._shift_spooled_process_dependents_after_create_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
@@ -1908,6 +1988,7 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_kerberos_tgts_before_service_tickets()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
+            self._shift_process_dependents_after_create()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
@@ -2205,6 +2286,47 @@ class WindowsEventEmitter(LogEmitter):
                 event["TimeCreated"] = latest + sample_timing_delta(
                     "windows.process_exit_after_visible_child",
                     seed_parts=(key[0], key[1], latest),
+                )
+
+    def _shift_process_dependents_after_create(self) -> None:
+        """Keep same-process Security dependents after visible 4688 rows."""
+        process_create_times: dict[tuple[str, str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("NewProcessId"),
+                event.get("NewProcessName"),
+            )
+            if isinstance(ts, datetime) and key is not None:
+                process_create_times[key] = ts
+
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            event_id = event.get("EventID")
+            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+                continue
+            if event_id == 4689:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessId"),
+                    event.get("ProcessName"),
+                )
+                relationship_key = "windows.process_exit_after_visible_create"
+            else:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                relationship_key = "source.windows_wfp_connection"
+            create_time = process_create_times.get(key) if key is not None else None
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + sample_timing_delta(
+                    relationship_key,
+                    seed_parts=(key[0], key[1], key[2], create_time),
                 )
 
     def flush(self, *, force: bool = False) -> None:

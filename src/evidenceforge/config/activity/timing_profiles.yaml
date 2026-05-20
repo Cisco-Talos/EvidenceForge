@@ -56,6 +56,11 @@ relationships:
     position: before
     min_ms: 250
     max_ms: 3000
+  windows.process_exit_after_visible_create:
+    class: teardown
+    position: after
+    min_ms: 25
+    max_ms: 350
   source.windows_wfp_connection:
     class: source_latency
     position: after

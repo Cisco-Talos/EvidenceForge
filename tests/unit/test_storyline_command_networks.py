@@ -289,6 +289,71 @@ class TestStorylineCommandNetworks:
             event.source_timing.source_times.values()
         )
 
+    def test_process_owned_windows_connection_waits_for_visible_process_create(self):
+        captured: list[Any] = []
+
+        class _CapturingDispatcher:
+            visibility_engine = None
+
+            @staticmethod
+            def dispatch(event: Any) -> None:
+                captured.append(event)
+
+            @staticmethod
+            def record_filtered_network_observation() -> None:
+                return None
+
+        state_manager = StateManager()
+        generator = ActivityGenerator(state_manager, {})
+        generator.dispatcher = _CapturingDispatcher()
+        actor = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        target = System(
+            hostname="DC-01",
+            ip="10.10.0.20",
+            os="Windows Server 2022",
+            type="server",
+        )
+        generator._ip_to_system = {source.ip: source, target.ip: target}
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        state_manager.set_current_time(event_time)
+
+        pid = generator.generate_process(
+            actor,
+            source,
+            event_time,
+            "0x3e7",
+            r"C:\Windows\System32\mstsc.exe",
+            "mstsc.exe /v:DC-01",
+            parent_pid=4,
+        )
+        visible_process_time = generator.process_source_create_time(source.hostname, pid)
+        assert visible_process_time is not None
+
+        generator.generate_connection(
+            src_ip=source.ip,
+            dst_ip=target.ip,
+            time=event_time + timedelta(milliseconds=1),
+            dst_port=3389,
+            proto="tcp",
+            service="rdp",
+            duration=3.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            pid=pid,
+            source_system=source,
+        )
+
+        connection = next(event for event in captured if event.event_type == "connection")
+        wfp = next(event for event in captured if event.event_type == "wfp_connection")
+        assert connection.timestamp > visible_process_time
+        assert wfp.timestamp > visible_process_time
+
 
 class _FakeActivityGenerator:
     def __init__(self) -> None:
