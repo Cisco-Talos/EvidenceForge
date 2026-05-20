@@ -74,7 +74,9 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
         conn_lifetime = net.duration if net.duration is not None else dns.rtt
         within = None
         if conn_lifetime is not None and conn_lifetime > 0:
-            latest = conn_ts + timedelta(seconds=max(0.0, conn_lifetime - 0.000001))
+            rtt = dns.rtt or 0.0
+            latest_offset = max(0.0, conn_lifetime - rtt - 0.000001)
+            latest = conn_ts + timedelta(seconds=latest_offset)
             within = (conn_ts, latest)
         event_ts = _SOURCE_TIMING.source_time(
             event,

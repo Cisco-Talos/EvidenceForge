@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from evidenceforge.generation.activity.generator import _ephemeral_port
+from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
@@ -946,6 +946,17 @@ class WorldPlanner:
             command_line=command_line,
             parent_pid=parent_pid,
         )
+        if target_exe.lower() == "ldapsearch":
+            lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
+            termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
+            self.activity_generator._remember_foreground_process_finalizer(
+                system=system,
+                user=user,
+                pid=pid,
+                process_name=image,
+                logon_id=session.logon_id,
+                termination_time=termination_time,
+            )
         self.activity_generator._record_user_process(system, user, pid, image)
         return pid
 

@@ -244,6 +244,7 @@ def materialize_edr_template(
         version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
+        "username": user,
         "host_ip": host_ip,
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),
@@ -304,6 +305,7 @@ def materialize_edr_template_group(
         version = rng.choice(["24.020.0128.0003", "24.045.0303.0002", "24.070.0407.0003"])
     replacements = {
         "user": user,
+        "username": user,
         "host_ip": host_ip,
         "rand": f"{rng.randint(10000, 99999)}",
         "small": str(rng.randint(1, 80)),

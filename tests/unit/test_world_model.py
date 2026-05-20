@@ -23,7 +23,7 @@
 """Unit tests for the compiled world model and planner layer."""
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -380,6 +380,65 @@ def test_connection_owner_process_uses_scenario_internal_urls(
     assert proc is not None
     assert "meridianhcs.local" in proc.command_line
     assert "corp.local" not in proc.command_line
+
+
+def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+    systems: dict[str, System],
+    users: dict[str, User],
+    state_manager: StateManager,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Server-side LDAP helper processes should not leak corp.local or stay open forever."""
+    world_model = WorldModel(scenario, "meridianhcs.local")
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["DB-01"].hostname,
+        logon_type=11,
+        source_ip=systems["WKS-01"].ip,
+        session_kind="ssh",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    monkeypatch.setattr(
+        "evidenceforge.generation.world_model.get_service_to_exes",
+        lambda: {"ldap": ["ldapsearch"]},
+    )
+
+    pid = planner.ensure_connection_process(
+        user=users["alice.admin"],
+        system=systems["DB-01"],
+        session=session,
+        time=session_time,
+        service="ldap",
+        rng=random.Random(3),
+    )
+    proc = state_manager.get_process(systems["DB-01"].hostname, pid)
+    assert proc is not None
+    assert "dc=meridianhcs,dc=local" in proc.command_line
+    assert "dc=corp,dc=local" not in proc.command_line
+
+    activity_generator.finalize_foreground_process_lifetimes(session_time + timedelta(minutes=1))
+    events = [call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list]
+    creates = [event for event in events if event.event_type == "process_create"]
+    terminates = [event for event in events if event.event_type == "process_terminate"]
+
+    assert any(event.process and event.process.pid == pid for event in creates)
+    terminate = next(event for event in terminates if event.process and event.process.pid == pid)
+    create = next(event for event in creates if event.process and event.process.pid == pid)
+    assert create.timestamp < terminate.timestamp
+    assert (terminate.timestamp - session_time).total_seconds() < 10
 
 
 def test_find_user_session_handles_mixed_timezone_start_times(

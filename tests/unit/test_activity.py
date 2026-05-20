@@ -2499,6 +2499,37 @@ class TestActivityGenerator:
         assert event.timestamp > process_start
         assert event.process.start_time == process_start
 
+    def test_image_load_materializes_username_placeholder(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Endpoint module-load paths should never leak literal username placeholders."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(session_start)
+        logon_id = activity_gen.generate_logon(test_user, test_system, session_start)
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=5),
+            logon_id,
+            r"C:\Program Files\Zoom\bin\Zoom.exe",
+            r'"C:\Program Files\Zoom\bin\Zoom.exe"',
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=6),
+            pid,
+            r"C:\Program Files\Zoom\bin\Zoom.exe",
+            r"C:\Users\{username}\AppData\Roaming\Zoom\bin\zVideoApp.dll",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "image_load"
+        assert "{username}" not in event.image_load.image_loaded
+        assert f"\\Users\\{test_user.username}\\" in event.image_load.image_loaded
+
     def test_user_session_process_identity_resolved_before_emit(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -5323,6 +5354,28 @@ class TestActivityGenerator:
 
         assert "meridianhcs.local" in command
         assert "corp.local" not in command
+
+    def test_parameterize_command_uses_scenario_ldap_base_dn(self, activity_gen, test_user):
+        """LDAP command templates should derive base DNs from the scenario domain."""
+        activity_gen._ad_domain = "meridianhcs.local"
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "openldap"],
+        )
+
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            'ldapsearch -x -H ldap://{ssh_target} -b "{ldap_base_dn}" "(objectClass=user)"',
+            username=test_user.username,
+            system=linux,
+        )
+
+        assert "dc=meridianhcs,dc=local" in command
+        assert "dc=corp,dc=local" not in command
+        assert "{ldap_base_dn}" not in command
 
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters

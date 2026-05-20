@@ -208,6 +208,39 @@ def test_zeek_dns_timestamp_stays_inside_rendered_conn_lifetime(tmp_path: Path) 
     dns_row = json.loads(dns_path.read_text().splitlines()[0])
 
     assert conn_row["ts"] <= dns_row["ts"] <= conn_row["ts"] + event.network.duration
+    assert dns_row["ts"] + dns_row["rtt"] <= conn_row["ts"] + conn_row["duration"]
+
+
+def test_zeek_dns_rtt_fits_exact_rendered_conn_lifetime(tmp_path: Path) -> None:
+    """DNS query time should leave room for rtt even when duration equals rtt."""
+    event = SecurityEvent(
+        timestamp=_base_time(),
+        event_type="connection",
+        network=_network_context(duration=0.02),
+        dns=DnsContext(
+            query="updates.example.com",
+            query_type="A",
+            response_ip="10.0.0.53",
+            answers=["10.0.0.53"],
+            TTLs=[60.0],
+            rtt=0.02,
+        ),
+    )
+    conn_path = tmp_path / "conn.json"
+    dns_path = tmp_path / "dns.json"
+    conn_emitter = ZeekEmitter(load_format("zeek_conn"), conn_path, threaded=False)
+    dns_emitter = ZeekDnsEmitter(load_format("zeek_dns"), dns_path, threaded=False)
+
+    conn_emitter.emit(event)
+    dns_emitter.emit(event)
+    conn_emitter.close()
+    dns_emitter.close()
+
+    conn_row = json.loads(conn_path.read_text().splitlines()[0])
+    dns_row = json.loads(dns_path.read_text().splitlines()[0])
+
+    assert conn_row["ts"] <= dns_row["ts"]
+    assert dns_row["ts"] + dns_row["rtt"] <= conn_row["ts"] + conn_row["duration"]
 
 
 def test_migrated_emitters_do_not_use_local_timing_helpers() -> None:

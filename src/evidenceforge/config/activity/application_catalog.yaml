@@ -1213,8 +1213,8 @@ applications:
       linux:
         image_path: "/usr/bin/ldapsearch"
         command_templates:
-          - 'ldapsearch -x -H ldap://{ssh_target} -b "dc=corp,dc=local" "(objectClass=user)"'
-          - 'ldapsearch -x -H ldap://{ssh_target} -b "dc=corp,dc=local" "(objectClass=computer)"'
+          - 'ldapsearch -x -H ldap://{ssh_target} -b "{ldap_base_dn}" "(objectClass=user)"'
+          - 'ldapsearch -x -H ldap://{ssh_target} -b "{ldap_base_dn}" "(objectClass=computer)"'
     categories: [query]
     personas: [sysadmin, help_desk]
 

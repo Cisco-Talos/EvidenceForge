@@ -973,6 +973,27 @@ def _windows_service_process_account(process_name: str, command_line: str) -> st
     return None
 
 
+def _account_leaf_name(username: str) -> str:
+    """Return the username component suitable for profile-path templates."""
+    return username.rsplit("\\", 1)[-1] if "\\" in username else username
+
+
+def _materialize_username_path(path: str, username: str) -> str:
+    """Resolve common user placeholders that must never reach endpoint logs."""
+    if not path:
+        return path
+    account = _account_leaf_name(username or "SYSTEM")
+    return path.replace("{username}", account).replace("{user}", account)
+
+
+def _ldap_base_dn(domain: str) -> str:
+    """Render a DNS domain as a lower-case LDAP base DN for command-line tools."""
+    labels = [label for label in domain.strip(".").lower().split(".") if label]
+    if not labels:
+        labels = ["corp", "local"]
+    return ",".join(f"dc={label}" for label in labels)
+
+
 def _certificate_validity_window(
     reference_time: datetime,
     rng: random.Random,
@@ -1034,6 +1055,7 @@ _LINUX_ONE_SHOT_NETWORK_EXES: set[str] = {
     "wget",
     "scp",
     "kubectl",
+    "ldapsearch",
     "mysqldump",
 }
 
@@ -2874,6 +2896,11 @@ class ActivityGenerator:
                     self._pick_internal_url_placeholder(rng),
                     1,
                 )
+        if "{ldap_base_dn}" in command_line:
+            command_line = command_line.replace(
+                "{ldap_base_dn}",
+                _ldap_base_dn(str(getattr(self, "_ad_domain", "") or "corp.local")),
+            )
         return _parameterize_command(rng, command_line, username=username)
 
     def _pick_internal_url_placeholder(self, rng: random.Random) -> str:
@@ -6509,6 +6536,7 @@ class ActivityGenerator:
             dll_profiles = get_dlls_for_process(_exe_lower)
             dll_profile = rng.choice(dll_profiles) if dll_profiles else {}
             dll_path = dll_profile.get("path", "")
+            dll_path = _materialize_username_path(dll_path, process_username)
             module_delay_ms = rng.randint(120, 1500)
             process_start = running_proc.start_time if running_proc is not None else None
             if dll_path and self._mark_loaded_module(
@@ -12924,6 +12952,7 @@ class ActivityGenerator:
         from evidenceforge.events.contexts import ImageLoadContext, ProcessContext
 
         image = normalize_defender_platform_path(image, system.hostname)
+        dll_path = _materialize_username_path(dll_path, user.username)
         dll_path = normalize_defender_platform_path(dll_path, system.hostname)
         time = self._clamp_time_after_process_start(system, pid, time)
         proc = self.state_manager.get_process(system.hostname, pid)
