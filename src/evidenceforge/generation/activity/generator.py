@@ -708,7 +708,71 @@ def _extract_network_command_target(command_line: str, service: str) -> str | No
     if normalized_service == "ldap":
         match = re.search(r"ldap://([^\s/\"']+)", command_line, re.IGNORECASE)
         return _normalize_command_host_token(match.group(1)) if match else None
+    if normalized_service == "mssql":
+        tokens = _command_tokens(command_line)
+        for idx, token in enumerate(tokens[1:], start=1):
+            lower = token.lower()
+            candidate = ""
+            if lower in {"-s", "/s", "-server", "--server"} and idx + 1 < len(tokens):
+                candidate = tokens[idx + 1]
+            elif lower.startswith("-s") and len(token) > 2:
+                candidate = token[2:]
+            elif lower.startswith("/s") and len(token) > 2:
+                candidate = token[2:]
+            elif lower.startswith("--server="):
+                candidate = token.split("=", 1)[1]
+            if candidate:
+                return _normalize_database_command_target(candidate)
+        return None
+    if normalized_service in {"mysql", "postgresql"}:
+        tokens = _command_tokens(command_line)
+        for idx, token in enumerate(tokens[1:], start=1):
+            lower = token.lower()
+            candidate = ""
+            if lower in {"-h", "--host", "--hostname"} and idx + 1 < len(tokens):
+                candidate = tokens[idx + 1]
+            elif lower.startswith("-h") and len(token) > 2:
+                candidate = token[2:]
+            elif lower.startswith("--host="):
+                candidate = token.split("=", 1)[1]
+            elif lower.startswith("--hostname="):
+                candidate = token.split("=", 1)[1]
+            if candidate:
+                return _normalize_database_command_target(candidate)
+        return None
     return None
+
+
+def _normalize_database_command_target(value: str) -> str:
+    """Normalize a database client target while preserving the user-visible host."""
+    host = _normalize_command_host_token(value)
+    lower = host.lower()
+    for prefix in ("tcp:", "np:", "lpc:"):
+        if lower.startswith(prefix):
+            host = host[len(prefix) :]
+            lower = host.lower()
+            break
+    if "," in host:
+        host = host.split(",", 1)[0]
+    if "\\" in host and not _is_local_database_instance_target(host):
+        host = host.split("\\", 1)[0]
+    return host.strip().rstrip(".")
+
+
+def _is_local_database_instance_target(target: str) -> bool:
+    """Return whether a DB target names a local-only instance with no network effect."""
+    normalized = _normalize_command_host_token(target).lower()
+    if not normalized:
+        return True
+    if normalized in {"localhost", "127.0.0.1", "::1", ".", "(local)", "local"}:
+        return True
+    if normalized in {"sqlexpress", "mssqllocaldb"}:
+        return True
+    if normalized.startswith(("localhost\\", ".\\", "(local)\\")):
+        return True
+    if normalized.startswith("(localdb)\\") or "mssqllocaldb" in normalized:
+        return True
+    return False
 
 
 def _parse_port_tokens(tokens: list[str]) -> list[int]:
@@ -2898,6 +2962,96 @@ class ActivityGenerator:
             return None
         return target_system.ip, normalized
 
+    def _fallback_database_network_target(
+        self,
+        target: str,
+        source_system: System,
+    ) -> tuple[str, str | None, bool] | None:
+        """Map an unresolved nonlocal DB target to a plausible failed TCP attempt."""
+        normalized = _normalize_database_command_target(target)
+        if not normalized or _is_local_database_instance_target(normalized):
+            return None
+        if _is_ip_literal(normalized):
+            return normalized, None, False
+
+        systems_by_ip = getattr(self, "_ip_to_system", {})
+        anchor_ip = ""
+        for db_entry in getattr(self, "_db_servers", []) or []:
+            if isinstance(db_entry, dict):
+                anchor_ip = str(db_entry.get("ip") or "")
+            else:
+                anchor_ip = str(db_entry)
+            if anchor_ip:
+                break
+        if not anchor_ip:
+            server_systems = [
+                system
+                for system in self._unique_environment_systems()
+                if getattr(system, "ip", "") != source_system.ip
+                and (
+                    getattr(system, "type", "") in {"server", "domain_controller"}
+                    or getattr(system, "roles", [])
+                )
+            ]
+            if server_systems:
+                anchor_ip = str(server_systems[0].ip)
+        if not anchor_ip:
+            anchor_ip = source_system.ip
+
+        try:
+            network = ipaddress.ip_network(f"{anchor_ip}/24", strict=False)
+            host_offset = 20 + (_stable_seed(f"db_unresolved:{normalized}") % 210)
+            candidate_ip = str(network.network_address + host_offset)
+            if candidate_ip == source_system.ip or candidate_ip in systems_by_ip:
+                candidate_ip = str(network.network_address + ((host_offset + 37) % 210 + 20))
+        except ValueError:
+            candidate_ip = f"10.10.2.{50 + (_stable_seed(f'db_unresolved:{normalized}') % 150)}"
+
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").strip(".")
+        hostname = normalized if "." in normalized or not ad_domain else f"{normalized}.{ad_domain}"
+        return candidate_ip, hostname, True
+
+    def _pick_database_target_placeholder(
+        self,
+        rng: random.Random,
+        command_line: str,
+        source_system: System,
+    ) -> str | None:
+        """Choose a scenario-aware value for database command target placeholders."""
+        command_lower = command_line.lower()
+        service = "mssql"
+        if "mysql" in command_lower:
+            service = "mysql"
+        elif "psql" in command_lower or "postgres" in command_lower:
+            service = "postgresql"
+
+        compatible: list[str] = []
+        for db_entry in getattr(self, "_db_servers", []) or []:
+            if isinstance(db_entry, dict):
+                entry_service = str(db_entry.get("service") or "")
+                if entry_service and entry_service != service:
+                    continue
+                ip = str(db_entry.get("ip") or "")
+            else:
+                ip = str(db_entry)
+            if ip and ip != source_system.ip:
+                compatible.append(ip)
+        if not compatible:
+            return None
+
+        target_ip = rng.choice(compatible)
+        target_system = getattr(self, "_ip_to_system", {}).get(target_ip)
+        if target_system is None:
+            return target_ip
+
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").strip(".")
+        style = rng.random()
+        if style < 0.20:
+            return target_ip
+        if style < 0.45 and ad_domain:
+            return f"{target_system.hostname}.{ad_domain}"
+        return str(target_system.hostname)
+
     def _pick_command_target_placeholder(
         self,
         rng: random.Random,
@@ -2967,6 +3121,10 @@ class ActivityGenerator:
                 "{ldap_base_dn}",
                 _ldap_base_dn(str(getattr(self, "_ad_domain", "") or "corp.local")),
             )
+        if "{db_server}" in command_line:
+            target = self._pick_database_target_placeholder(rng, command_line, system)
+            if target:
+                command_line = command_line.replace("{db_server}", target)
         return _parameterize_command(rng, command_line, username=username)
 
     def _pick_internal_url_placeholder(self, rng: random.Random) -> str:
@@ -10629,17 +10787,22 @@ class ActivityGenerator:
         if conn_info is None:
             return
 
-        # Only emit ~60% of the time (not every process invocation connects)
-        if rng.random() > 0.60:
+        dst_port = conn_info["dst_port"]
+        service = conn_info["service"]
+        command_target = _extract_network_command_target(command_line, service)
+        command_http_url = _extract_http_url_from_command(command_line)
+
+        # Only emit ~60% of ambient app launches. Commands that name a concrete
+        # remote endpoint should leave a matching socket attempt every time.
+        if not command_target and not command_http_url and rng.random() > 0.60:
             return
 
         conn_time = time + timedelta(milliseconds=rng.randint(50, 500))
         ext_hostname = None
-        dst_port = conn_info["dst_port"]
-        service = conn_info["service"]
         http_context = None
         resp_bytes = rng.randint(500, 50000)
         emit_dns = bool(conn_info["external"])
+        failure_conn_state = None
 
         if conn_info["external"]:
             # External connection: domain-first selection. App-specific mappings
@@ -10709,7 +10872,6 @@ class ActivityGenerator:
             # Internal connection: use DB server or any internal server
             db_servers = getattr(self, "_db_servers", [])
             all_ips = getattr(self, "_all_system_ips", [])
-            command_target = _extract_network_command_target(command_line, service)
             resolved_command_target = (
                 self._resolve_command_network_target(command_target, service)
                 if command_target
@@ -10721,12 +10883,24 @@ class ActivityGenerator:
                     ext_hostname = command_hostname
                     emit_dns = True
             elif command_target:
-                logger.debug(
-                    "Skipping %s process network effect with unresolved command target %s",
-                    service,
-                    command_target,
+                fallback_target = (
+                    self._fallback_database_network_target(command_target, system)
+                    if service in {"mssql", "mysql", "postgresql"}
+                    else None
                 )
-                return
+                if fallback_target is None:
+                    logger.debug(
+                        "Skipping %s process network effect with unresolved command target %s",
+                        service,
+                        command_target,
+                    )
+                    return
+                dst_ip, command_hostname, emit_dns = fallback_target
+                if command_hostname:
+                    ext_hostname = command_hostname
+                failure_conn_state = "S0"
+                service = ""
+                resp_bytes = 0
             elif service in ("mssql", "mysql", "postgresql") and db_servers:
                 # Filter to DB servers that match the requested service
                 svc = service
@@ -10752,12 +10926,14 @@ class ActivityGenerator:
             proto="tcp",
             service=service,
             duration=rng.uniform(0.3, 15.0),
-            orig_bytes=rng.randint(200, 5000),
+            orig_bytes=rng.randint(48, 140) if failure_conn_state else rng.randint(200, 5000),
             resp_bytes=resp_bytes,
             emit_dns=emit_dns,
             pid=pid,
             http=http_context,
             hostname=ext_hostname,
+            source_system=system,
+            conn_state=failure_conn_state,
         )
 
     def execute_baseline_activity(

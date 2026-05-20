@@ -2057,6 +2057,78 @@ class TestActivityGenerator:
         assert network_events[-1].network.dst_ip == web_server.ip
         assert network_events[-1].network.dst_port == 22
 
+    def test_sqlcmd_unresolved_host_emits_failed_network_attempt(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Explicit sqlcmd targets should not render as process-only activity."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+        activity_gen._all_system_ips = [test_system.ip]
+        activity_gen._ad_domain = "example.com"
+        process_name = (
+            r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe"
+        )
+        command_line = 'sqlcmd.exe -S sqlprod01 -Q "SELECT 1"'
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=process_name,
+            command_line=command_line,
+            username="testuser",
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+
+        activity_gen._emit_process_network_correlation(
+            test_system,
+            process_name,
+            command_line,
+            timestamp,
+            pid,
+            random.Random(2),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert network_events
+        assert network_events[-1].network.dst_port == 1433
+        assert network_events[-1].network.conn_state == "S0"
+        assert network_events[-1].network.resp_bytes == 0
+        assert network_events[-1].network.initiating_pid == pid
+
+        assert network_events[-1].network.dst_ip != test_system.ip
+        assert network_events[-1].network.dst_ip.startswith("10.0.0.")
+
+    def test_sqlcmd_local_instance_does_not_emit_network_attempt(
+        self, activity_gen, test_system, mock_emitters
+    ):
+        """Local SQL Server instances should stay host-local."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_name = (
+            r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe"
+        )
+        command_line = 'sqlcmd.exe -S SQLEXPRESS -Q "SELECT 1"'
+
+        activity_gen._emit_process_network_correlation(
+            test_system,
+            process_name,
+            command_line,
+            timestamp,
+            4242,
+            random.Random(2),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert not network_events
+
     def test_process_follow_on_file_event_after_process_create(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
