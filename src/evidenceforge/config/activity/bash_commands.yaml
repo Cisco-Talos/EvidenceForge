@@ -472,9 +472,9 @@ workflows:
 # QWERTY keyboard adjacency map for generative typo model.
 # Each key maps to its physical neighbors on a standard US keyboard.
 typo_model:
-  max_rate: 0.08
-  short_history_threshold: 8
-  short_history_max_typos: 1
+  max_rate: 0.03
+  short_history_threshold: 10
+  short_history_max_typos: 0
   correction_probability: 0.85
 
 keyboard_adjacency:

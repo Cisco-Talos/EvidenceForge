@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -457,6 +458,283 @@ class TestSslContextPopulation:
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
 
+    def test_ssh_session_sets_destination_side_transport_pid(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_events = [
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.command_line == "sshd: [accepted]"
+        ]
+        assert transport_events
+        assert ssh_event.network.responding_pid == transport_events[0].process.pid
+        syslog_pids = {
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
+        }
+        assert syslog_pids == {ssh_event.network.responding_pid}
+
+    def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=8.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        transport_events = [
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.command_line == "sshd: [accepted]"
+        ]
+        assert transport_events
+        assert conn_event.network.responding_pid == transport_events[0].process.pid
+
+    def test_port_22_connection_without_service_sets_destination_side_transport_pid(
+        self, activity_gen
+    ):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            duration=0.4,
+            orig_bytes=120,
+            resp_bytes=200,
+            src_port=51111,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        transport_events = [
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.command_line == "sshd: [accepted]"
+        ]
+        assert transport_events
+        assert conn_event.network.responding_pid == transport_events[0].process.pid
+
+    def test_ssh_session_avoids_existing_destination_endpoint_tuple(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=4.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+        first_conn = next(event for event in events if event.event_type == "connection")
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        assert ssh_event.network.src_port != first_conn.network.src_port
+        assert ssh_event.network.responding_pid != first_conn.network.responding_pid
+        syslog_pids = {
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
+        }
+        assert syslog_pids == {ssh_event.network.responding_pid}
+
+    def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=4.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+        first_conn = next(event for event in events if event.event_type == "connection")
+
+        gen.generate_syslog_event(
+            system=target,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            app_name="sshd",
+            message="Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22",
+            pid=6505,
+            facility=10,
+        )
+        gen.generate_syslog_event(
+            system=target,
+            time=datetime(2024, 1, 15, 10, 0, 2, tzinfo=UTC),
+            app_name="sshd",
+            message="Accepted publickey for admin from 10.0.10.50 port 51111 ssh2",
+            pid=6505,
+            facility=10,
+        )
+        gen.generate_syslog_event(
+            system=target,
+            time=datetime(2024, 1, 15, 10, 0, 3, tzinfo=UTC),
+            app_name="sshd",
+            message="pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
+            pid=6505,
+            facility=10,
+        )
+
+        syslog_pids = [
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
+        ]
+        assert syslog_pids == [
+            first_conn.network.responding_pid,
+            first_conn.network.responding_pid,
+            first_conn.network.responding_pid,
+        ]
+
+    def test_reserved_ssh_source_port_blocks_generic_tuple_reuse(
+        self,
+        activity_gen,
+        monkeypatch,
+    ):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        reserved = gen.reserve_ssh_source_port(
+            "10.0.10.50",
+            target.ip,
+            51111,
+            random.Random(7),
+            "linux",
+            time=base_time,
+        )
+
+        assert reserved == 51111
+
+        candidate_ports = iter([51111, 51112])
+        monkeypatch.setattr(
+            generator_module,
+            "_ephemeral_port",
+            lambda rng, os_category: next(candidate_ports),
+        )
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=base_time + timedelta(seconds=1),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=4.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        assert conn_event.network.src_port == 51112
+
     def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 
@@ -476,11 +754,13 @@ class TestSslContextPopulation:
             time=base_time,
             source_ip="10.0.10.50",
             source_port=51111,
-            sshd_pid=6505,
         )
 
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
         syslog_events = [
-            event for event in events if event.syslog is not None and event.syslog.pid == 6505
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.pid == ssh_event.network.responding_pid
         ]
         messages = [event.syslog.message for event in syslog_events]
         times = [event.timestamp for event in syslog_events]
@@ -535,6 +815,12 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None and event.syslog.message.startswith("Accepted password")
         )
+        pam_event = next(
+            event
+            for event in events
+            if event.syslog is not None
+            and event.syslog.message.startswith("pam_unix(sshd:session)")
+        )
         ecar_login_time = gen._source_timing_planner.source_time(
             ssh_event,
             "source.ecar_session",
@@ -552,7 +838,8 @@ class TestSslContextPopulation:
         )
 
         assert ecar_login_time > accepted_event.timestamp
-        assert ecar_login_time > accepted_event.timestamp + timedelta(milliseconds=250)
+        assert ecar_login_time > pam_event.timestamp
+        assert ecar_login_time > pam_event.timestamp + timedelta(milliseconds=250)
         delayed_for_observation_profile = replace(
             ssh_event,
             timestamp=ssh_event.timestamp + timedelta(milliseconds=750),
@@ -714,6 +1001,12 @@ class TestSslContextPopulation:
         assert event.network.resp_ip_bytes is not None
         assert event.network.orig_ip_bytes > event.network.orig_bytes
         assert event.network.resp_ip_bytes > event.network.resp_bytes
+        assert (
+            event.network.orig_ip_bytes != event.network.orig_bytes + event.network.orig_pkts * 40
+        )
+        assert (
+            event.network.resp_ip_bytes != event.network.resp_bytes + event.network.resp_pkts * 40
+        )
 
     def test_ssh_session_records_transport_close_time(self, activity_gen):
         gen, events = activity_gen
@@ -1369,9 +1662,12 @@ class TestHttpContextPopulation:
         event = events[-1]
         assert event.network.resp_bytes > event.http.response_body_len
 
-    def test_large_tcp_transfer_counts_reverse_ack_packets(self, activity_gen):
+    def test_large_tcp_transfer_counts_reverse_ack_packets(self, activity_gen, monkeypatch):
         """Large one-way TCP transfers should not keep single-digit ACK-side packet counts."""
+        import evidenceforge.generation.activity.generator as generator_module
+
         gen, events = activity_gen
+        monkeypatch.setattr(generator_module, "_tcp_effective_mss_bytes", lambda _rng: 1200)
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -1403,8 +1699,46 @@ class TestHttpContextPopulation:
 
         assert upload.resp_pkts >= math.ceil((upload.orig_bytes or 0) / 1460 / 4)
         assert upload.resp_ip_bytes >= (upload.resp_bytes or 0) + (upload.resp_pkts * 40)
+        assert upload.orig_pkts > math.ceil((upload.orig_bytes or 0) / 1460)
+        assert upload.orig_ip_bytes != (upload.orig_bytes or 0) + (upload.orig_pkts * 52)
         assert download.orig_pkts >= math.ceil((download.resp_bytes or 0) / 1460 / 4)
         assert download.orig_ip_bytes >= (download.orig_bytes or 0) + (download.orig_pkts * 40)
+        assert download.resp_pkts > math.ceil((download.resp_bytes or 0) / 1460)
+        assert download.resp_ip_bytes != (download.resp_bytes or 0) + (download.resp_pkts * 52)
+
+    def test_http_enrichment_counts_control_packets(self, activity_gen, monkeypatch):
+        """HTTP body accounting should retain Zeek history control packets in conn.log counts."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        gen, events = activity_gen
+        monkeypatch.setattr(generator_module, "_tcp_success_history", lambda _rng: "ShADadf")
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.20",
+            time=datetime(2024, 1, 15, 10, 2, 0, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.2,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="app.internal",
+                uri="/download/report.csv",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=0,
+                response_body_len=11_396,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/csv"],
+            ),
+        )
+
+        net = events[-1].network
+        assert net.resp_pkts > math.ceil((net.resp_bytes or 0) / 1460)
+        assert net.resp_ip_bytes != (net.resp_bytes or 0) + (net.resp_pkts * 52)
 
     def test_icmp_accounting_is_echo_like(self, activity_gen):
         """ICMP echo-style flows should not inherit bulk TCP byte/packet accounting."""

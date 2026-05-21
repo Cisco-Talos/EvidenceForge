@@ -341,6 +341,44 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     assert term_calls[0].kwargs["time"] >= ts + timedelta(seconds=1)
 
 
+def test_cron_schedule_launches_on_minute_boundaries(linux_system):
+    """Cron jobs should not inherit arbitrary second jitter from systemd timers."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    sched = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "frequency": "30min",
+        "typical_hour": 0,
+        "jitter_minutes": 8,
+        "slot_jitter_seconds": 45,
+        "distro": "debian",
+        "cron_user": "sysstat",
+        "cron_commands": {"debian": "debian-sa1 1 1"},
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [sched]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            random.Random(11),
+            {"cron": 1337},
+            False,
+            False,
+        )
+
+    fire_times = [call.args[2] for call in engine._emit_scheduled_event.call_args_list]
+    assert len(fire_times) == 2
+    assert all(fire_time.second == 0 for fire_time in fire_times)
+    assert all(fire_time.microsecond == 0 for fire_time in fire_times)
+
+
 @pytest.fixture
 def win_system():
     return System(hostname="WKS-01", ip="10.0.10.1", os="Windows 10", type="workstation")
@@ -1160,9 +1198,13 @@ class TestParentPidSelection:
 
         proc = state_manager.get_process(linux_system.hostname, pid)
         bash_pid = pids["bash"]
-        assert proc.parent_pid == bash_pid, (
-            f"Linux user process parent should be bash ({bash_pid}), not {proc.parent_pid}"
-        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert proc.parent_pid != bash_pid
+        assert proc.parent_pid == session.session_shell_pid
+        parent_proc = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent_proc is not None
+        assert parent_proc.image == "/bin/bash"
 
     def test_process_tree_depth(self, state_manager, mock_emitters, win_system):
         """After creating a shell, subsequent processes should sometimes use it as parent."""

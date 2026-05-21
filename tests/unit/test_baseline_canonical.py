@@ -38,12 +38,15 @@ from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
+    _extra_syslog_service_values,
+    _linux_ambient_logind_probability,
     _linux_baseline_pam_close_lead,
     _linux_baseline_pam_open_lead,
     _linux_baseline_session_initiator,
     _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
     _module_matches_process,
+    _render_extra_sudo_command_template,
     _sample_lock_duration,
     _ufw_block_syn_packet_len,
     _ufw_block_ttl,
@@ -95,15 +98,74 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
 
 def test_linux_baseline_session_initiator_creates_pam_session_message():
     """Ambient logind session noise should have a concrete PAM initiator."""
-    app_name, service, message = _linux_baseline_session_initiator(
-        "admin",
-        rng=random.Random(7),
+    samples = [
+        _linux_baseline_session_initiator("admin", rng=random.Random(seed)) for seed in range(30)
+    ]
+    samples.extend(
+        _linux_baseline_session_initiator("root", rng=random.Random(seed)) for seed in range(30)
     )
 
-    assert app_name in {"CRON", "login", "sudo"}
-    assert service in {"cron", "login", "sudo"}
-    assert "pam_unix(" in message
-    assert ":session): session opened for user admin(uid=" in message
+    assert {service for _app_name, service, _message in samples} <= {"login", "sudo", "su"}
+    assert all(app_name != "CRON" for app_name, _service, _message in samples)
+    assert all(service != "cron" for _app_name, service, _message in samples)
+    assert all("pam_unix(" in message for _app_name, _service, message in samples)
+    assert any(
+        ":session): session opened for user admin(uid=" in message
+        for _app_name, _service, message in samples
+    )
+    assert any(
+        ":session): session opened for user root(uid=" in message
+        for _app_name, _service, message in samples
+    )
+
+
+def test_linux_server_ambient_logind_noise_is_thinned():
+    """Generic local-console/logind noise should be much sparser on servers."""
+    assert _linux_ambient_logind_probability("server") < _linux_ambient_logind_probability(
+        "workstation"
+    )
+    assert _linux_ambient_logind_probability("server") <= 0.15
+
+
+def test_server_pam_initiator_favors_sudo_over_local_login():
+    """Server baseline session noise should not overproduce LOGIN(uid=0)."""
+    samples = [
+        _linux_baseline_session_initiator("admin", rng=random.Random(seed), system_type="server")
+        for seed in range(120)
+    ]
+    services = [service for _app_name, service, _message in samples]
+
+    assert services.count("sudo") > services.count("login")
+
+
+def test_extra_sudo_command_template_uses_host_services():
+    """Extra sudo COMMAND text should vary through host-aware service placeholders."""
+    command = _render_extra_sudo_command_template(
+        "/bin/systemctl status {service}",
+        random.Random(3),
+        system_services=["mysql", "dns-client", "ssh"],
+        fallback_services=["apache2"],
+    )
+
+    assert command in {"/bin/systemctl status mysql", "/bin/systemctl status sshd"}
+    assert _extra_syslog_service_values(["mysql", "ssh"], ["apache2"]) == ["mysql", "sshd"]
+
+
+def test_extra_sudo_command_template_resolves_command_specific_placeholders():
+    """Extra sudo COMMAND text should vary counts and windows from config pools."""
+    command = _render_extra_sudo_command_template(
+        '/usr/bin/journalctl -u {service} -n {journal_lines} --since "{journal_window}"',
+        random.Random(7),
+        system_services=["postgresql", "dns-client"],
+        fallback_services=["apache2"],
+        params={
+            "journal_lines": ["40", "80"],
+            "journal_window": ["15 min ago", "45 min ago"],
+        },
+    )
+
+    assert command.startswith("/usr/bin/journalctl -u postgresql -n ")
+    assert "{journal_" not in command
 
 
 def test_linux_baseline_pam_leads_leave_visible_ordering_margin():
@@ -515,7 +577,10 @@ class TestWebAccessCorrelation:
         """Auto-generated HTTP contexts should not size static resources from flow bytes."""
         from evidenceforge.generation.activity import generator as generator_module
         from evidenceforge.generation.activity import proxy_uri
-        from evidenceforge.generation.activity.http_content import response_size_for_status
+        from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
+            response_size_for_status,
+        )
 
         monkeypatch.setattr(
             proxy_uri,
@@ -540,10 +605,13 @@ class TestWebAccessCorrelation:
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
         assert event.http.uri == "/favicon.ico"
-        assert event.http.response_body_len == response_size_for_status(
-            200,
-            "portal.example.com",
-            "/favicon.ico",
+        assert event.http.response_body_len == apply_transfer_size_variance(
+            response_size_for_status(200, "portal.example.com", "/favicon.ico"),
+            status_code=200,
+            host="portal.example.com",
+            uri="/favicon.ico",
+            content_type="image/x-icon",
+            variant_key=f"10.0.10.50:{event.http.user_agent}",
         )
         assert event.http.resp_mime_types == ["image/x-icon"]
 

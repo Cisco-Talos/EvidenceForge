@@ -606,6 +606,98 @@ class TestExplicitProxyVisibility:
         assert client_event.process is not None
         assert client_event.process.start_time < client_event.timestamp
 
+    def test_proxy_upstream_waits_for_visible_connect_when_client_process_is_source_delayed(
+        self,
+    ):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _svchost_pid, explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        request_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        curl_image = r"C:\Windows\System32\curl.exe"
+        generator.state_manager.set_current_time(request_time - timedelta(seconds=5))
+        curl_pid = generator.state_manager.create_process(
+            system=workstation.hostname,
+            parent_pid=explorer_pid,
+            image=curl_image,
+            command_line="curl.exe",
+            username=user.username,
+            integrity_level="Medium",
+            logon_id=user_session.logon_id,
+        )
+        generator._process_source_create_times[(workstation.hostname, curl_pid)] = (
+            request_time + timedelta(seconds=2)
+        )
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=workstation.ip,
+                method="CONNECT",
+                url="example.com:443",
+                host="example.com",
+                status_code=200,
+                sc_bytes=192,
+                cs_bytes=381,
+                time_taken=900,
+                user_agent="curl/8.4.0",
+                content_type="",
+                cache_result="MISS",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip="93.184.216.34",
+            time=request_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            pid=curl_pid,
+            source_system=workstation,
+            hostname="example.com",
+            conn_state="SF",
+            process_image=curl_image,
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == workstation.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+        upstream_candidates = [
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == "10.0.3.10" and call.args[0].network.dst_port == 443
+        ]
+        assert upstream_candidates, [
+            (
+                call.args[0].network.src_ip,
+                call.args[0].network.dst_ip,
+                call.args[0].network.dst_port,
+                call.args[0].network.service,
+            )
+            for call in emitters["zeek_conn"].emit.call_args_list
+        ]
+        upstream_event = upstream_candidates[0]
+
+        assert upstream_event.timestamp > client_event.timestamp + timedelta(milliseconds=451)
+
     def test_connect_target_browser_hint_uses_origin_https_url(self):
         generator = ActivityGenerator(StateManager(), {})
 

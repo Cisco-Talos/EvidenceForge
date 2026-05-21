@@ -86,6 +86,11 @@ relationships:
     position: after
     min_ms: 80
     max_ms: 4200
+  source.windows_explicit_credentials_after_process_create:
+    class: source_latency
+    position: after
+    min_ms: 35
+    max_ms: 650
   source.windows_security_process_terminate:
     class: source_latency
     position: after

@@ -106,6 +106,21 @@ def test_normalize_sshd_child_pids_preserves_session_mapping_and_monotonicity() 
     assert pids[2] > pids[0]
 
 
+def test_normalize_sshd_child_pids_does_not_let_orphan_closes_rewrite_session_open() -> None:
+    lines = [
+        "<86>1 2024-03-18T15:51:34.963802Z app sshd 784323 - - Connection from 10.0.1.33 port 63690 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T15:51:35.491983Z app sshd 784323 - - Accepted publickey for user from 10.0.1.33 port 63690 ssh2",
+        "<86>1 2024-03-18T15:52:24.705921Z app sshd 784329 - - pam_unix(sshd:session): session closed for user other",
+        "<86>1 2024-03-18T15:54:22.189035Z app sshd 784327 - - Connection from 10.0.1.31 port 63843 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T15:54:23.876283Z app sshd 784327 - - Accepted password for user from 10.0.1.31 port 63843 ssh2",
+    ]
+
+    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
+
+    pids = [int(line.split(" sshd ")[1].split(" ")[0]) for line in normalized]
+    assert pids == [784323, 784323, 784329, 784327, 784327]
+
+
 def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
     lines = [
         "<30>1 2024-03-18T12:00:00.000000Z app unattended-upgr 100 - - Packages checked",

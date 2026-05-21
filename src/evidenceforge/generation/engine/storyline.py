@@ -52,6 +52,7 @@ from evidenceforge.generation.activity.generator import (
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
+    apply_transfer_size_variance,
     is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
@@ -2202,7 +2203,14 @@ class StorylineMixin:
                         uri = f"{uri}?{parsed_url.query}"
                     mime_type = normalize_mime_type_for_path(uri, "text/plain")
                     response_body_len = (
-                        response_size_for_status(200, hostname, uri)
+                        apply_transfer_size_variance(
+                            response_size_for_status(200, hostname, uri),
+                            status_code=200,
+                            host=hostname,
+                            uri=uri,
+                            content_type=mime_type,
+                            variant_key=f"{system.ip}:{process_name}:{pid}",
+                        )
                         if is_stable_resource_path(uri)
                         else response_size_for_mime(rng, mime_type)
                     )
@@ -2309,10 +2317,16 @@ class StorylineMixin:
                         orig_bytes = 0
                         resp_bytes = 0
                         rendered_service = None
+                    connection_time = self._clamp_after_storyline_process_source_create(
+                        system=system,
+                        pid=pid,
+                        network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        rng=rng,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=target_ip,
-                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        time=connection_time,
                         dst_port=dst_port,
                         proto="tcp",
                         service=rendered_service,
@@ -2336,13 +2350,19 @@ class StorylineMixin:
             if scp_target is not None:
                 dst_ip = self._resolve_storyline_network_target(scp_target)
                 if dst_ip:
-                    transfer_time = time + timedelta(milliseconds=rng.randint(250, 900))
+                    transfer_time = self._clamp_after_storyline_process_source_create(
+                        system=system,
+                        pid=pid,
+                        network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        rng=rng,
+                    )
                     source_port = self.activity_generator.reserve_ssh_source_port(
                         system.ip,
                         dst_ip,
                         None,
                         rng,
                         _get_os_category(system.os),
+                        time=transfer_time,
                     )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
@@ -2423,6 +2443,7 @@ class StorylineMixin:
             if lifetime is not None:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)
+                shell_release_time = term_time
                 terminate_immediately = False
                 if os_category == "linux":
                     from evidenceforge.generation.activity.generator import (
@@ -2447,6 +2468,15 @@ class StorylineMixin:
                         logon_id=process_logon_id,
                         from_storyline=True,
                     )
+                    source_term_getter = getattr(
+                        self.activity_generator,
+                        "process_source_terminate_time",
+                        None,
+                    )
+                    if callable(source_term_getter):
+                        source_term_time = source_term_getter(system.hostname, pid)
+                        if isinstance(source_term_time, datetime):
+                            shell_release_time = max(shell_release_time, source_term_time)
                 else:
                     self._queue_story_process_termination(
                         actor=process_actor,
@@ -2462,13 +2492,13 @@ class StorylineMixin:
                         username=process_actor.username,
                         logon_id=process_logon_id,
                         parent_pid=parent_pid,
-                        termination_time=term_time,
+                        termination_time=shell_release_time,
                         process_name=process_name,
                         command_line=process_command_line,
                     )
-                    self._storyline_shell_available_at[shell_key] = term_time
+                    self._storyline_shell_available_at[shell_key] = shell_release_time
                     process_shell_key = (system.hostname, process_actor.username)
-                    self._storyline_shell_available_at[process_shell_key] = term_time
+                    self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
         elif spec.type == "connection":
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]
@@ -3693,7 +3723,14 @@ class StorylineMixin:
                 )
 
                 _response_body_len = (
-                    response_size_for_status(_status, scan_host, _uri)
+                    apply_transfer_size_variance(
+                        response_size_for_status(_status, scan_host, _uri),
+                        status_code=_status,
+                        host=scan_host,
+                        uri=_uri,
+                        content_type=_mime_type,
+                        variant_key=f"{scan_src_ip}:{scan_ua}",
+                    )
                     if _status >= 400 or is_stable_resource_path(_uri)
                     else response_size_for_mime(rng, _mime_type)
                 )
@@ -4303,7 +4340,8 @@ class StorylineMixin:
                     s
                     for s in sessions
                     if s.system == system.hostname
-                    and s.logon_type in (2, 10, 11)
+                    and s.logon_type in (2, 11)
+                    and s.session_kind not in {"network", "service", "rdp", "ssh"}
                     and s.start_time <= time
                 ),
                 key=lambda s: s.start_time,
@@ -4324,7 +4362,8 @@ class StorylineMixin:
                     s
                     for s in sessions
                     if s.system == system.hostname
-                    and s.logon_type in (2, 10, 11)
+                    and s.logon_type in (2, 11)
+                    and s.session_kind not in {"network", "service", "rdp", "ssh"}
                     and s.start_time <= time
                 ),
                 key=lambda s: s.start_time,
@@ -4552,16 +4591,30 @@ class StorylineMixin:
         )
 
         self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
-        parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
-        sshd_pid = self.state_manager.create_process(
-            system=target_system.hostname,
-            parent_pid=parent_pid if parent_pid > 0 else 0,
-            image="/usr/sbin/sshd",
-            command_line=f"sshd: {target_user}@notty",
-            username=target_user,
-            integrity_level="High" if target_user == "root" else "Medium",
+        ensure_responder = getattr(
+            self.activity_generator,
+            "ensure_linux_ssh_responder_process",
+            None,
         )
+        if callable(ensure_responder):
+            sshd_pid = ensure_responder(
+                target_system=target_system,
+                time=transfer_time,
+                source_ip=source_system.ip,
+                source_port=source_port,
+            )
+        else:
+            parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
+            sshd_pid = self.state_manager.create_process(
+                system=target_system.hostname,
+                parent_pid=parent_pid if parent_pid > 0 else 0,
+                image="/usr/sbin/sshd",
+                command_line=f"sshd: {target_user}@notty",
+                username=target_user,
+                integrity_level="High" if target_user == "root" else "Medium",
+            )
         sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
+        parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
         ssh_syslog_seed = (
             target_system.hostname,
             source_system.ip,

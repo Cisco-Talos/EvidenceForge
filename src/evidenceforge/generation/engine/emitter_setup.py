@@ -229,6 +229,9 @@ class EmitterSetupMixin:
                             if rule.type == "static" and rule.mapped_ip and rule.real_ip:
                                 asa_emitter._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
 
+        if "ecar" in self.emitters:
+            self.emitters["ecar"]._output_end_time = self.end_time
+
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.
 
