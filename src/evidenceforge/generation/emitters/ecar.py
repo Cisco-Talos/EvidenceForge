@@ -1251,24 +1251,55 @@ class EcarEmitter(HostMultiplexEmitter):
 
     _LINUX_SHELL_FOREGROUND_EXES = {
         "cargo",
+        "cat",
+        "curl",
+        "date",
+        "df",
         "docker",
+        "du",
         "emacs",
+        "env",
+        "find",
+        "free",
         "gcc",
+        "grep",
         "gzip",
+        "head",
+        "hostname",
+        "id",
+        "ip",
+        "journalctl",
         "kubectl",
+        "ldapsearch",
+        "ls",
         "make",
         "mysql",
         "mysqldump",
         "nano",
         "npm",
+        "pg_isready",
+        "printenv",
+        "ps",
         "psql",
+        "pwd",
         "python",
         "python3",
         "redis-cli",
+        "scp",
+        "sleep",
+        "ss",
         "sqlite3",
+        "systemctl",
         "tar",
+        "test",
+        "tail",
+        "true",
+        "uname",
         "vi",
         "vim",
+        "wc",
+        "wget",
+        "whoami",
         "zip",
     }
 
@@ -1280,9 +1311,26 @@ class EcarEmitter(HostMultiplexEmitter):
         props = record.get("properties") or {}
         image = str(props.get("image_path") or "")
         parent_image = str(props.get("parent_image_path") or "")
+        command_line = str(props.get("command_line") or "")
+        if "|" in command_line or cls._is_backgrounded_shell_command(command_line):
+            return False
         exe = image.rsplit("/", 1)[-1].lower()
         parent_exe = parent_image.rsplit("/", 1)[-1].lower()
         return exe in cls._LINUX_SHELL_FOREGROUND_EXES and parent_exe in {"bash", "sh", "zsh"}
+
+    @staticmethod
+    def _is_backgrounded_shell_command(command_line: str) -> bool:
+        """Return whether a shell command should not block later foreground children."""
+        normalized = command_line.strip().lower()
+        if not normalized:
+            return False
+        return (
+            normalized.endswith("&")
+            or " nohup " in f" {normalized} "
+            or "tail -f" in normalized
+            or "watch " in normalized
+            or "--follow" in normalized
+        )
 
     @classmethod
     def _normalize_linux_shell_foreground_order(cls, lines: list[str]) -> list[str]:

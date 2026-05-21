@@ -352,6 +352,154 @@ def test_ecar_linux_shell_foreground_order_serializes_visible_commands() -> None
     assert rows[5]["timestamp_ms"] > rows[4]["timestamp_ms"]
 
 
+def test_ecar_linux_shell_foreground_order_covers_scp_transfer_chain() -> None:
+    """eCAR should serialize bounded foreground transfer commands from one shell."""
+    gzip_create = {
+        "timestamp_ms": 1_710_782_144_698,
+        "id": "gzip-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "gzip-process",
+        "actorID": "bash-process",
+        "pid": 706031,
+        "ppid": 705932,
+        "principal": "root",
+        "properties": {
+            "image_path": "/usr/bin/gzip",
+            "command_line": "gzip -9 /tmp/rpt_0318.sql",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    scp_create = {
+        "timestamp_ms": 1_710_782_165_966,
+        "id": "scp-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "scp-process",
+        "actorID": "bash-process",
+        "pid": 706051,
+        "ppid": 705932,
+        "principal": "root",
+        "properties": {
+            "image_path": "/usr/bin/scp",
+            "command_line": "scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt.sql.gz",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    gzip_terminate = {
+        "timestamp_ms": 1_710_782_173_346,
+        "id": "gzip-terminate",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "gzip-process",
+        "pid": 706031,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/gzip"},
+    }
+    scp_flow = {
+        "timestamp_ms": 1_710_782_166_500,
+        "id": "scp-flow",
+        "hostname": "DB-PROD-01",
+        "object": "FLOW",
+        "action": "START",
+        "objectID": "flow-1",
+        "actorID": "scp-process",
+        "pid": 706051,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/scp"},
+    }
+    scp_terminate = {
+        "timestamp_ms": 1_710_782_235_832,
+        "id": "scp-terminate",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "scp-process",
+        "pid": 706051,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/scp"},
+    }
+
+    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
+        [
+            json.dumps(gzip_create, separators=(",", ":")),
+            json.dumps(scp_create, separators=(",", ":")),
+            json.dumps(gzip_terminate, separators=(",", ":")),
+            json.dumps(scp_flow, separators=(",", ":")),
+            json.dumps(scp_terminate, separators=(",", ":")),
+        ]
+    )
+    normalized = EcarEmitter._normalize_process_reference_order(normalized)
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[1]["timestamp_ms"] > rows[2]["timestamp_ms"]
+    assert rows[3]["timestamp_ms"] > rows[1]["timestamp_ms"]
+    assert rows[4]["timestamp_ms"] > rows[3]["timestamp_ms"]
+
+
+def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() -> None:
+    """Pipeline children are concurrent shell work, not sequential foreground prompts."""
+    gzip_create = {
+        "timestamp_ms": 1_710_782_144_698,
+        "id": "gzip-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "gzip-process",
+        "actorID": "bash-process",
+        "pid": 706031,
+        "ppid": 705932,
+        "principal": "root",
+        "properties": {
+            "image_path": "/usr/bin/gzip",
+            "command_line": "tar cf - /var/log | gzip -9 > logs.tar.gz",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    tar_create = {
+        "timestamp_ms": 1_710_782_145_001,
+        "id": "tar-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "tar-process",
+        "actorID": "bash-process",
+        "pid": 706032,
+        "ppid": 705932,
+        "principal": "root",
+        "properties": {
+            "image_path": "/usr/bin/tar",
+            "command_line": "tar cf - /var/log | gzip -9 > logs.tar.gz",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+    gzip_terminate = {
+        "timestamp_ms": 1_710_782_173_346,
+        "id": "gzip-terminate",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "TERMINATE",
+        "objectID": "gzip-process",
+        "pid": 706031,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/gzip"},
+    }
+
+    normalized = EcarEmitter._normalize_linux_shell_foreground_order(
+        [
+            json.dumps(gzip_create, separators=(",", ":")),
+            json.dumps(tar_create, separators=(",", ":")),
+            json.dumps(gzip_terminate, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[1]["timestamp_ms"] == tar_create["timestamp_ms"]
+
+
 def test_ecar_logon_does_not_render_self_sourced_remote_ip(tmp_path: Path) -> None:
     """Endpoint USER_SESSION rows should not publish the host IP as a remote source."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

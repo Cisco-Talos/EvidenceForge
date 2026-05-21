@@ -1558,6 +1558,24 @@ class StorylineMixin:
                 from_storyline=True,
             )
 
+    def _apply_storyline_shell_availability(
+        self,
+        *,
+        actor: User,
+        system: System,
+        time: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Delay Linux same-user storyline siblings until their shell is available."""
+        if _get_os_category(system.os) != "linux":
+            return time
+        available_at = getattr(self, "_storyline_shell_available_at", {}).get(
+            (system.hostname, actor.username)
+        )
+        if available_at is None or time >= available_at:
+            return time
+        return available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
+
     def _execute_storyline(self) -> None:
         """Execute storyline events (malicious/suspicious activities).
 
@@ -1624,6 +1642,12 @@ class StorylineMixin:
             try:
                 for i, spec in enumerate(storyline_event.events):
                     event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                    event_t = self._apply_storyline_shell_availability(
+                        actor=actor,
+                        system=system,
+                        time=event_t,
+                        rng=rng,
+                    )
                     self.state_manager.set_current_time(event_t)
                     malicious_event = self._execute_typed_event(
                         spec=spec,
@@ -1683,6 +1707,12 @@ class StorylineMixin:
         try:
             for i, spec in enumerate(storyline_event.events):
                 event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                event_t = self._apply_storyline_shell_availability(
+                    actor=actor,
+                    system=system,
+                    time=event_t,
+                    rng=rng,
+                )
                 self.state_manager.set_current_time(event_t)
                 malicious_event = self._execute_typed_event(
                     spec=spec,
@@ -1739,6 +1769,12 @@ class StorylineMixin:
         try:
             for i, spec in enumerate(rh_event.events):
                 event_t = event_time + timedelta(seconds=cadence_offsets[i])
+                event_t = self._apply_storyline_shell_availability(
+                    actor=actor,
+                    system=system,
+                    time=event_t,
+                    rng=rng,
+                )
                 self.state_manager.set_current_time(event_t)
                 result = self._execute_typed_event(
                     spec=spec,
@@ -1923,17 +1959,6 @@ class StorylineMixin:
                 if available_at is not None and time < available_at:
                     time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
-            if os_category == "linux":
-                scheduled_bash_time = self.activity_generator.generate_bash_command(
-                    actor,
-                    system,
-                    time,
-                    command_line,
-                    emit_process_telemetry=False,
-                )
-                if isinstance(scheduled_bash_time, datetime):
-                    time = scheduled_bash_time
-
             if "<base64_encoded_command>" in command_line:
                 command_line = command_line.replace(
                     "<base64_encoded_command>",
@@ -1978,6 +2003,29 @@ class StorylineMixin:
                 parent_pid = self.activity_generator._resolve_parent(
                     system, actor, time, logon_id, process_name
                 )
+            if os_category == "linux":
+                reserved_start_time = (
+                    self.activity_generator.reserve_linux_foreground_process_start(
+                        system=system,
+                        username=process_actor.username,
+                        logon_id=process_logon_id,
+                        parent_pid=parent_pid,
+                        requested_time=time,
+                        process_name=process_name,
+                        command_line=process_command_line,
+                    )
+                )
+                if isinstance(reserved_start_time, datetime):
+                    time = reserved_start_time
+                scheduled_bash_time = self.activity_generator.generate_bash_command(
+                    actor,
+                    system,
+                    time,
+                    command_line,
+                    emit_process_telemetry=False,
+                )
+                if isinstance(scheduled_bash_time, datetime):
+                    time = scheduled_bash_time
             exe_name = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
             service_backed_process = "service_installed" in explicit_types and exe_name in {
                 "psexesvc.exe",
@@ -2301,16 +2349,47 @@ class StorylineMixin:
             if lifetime is not None:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)
-                self._queue_story_process_termination(
-                    actor=process_actor,
-                    system=system,
-                    time=term_time,
-                    pid=pid,
-                    process_name=process_name,
-                    logon_id=process_logon_id,
-                )
+                terminate_immediately = False
                 if os_category == "linux":
+                    from evidenceforge.generation.activity.generator import (
+                        _linux_foreground_lifetime,
+                    )
+
+                    terminate_immediately = (
+                        _linux_foreground_lifetime(process_name, process_command_line) is not None
+                    )
+                if terminate_immediately:
+                    self.activity_generator.generate_process_termination(
+                        user=process_actor,
+                        system=system,
+                        time=term_time,
+                        pid=pid,
+                        process_name=process_name,
+                        logon_id=process_logon_id,
+                        from_storyline=True,
+                    )
+                else:
+                    self._queue_story_process_termination(
+                        actor=process_actor,
+                        system=system,
+                        time=term_time,
+                        pid=pid,
+                        process_name=process_name,
+                        logon_id=process_logon_id,
+                    )
+                if os_category == "linux":
+                    self.activity_generator.remember_linux_foreground_process_completion(
+                        system=system,
+                        username=process_actor.username,
+                        logon_id=process_logon_id,
+                        parent_pid=parent_pid,
+                        termination_time=term_time,
+                        process_name=process_name,
+                        command_line=process_command_line,
+                    )
                     self._storyline_shell_available_at[shell_key] = term_time
+                    process_shell_key = (system.hostname, process_actor.username)
+                    self._storyline_shell_available_at[process_shell_key] = term_time
 
         elif spec.type == "connection":
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]

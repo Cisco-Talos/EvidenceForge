@@ -1839,6 +1839,31 @@ class TestActivityGenerator:
         assert events[0].timestamp == timestamp
         assert events[1].timestamp >= timestamp + timedelta(seconds=45)
 
+    def test_bash_history_preserves_transfer_command_dwell(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Archive and transfer commands should keep the shell busy for realistic dwell."""
+        linux = System(hostname="DB-PROD-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
+        user = User(username="root", full_name="Root", email="root@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        activity_gen.generate_bash_command(user, linux, timestamp, "gzip -9 /tmp/rpt.sql")
+        activity_gen.generate_bash_command(
+            user,
+            linux,
+            timestamp + timedelta(seconds=1),
+            "scp /tmp/rpt.sql.gz root@10.10.2.30:/tmp/rpt.sql.gz",
+        )
+
+        events = [call.args[0] for call in bash_emitter.emit.call_args_list]
+        assert events[0].timestamp == timestamp
+        assert events[1].timestamp >= timestamp + timedelta(seconds=14)
+
     def test_same_user_bash_history_avoids_same_second_across_hosts(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -5732,6 +5757,50 @@ class TestActivityGenerator:
         assert mysqldump_create.process.parent_pid == bash_pid
         assert gzip_create.process.parent_pid == bash_pid
         assert gzip_create.timestamp > mysqldump_terminate.timestamp
+
+    def test_linux_foreground_completion_updates_user_shell_without_parent_state(
+        self, activity_gen, test_user
+    ):
+        """Storyline shell chains should serialize even when parent shell state is sparse."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.2.50",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc456"
+        parent_pid = 707122
+        gzip_done = command_time + timedelta(seconds=42)
+
+        activity_gen.remember_linux_foreground_process_completion(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            termination_time=gzip_done,
+            process_name="/usr/bin/gzip",
+            command_line="gzip -9 /tmp/rpt_0318.sql",
+        )
+        reserved = activity_gen.reserve_linux_foreground_process_start(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=command_time + timedelta(seconds=1),
+            process_name="/usr/bin/scp",
+            command_line="scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt_0318.sql.gz",
+        )
+        scheduled_history = activity_gen._schedule_bash_history_time(
+            test_user,
+            linux,
+            command_time + timedelta(seconds=1),
+            "scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt_0318.sql.gz",
+        )
+
+        assert reserved > gzip_done
+        assert scheduled_history > gzip_done
 
     def test_linux_process_activity_reserves_busy_foreground_shell(
         self, activity_gen, test_user, state_manager, mock_emitters

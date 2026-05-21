@@ -191,7 +191,8 @@ _BASH_BLOCKING_PREFIXES = (
     "pip install",
     "tail -f ",
 )
-_BASH_MEDIUM_PREFIXES = ("curl ", "wget ", "scp ", "ssh ", "mysql ", "psql ", "git ", "gzip ")
+_BASH_TRANSFER_PREFIXES = ("gzip ", "scp ", "tar ", "zip ")
+_BASH_MEDIUM_PREFIXES = ("curl ", "wget ", "ssh ", "mysql ", "psql ", "git ")
 _BASH_BUILTIN_COMMANDS = {
     ".",
     "alias",
@@ -310,6 +311,8 @@ def _bash_command_dwell_seconds(command: str) -> float:
         return 1.0
     if any(normalized.startswith(prefix) for prefix in _BASH_BLOCKING_PREFIXES):
         return 45.0
+    if any(normalized.startswith(prefix) for prefix in _BASH_TRANSFER_PREFIXES):
+        return 14.0
     if any(normalized.startswith(prefix) for prefix in _BASH_MEDIUM_PREFIXES):
         return 8.0
     return 2.0
@@ -2932,6 +2935,18 @@ class ActivityGenerator:
         seed_text: str,
     ) -> None:
         """Remember when an interactive Linux shell can plausibly accept more input."""
+        rng = random.Random(
+            _stable_seed(
+                f"foreground_shell_release:{system.hostname}:{username}:{logon_id}:"
+                f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
+            )
+        )
+        release_time = termination_time + timedelta(milliseconds=rng.randint(180, 1400))
+        bash_key = (system.hostname, username)
+        self._bash_history_next_time[bash_key] = max(
+            self._bash_history_next_time.get(bash_key, release_time),
+            release_time,
+        )
         key = self._foreground_shell_key(
             system=system,
             username=username,
@@ -2940,21 +2955,63 @@ class ActivityGenerator:
         )
         if key is None:
             return
-        rng = random.Random(
-            _stable_seed(
-                f"foreground_shell_release:{system.hostname}:{username}:{logon_id}:"
-                f"{parent_pid}:{seed_text}:{termination_time.timestamp()}"
-            )
-        )
-        release_time = termination_time + timedelta(milliseconds=rng.randint(180, 1400))
         self._foreground_shell_next_time[key] = max(
             release_time,
             self._foreground_shell_next_time.get(key, release_time),
         )
-        bash_key = (system.hostname, username)
-        self._bash_history_next_time[bash_key] = max(
-            self._bash_history_next_time.get(bash_key, release_time),
-            release_time,
+
+    def reserve_linux_foreground_process_start(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        requested_time: datetime,
+        process_name: str,
+        command_line: str,
+    ) -> datetime:
+        """Return a shell-serialized start time for a Linux foreground process."""
+        if _get_os_category(system.os) != "linux":
+            return requested_time
+        if _linux_foreground_lifetime(process_name, command_line) is None:
+            return requested_time
+        reserved_time = max(
+            requested_time,
+            self._bash_history_next_time.get((system.hostname, username), requested_time),
+        )
+        return self._reserve_foreground_shell_time(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=reserved_time,
+            seed_text=command_line,
+        )
+
+    def remember_linux_foreground_process_completion(
+        self,
+        *,
+        system: System,
+        username: str,
+        logon_id: str,
+        parent_pid: int,
+        termination_time: datetime,
+        process_name: str,
+        command_line: str,
+    ) -> None:
+        """Update shared shell availability after a Linux foreground process finishes."""
+        if _get_os_category(system.os) != "linux":
+            return
+        if _linux_foreground_lifetime(process_name, command_line) is None:
+            return
+        self._remember_foreground_shell_available(
+            system=system,
+            username=username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            termination_time=termination_time,
+            seed_text=command_line,
         )
 
     def _ntp_association_profile(self, src_ip: str, dst_ip: str) -> dict[str, float | int]:

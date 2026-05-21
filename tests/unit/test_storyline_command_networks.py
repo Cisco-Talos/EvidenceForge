@@ -372,6 +372,7 @@ class _FakeActivityGenerator:
         self.connections: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
+        self.process_terminations: list[dict] = []
         self.process_source_times: dict[tuple[str, int], datetime] = {}
         self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
@@ -387,18 +388,54 @@ class _FakeActivityGenerator:
         self.scheduled_tasks: list[dict] = []
         self.sid_registry: dict[str, str] = {}
         self.bash_schedule_offset: timedelta | None = None
+        self._bash_next_time: dict[tuple[str, str], datetime] = {}
+        self._foreground_next_time: dict[tuple[str, str, str, int], datetime] = {}
+        self._next_pid = 4241
 
     def generate_bash_command(self, *args: Any, **kwargs: Any) -> datetime | None:
+        actor = args[0]
+        system = args[1]
         requested_time = args[2]
         scheduled_time = (
             requested_time + self.bash_schedule_offset
             if self.bash_schedule_offset is not None
-            else None
+            else requested_time
+        )
+        scheduled_time = max(
+            scheduled_time,
+            self._bash_next_time.get((system.hostname, actor.username), scheduled_time),
         )
         self.bash_commands.append(
             {"args": args, "kwargs": kwargs, "scheduled_time": scheduled_time}
         )
         return scheduled_time
+
+    def reserve_linux_foreground_process_start(self, **kwargs: Any) -> datetime:
+        system = kwargs["system"]
+        username = kwargs["username"]
+        logon_id = kwargs["logon_id"]
+        parent_pid = kwargs["parent_pid"]
+        requested_time = kwargs["requested_time"]
+        key = (system.hostname, username, logon_id, parent_pid)
+        return max(requested_time, self._foreground_next_time.get(key, requested_time))
+
+    def remember_linux_foreground_process_completion(self, **kwargs: Any) -> None:
+        system = kwargs["system"]
+        username = kwargs["username"]
+        logon_id = kwargs["logon_id"]
+        parent_pid = kwargs["parent_pid"]
+        termination_time = kwargs["termination_time"]
+        foreground_key = (system.hostname, username, logon_id, parent_pid)
+        release_time = termination_time + timedelta(milliseconds=250)
+        self._foreground_next_time[foreground_key] = max(
+            release_time,
+            self._foreground_next_time.get(foreground_key, release_time),
+        )
+        bash_key = (system.hostname, username)
+        self._bash_next_time[bash_key] = max(
+            release_time,
+            self._bash_next_time.get(bash_key, release_time),
+        )
 
     def _resolve_parent(self, *args: Any, **kwargs: Any) -> int:
         return 1
@@ -418,8 +455,12 @@ class _FakeActivityGenerator:
         )
 
     def generate_process(self, *args: Any, **kwargs: Any) -> int:
+        self._next_pid += 1
         self.processes.append(kwargs)
-        return 4242
+        return self._next_pid
+
+    def generate_process_termination(self, *args: Any, **kwargs: Any) -> None:
+        self.process_terminations.append(kwargs)
 
     def generate_logon(self, *args: Any, **kwargs: Any) -> str:
         return "0xabc"
@@ -1050,6 +1091,80 @@ class TestStorylineCommandSideEffects:
         scheduled_time = requested_time + timedelta(seconds=45)
         assert engine.activity_generator.bash_commands[0]["scheduled_time"] == scheduled_time
         assert engine.activity_generator.processes[0]["time"] == scheduled_time
+
+    def test_linux_storyline_foreground_chain_waits_for_prior_termination(self):
+        source = System(
+            hostname="DB-PROD-01",
+            ip="10.10.2.40",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        target = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.local",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source, target], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None, dispatch=lambda event: None)
+        engine.malicious_events = []
+        start_time = datetime(2026, 5, 11, 17, 15, tzinfo=UTC)
+        specs = [
+            SimpleNamespace(
+                type="process",
+                process_name="/usr/bin/mysqldump",
+                command_line=(
+                    "mysqldump --single-transaction ehr patients insurance_claims "
+                    "> /tmp/rpt_0318.sql"
+                ),
+            ),
+            SimpleNamespace(
+                type="process",
+                process_name="/usr/bin/gzip",
+                command_line="gzip -9 /tmp/rpt_0318.sql",
+            ),
+            SimpleNamespace(
+                type="process",
+                process_name="/usr/bin/scp",
+                command_line="scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt_0318.sql.gz",
+            ),
+        ]
+
+        for spec in specs:
+            engine._execute_typed_event(
+                spec=spec,
+                actor=actor,
+                system=source,
+                time=start_time,
+                activity="dump, compress, and transfer database archive",
+                explicit_types={"process"},
+            )
+
+        process_times = [
+            item["time"] for item in engine.activity_generator.processes if "time" in item
+        ]
+        bash_times = [item["scheduled_time"] for item in engine.activity_generator.bash_commands]
+        assert bash_times == process_times
+        assert process_times == sorted(process_times)
+        assert process_times[1] > process_times[0] + timedelta(seconds=5)
+        assert process_times[2] > process_times[1] + timedelta(seconds=5)
+        termination_times = [
+            item["time"] for item in engine.activity_generator.process_terminations
+        ]
+        assert termination_times[0] < process_times[1]
+        assert termination_times[1] < process_times[2]
+        assert engine.activity_generator.connections
+        assert engine.activity_generator.connections[0]["time"] > process_times[2]
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(
