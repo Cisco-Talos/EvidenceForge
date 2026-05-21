@@ -370,6 +370,58 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].source_system == "WKS-01"
 
 
+def test_world_planner_moves_rdp_source_after_future_workstation_session(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Out-of-order RDP source activity should not create an earlier duplicate Type 2 logon."""
+    future_session_start = datetime(2024, 1, 15, 10, 8, 0, tzinfo=UTC)
+    state_manager.set_current_time(future_session_start)
+    source_logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=future_session_start,
+        session_kind="interactive",
+    )
+    mock_emitters["windows_event_security"].reset_mock()
+
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["APP-01"],
+        time=datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC),
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+
+    assert result.session.start_time > future_session_start
+    mstsc_processes = [
+        proc
+        for proc in state_manager.list_running_processes()
+        if proc.system == "WKS-01" and proc.image.endswith("mstsc.exe")
+    ]
+    assert len(mstsc_processes) == 1
+    assert mstsc_processes[0].start_time > future_session_start
+    assert mstsc_processes[0].logon_id == source_logon_id
+    emitted_logons = [
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "logon"
+    ]
+    source_logons = [
+        event
+        for event in emitted_logons
+        if event.dst_host and event.dst_host.hostname == systems["WKS-01"].hostname
+    ]
+    assert source_logons == []
+
+
 def test_connection_owner_process_uses_scenario_internal_urls(
     monkeypatch: pytest.MonkeyPatch,
     scenario: Scenario,

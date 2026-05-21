@@ -1131,12 +1131,24 @@ class WorldPlanner:
         rng: random.Random,
     ) -> SessionBootstrapResult:
         source_pid = -1
+        source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
         if plan.source_system is not None:
+            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                username=user.username,
+                source_system=plan.source_system,
+                source_process_time=source_process_time,
+                rng=rng,
+            )
+            if aligned_source_time > source_process_time:
+                shift = aligned_source_time - source_process_time
+                source_process_time = aligned_source_time
+                logon_time += shift
+                activity_time += shift
             source_pid = self._ensure_rdp_client_process(
                 user=user,
                 source_system=plan.source_system,
                 target_system=plan.target_system,
-                time=logon_time - timedelta(milliseconds=rng.randint(1800, 3200)),
+                time=source_process_time,
                 rng=rng,
             )
         logon_id = self.state_manager.create_session(
@@ -1162,6 +1174,44 @@ class WorldPlanner:
             )
         session.last_activity_time = activity_time
         return SessionBootstrapResult(session=session, network_uid=uid)
+
+    def _align_rdp_source_after_future_workstation_session(
+        self,
+        *,
+        username: str,
+        source_system: System,
+        source_process_time: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Move source-side RDP work after an already-planned workstation session."""
+        host = self.world_model.hosts.get(source_system.hostname)
+        if host is None or host.os_category != "windows":
+            return source_process_time
+
+        source_utc = (
+            source_process_time.replace(tzinfo=UTC)
+            if source_process_time.tzinfo is None
+            else source_process_time.astimezone(UTC)
+        )
+        hour_end = source_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        future_sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(username)
+            if session.system == source_system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and source_utc < self._session_start_sort_key(session) < hour_end
+        ]
+        if not future_sessions:
+            return source_process_time
+
+        next_session = min(future_sessions, key=self._session_start_sort_key)
+        aligned = self._session_start_sort_key(next_session) + timedelta(
+            seconds=rng.uniform(20.0, 90.0)
+        )
+        if aligned >= hour_end:
+            return source_process_time
+        return aligned
 
     def _ensure_rdp_client_process(
         self,
