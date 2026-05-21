@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Prepare the `dev` -> `main` PR for the loop-driven realism improvement batch — applied the required v0.9.0 minor version/changelog bump, refreshed `uv.lock`, and passed Ruff plus full normal `uv run pytest --no-cov` before opening the PR.
 - [x] Run a blind expert panel on the current loop-188 iteration-test output and summarize reviewer synthetic-confidence scores — panel average synthetic-confidence was 61.0 (Threat Hunter 68, Detection 68, Network 36, Host/EDR 72), with reports and `scores.json` saved under `scenarios/iteration-test/blind-test/loop-188/`.
 - [x] Run ten additional family-level iteration-test assessment/fix loops using the strengthened loop prompt, starting at loop 179 from loop-178 Windows source-native and session-continuity findings. Completed loops 179-188 with owning-layer fixes, focused regression tests, regenerated data, eval artifacts, and reviewer-finding probes.
 - [x] Loop 188 family fix — populated source-native proxy identities in the canonical `ProxyContext` owner path instead of patching rendered proxy output; regenerated loop-188 output scored 96.15 across 78,731 records, with 745 authenticated proxy rows, 14 distinct proxy usernames, all 745 assigned-workstation non-407 rows authenticated, all 188 machine-context rows using machine accounts, and zero authenticated 407/server-origin rows.

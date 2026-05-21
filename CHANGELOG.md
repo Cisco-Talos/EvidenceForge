@@ -4,6 +4,58 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.9.0 (2026-05-21)
+
+This minor release packages the source-aware timing planner, expanded workstation-normal activity
+defaults, and the loop-driven realism hardening work through loop 188. The branch includes `feat:`
+commits since v0.8.1, so the version moves from `0.8.1` to `0.9.0` under the pre-1.0 semver
+policy.
+
+**Source-aware timing and activity expansion**
+
+- Added the source-aware timing planner and expanded workstation-normal activity defaults, then
+  carried that work through endpoint, Zeek, DNS, TLS, proxy, syslog, Kerberos, and shell-ordering
+  fixes (`4accda90`, `e6aa9fd1`, `b4ee3d7`, `19b7d317`, `1bc5f0ad`, `949108ea`, `1aacf04d`,
+  `7cfccdfc`, `8900bf5e`, `a4623f56`, `075a64cd`, `b7867189`, `a9d7fee5`, `249f3c09`,
+  `92a0ee2b`, `0658ec96`, `e6952094`, `32d37f96`, `c578091a`, `6fb809ec`, `bd13f72c`,
+  `c1330075`, `13b888b4`, `208694f9`, `d500c61a`, `b2168bc3`, `096d2141`, `d48c3877`,
+  `f36f8000`, `b14cf417`, `7e4b5424`, `dd7291c9`, `cc480317`, `77adcba5`, `923aaf6f`,
+  `635bdea4`, `ec3b409a`, `394f2c63`, `b286044f`, `7cb829d0`, `3aa98087`, `0f9c292f`,
+  `b3ea6ab9`, `05a1205f`, `3fae9806`, `faf55ab7`).
+
+**Loop-assessment realism fixes**
+
+- Preserved source-native event ordering and lifetimes across browser, proxy, Linux SSH, OCSP,
+  shell telemetry, eCAR, Kerberos, logind/PAM, source timing, DNS/TLS, Windows sessions, Bash
+  workflow texture, web exploit provenance, Zeek sensor observations, OCSP request paths,
+  infrastructure user agents, DNS tunnel morphology, scanner profiles, and proxy identities
+  (`6886df61`, `49bc37bb`, `ea6133fd`, `d9ee7de7`, `d1494cec`, `9d523c3a`, `a3fa233e`,
+  `84bb4126`, `73c3252c`, `6b95d76f`, `c613ac33`, `6e31ce16`, `75e4d5c5`, `b2e1e628`,
+  `cb920b33`, `0eddcdd0`, `74ae3c85`, `8e65458d`, `fad4bc09`, `c1bc96be`, `3de3d26c`,
+  `6a8b9b1b`, `b7b5009b`, `6e3c2241`, `0cf7f4b0`, `689e6e33`, `de0102db`, `e2ab1aa0`,
+  `72b7236c`, `4a276c8e`, `87b359fc`, `165275e2`, `67144f31`, `2b72678c`, `7d405429`,
+  `48d76342`, `9c3bf151`, `8a70d421`, `8f8d9987`, `3f4ced21`, `9601291f`, `898f8c68`,
+  `85cc4fc0`, `3895f80f`, `3b86aa5a`, `67acff74`, `f700d3bf`, `ecd01eb6`).
+
+**Assessment records and loop guidance**
+
+- Recorded blind-panel and loop-assessment findings from loops 134-188, added messy-attacker and
+  family-level iteration-loop guidance, strengthened the family-fix prompt, and tracked loop-178
+  through loop-188 completion and blind-panel score summaries (`81522de6`, `80b274e2`,
+  `edd38dec`, `1aff790a`, `4daf3e84`, `2d3fbd44`, `39f8495c`, `382cebf5`, `928643da`,
+  `08843d32`, `67bebd75`, `8dfe97e0`, `b778c385`, `ed75fbdd`, `809e9160`, `07ddd477`,
+  `c360e56a`, `385c500b`, `02ebb9f8`, `4ea58b96`, `6a2a620b`, `d57ce83f`, `be7d4a28`,
+  `307907a1`, `9ec16b09`, `c6ed04f8`, `dbf77589`, `fe319860`, `c8a8f8de`, `1ae5a093`,
+  `9cf2b14d`, `4d3fa6ef`, `0fd71ce6`, `d2b55174`, `9611bc2f`, `75447ca0`, `9dcb968d`,
+  `d98dedea`, `178c1542`, `59418af1`, `95f75c7a`, `f34ec469`, `c71e0e78`, `936358be`,
+  `333e31f8`, `418de425`, `905f4514`, `4c329877`).
+
+**Validation**
+
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` passed.
+- `uv run pytest --no-cov` passed with `3556 passed`, `15 skipped`.
+
 ## v0.8.1 (2026-05-19)
 
 This patch release packages the post-v0.8.0 realism and skill-guidance fixes on `dev`.
