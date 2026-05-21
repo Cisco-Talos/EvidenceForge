@@ -5142,10 +5142,12 @@ class ActivityGenerator:
         net = tls_event.network
         if net is None:
             return
-        import hashlib
 
         from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-        from evidenceforge.generation.activity.tls_realism import pick_ocsp_responder
+        from evidenceforge.generation.activity.tls_realism import (
+            ocsp_request_path,
+            pick_ocsp_responder,
+        )
 
         issuer_name = tls_event.x509.certificate_issuer if tls_event.x509 else ""
         responder = pick_ocsp_responder(
@@ -5156,10 +5158,16 @@ class ActivityGenerator:
         ocsp_time = tls_event.timestamp + timedelta(
             milliseconds=random.Random(_stable_seed(f"ocsp_time:{ocsp.id}")).randint(900, 4500)
         )
-        uri_seed = hashlib.sha1(f"{cert_name}:{ocsp.serial_number}".encode()).hexdigest()[:12]
+        ocsp_uri = ocsp_request_path(
+            responder=responder,
+            issuer_name=issuer_name,
+            cert_name=cert_name,
+            serial_number=ocsp.serial_number,
+            this_update=ocsp.this_update,
+        )
         response_profile_key = (
             responder,
-            f"/{uri_seed}",
+            ocsp_uri,
             ocsp.serial_number,
             ocsp.this_update,
             ocsp.next_update,
@@ -5183,7 +5191,7 @@ class ActivityGenerator:
         http_ctx = HttpContext(
             method="GET",
             host=responder,
-            uri=f"/{uri_seed}",
+            uri=ocsp_uri,
             version="1.1",
             user_agent=user_agent,
             request_body_len=0,

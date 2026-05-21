@@ -43,6 +43,17 @@ ocsp:
   this_update_max_skew_seconds: 3600
   next_update_min_seconds: 28800
   next_update_max_seconds: 604800
+  request_path:
+    # OCSP-over-HTTP GET carries a base64-encoded DER OCSPRequest in the
+    # path, not a short human-sized token. Prefixes mirror common DER/base64
+    # sequence starts, then per-certificate bytes fill the body.
+    min_encoded_chars: 72
+    max_encoded_chars: 150
+    include_padding_probability: 0.35
+    der_prefixes:
+      - "MFEwTzBNMEswSTAJBgUrDgMCGgUABB"
+      - "MFUwUzBRME8wTTAJBgUrDgMCGgUABB"
+      - "MFIwUDBOMEwwSjAJBgUrDgMCGgUABB"
   responders:
     - issuer_patterns: ["*Acme Enterprise*", "*Enterprise*"]
       domains: ["ocsp.meridianhcs.local"]

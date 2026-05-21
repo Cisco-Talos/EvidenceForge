@@ -344,6 +344,42 @@ class TlsOcspResponder(BaseModel, extra="forbid"):
     domains: list[str]
 
 
+class TlsOcspRequestPathConfig(BaseModel, extra="forbid"):
+    """OCSP GET request-path shape settings in tls_realism.yaml."""
+
+    min_encoded_chars: int = 72
+    max_encoded_chars: int = 150
+    include_padding_probability: float = 0.35
+    der_prefixes: list[str] = Field(default_factory=list)
+
+    @field_validator("min_encoded_chars", "max_encoded_chars")
+    @classmethod
+    def encoded_length_valid(cls, v: int) -> int:
+        if v < 32 or v > 512:
+            raise ValueError("encoded length must be between 32 and 512")
+        return v
+
+    @field_validator("include_padding_probability")
+    @classmethod
+    def padding_probability_valid(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("include_padding_probability must be between 0 and 1")
+        return v
+
+    @field_validator("der_prefixes")
+    @classmethod
+    def der_prefixes_valid(cls, v: list[str]) -> list[str]:
+        if any(not prefix for prefix in v):
+            raise ValueError("der_prefixes entries must be non-empty")
+        return v
+
+    @model_validator(mode="after")
+    def encoded_range_valid(self) -> TlsOcspRequestPathConfig:
+        if self.max_encoded_chars < self.min_encoded_chars:
+            raise ValueError("max_encoded_chars must be >= min_encoded_chars")
+        return self
+
+
 class TlsOcspConfig(BaseModel, extra="forbid"):
     """OCSP behavior settings in tls_realism.yaml."""
 
@@ -351,6 +387,7 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     this_update_max_skew_seconds: int
     next_update_min_seconds: int
     next_update_max_seconds: int
+    request_path: TlsOcspRequestPathConfig = Field(default_factory=TlsOcspRequestPathConfig)
     responders: list[TlsOcspResponder] = Field(default_factory=list)
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
     suppress_revoked_suffixes: list[str] = Field(default_factory=list)

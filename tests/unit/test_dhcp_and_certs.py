@@ -35,6 +35,7 @@ from evidenceforge.generation.activity.tls_realism import (
     load_tls_realism,
     multi_label_public_suffixes,
     ocsp_config,
+    ocsp_request_path,
     pick_ocsp_responder,
     pick_tls_destination,
     reset_tls_realism_cache,
@@ -200,6 +201,36 @@ class TestTlsIssuers:
         for domain in domains:
             statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
             assert "revoked" not in statuses
+
+    def test_ocsp_request_path_uses_long_encoded_der_shape(self):
+        """OCSP-over-HTTP GET paths should not look like short synthetic tokens."""
+        path = ocsp_request_path(
+            responder="ocsp.digicert.com",
+            issuer_name="CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US",
+            cert_name="ctldl.windowsupdate.com",
+            serial_number="ABCDEF0123456789",
+            this_update=1710763200,
+        )
+        same_path = ocsp_request_path(
+            responder="ocsp.digicert.com",
+            issuer_name="CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US",
+            cert_name="ctldl.windowsupdate.com",
+            serial_number="ABCDEF0123456789",
+            this_update=1710763200,
+        )
+        different_path = ocsp_request_path(
+            responder="ocsp.digicert.com",
+            issuer_name="CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US",
+            cert_name="ctldl.windowsupdate.com",
+            serial_number="FEDCBA9876543210",
+            this_update=1710763200,
+        )
+
+        assert path == same_path
+        assert path != different_path
+        assert path.startswith(("/MFE", "/MFU", "/MFI"))
+        assert len(path) >= 73
+        assert not re.fullmatch(r"/[0-9a-f]{12}", path)
 
     def test_tls_certificate_serial_lengths_vary_but_remain_stable(self):
         """Certificate serials should not all look like fixed 128-bit generated values."""

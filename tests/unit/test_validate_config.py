@@ -330,6 +330,33 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_ocsp_request_path_bounds(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            ocsp = dict(data.get("ocsp", {}))
+            ocsp["request_path"] = {
+                "min_encoded_chars": 160,
+                "max_encoded_chars": 40,
+                "include_padding_probability": 0.35,
+                "der_prefixes": ["MFE"],
+            }
+            return {**data, "ocsp": ocsp}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "max_encoded_chars must be >= min_encoded_chars" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_public_dns_profile(self, monkeypatch):
         from evidenceforge.generation.activity import public_dns_profiles
 
