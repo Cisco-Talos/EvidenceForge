@@ -2035,6 +2035,19 @@ def _public_dns_mx_answers(domain: str) -> list[str]:
     return answers or [f"10 mail.{domain}"]
 
 
+def _dns_soa_answer(domain: str, mname: str, rname: str, seed_context: str = "") -> str:
+    """Return source-native SOA RDATA with serial and timer fields."""
+    owner = domain.lower().rstrip(".")
+    seed = _stable_seed(f"dns_soa:{owner}:{mname}:{rname}:{seed_context}")
+    rng = random.Random(seed)
+    serial = 2024000000 + rng.randint(10100, 123199)
+    refresh = rng.choice((1800, 3600, 7200, 10800, 14400))
+    retry = rng.choice((300, 600, 900, 1200, 1800))
+    expire = rng.choice((604800, 1209600, 2419200))
+    minimum = rng.choice((60, 300, 600, 900, 1800, 3600))
+    return f"{mname} {rname} {serial} {refresh} {retry} {expire} {minimum}"
+
+
 def _public_dns_soa_answers(domain: str) -> list[str]:
     """Return a realistic public SOA answer for a domain."""
     profile = _public_dns_profile("nameserver_profiles", domain)
@@ -2045,7 +2058,7 @@ def _public_dns_soa_answers(domain: str) -> list[str]:
         rname = _render_public_dns_answer(str(rng.choice(rnames)), domain)
     else:
         rname = f"dns-admin.{domain}"
-    return [f"{nameservers[0]} {rname}"]
+    return [_dns_soa_answer(domain, nameservers[0], rname, str(profile.get("name", "")))]
 
 
 def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str, int]:
@@ -11930,7 +11943,14 @@ class ActivityGenerator:
                 companion_qtype = 6
                 companion_query = _dns_registrable_domain(hostname)
                 if _dns_is_internal_name(companion_query, ad_domain):
-                    companion_answers = [f"ns1.{companion_query} hostmaster.{companion_query}"]
+                    companion_answers = [
+                        _dns_soa_answer(
+                            companion_query,
+                            f"ns1.{companion_query}",
+                            f"hostmaster.{companion_query}",
+                            "internal",
+                        )
+                    ]
                 else:
                     companion_answers = _public_dns_soa_answers(companion_query)
             companion_is_internal = _dns_is_internal_name(companion_query, ad_domain) or (
