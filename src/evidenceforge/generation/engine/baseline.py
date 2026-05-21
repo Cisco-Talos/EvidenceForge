@@ -2369,6 +2369,16 @@ class BaselineMixin:
         this specific system, creates a logon with an appropriate type
         (interactive for workstations, network/RDP for servers).
         """
+        if _get_os_category(system.os) == "windows":
+            existing_interactive = self._existing_windows_interactive_session(
+                user,
+                system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                return existing_interactive.logon_id
+
         if hasattr(self, "world_planner"):
             session = self.world_planner.ensure_user_session(user, system, time, rng)
             return session.logon_id
@@ -2399,6 +2409,25 @@ class BaselineMixin:
             time=logon_time,
             logon_type=logon_type,
         )
+
+    def _existing_windows_interactive_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> Any | None:
+        """Return an already-started same-user Windows interactive session."""
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if session.system == system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and _session_started_by(session, time)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.start_time)
 
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
         """Generate suspicious-but-benign ambient noise events.

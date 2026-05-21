@@ -62,6 +62,47 @@ class TestRsatToolSelection:
 
 
 class TestRsatSessionTiming:
+    def test_ensure_session_reuses_existing_windows_interactive_before_planner(self) -> None:
+        class PlannerShouldNotRun:
+            def ensure_user_session(self, *args, **kwargs):
+                raise AssertionError("existing Windows session should be reused locally")
+
+        mixin = BaselineMixin()
+        mixin.state_manager = StateManager()
+        mixin.world_planner = PlannerShouldNotRun()
+        user = User(
+            username="aisha.johnson",
+            full_name="Aisha Johnson",
+            email="aisha@example.com",
+            enabled=True,
+        )
+        system = System(
+            hostname="WS-AJOHNSON-01",
+            ip="10.10.1.35",
+            os="Windows 11",
+            type="workstation",
+        )
+        session_start = datetime(2024, 3, 18, 13, 1, tzinfo=UTC)
+        activity_time = datetime(2024, 3, 18, 13, 8, tzinfo=UTC)
+        mixin.state_manager.set_current_time(session_start)
+        logon_id = mixin.state_manager.create_session(
+            username=user.username,
+            system=system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=session_start,
+            session_kind="interactive",
+        )
+
+        reused = mixin._ensure_session_on_system(
+            user,
+            system,
+            activity_time,
+            random.Random(7),
+        )
+
+        assert reused == logon_id
+
     def test_rsat_activity_moves_after_existing_future_workstation_session(self) -> None:
         mixin = BaselineMixin()
         mixin.state_manager = StateManager()
