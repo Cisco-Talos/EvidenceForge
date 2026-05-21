@@ -751,6 +751,8 @@ class EcarEmitter(HostMultiplexEmitter):
         host = event.dst_host
         if net is None or host is None:
             return -1
+        if net.responding_pid > 0:
+            return net.responding_pid
 
         system_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
         for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(net.dst_port, ()):

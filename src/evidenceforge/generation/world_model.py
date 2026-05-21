@@ -1078,11 +1078,6 @@ class WorldPlanner:
             source_port=source_port,
             session_kind="ssh",
         )
-        sshd_pid = self.state_manager.allocate_transient_linux_pid(
-            plan.target_system.hostname,
-            logon_time,
-        )
-        self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
         min_duration = max(
             30.0,
@@ -1095,7 +1090,6 @@ class WorldPlanner:
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_port=source_port,
-            sshd_pid=sshd_pid,
             logon_id=logon_id,
             session_obj_id=session_obj_id,
             min_duration=min_duration,

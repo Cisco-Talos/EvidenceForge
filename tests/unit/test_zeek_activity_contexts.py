@@ -457,6 +457,43 @@ class TestSslContextPopulation:
         assert "admin(uid=1001) by (uid=0)" in pam_messages[0]
         assert "admin(uid=0)" not in pam_messages[0]
 
+    def test_ssh_session_sets_destination_side_transport_pid(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_events = [
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.command_line == "sshd: [accepted]"
+        ]
+        assert transport_events
+        assert ssh_event.network.responding_pid == transport_events[0].process.pid
+        syslog_pids = {
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
+        }
+        assert syslog_pids == {ssh_event.network.responding_pid}
+
     def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 

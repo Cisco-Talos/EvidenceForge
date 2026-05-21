@@ -10348,11 +10348,6 @@ class ActivityGenerator:
         elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
             src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
-        if sshd_pid is None:
-            sshd_pid = self.state_manager.allocate_transient_linux_pid(
-                target_system.hostname,
-                time,
-            )
         if logon_id:
             self.state_manager.update_session_metadata(
                 logon_id,
@@ -10468,6 +10463,28 @@ class ActivityGenerator:
             accepted_delay_ms = conn_delay_ms + rng.randint(450, 3500)
             pam_delay_ms = accepted_delay_ms + rng.randint(45, 180)
             logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
+            if sshd_pid is None:
+                sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+                global_sshd = sys_pids.get("sshd")
+                parent_pid = (
+                    global_sshd
+                    if global_sshd
+                    and self.state_manager.get_process(target_system.hostname, global_sshd)
+                    is not None
+                    else 0
+                )
+                sshd_pid = self.generate_system_process(
+                    system=target_system,
+                    time=time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
+                    process_name="/usr/sbin/sshd",
+                    command_line="sshd: [accepted]",
+                    parent_pid=parent_pid,
+                    username="root",
+                    emit_linux_syslog=False,
+                )
+            event.network.responding_pid = sshd_pid
+            if logon_id:
+                self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
             ssh_syslog_seed = (
                 target_system.hostname,
                 source_ip,
