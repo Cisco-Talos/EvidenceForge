@@ -7188,6 +7188,13 @@ class ActivityGenerator:
             parent_pid=parent_pid,
             process_username=process_username,
         )
+        parent_pid = self._materialize_visible_linux_shell_parent_for_child(
+            system=system,
+            time=time,
+            logon_id=process_logon_id,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
         # Phase 1: Allocate IDs from StateManager
@@ -16505,6 +16512,58 @@ class ActivityGenerator:
             ):
                 return candidate
         return parent_pid
+
+    def _materialize_visible_linux_shell_parent_for_child(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int:
+        """Ensure post-window Linux shell parents are source-visible."""
+        if _get_os_category(system.os) != "linux":
+            return parent_pid
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_proc is None or not self._is_pid_active_at(system, parent_pid, time):
+            return parent_pid
+
+        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if parent_exe not in {"bash", "sh", "zsh"}:
+            return parent_pid
+
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is None:
+            return parent_pid
+        scenario_start = ensure_utc(scenario_start)
+        activity_time = ensure_utc(time)
+        if activity_time < scenario_start:
+            return parent_pid
+        if ensure_utc(parent_proc.start_time) >= scenario_start:
+            return parent_pid
+
+        user = self._user_model_for_username(process_username)
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            session_shell_pid = self.ensure_linux_session_shell(
+                user=user,
+                target_system=system,
+                logon_id=logon_id,
+                logon_time=session.start_time,
+                activity_time=activity_time,
+            )
+            if session_shell_pid is not None:
+                return session_shell_pid
+
+        visible_shell_pid = self.ensure_linux_visible_shell_parent(
+            user=user,
+            target_system=system,
+            activity_time=activity_time,
+            logon_id=logon_id,
+            logon_time=session.start_time if session is not None else None,
+        )
+        return visible_shell_pid if visible_shell_pid is not None else parent_pid
 
     def _is_windows_same_exe_gui_child(self, process_name: str, command_line: str) -> bool:
         """Return whether a Windows GUI command should be parented by its own executable."""

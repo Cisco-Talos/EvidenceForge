@@ -1126,6 +1126,39 @@ class TestLinuxParentSelection:
         assert parent.image == "/bin/bash"
         assert parent.start_time >= scenario_start
 
+    def test_linux_process_creation_guard_materializes_hidden_shell_parent(
+        self, state_manager, mock_emitters, linux_system, user, monkeypatch
+    ):
+        """The process boundary should repair hidden shell parents from any caller."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(minutes=20)
+
+        monkeypatch.setattr(
+            ag,
+            "_sanitize_user_parent_pid",
+            lambda **kwargs: kwargs["parent_pid"],
+        )
+
+        pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id="",
+            process_name="/usr/bin/grep",
+            command_line="grep -i error /var/log/syslog",
+            parent_pid=pids["bash"],
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        assert proc is not None
+        assert proc.parent_pid != pids["bash"]
+        parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.start_time >= scenario_start
+
     def test_linux_resolve_parent_materializes_visible_shell_without_session(
         self, state_manager, mock_emitters, linux_system, user
     ):
