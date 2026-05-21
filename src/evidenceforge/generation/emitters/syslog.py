@@ -473,7 +473,7 @@ class SyslogEmitter(HostMultiplexEmitter):
     def _normalize_sshd_child_pids_for_lines(cls, lines: list[str], host_key: str) -> list[str]:
         """Return lines with per-session sshd child PIDs increasing by source time."""
         pid_map: dict[str, int] = {}
-        latest_pid = 0
+        latest_session_pid = 0
         normalized: list[str] = []
         for line in lines:
             match = cls._sshd_pid_match(line)
@@ -484,15 +484,25 @@ class SyslogEmitter(HostMultiplexEmitter):
             new_pid = pid_map.get(old_pid)
             if new_pid is None:
                 parsed_old_pid = int(old_pid)
-                if parsed_old_pid > latest_pid:
+                opens_visible_session = (
+                    "Connection from " in line
+                    or "Accepted " in line
+                    or "pam_unix(sshd:session): session opened" in line
+                )
+                if not opens_visible_session:
                     new_pid = parsed_old_pid
+                    pid_map[old_pid] = new_pid
+                elif parsed_old_pid > latest_session_pid:
+                    new_pid = parsed_old_pid
+                    latest_session_pid = new_pid
+                    pid_map[old_pid] = new_pid
                 else:
                     bump = 1 + (
                         _stable_seed(f"syslog_sshd_pid:{host_key}:{old_pid}:{len(pid_map)}") % 17
                     )
-                    new_pid = latest_pid + bump
-                latest_pid = new_pid
-                pid_map[old_pid] = new_pid
+                    new_pid = latest_session_pid + bump
+                    latest_session_pid = new_pid
+                    pid_map[old_pid] = new_pid
             normalized.append(
                 f"{line[: match.start()]}{match.group('prefix')}{new_pid}{match.group('suffix')}"
                 f"{line[match.end() :]}"
