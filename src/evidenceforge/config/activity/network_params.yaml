@@ -81,22 +81,15 @@ dns_tunnel_rtt:
 
 dns_tunnel_response_templates:
   - "{token}"
-  - "v={token}"
-  - "id={token}"
-  - "d={token}"
-  - "rx={token}"
-  - "p={seq_hex};d={token}"
-  - "s={seq};d={token}"
-  - "m={token};c={seq_hex}"
-  - "r={seq_hex};b={token}"
-  - "ok:{seq}:{token}"
-  - "{edge}={token}"
-  - "n={seq_hex}.{token}"
-  - "x-{edge}:{seq_hex}:{token}"
-  - "srv.{edge}.{seq_hex}.{token}"
-  - "slot-{seq}-t{ttl}-{token}"
-  - "srv-{edge}-{seq_hex}:{token}"
-  - "xid:{token}:path-{edge}:n{seq}"
+  - "{token}.{seq_hex}"
+  - "{seq_hex}.{token}"
+  - "{edge}{seq_hex}{token}"
+  - "{token}-{edge}{seq_hex}"
+  - "_{edge}{token}"
+  - "{seq_hex}-{token}"
+  - "x{edge}{token}"
+  - "r{seq_hex}{token}"
+  - "m{edge}{token}"
 
 dns_tunnel_ttl_choices:
   - value: 0
@@ -129,6 +122,60 @@ dns_tunnel_rcode_weights:
   NXDOMAIN: 5
   SERVFAIL: 2
   REFUSED: 1
+
+external_scanner_port_profiles:
+  - name: "web_recon"
+    weight: 32
+    ports:
+      - {port: 80, weight: 34}
+      - {port: 443, weight: 38}
+      - {port: 8080, weight: 16}
+      - {port: 8443, weight: 7}
+      - {port: 22, weight: 5}
+  - name: "windows_exposure"
+    weight: 24
+    ports:
+      - {port: 445, weight: 36}
+      - {port: 3389, weight: 28}
+      - {port: 135, weight: 14}
+      - {port: 139, weight: 10}
+      - {port: 5985, weight: 7}
+      - {port: 80, weight: 5}
+  - name: "iot_telnet"
+    weight: 15
+    ports:
+      - {port: 23, weight: 48}
+      - {port: 2323, weight: 18}
+      - {port: 22, weight: 16}
+      - {port: 80, weight: 10}
+      - {port: 8080, weight: 8}
+  - name: "mail_relay_probe"
+    weight: 10
+    ports:
+      - {port: 25, weight: 44}
+      - {port: 587, weight: 24}
+      - {port: 465, weight: 16}
+      - {port: 110, weight: 8}
+      - {port: 143, weight: 8}
+  - name: "database_probe"
+    weight: 9
+    ports:
+      - {port: 1433, weight: 32}
+      - {port: 3306, weight: 24}
+      - {port: 5432, weight: 22}
+      - {port: 6379, weight: 12}
+      - {port: 9200, weight: 10}
+  - name: "broad_low_rate"
+    weight: 10
+    ports:
+      - {port: 22, weight: 12}
+      - {port: 23, weight: 10}
+      - {port: 80, weight: 18}
+      - {port: 443, weight: 18}
+      - {port: 445, weight: 12}
+      - {port: 3389, weight: 12}
+      - {port: 8080, weight: 10}
+      - {port: 8443, weight: 8}
 
 proxy_connect_status_messages:
   200:

@@ -68,7 +68,9 @@ from evidenceforge.generation.activity.ids_signatures import (
     load_ids_signatures,
     render_dns_query_template,
 )
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
+from evidenceforge.generation.activity.network_params import external_scanner_port_for_source
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
     pick_granted_access,
@@ -86,7 +88,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
-from evidenceforge.models.scenario import Persona, User
+from evidenceforge.models.scenario import Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,79 @@ def _ufw_block_ttl(src_ip: str) -> int:
         initial = rng.choices((64, 128, 255), weights=(58, 36, 6), k=1)[0]
         hops = rng.randint(7, 30) if initial == 255 else rng.randint(5, 24)
     return max(32, initial - hops)
+
+
+def _linux_baseline_session_initiator(
+    user: str,
+    *,
+    rng: random.Random,
+) -> tuple[str, str, str]:
+    """Return a plausible PAM initiator for ambient logind session noise."""
+    if user == "root":
+        service = rng.choices(("cron", "sudo", "su"), weights=(72, 18, 10), k=1)[0]
+    else:
+        service = rng.choices(("login", "sudo", "cron"), weights=(55, 28, 17), k=1)[0]
+    app_name = "CRON" if service == "cron" else service
+    opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
+    message = (
+        f"pam_unix({service}:session): session opened for user "
+        f"{user}(uid={_linux_uid_for_user(user)}) by {opener}"
+    )
+    return app_name, service, message
+
+
+def _linux_baseline_pam_open_lead(rng: random.Random) -> timedelta:
+    """Return lead time for ambient PAM open rows before logind records."""
+    return timedelta(milliseconds=rng.randint(3000, 8000))
+
+
+def _linux_baseline_pam_close_lead(rng: random.Random) -> timedelta:
+    """Return lead time for ambient PAM close rows before logind removal records."""
+    return timedelta(milliseconds=rng.randint(1200, 4200))
+
+
+def _linux_transient_syslog_pid(
+    state_manager: Any,
+    system_hostname: str,
+    event_time: datetime,
+    rng: random.Random,
+) -> int:
+    """Allocate a source-native PID for one short-lived Linux syslog invocation."""
+    allocator = getattr(state_manager, "allocate_transient_linux_pid", None)
+    if callable(allocator):
+        return allocator(system_hostname, event_time)
+    return rng.randint(1200, 9500)
+
+
+def _sample_lock_duration(rng: random.Random, kind: str) -> timedelta:
+    """Return a human-shaped workstation lock duration with non-minute texture."""
+    if kind == "lunch":
+        seconds = int(rng.triangular(22 * 60, 76 * 60, 43 * 60))
+        seconds += rng.randint(-95, 125)
+    else:
+        bucket = rng.random()
+        if bucket < 0.18:
+            seconds = rng.randint(65, 260)
+        elif bucket < 0.82:
+            seconds = int(rng.triangular(4 * 60, 24 * 60, 9 * 60))
+        else:
+            seconds = int(rng.triangular(18 * 60, 52 * 60, 31 * 60))
+        seconds += rng.randint(-35, 85)
+    seconds = max(127, seconds)
+    return timedelta(seconds=seconds, milliseconds=rng.randint(17, 987))
+
+
+def _extra_syslog_limit_key(system_hostname: str, entry: dict[str, Any]) -> str:
+    """Return the per-host generation-limit key for an extra syslog entry."""
+    messages = entry.get("messages") if isinstance(entry.get("messages"), list) else []
+    marker = "|".join(str(message) for message in messages[:2])
+    return f"{system_hostname}:{entry.get('app', '<unknown>')}:{marker}"
+
+
+def _networkmanager_message_timestamp(ts: datetime) -> str:
+    """Return the source-native NetworkManager bracket timestamp."""
+    timestamp = ts if ts.tzinfo is not None else ts.replace(tzinfo=UTC)
+    return f"{timestamp.timestamp():.4f}"
 
 
 def _plan_http_request_groups(
@@ -759,7 +834,7 @@ def _cron_workload_process(
     """Resolve the concrete workload process normally spawned by a cron shell."""
     command_lower = command.lower()
     if "debian-sa1" in command_lower:
-        return "/usr/lib/sysstat/debian-sa1", "debian-sa1 1 1", (0.05, 0.45)
+        return "/usr/lib/sysstat/debian-sa1", "debian-sa1 1 1", (1.05, 2.4)
     if "logrotate" in command_lower:
         return "/usr/sbin/logrotate", "/usr/sbin/logrotate /etc/logrotate.conf", (0.8, 4.5)
     if "run-parts" in command_lower:
@@ -915,6 +990,162 @@ class BaselineMixin:
         if deleted is not None and when >= deleted:
             return False
         return True
+
+    def _next_rsyslog_fd(self, hostname: str, rng: random.Random) -> int:
+        """Return a small process-local fd for rsyslog daemon payloads."""
+        fd_state = getattr(self, "_linux_rsyslog_fds", None)
+        if fd_state is None:
+            fd_state = {}
+            self._linux_rsyslog_fds = fd_state
+        current = fd_state.get(hostname)
+        if current is None:
+            current = 4 + (_stable_seed(f"rsyslog_fd_base:{hostname}") % 8)
+        else:
+            current += rng.choice([1, 1, 2])
+            if current > 64:
+                current = 4 + rng.randint(0, 8)
+        fd_state[hostname] = current
+        return current
+
+    def _next_dbus_bus_id(self, hostname: str, rng: random.Random) -> int:
+        """Return a plausible monotonic system bus name suffix for one host."""
+        bus_state = getattr(self, "_linux_dbus_bus_ids", None)
+        if bus_state is None:
+            bus_state = {}
+            self._linux_dbus_bus_ids = bus_state
+        current = bus_state.get(hostname)
+        if current is None:
+            current = 12 + (_stable_seed(f"dbus_bus_id_base:{hostname}") % 80)
+        else:
+            current += rng.choice([1, 1, 2, 3])
+            if current > 980:
+                current = 12 + rng.randint(0, 80)
+        bus_state[hostname] = current
+        return current
+
+    def _polkit_session_pool(self, hostname: str, rng: random.Random) -> list[int]:
+        """Return low, source-native session IDs that can represent pre-existing logind sessions."""
+        pool_state = getattr(self, "_linux_polkit_session_pools", None)
+        if pool_state is None:
+            pool_state = {}
+            self._linux_polkit_session_pools = pool_state
+        pool = pool_state.get(hostname)
+        if pool is None:
+            base = 18 + (_stable_seed(f"polkit_session_base:{hostname}") % 160)
+            pool = [base]
+            for _ in range(3):
+                pool.append(pool[-1] + rng.randint(1, 5))
+            pool_state[hostname] = pool
+        return pool
+
+    def _new_polkit_agent(
+        self,
+        hostname: str,
+        rng: random.Random,
+        entry: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Create source-local polkit agent state for one host."""
+        params = entry.get("params") or {}
+        process_paths = params.get("agent_process_path") or [
+            "/usr/libexec/polkit-gnome-authentication-agent-1",
+            "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
+            "/usr/libexec/kf5/polkit-kde-authentication-agent-1",
+        ]
+        return {
+            "session_id": rng.choice(self._polkit_session_pool(hostname, rng)),
+            "bus_id": self._next_dbus_bus_id(hostname, rng),
+            "process_path": rng.choice(process_paths),
+        }
+
+    @staticmethod
+    def _polkit_action_process_paths() -> dict[str, tuple[str, ...]]:
+        """Return source-native process candidates for common polkit action families."""
+        return {
+            "org.freedesktop.systemd1.manage-units": (
+                "/usr/bin/systemctl",
+                "/usr/bin/systemctl",
+                "/usr/bin/loginctl",
+            ),
+            "org.freedesktop.login1.reboot": (
+                "/usr/bin/systemctl",
+                "/usr/bin/loginctl",
+            ),
+            "org.freedesktop.packagekit.system-update": (
+                "/usr/lib/packagekit/packagekitd",
+                "/usr/bin/pkcon",
+            ),
+            "org.freedesktop.NetworkManager.settings.modify.system": (
+                "/usr/bin/nmcli",
+                "/usr/sbin/NetworkManager",
+            ),
+            "org.freedesktop.timedate1.set-timezone": ("/usr/bin/timedatectl",),
+        }
+
+    def _polkit_action_profile(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+    ) -> tuple[str, str]:
+        """Choose a coherent action/process pair for a polkit authorization message."""
+        params = entry.get("params") or {}
+        allowed = {str(item) for item in params.get("action_id", [])}
+        profiles = [
+            (action, process)
+            for action, processes in self._polkit_action_process_paths().items()
+            if not allowed or action in allowed
+            for process in processes
+        ]
+        if not profiles:
+            action = rng.choice(
+                params.get("action_id") or ["org.freedesktop.systemd1.manage-units"]
+            )
+            process = rng.choice(params.get("process_path") or ["/usr/bin/systemctl"])
+            return str(action), str(process)
+        return rng.choice(profiles)
+
+    def _render_polkit_syslog_message(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        *,
+        system: Any,
+        timestamp: datetime,
+    ) -> str:
+        """Render polkit messages with coherent session and D-Bus state."""
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        hostname = system.hostname
+        active_agents = getattr(self, "_linux_polkit_agents", None)
+        if active_agents is None:
+            active_agents = {}
+            self._linux_polkit_agents = active_agents
+        host_agents = active_agents.setdefault(hostname, [])
+
+        template = rng.choice(entry.get("messages", [""]))
+        if template.startswith("Unregistered") and host_agents:
+            agent = host_agents.pop(0)
+        else:
+            agent = self._new_polkit_agent(hostname, rng, entry)
+            if template.startswith("Registered"):
+                host_agents.append(agent)
+
+        process_id = self.state_manager.allocate_transient_linux_pid(hostname, timestamp)
+        action_id, action_process_path = self._polkit_action_profile(entry, rng)
+        values = {
+            "action_id": action_id,
+            "bus_id": agent["bus_id"],
+            "process_path": action_process_path
+            if "action {action_id}" in template
+            else agent["process_path"],
+        }
+        positional = agent["session_id"] if "unix-session:{0}" in template else process_id
+        return render_extra_syslog_message(
+            {**entry, "messages": [template]},
+            rng,
+            positional_value=positional,
+            system_services=system.services,
+            values=values,
+        )
 
     def _schedule_foreground_process_termination(
         self,
@@ -2139,6 +2370,16 @@ class BaselineMixin:
         this specific system, creates a logon with an appropriate type
         (interactive for workstations, network/RDP for servers).
         """
+        if _get_os_category(system.os) == "windows":
+            existing_interactive = self._existing_windows_interactive_session(
+                user,
+                system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                return existing_interactive.logon_id
+
         if hasattr(self, "world_planner"):
             session = self.world_planner.ensure_user_session(user, system, time, rng)
             return session.logon_id
@@ -2169,6 +2410,25 @@ class BaselineMixin:
             time=logon_time,
             logon_type=logon_type,
         )
+
+    def _existing_windows_interactive_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> Any | None:
+        """Return an already-started same-user Windows interactive session."""
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if session.system == system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and _session_started_by(session, time)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.start_time)
 
     def _generate_suspicious_noise(self, current_hour: datetime) -> None:
         """Generate suspicious-but-benign ambient noise events.
@@ -2216,6 +2476,16 @@ class BaselineMixin:
                     self.scenario.environment.domain or "corp.local",
                 )
                 if result:
+                    aligned_time = self._align_rsat_with_future_workstation_session(
+                        result["user"],
+                        result["system"],
+                        result["time"],
+                        current_hour + timedelta(hours=1),
+                        rng,
+                    )
+                    if aligned_time is None:
+                        continue
+                    result["time"] = aligned_time
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
                     )
@@ -2643,8 +2913,6 @@ class BaselineMixin:
         # Collect internal IPs from scenario systems
         internal_ips = [s.ip for s in self.scenario.environment.systems if s.ip]
 
-        # Commonly targeted ports for external scanning
-        _SCAN_PORTS = [22, 23, 80, 443, 445, 1433, 3389, 5432, 8080, 8443]
         # Ports rarely allowed in corporate firewalls
         _BLOCKED_PORTS = [23, 135, 137, 138, 139, 445, 1433, 3389, 5900, 6379]
 
@@ -2734,7 +3002,7 @@ class BaselineMixin:
                         k=1,
                     )[0]
                     dst_ip = _pick_public_scan_target()
-                    dst_port = rng.choice(_SCAN_PORTS)
+                    dst_port = external_scanner_port_for_source(src_ip, rng)
                     proto = "tcp"
                 elif roll < 0.80:
                     # Cross-segment blocked
@@ -3416,7 +3684,11 @@ class BaselineMixin:
 
         # Lunch lock at hour 12
         if local_hour == 12 and rng.random() < 0.85:
-            lock_t = current_hour + timedelta(minutes=rng.randint(0, 15))
+            lock_t = current_hour + timedelta(
+                minutes=rng.randint(0, 15),
+                seconds=rng.randint(0, 59),
+                milliseconds=rng.randint(11, 973),
+            )
             if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
                 return
             self.state_manager.set_current_time(lock_t)
@@ -3426,7 +3698,7 @@ class BaselineMixin:
                 time=lock_t,
                 logon_id=session.logon_id,
             )
-            unlock_t = lock_t + timedelta(minutes=rng.randint(30, 60))
+            unlock_t = lock_t + _sample_lock_duration(rng, "lunch")
             logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
             if logoff_time and unlock_t >= logoff_time:
                 return
@@ -3438,7 +3710,10 @@ class BaselineMixin:
 
         # Random meeting-break lock/unlock
         if rng.random() < lock_prob:
-            lock_t = current_hour + timedelta(seconds=rng.randint(60, 3500))
+            lock_t = current_hour + timedelta(
+                seconds=rng.randint(60, 3500),
+                milliseconds=rng.randint(11, 973),
+            )
             if not _session_active_at(session, lock_t, current_hour, planned_logoffs):
                 return
             self.state_manager.set_current_time(lock_t)
@@ -3448,7 +3723,7 @@ class BaselineMixin:
                 time=lock_t,
                 logon_id=session.logon_id,
             )
-            unlock_t = lock_t + timedelta(minutes=rng.randint(2, 15))
+            unlock_t = lock_t + _sample_lock_duration(rng, "meeting")
             logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
             if logoff_time and unlock_t >= logoff_time:
                 return
@@ -3903,15 +4178,18 @@ class BaselineMixin:
                         dc_hostname = rng.choice(dc_hostnames)
                     if dc_hostname:
                         machine_principal = f"{system.hostname}$"
-                        tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
-                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
-                        if tgs_time <= tgt_time:
-                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
-                        self.activity_generator.generate_kerberos_tgt(
+                        tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
+                            ts,
+                            rng,
+                            tgs_before_ms=(8, 65),
+                            tgt_before_tgs_ms=(35, 240),
+                        )
+                        self.activity_generator._maybe_generate_kerberos_tgt(
                             username=machine_principal,
                             source_ip=system.ip,
                             dc_hostname=dc_hostname,
                             time=tgt_time,
+                            rng=rng,
                         )
                         service_name = rng.choices(
                             [
@@ -4134,15 +4412,18 @@ class BaselineMixin:
                         ):
                             dc_hostname = system.hostname
                             machine_principal = f"{src_sys.hostname}$"
-                            tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
-                            tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
-                            if tgs_time <= tgt_time:
-                                tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
-                            self.activity_generator.generate_kerberos_tgt(
+                            tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
+                                ts,
+                                rng,
+                                tgs_before_ms=(8, 65),
+                                tgt_before_tgs_ms=(35, 240),
+                            )
+                            self.activity_generator._maybe_generate_kerberos_tgt(
                                 username=machine_principal,
                                 source_ip=src_ip,
                                 dc_hostname=dc_hostname,
                                 time=tgt_time,
+                                rng=rng,
                             )
                             service_name = rng.choices(
                                 [
@@ -4799,15 +5080,18 @@ class BaselineMixin:
                         dc_hostname = rng.choice(dc_hostnames)
                     if dc_hostname:
                         machine_principal = f"{system.hostname}$"
-                        tgt_time = ts - timedelta(milliseconds=rng.randint(60, 220))
-                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 55))
-                        if tgs_time <= tgt_time:
-                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(12, 48))
-                        self.activity_generator.generate_kerberos_tgt(
+                        tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
+                            ts,
+                            rng,
+                            tgs_before_ms=(8, 55),
+                            tgt_before_tgs_ms=(35, 220),
+                        )
+                        self.activity_generator._maybe_generate_kerberos_tgt(
                             username=machine_principal,
                             source_ip=system.ip,
                             dc_hostname=dc_hostname,
                             time=tgt_time,
+                            rng=rng,
                         )
                         service_name = rng.choices(
                             [
@@ -5294,7 +5578,7 @@ class BaselineMixin:
                 roster = self._get_server_ssh_users(system)
                 if roster:
                     from evidenceforge.generation.activity.bash_commands import (
-                        pick_bash_command_entry,
+                        pick_bash_session_commands,
                     )
 
                     num_ssh = self._scaled_randint(rng, system, "linux_remote_admin", 1, 3)
@@ -5360,20 +5644,16 @@ class BaselineMixin:
                                 "pip install",
                             ]
                         )
-                        typo_count = 0
-                        for _cmd_i in range(n_cmds):
+                        command_entries = pick_bash_session_commands(
+                            rng,
+                            ssh_user.persona or "",
+                            system.hostname,
+                            system.services,
+                            username=ssh_user.username,
+                            command_count=n_cmds,
+                        )
+                        for cmd, _is_typo in command_entries:
                             cmd_offset = rng.randint(30, 600)
-                            cmd, is_typo = pick_bash_command_entry(
-                                rng,
-                                ssh_user.persona or "",
-                                system.hostname,
-                                system.services,
-                                username=ssh_user.username,
-                                session_command_count=n_cmds,
-                                prior_typo_count=typo_count,
-                            )
-                            if is_typo:
-                                typo_count += 1
                             # Complexity-aware timing: build/install commands
                             # take longer than simple lookups (ls, cat, pwd)
                             is_slow = any(kw in cmd.lower() for kw in _SLOW_CMD_KEYWORDS)
@@ -5409,7 +5689,7 @@ class BaselineMixin:
                 )
                 if ws_user is not None:
                     from evidenceforge.generation.activity.bash_commands import (
-                        pick_bash_command_entry,
+                        pick_bash_session_commands,
                     )
 
                     n_cmds = self._scaled_randint(
@@ -5423,24 +5703,20 @@ class BaselineMixin:
                     ts0 = current_hour + timedelta(seconds=rng.uniform(0, 3599))
                     hour_end = current_hour + timedelta(hours=1)
                     cumulative = 0
-                    typo_count = 0
-                    for _ in range(n_cmds):
+                    command_entries = pick_bash_session_commands(
+                        rng,
+                        ws_user.persona or "",
+                        system.hostname,
+                        system.services,
+                        username=ws_user.username,
+                        command_count=n_cmds,
+                    )
+                    for cmd, _is_typo in command_entries:
                         gap = rng.randint(30, 300)
                         cumulative += gap
                         cmd_time = ts0 + timedelta(seconds=cumulative)
                         if cmd_time >= hour_end:
                             break
-                        cmd, is_typo = pick_bash_command_entry(
-                            rng,
-                            ws_user.persona or "",
-                            system.hostname,
-                            system.services,
-                            username=ws_user.username,
-                            session_command_count=n_cmds,
-                            prior_typo_count=typo_count,
-                        )
-                        if is_typo:
-                            typo_count += 1
                         self.state_manager.set_current_time(cmd_time)
                         self.activity_generator.generate_bash_command(
                             ws_user, system, cmd_time, cmd
@@ -5692,6 +5968,7 @@ class BaselineMixin:
 
             scenario_start = self.scenario.time_window.start
             boot_uptime = self._kernel_boot_uptimes.get(system.hostname, 500000.0)
+            primary_interface = linux_primary_interface(system)
 
             # Generate scheduled tasks (cron/systemd timers) at real frequencies
             self._generate_scheduled_tasks(
@@ -5720,7 +5997,6 @@ class BaselineMixin:
             )
             for offset in _syslog_offsets:
                 ts = current_hour + timedelta(seconds=offset)
-                uptime = int(boot_uptime + (ts - scenario_start).total_seconds())
                 kernel_uptime = _kernel_uptime_stamp(boot_uptime, scenario_start, ts)
 
                 source_roll = rng.random()
@@ -5742,12 +6018,12 @@ class BaselineMixin:
                             k=1,
                         )[0]
                         spt = rng.randint(1024, 65535)
-                        dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
+                        dpt = external_scanner_port_for_source(src_ip, rng)
                         packet_len = _ufw_block_syn_packet_len(src_ip)
                         ttl = _ufw_block_ttl(src_ip)
                         msg = (
                             f"[{kernel_uptime}] [UFW BLOCK] "
-                            f"IN=ens160 OUT= SRC={src_ip} DST={system.ip} "
+                            f"IN={primary_interface} OUT= SRC={src_ip} DST={system.ip} "
                             f"LEN={packet_len} TOS=0x00 PREC=0x00 TTL={ttl} "
                             f"ID={rng.randint(1, 65535)} PROTO=TCP SPT={spt} DPT={dpt} "
                             f"WINDOW={rng.choice([1024, 14600, 65535])} RES=0x00 SYN URGP=0"
@@ -5807,20 +6083,50 @@ class BaselineMixin:
                     if not is_rhel_like:
                         session_users.append("ubuntu")
                     user = rng.choice(session_users)
+                    pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
+                        user,
+                        rng=rng,
+                    )
+                    pam_open_time = ts - _linux_baseline_pam_open_lead(rng)
+                    pam_pid = _linux_transient_syslog_pid(
+                        self.state_manager,
+                        system.hostname,
+                        pam_open_time,
+                        rng,
+                    )
+                    self.activity_generator.generate_syslog_event(
+                        system=system,
+                        time=pam_open_time,
+                        app_name=pam_app,
+                        message=pam_open,
+                        pid=pam_pid,
+                        facility=10,
+                    )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
                         app_name="systemd-logind",
                         message=f"New session {sid} of user {user}.",
                         pid=sys_pids.get("logind", rng.randint(400, 800)),
+                        facility=10,
                     )
                     if rng.random() < 0.65:
+                        remove_time = ts + timedelta(seconds=rng.randint(120, 5400))
                         self.activity_generator.generate_syslog_event(
                             system=system,
-                            time=ts + timedelta(seconds=rng.randint(120, 5400)),
+                            time=remove_time - _linux_baseline_pam_close_lead(rng),
+                            app_name=pam_app,
+                            message=f"pam_unix({pam_service}:session): session closed for user {user}",
+                            pid=pam_pid,
+                            facility=10,
+                        )
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=remove_time,
                             app_name="systemd-logind",
                             message=f"Removed session {sid}.",
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
+                            facility=10,
                         )
                 elif source_roll < 0.34 and sys_type == "server":
                     other_ips = [
@@ -5901,7 +6207,7 @@ class BaselineMixin:
                         )
                     else:
                         auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(25, 120)
+                    _msg_offset = rng.randint(35, 160)
                     ssh_syslog_seed = (
                         system.hostname,
                         ip,
@@ -5919,7 +6225,13 @@ class BaselineMixin:
                                 *ssh_syslog_seed,
                             )
                         )
-                        _msg_offset += rng.randint(12, 70)
+                        if _label == "connection":
+                            if auth_msg.startswith("Accepted password"):
+                                _msg_offset += rng.randint(450, 3500)
+                            else:
+                                _msg_offset += rng.randint(90, 550)
+                        else:
+                            _msg_offset += rng.randint(45, 180)
                     # systemd-logind is observed as a different process from
                     # sshd, so source-observation delay can be independent.
                     # Keep enough visible margin that New-session rows cannot
@@ -6104,37 +6416,74 @@ class BaselineMixin:
                         k=1,
                     )[0]
                     app = entry["app"]
+                    limit = entry.get("max_per_host_window")
+                    limit_key = ""
+                    if isinstance(limit, int) and limit > 0:
+                        if not hasattr(self, "_extra_syslog_entry_counts"):
+                            self._extra_syslog_entry_counts = {}
+                        limit_key = _extra_syslog_limit_key(system.hostname, entry)
+                        if self._extra_syslog_entry_counts.get(limit_key, 0) >= limit:
+                            continue
                     # Format placeholders vary by daemon
                     if app == "dhclient":
                         # DHCP syslog must be tied to the canonical lease
                         # transaction; generic noise can contradict Zeek DHCP.
                         continue
                     elif app == "NetworkManager":
-                        # NM uses monotonic kernel uptime seconds in [brackets]
+                        # NetworkManager logs an epoch-style timestamp in [brackets].
                         msg = render_extra_syslog_message(
                             entry,
                             rng,
-                            positional_value=uptime,
+                            positional_value=_networkmanager_message_timestamp(ts),
                             system_services=system.services,
+                            values={"interface": primary_interface},
                         )
                     elif app == "systemd-resolved":
                         dns_server = rng.choice(dns_ips) if dns_ips else "10.0.0.1"
+                        scope = "global" if rng.random() < 0.35 else primary_interface
                         msg = render_extra_syslog_message(
                             entry,
                             rng,
                             positional_value=rng.randint(100000, 999999),
                             system_services=system.services,
-                            values={"dns_server": dns_server},
+                            values={
+                                "dns_server": dns_server,
+                                "interface": primary_interface,
+                                "scope": scope,
+                            },
                         )
                     elif app == "anacron":
                         self._emit_anacron_lifecycle(system, ts, rng, sys_pids)
                         continue
+                    elif app == "polkitd":
+                        msg = self._render_polkit_syslog_message(
+                            entry,
+                            rng,
+                            system=system,
+                            timestamp=ts,
+                        )
+                    elif app == "rsyslogd":
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(1000, 99999),
+                            system_services=system.services,
+                            values={"fd": self._next_rsyslog_fd(system.hostname, rng)},
+                        )
+                    elif app == "dbus-daemon":
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=self._next_dbus_bus_id(system.hostname, rng),
+                            system_services=system.services,
+                        )
                     else:
                         msg = render_extra_syslog_message(
                             entry,
                             rng,
                             positional_value=rng.randint(100000, 999999),
                             system_services=system.services,
+                            values={"interface": primary_interface},
                         )
                     # Map syslog app names to sys_pids keys for persistent daemons.
                     # Only map to sys_pids entries that are the SAME daemon.
@@ -6150,28 +6499,47 @@ class BaselineMixin:
                     # Transient processes (forked per invocation) get random PIDs;
                     # persistent daemons get stable PIDs.
                     _TRANSIENT_APPS = {"sudo", "cron"}
-                    pid_key = _APP_TO_PID_KEY.get(app)
-                    if pid_key and pid_key in sys_pids:
-                        pid = sys_pids[pid_key]
-                    elif app in _TRANSIENT_APPS:
+                    if app in _TRANSIENT_APPS:
                         pid = self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             ts,
                         )
                     else:
-                        # Derive a stable per-host PID for persistent daemons not in sys_pids
-                        import hashlib as _hl
+                        pid_key = _APP_TO_PID_KEY.get(app)
+                        if pid_key and pid_key in sys_pids:
+                            pid = sys_pids[pid_key]
+                        else:
+                            # Derive a stable per-host PID for persistent daemons not in sys_pids.
+                            import hashlib as _hl
 
-                        _h = int(
-                            _hl.md5(
-                                f"{system.hostname}:{app}".encode(),
-                                usedforsecurity=False,
-                            ).hexdigest(),
-                            16,
-                        )
-                        pid = 500 + (_h % 59500)  # range 500-59999
+                            _h = int(
+                                _hl.md5(
+                                    f"{system.hostname}:{app}".encode(),
+                                    usedforsecurity=False,
+                                ).hexdigest(),
+                                16,
+                            )
+                            pid = 500 + (_h % 59500)  # range 500-59999
                     facility = 10 if app == "sudo" else 3
                     severity = 5 if app == "sudo" else 6
+                    sudo_has_session = (
+                        app == "sudo" and "COMMAND=" in msg and "command not allowed" not in msg
+                    )
+                    if sudo_has_session:
+                        sudo_user = (msg.split(" : ", 1)[0] or "admin").strip()
+                        uid = _linux_uid_for_user(sudo_user)
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts - timedelta(milliseconds=rng.randint(80, 420)),
+                            app_name="sudo",
+                            message=(
+                                "pam_unix(sudo:session): session opened for user "
+                                f"root(uid=0) by {sudo_user}(uid={uid})"
+                            ),
+                            pid=pid,
+                            facility=10,
+                            severity=6,
+                        )
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -6181,6 +6549,20 @@ class BaselineMixin:
                         facility=facility,
                         severity=severity,
                     )
+                    if sudo_has_session:
+                        self.activity_generator.generate_syslog_event(
+                            system=system,
+                            time=ts + timedelta(milliseconds=rng.randint(90, 900)),
+                            app_name="sudo",
+                            message="pam_unix(sudo:session): session closed for user root",
+                            pid=pid,
+                            facility=10,
+                            severity=6,
+                        )
+                    if limit_key:
+                        self._extra_syslog_entry_counts[limit_key] = (
+                            self._extra_syslog_entry_counts.get(limit_key, 0) + 1
+                        )
 
         # ICMP ping between systems on same subnet
         systems = self.scenario.environment.systems
@@ -6311,7 +6693,15 @@ class BaselineMixin:
 
                     if sig_direction == "out":
                         src_ip = local_sys.ip
-                        dst_ip = ext_ip
+                        if alert_proto in {"udp", "tcp"} and alert_dst_port == 53:
+                            dns_ips = getattr(
+                                self.activity_generator,
+                                "_dns_server_ips",
+                                ["10.0.0.1"],
+                            )
+                            dst_ip = rng.choice(dns_ips)
+                        else:
+                            dst_ip = ext_ip
                         source_system = local_sys
                     else:
                         if hasattr(self, "dispatcher") and self.dispatcher.visibility_engine:
@@ -6749,6 +7139,16 @@ class BaselineMixin:
 
             offset = rng.uniform(0, 3599)
             base_time = current_hour + timedelta(seconds=offset)
+            aligned_time = self._align_rsat_with_future_workstation_session(
+                admin,
+                ws,
+                base_time,
+                current_hour + timedelta(hours=1),
+                rng,
+            )
+            if aligned_time is None:
+                continue
+            base_time = aligned_time
             self.state_manager.set_current_time(base_time)
 
             logon_id = self._ensure_session_on_system(admin, ws, base_time, rng)
@@ -6812,6 +7212,40 @@ class BaselineMixin:
                     pid=mmc_pid,
                     source_system=ws,
                 )
+
+    def _align_rsat_with_future_workstation_session(
+        self,
+        user: User,
+        system: System,
+        base_time: datetime,
+        hour_end: datetime,
+        rng: random.Random,
+    ) -> datetime | None:
+        """Move foreground admin work after an already-planned workstation session."""
+        if _get_os_category(system.os) != "windows":
+            return base_time
+
+        def _as_utc(value: datetime) -> datetime:
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+        base_utc = _as_utc(base_time)
+        hour_end_utc = _as_utc(hour_end)
+        future_sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and base_utc < _as_utc(session.start_time) < hour_end_utc
+        ]
+        if not future_sessions:
+            return base_time
+
+        next_session = min(future_sessions, key=lambda session: _as_utc(session.start_time))
+        aligned = _as_utc(next_session.start_time) + timedelta(seconds=rng.uniform(20.0, 90.0))
+        if aligned >= hour_end_utc:
+            return None
+        return aligned
 
     def _resolve_rsat_workstation(self, admin, workstations, rng):
         """Find the admin's Windows workstation for RSAT sessions."""

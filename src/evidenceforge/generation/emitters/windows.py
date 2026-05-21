@@ -59,6 +59,7 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -66,6 +67,7 @@ from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.windows_ids import normalize_windows_id_value
 
 win_logger = logging.getLogger(__name__)
+_SOURCE_TIMING = SourceTimingPlanner()
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
@@ -115,6 +117,38 @@ def _has_nearby_dropped_unlock(
 def _windows_path_basename(path: str) -> str:
     """Return a lowercase basename for Windows or POSIX-looking paths."""
     return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+
+
+def _windows_pid_hex(value: Any) -> str:
+    """Return a normalized lowercase hex PID key from Security event fields."""
+    if isinstance(value, int):
+        return f"0x{value:x}"
+    text = str(value or "").strip().lower()
+    if not text or text == "-":
+        return ""
+    if text.startswith("0x"):
+        return text
+    if text.isdecimal():
+        return f"0x{int(text):x}"
+    return text
+
+
+def _security_process_image_key(value: Any) -> str:
+    """Return a loose image key that matches Win32 and device-path renderings."""
+    return _windows_path_basename(str(value or ""))
+
+
+def _security_process_key(
+    computer: str,
+    pid_value: Any,
+    image_value: Any,
+) -> tuple[str, str, str] | None:
+    """Return a process lifecycle key for Security 4688/4689/5156 rows."""
+    pid = _windows_pid_hex(pid_value)
+    image = _security_process_image_key(image_value)
+    if not computer or not pid or pid in {"0x0", "0x4"} or not image or image == "system":
+        return None
+    return (computer, pid, image)
 
 
 def _normalize_windows_time_created(
@@ -223,16 +257,17 @@ def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
 
 
-def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Return the same-user/source key for DC Kerberos ticket ordering checks."""
+def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Return the same-user/source-port key for DC Kerberos ticket ordering checks."""
     if event.get("EventID") not in {4768, 4769}:
         return None
     username = str(event.get("TargetUserName") or "").split("@", 1)[0].lower()
     source_ip = str(event.get("IpAddress") or "")
+    source_port = str(event.get("IpPort") or "")
     computer = str(event.get("Computer") or "")
-    if not username or not source_ip or source_ip == "-" or not computer:
+    if not username or not source_ip or source_ip == "-" or not source_port or not computer:
         return None
-    return (computer, username, source_ip)
+    return (computer, username, source_ip, source_port)
 
 
 def _special_privilege_fallback(username: str) -> str:
@@ -593,7 +628,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        session_id = self._session_id_for_logon(auth.logon_id)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4800,
             "TimeCreated": event.timestamp,
@@ -615,7 +650,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        session_id = self._session_id_for_logon(auth.logon_id)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4801,
             "TimeCreated": event.timestamp,
@@ -705,10 +740,17 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
+        )
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -740,10 +782,17 @@ class WindowsEventEmitter(LogEmitter):
         host = self._get_host(event)
         if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
             return
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_terminate",
+            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
+            not_before=event.timestamp,
+        )
 
         event_data = {
             "EventID": 4689,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -765,10 +814,17 @@ class WindowsEventEmitter(LogEmitter):
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
+        )
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -1028,7 +1084,8 @@ class WindowsEventEmitter(LogEmitter):
                 image = "System"
             else:
                 return
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.windows_wfp_connection",
             seed_parts=(
                 host.hostname,
@@ -1039,6 +1096,7 @@ class WindowsEventEmitter(LogEmitter):
                 net.dst_port,
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
 
         event_data = {
@@ -1589,7 +1647,9 @@ class WindowsEventEmitter(LogEmitter):
                 row[0],
             ),
         )
-        tgts_by_key: dict[tuple[str, str, str], list[tuple[int, dict[str, Any], datetime]]] = {}
+        tgts_by_key: dict[
+            tuple[str, str, str, str], list[tuple[int, dict[str, Any], datetime]]
+        ] = {}
         for rowid, event in ordered:
             if event.get("EventID") != 4768:
                 continue
@@ -1598,7 +1658,7 @@ class WindowsEventEmitter(LogEmitter):
             if key is not None and isinstance(ts, datetime):
                 tgts_by_key.setdefault(key, []).append((rowid, event, ensure_utc(ts)))
 
-        prior_tgt_by_key: dict[tuple[str, str, str], datetime] = {}
+        prior_tgt_by_key: dict[tuple[str, str, str, str], datetime] = {}
         moved: set[int] = set()
         for rowid, event in ordered:
             ts = event.get("TimeCreated")
@@ -1634,7 +1694,13 @@ class WindowsEventEmitter(LogEmitter):
                 _stable_seed(f"kerberos_tgt_before_tgs:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}")
                 % 181
             )
-            new_time = ts - timedelta(milliseconds=gap_ms)
+            gap_us = 41 + (
+                _stable_seed(
+                    f"kerberos_tgt_before_tgs_us:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}"
+                )
+                % 911
+            )
+            new_time = ts - timedelta(milliseconds=gap_ms, microseconds=gap_us)
             tgt_event["TimeCreated"] = new_time
             prior_tgt_by_key[key] = new_time
             moved.add(tgt_rowid)
@@ -1817,6 +1883,53 @@ class WindowsEventEmitter(LogEmitter):
                     updates.clear()
         self._update_spooled_events_unlocked(updates)
 
+    def _shift_spooled_process_dependents_after_create_unlocked(self) -> None:
+        """Keep spooled same-process Security dependents after visible 4688 rows."""
+        process_create_times: dict[tuple[str, str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("NewProcessId"),
+                event.get("NewProcessName"),
+            )
+            if isinstance(ts, datetime) and key is not None:
+                process_create_times[key] = ts
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            event_id = event.get("EventID")
+            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+                continue
+            if event_id == 4689:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessId"),
+                    event.get("ProcessName"),
+                )
+                relationship_key = "windows.process_exit_after_visible_create"
+            else:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                relationship_key = "source.windows_wfp_connection"
+            create_time = process_create_times.get(key) if key is not None else None
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + sample_timing_delta(
+                    relationship_key,
+                    seed_parts=(key[0], key[1], key[2], create_time),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
     def _suppress_spooled_duplicate_lock_unlock_transitions_unlocked(self) -> None:
         """Keep spooled 4800/4801 as a chronological session state machine."""
         session_state: dict[tuple[str, str, str], str] = {}
@@ -1881,6 +1994,7 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
+            self._shift_spooled_process_dependents_after_create_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
@@ -1889,6 +2003,7 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_kerberos_tgts_before_service_tickets()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
+            self._shift_process_dependents_after_create()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
@@ -2186,6 +2301,47 @@ class WindowsEventEmitter(LogEmitter):
                 event["TimeCreated"] = latest + sample_timing_delta(
                     "windows.process_exit_after_visible_child",
                     seed_parts=(key[0], key[1], latest),
+                )
+
+    def _shift_process_dependents_after_create(self) -> None:
+        """Keep same-process Security dependents after visible 4688 rows."""
+        process_create_times: dict[tuple[str, str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("NewProcessId"),
+                event.get("NewProcessName"),
+            )
+            if isinstance(ts, datetime) and key is not None:
+                process_create_times[key] = ts
+
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            event_id = event.get("EventID")
+            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+                continue
+            if event_id == 4689:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessId"),
+                    event.get("ProcessName"),
+                )
+                relationship_key = "windows.process_exit_after_visible_create"
+            else:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                relationship_key = "source.windows_wfp_connection"
+            create_time = process_create_times.get(key) if key is not None else None
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + sample_timing_delta(
+                    relationship_key,
+                    seed_parts=(key[0], key[1], key[2], create_time),
                 )
 
     def flush(self, *, force: bool = False) -> None:

@@ -27,6 +27,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed
 
 _ZEEK_SERVICE_ALIASES: dict[str, str] = {
@@ -37,6 +38,7 @@ _ZEEK_SERVICE_ALIASES: dict[str, str] = {
     "ms-sql": "tds",
     "rpc": "dce_rpc",
 }
+_SOURCE_TIMING = SourceTimingPlanner()
 
 
 def _tls_completed_duration_floor(event: SecurityEvent, min_ms: int, max_ms: int) -> float:
@@ -118,7 +120,7 @@ class ZeekEmitter(SensorMultiplexEmitter):
             net.protocol == "tcp"
             and net.dst_port == 443
             and net.conn_state == "SF"
-            and event.ssl is not None
+            and (event.ssl is not None or self._render_service_name(net.service) == "ssl")
         ):
             tls_min_window = get_timing_window(
                 "network.tls_completed_min_duration",
@@ -132,14 +134,31 @@ class ZeekEmitter(SensorMultiplexEmitter):
                 duration is None
                 or duration < min_duration
                 or abs(duration - min_duration) < 0.000001
+                or (
+                    self._render_service_name(net.service) == "ssl"
+                    and abs(float(duration) - 1.2) < 0.000001
+                )
             ):
                 duration = _tls_completed_duration_floor(
                     event,
                     tls_min_window.min_ms,
                     tls_min_window.max_ms,
                 )
+        event_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
         event_data = {
-            "ts": event.timestamp,
+            "ts": event_ts,
             "uid": net.zeek_uid,
             "id.orig_h": src_ip,
             "id.orig_p": src_port,

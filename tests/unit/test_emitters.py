@@ -713,6 +713,115 @@ class TestWindowsEventEmitter:
         assert termination["TimeCreated"] == child_time + expected_delta
         emitter._cleanup_spool_unlocked()
 
+    def test_process_termination_shifted_after_same_pid_create(self, format_def, temp_output):
+        """Security 4689 should not visibly precede same-process Security 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        terminate_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        create_time = terminate_time + timedelta(milliseconds=44)
+        emitter._event_dicts = [
+            {
+                "EventID": 4689,
+                "TimeCreated": terminate_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessId": "0x1e1c",
+                "ProcessName": r"C:\Windows\System32\gpupdate.exe",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": create_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "NewProcessId": "0x1e1c",
+                "NewProcessName": r"C:\Windows\System32\gpupdate.exe",
+            },
+        ]
+
+        emitter._shift_process_dependents_after_create()
+
+        expected_delta = sample_timing_delta(
+            "windows.process_exit_after_visible_create",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0x1e1c",
+                "gpupdate.exe",
+                create_time,
+            ),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == create_time + expected_delta
+
+    def test_wfp_connection_shifted_after_same_pid_create(self, format_def, temp_output):
+        """Security 5156 should not visibly precede same-process Security 4688."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        wfp_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        create_time = wfp_time + timedelta(milliseconds=245)
+        emitter._event_dicts = [
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 7416,
+                "Application": r"\device\harddiskvolume1\windows\system32\mstsc.exe",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": create_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "NewProcessId": "0x1cf8",
+                "NewProcessName": r"C:\Windows\System32\mstsc.exe",
+            },
+        ]
+
+        emitter._shift_process_dependents_after_create()
+
+        expected_delta = sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0x1cf8",
+                "mstsc.exe",
+                create_time,
+            ),
+        )
+        assert emitter._event_dicts[0]["TimeCreated"] == create_time + expected_delta
+
+    def test_spooled_wfp_connection_shifted_after_same_pid_create(self, format_def, temp_output):
+        """Spooled Security 5156 fixups should preserve process-before-network order."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        wfp_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        create_time = wfp_time + timedelta(milliseconds=136)
+        emitter._event_dicts = [
+            {
+                "EventID": 5156,
+                "TimeCreated": wfp_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "ProcessID": 6136,
+                "Application": r"\device\harddiskvolume1\program files\palo alto\pangpa.exe",
+            },
+            {
+                "EventID": 4688,
+                "TimeCreated": create_time,
+                "Computer": "WIN-TEST-01.corp.local",
+                "NewProcessId": "0x17f8",
+                "NewProcessName": r"C:\Program Files\Palo Alto\pangpa.exe",
+            },
+        ]
+
+        emitter._spool_event_dicts_unlocked()
+        emitter._shift_spooled_process_dependents_after_create_unlocked()
+        events = list(emitter._iter_spooled_events_unlocked())
+
+        expected_delta = sample_timing_delta(
+            "source.windows_wfp_connection",
+            seed_parts=(
+                "WIN-TEST-01.corp.local",
+                "0x17f8",
+                "pangpa.exe",
+                create_time,
+            ),
+        )
+        wfp = next(event for event in events if event["EventID"] == 5156)
+        assert wfp["TimeCreated"] == create_time + expected_delta
+        emitter._cleanup_spool_unlocked()
+
     def test_process_create_shifted_after_visible_parent_create(self, format_def, temp_output):
         """Security 4688 should not visibly create a child before its parent 4688."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
@@ -974,6 +1083,7 @@ class TestWindowsEventEmitter:
             "Computer": "DC-01.corp.local",
             "TargetUserName": "alice@CORP.LOCAL",
             "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
         }
         tgt = {
             "EventID": 4768,
@@ -981,12 +1091,49 @@ class TestWindowsEventEmitter:
             "Computer": "DC-01.corp.local",
             "TargetUserName": "alice",
             "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
         }
         emitter._event_dicts = [tgs, tgt]
 
         emitter._shift_kerberos_tgts_before_service_tickets()
 
         assert tgt["TimeCreated"] < tgs["TimeCreated"]
+        assert tgt["TimeCreated"].microsecond % 1000 != tgs["TimeCreated"].microsecond % 1000
+
+    def test_kerberos_tgt_shift_uses_source_port_specific_key(self, format_def, temp_output):
+        """An older TGT on a different client port should not satisfy a later TGS."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
+        tgs_time = datetime(2024, 1, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        previous_tgt = {
+            "EventID": 4768,
+            "TimeCreated": tgs_time - timedelta(seconds=30),
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice",
+            "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "49152",
+        }
+        tgs = {
+            "EventID": 4769,
+            "TimeCreated": tgs_time,
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice@CORP.LOCAL",
+            "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
+        }
+        matching_tgt = {
+            "EventID": 4768,
+            "TimeCreated": tgs_time + timedelta(milliseconds=50),
+            "Computer": "DC-01.corp.local",
+            "TargetUserName": "alice",
+            "IpAddress": "::ffff:10.0.0.25",
+            "IpPort": "51234",
+        }
+        emitter._event_dicts = [previous_tgt, tgs, matching_tgt]
+
+        emitter._shift_kerberos_tgts_before_service_tickets()
+
+        assert matching_tgt["TimeCreated"] < tgs["TimeCreated"]
+        assert previous_tgt["TimeCreated"] < matching_tgt["TimeCreated"]
 
     def test_spooled_kerberos_tgt_shifted_before_visible_service_ticket(
         self,
@@ -1003,6 +1150,7 @@ class TestWindowsEventEmitter:
                 "Computer": "DC-01.corp.local",
                 "TargetUserName": "alice@CORP.LOCAL",
                 "IpAddress": "::ffff:10.0.0.25",
+                "IpPort": "51234",
             },
             {
                 "EventID": 4768,
@@ -1010,6 +1158,7 @@ class TestWindowsEventEmitter:
                 "Computer": "DC-01.corp.local",
                 "TargetUserName": "alice",
                 "IpAddress": "::ffff:10.0.0.25",
+                "IpPort": "51234",
             },
         ]
         emitter._spool_event_dicts_unlocked()
@@ -2141,6 +2290,47 @@ class TestWindowsEventEmitter:
         assert len(session_lines) == 2
         assert session_lines[0] == session_lines[1]
 
+    def test_lock_unlock_render_canonical_session_id_from_auth_context(
+        self, format_def, temp_output
+    ):
+        """4800/4801 SessionId should come from session state, not LogonID hashing."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WKS-01",
+            fqdn="WKS-01.corp.local",
+            ip="10.0.0.50",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        base_auth = {
+            "username": "jsmith",
+            "user_sid": "S-1-5-21-123-456-789-1001",
+        }
+        emitter.emit(
+            SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+                event_type="workstation_locked",
+                dst_host=host,
+                auth=AuthContext(**base_auth, logon_id="0x2664c4e", session_id=5),
+            )
+        )
+        emitter.emit(
+            SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 35, 0, 0, tzinfo=UTC),
+                event_type="workstation_unlocked",
+                dst_host=host,
+                auth=AuthContext(**base_auth, logon_id="0x2802b88", session_id=6),
+            )
+        )
+        emitter.close()
+        content = temp_output.read_text()
+        assert '<Data Name="TargetLogonId">0x2664c4e</Data>' in content
+        assert '<Data Name="SessionId">5</Data>' in content
+        assert '<Data Name="TargetLogonId">0x2802b88</Data>' in content
+        assert '<Data Name="SessionId">6</Data>' in content
+
     def test_duplicate_unlock_suppression_handles_many_paired_type7_logons(
         self, format_def, temp_output
     ):
@@ -2539,7 +2729,7 @@ class TestWindowsEventEmitter:
         assert '<Data Name="PrivilegeList">-</Data>' in content
 
     def test_emit_account_changed(self, format_def, temp_output):
-        """Test emitting 4738 (user account changed) with Dummy field."""
+        """Test emitting 4738 (user account changed) with native account fields."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
         event_data = {
             "EventID": 4738,
@@ -2566,7 +2756,8 @@ class TestWindowsEventEmitter:
         emitter.close()
         content = temp_output.read_text()
         assert "<EventID>4738</EventID>" in content
-        assert '<Data Name="Dummy">-</Data>' in content  # 4738 unique Dummy field
+        assert '<Data Name="Dummy">' not in content
+        assert '<Data Name="TargetUserName">jsmith</Data>' in content
 
     def test_emit_event_with_unsafe_computer_routes_to_flat_output(self, format_def, tmp_path):
         """Unsafe Computer values must not create traversing per-host paths."""

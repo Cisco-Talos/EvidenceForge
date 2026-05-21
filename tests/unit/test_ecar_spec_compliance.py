@@ -622,6 +622,55 @@ class TestChronologicalOutput:
         )
         assert terminate_ts > module_ts
 
+    def test_close_rewrites_linux_pids_after_canonical_create_ordering(self, tmp_path, ts):
+        """Linux PID morphology should follow final rendered process-create order."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "proc-a",
+                "pid": 5000,
+                "image_path": "/usr/bin/parent",
+                "_canonical_ms": int(ts.replace(second=1).timestamp() * 1000),
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "proc-b",
+                "pid": 1000,
+                "image_path": "/usr/bin/child",
+                "_canonical_ms": int(ts.replace(second=3).timestamp() * 1000),
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "linux01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        creates = sorted(
+            (row for row in rows if row["object"] == "PROCESS" and row["action"] == "CREATE"),
+            key=lambda row: row["timestamp_ms"],
+        )
+        assert [row["pid"] for row in creates] == sorted(row["pid"] for row in creates)
+        assert creates[1]["pid"] > 5000
+
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
@@ -1055,6 +1104,81 @@ class TestChronologicalOutput:
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
 
+    def test_close_moves_parent_termination_after_visible_child_termination(self, tmp_path, ts):
+        """Visible eCAR parents should not terminate before foreground children."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=0),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "shell-process",
+                "pid": 837798,
+                "ppid": 36175,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=80_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "debian-sa1-process",
+                "actorID": "shell-process",
+                "pid": 837826,
+                "ppid": 837798,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=90_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "shell-process",
+                "pid": 837798,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=200_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "debian-sa1-process",
+                "pid": 837826,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "linux01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        shell_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "shell-process" and row["action"] == "TERMINATE"
+        )
+        child_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "debian-sa1-process" and row["action"] == "TERMINATE"
+        )
+        assert shell_ms > child_ms
+
     def test_close_moves_dependent_telemetry_after_reordered_process_create(self, tmp_path, ts):
         """Dependent eCAR records should follow a process create shifted after its parent."""
         fmt = Mock()
@@ -1173,6 +1297,73 @@ class TestChronologicalOutput:
 
         row = json.loads(normalized[0])
         assert row["timestamp_ms"] == 1000
+
+    def test_linux_pid_morphology_rewrites_later_lower_process_pids(self):
+        """Linux eCAR PID rendering should not move backward over source time."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "parent",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/bin/sh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "shell",
+                    "pid": 450,
+                    "tid": 450,
+                    "properties": {"image_path": "/usr/bin/journalctl"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "FILE",
+                    "action": "READ",
+                    "actorID": "shell",
+                    "pid": 450,
+                    "properties": {"file_path": "/var/log/syslog"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2200,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "child",
+                    "actorID": "shell",
+                    "pid": 440,
+                    "tid": 440,
+                    "ppid": 450,
+                    "properties": {"image_path": "/usr/bin/tail"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        parent = next(row for row in normalized if row.get("objectID") == "parent")
+        shell = next(row for row in normalized if row.get("objectID") == "shell")
+        file_row = next(row for row in normalized if row.get("object") == "FILE")
+        child = next(row for row in normalized if row.get("objectID") == "child")
+        assert shell["pid"] > parent["pid"]
+        assert file_row["pid"] == shell["pid"]
+        assert child["pid"] > shell["pid"]
+        assert child["ppid"] == shell["pid"]
 
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""

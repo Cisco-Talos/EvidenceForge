@@ -396,6 +396,36 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
+    def test_kerberos_service_ticket_weak_rule_skips_later_matching_tgt(self):
+        """A cached-ticket 4769 is not inverted just because a matching 4768 appears later."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4769,
+                        "Computer": "DC-01",
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=base,
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4768,
+                        "Computer": "DC-01",
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ]
+        }
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
     def test_causal_ordering_counts_failures_after_sample_cap(self):
         """Failures beyond the diagnostic sample cap still count against the score."""
         base = T0 + self._AFTER_GRACE

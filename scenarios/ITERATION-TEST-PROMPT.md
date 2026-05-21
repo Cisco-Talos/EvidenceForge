@@ -79,15 +79,37 @@
   Keep suspicious_noise at medium — high-entropy CDN subdomains, unusual outbound patterns,
   and scan overlap noise are specifically evaluated by human reviewers for realism.
 
-  Attack storyline — APT via web app exploit, compressed kill chain:
+  Attack storyline — APT via web app exploit, messy intrusion path with false starts:
 
-  Attacker realism: Include 2-3 fumbles interspersed naturally within the phases below.
-  Suggested fumbles:
-  - Failed SSH to PROXY-01 (connection refused) before pivoting to APP-INT-01
-  - One failed_logon with wrong password before the correct lateral movement credential
-  - A find/ls command that returns nothing useful, followed by a retry with different path
-  Do NOT put fumbles in a separate section — weave them into the existing steps so the
-  timeline looks organic.
+  Attacker realism: The attacker story MUST feel exploratory and uneven, not like a
+  polished training walkthrough. Build in many naturally interspersed wrong turns:
+  typos, malformed commands, retries, dead-end file paths, permission denials,
+  wrong-host pivots, wrong credentials, blocked or failed connections, redundant
+  "checking my bearings" commands, and internal recon loops before consequential
+  actions. Target roughly 10-15 small attacker mistakes or recon detours across the
+  chain, with at least one visible wrong turn or extra recon cluster in each major
+  phase: initial access, Linux discovery, credential access, lateral movement,
+  Windows/AD discovery, privilege escalation/persistence, collection/exfiltration,
+  and cleanup.
+
+  Suggested messy artifacts:
+  - HTTP exploit attempts that hit the wrong URI/parameter or return 404/500 before
+    the successful path.
+  - Mistyped or corrected Linux commands such as `ip aadr`, `cat /etc/resolve.conf`,
+    `grep -r passwrod`, or a `find`/`ls` command that returns nothing useful before
+    the corrected command.
+  - Internal recon detours such as `hostname`, `id`, `whoami`, `pwd`, `ls -la`,
+    `ip route`, `ss -tulpn`, `arp -a`, `nslookup`, `dig`, and a wrong subnet scan
+    before the useful target range.
+  - Failed SSH/RDP/RunAs attempts with wrong usernames, keys, passwords, ports, or
+    hosts before a successful pivot.
+  - Windows/AD typos and retries such as `net vieew`, a malformed `nltest`, a wrong
+    LDAP base DN, or an initial `whoami /priv`/group query that gives little value.
+  - Empty shares, wrong directories, missing tables, denied paths, blocked C2, and
+    abandoned archive names before the attacker finds the useful data path.
+  Do NOT put these in a separate "fumbles" section or label them as fumbles — weave
+  them into process, connection, failed_logon, dns_query, ssh_session, rdp_session,
+  and bash_history evidence so the timeline looks lived-in.
 
   1. Port Scan (+0h30m): External attacker scans the DMZ segment for services.
      Use a `port_scan` event with `source_ip: "185.70.41.45"`, `target_segment: dmz`,
@@ -112,10 +134,13 @@
      00:1A:2B:3C:4D:5E.
 
   4. Initial Access (+1h): External attacker (185.70.41.45) scans and exploits SQL injection on
-     WEB-EXT-01's EHR portal. Use connection events with HTTP fields (method: POST, uri with SQLi
-     payload, status_code: 500, user_agent, hostname: "ehr-portal.meridianhcs.com"). Actor: root.
+     WEB-EXT-01's EHR portal. Include a couple of imperfect attempts first: a wrong endpoint,
+     a malformed parameter, or a payload that returns 404/500 before the successful exploit path.
+     Use connection events with HTTP fields (method: POST, uri with SQLi payload, status_code:
+     404/500/200 as appropriate, user_agent, hostname: "ehr-portal.meridianhcs.com"). Actor: root.
 
-  5. Execution (+1h20m): Web shell upload and reverse shell to C2 at 45.33.32.30:8443. Include:
+  5. Execution (+1h20m): Web shell upload and reverse shell to C2 at 45.33.32.30:8443. Include
+     one failed upload path or wrong filename before the successful web shell placement. Include:
      - connection event with HTTP fields showing the web shell upload (method: POST, status_code: 200)
      - process event for the reverse shell execution with a real base64-encoded reverse shell payload
        (generate via Bash tool)
@@ -123,19 +148,26 @@
        raw event type — use a realistic Apache error format line)
      Actor: apache on WEB-EXT-01.
 
-  6. Discovery (+1h40m): Network enumeration from WEB-EXT-01 — ip addr, cat /etc/hosts,
-     cat /etc/resolv.conf, nmap ping sweep and port scan of server_vlan. Multiple process events
-     with bash_history entries. Use typing cadence (1-15 second gaps between commands, not
-     identical timestamps). Actor: root on WEB-EXT-01.
+  6. Discovery (+1h40m): Network enumeration from WEB-EXT-01 — include "where am I" commands
+     (`hostname`, `id`, `whoami`, `pwd`, `ls -la`), one or two typos/retries (`ip aadr`,
+     `cat /etc/resolve.conf`), then corrected `ip addr`, `cat /etc/hosts`, `cat /etc/resolv.conf`,
+     `ip route`, `ss -tulpn`, `arp -a`, `nslookup`/`dig`, a wrong subnet nmap sweep, and finally
+     nmap ping sweep and port scan of server_vlan. Multiple process events with bash_history
+     entries. Use irregular typing cadence (some 1-15 second gaps, some minute-scale pauses,
+     not identical timestamps). Actor: root on WEB-EXT-01.
 
   7. Credential Access (+2h): Harvest DB credentials from web app config files and SSH keys.
-     Process events reading /var/www/html/config.php and ~/.ssh/id_rsa. Actor: root on WEB-EXT-01.
+     Check at least two wrong paths or empty files before the correct artifacts, such as
+     `/var/www/config.php`, `/opt/ehr/.env`, or a mistyped `grep -r passwrod`, then read
+     /var/www/html/config.php and ~/.ssh/id_rsa. Actor: root on WEB-EXT-01.
 
   8. Lateral Movement (+2h15m): SSH from WEB-EXT-01 to APP-INT-01 using stolen SSH key
-     (ssh_session event). Actor: root. Note: weave in the PROXY-01 fumble here or just before —
-     failed TCP connection to PROXY-01, then successful ssh_session to APP-INT-01.
+     (ssh_session event). Actor: root. Weave in multiple pivot mistakes here or just before:
+     failed TCP/SSH connection to PROXY-01, an attempt to the wrong port or username, then
+     successful ssh_session to APP-INT-01.
 
   9. Credential Access (+2h35m): Dump /etc/shadow and /etc/passwd on APP-INT-01.
+     Include a small typo or wrong file check before the successful read, then the real commands.
      Process events with bash_history entries. Actor: root on APP-INT-01.
 
   10. Explicit Credentials (+2h50m): Attacker uses RunAs with compromised sysadmin account
@@ -144,12 +176,16 @@
   11. Credential Spray (+3h): credential_spray event with pattern: spray, target_accounts:
       [2-3 accounts from the 8 users], success: {account: one of the users, after: 3},
       interval: "5s", count: 10. Then successful RDP session (rdp_session) to that user's
-      workstation. Weave in the wrong-password fumble: one failed_logon before the spray.
+      workstation. Weave in wrong-password and wrong-target noise: at least one failed_logon
+      before the spray and one failed RDP or logon attempt before the successful workstation
+      session.
       Actor: attacker on rogue device / compromised host.
 
   12. Discovery (+3h20m): AD enumeration from the compromised workstation — whoami /all,
-      net user /domain, net group "Domain Admins", net view. Include dns_query events for
-      DC hostname lookups. Include LDAP connection to DC-01 (connection event).
+      net user /domain, net group "Domain Admins", net view. Include noisy operator behavior:
+      `whoami /priv` before `/all`, typo `net vieew`, malformed `nltest` or wrong domain query,
+      wrong LDAP base DN before the correct one, and repeated DC hostname lookups. Include
+      dns_query events for DC hostname lookups and LDAP connection to DC-01 (connection event).
       Use typing cadence between commands.
 
   13. Mimikatz (+3h45m): Mimikatz disguised as ms-index-service.exe with create_remote_thread
@@ -160,7 +196,9 @@
   14. Lateral Movement (+4h): PsExec to DC-01 via SMB. Model correctly:
       logon (type 3 from source workstation) + service_installed (service_name: "PSEXESVC",
       service_file_name: "%SystemRoot%\PSEXESVC.exe") + process events for commands run under
-      the service. Do NOT use "cmd.exe /c PSEXESVC.exe" — that produces the wrong parent chain.
+      the service. Include a wrong host/admin-share/service-control probe before the successful
+      DC-01 PsExec path. Do NOT use "cmd.exe /c PSEXESVC.exe" — that produces the wrong parent
+      chain.
 
   15. Privilege Escalation (+4h15m): Create backdoor account svc_mhsync (account_created event),
       add to Domain Admins (group_member_added event). Actor: SYSTEM on DC-01.
@@ -168,6 +206,8 @@
   16. Persistence (+4h20m): Install service "DeviceSyncSvc" (service_installed event with
       service_name, service_file_name, service_account) and create scheduled task
       "\Microsoft\Windows\Maintenance\DeviceSync" (scheduled_task_created event) on DC-01.
+      Include one harmless-looking abandoned service/task name or a corrected command syntax
+      attempt before the final service/task creation.
 
   17. C2 Beaconing (+4h30m): HTTPS beacon from DC-01 to 45.33.32.30:443 (beacon event with
       interval: "10m", duration: "1h30m", jitter: 0.3, hostname, user_agent, method: GET,
@@ -188,10 +228,12 @@
 
   21. Collection (+5h01m): Authenticate to FILE-SRV-01 with backdoor account svc_mhsync
       (logon event, type 3), enumerate shares, stage financial and patient data, compress
-      with PowerShell Compress-Archive.
+      with PowerShell Compress-Archive. Include wrong shares, empty directories, permission
+      denied paths, and at least one abandoned archive filename before the final archive.
 
   22. Database Access (+5h15m): SSH to DB-PROD-01 (ssh_session), mysqldump patient and insurance
-      tables, gzip and SCP back to APP-INT-01.
+      tables, gzip and SCP back to APP-INT-01. Include a failed SSH/login attempt, a wrong
+      database or table name, and a corrected mysqldump command before the successful dump.
 
   23. Workstation Lock (+5h20m): Attacker locks the compromised workstation before stepping away
       (workstation_lock event) — exercises EventID 4800.
@@ -205,7 +247,8 @@
 
   26. Defense Evasion (+5h40m): Clear bash history on Linux hosts (process), encoded PowerShell
       download (real UTF-16LE base64, generate via Bash tool), clear Security event log on DC-01
-      (log_cleared event).
+      (log_cleared event). Include at least one typo/failed cleanup attempt and partial cleanup
+      evidence before successful log clearing.
 
   27. DNS Queries (+5h45m): Standalone DNS queries for attacker infrastructure (dns_query events
       with query, qtype, rcode, answer fields).
@@ -237,6 +280,11 @@
     to `dhcp_lease`; DHCP hostname comes from the parent storyline `system`.
   - All base64 payloads must be real (generated via Bash tool)
   - Attacker naming must be realistic (no "evil", "malware", "attacker" names)
+  - Avoid overly meaningful breadcrumb names. Use mundane temp names, abandoned candidates,
+    and renamed archives rather than labels that summarize the operation.
+  - Preserve the attack objectives and required event-type coverage, but avoid perfect first-try
+    progression. Wrong turns should be visible in typed events and source-native artifacts, not
+    merely mentioned in descriptions.
   - External IPs from realistic public ranges (NOT RFC 5737 documentation ranges). Keep org
     public IPs (203.14.x.x) separate from attacker IPs (45.33.32.x, 185.70.41.x). Do NOT
     use 45.33.32.1 (scanme.nmap.org).

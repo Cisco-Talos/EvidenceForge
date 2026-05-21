@@ -31,7 +31,7 @@ def test_parameterize_command_replaces_linux_query_placeholders() -> None:
     """Linux query placeholders should resolve to concrete command content."""
     rng = Random(1234)
 
-    mysql_cmd = _parameterize_command(rng, "mysql -u root -p {mysql_db}")
+    mysql_cmd = _parameterize_command(rng, "mysql --defaults-extra-file=~/.my.cnf {mysql_db}")
     psql_cmd = _parameterize_command(rng, "psql -U postgres -d {psql_db}")
     redis_cmd = _parameterize_command(rng, "{redis_cmd}")
 

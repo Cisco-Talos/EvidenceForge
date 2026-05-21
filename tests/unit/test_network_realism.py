@@ -25,6 +25,11 @@ from evidenceforge.generation.activity.generator import (
     _TLS13_CIPHER_WEIGHTS,
     _UDP_OVERHEAD_VALUES,
     _UDP_OVERHEAD_WEIGHTS,
+    _choose_ssl_history,
+)
+from evidenceforge.generation.activity.network_params import (
+    external_scanner_port_profile_for_source,
+    external_scanner_port_profiles,
 )
 from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
 
@@ -67,6 +72,29 @@ class TestProtocolOverhead:
         assert len(counts) == 4
 
 
+class TestExternalScannerProfiles:
+    """External scanner sources should have source-sticky, non-flat port preferences."""
+
+    def test_external_scanner_profiles_are_loaded(self):
+        profiles = external_scanner_port_profiles()
+
+        assert len(profiles) >= 4
+        assert all(profile["ports"] for profile in profiles)
+        assert any(profile["name"] == "web_recon" for profile in profiles)
+        assert any(profile["name"] == "windows_exposure" for profile in profiles)
+
+    def test_external_scanner_profiles_are_sticky_by_source(self):
+        observed = set()
+        for idx in range(40):
+            src_ip = f"198.51.100.{idx + 1}"
+            profile = external_scanner_port_profile_for_source(src_ip)
+
+            assert profile == external_scanner_port_profile_for_source(src_ip)
+            observed.add(profile["name"])
+
+        assert len(observed) >= 4
+
+
 class TestNtpTiming:
     """Bug #2: NTP timing varies by stratum."""
 
@@ -99,6 +127,23 @@ class TestSslRealism:
     def test_ssl_history_has_more_than_2_patterns(self):
         assert len(_SSL_HIST_SUCCESS_VALUES) > 2
         assert len(_SSL_HIST_FAILURE_VALUES) >= 2
+
+    def test_established_ssl_histories_include_server_hello(self):
+        """Zeek ssl.log established handshakes should include ServerHello."""
+        allowed_codes = set("^HCSVTXKRNYGFWUAZIBDEOPMJLQ")
+
+        assert all("S" in history for history in _SSL_HIST_SUCCESS_VALUES)
+        assert all(set(history) <= allowed_codes for history in _SSL_HIST_SUCCESS_VALUES)
+        assert all(
+            "S"
+            in _choose_ssl_history(
+                random.Random(seed),
+                tls_version="TLSv13" if seed % 2 else "TLSv12",
+                established=True,
+                resumed=bool(seed % 3),
+            )
+            for seed in range(100)
+        )
 
     def test_ssl_history_sampling_produces_diversity(self):
         rng = random.Random(42)

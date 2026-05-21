@@ -258,10 +258,22 @@ class SupplementaryAuditEvents(ExpansionRule):
         # Pick DC system: first available, or fall back to target_system
         dc_system = ctx.dc_systems[0] if ctx.dc_systems else ctx.target_system
 
-        timing = _timing_spec(
+        audit_timing = _timing_spec(
             "windows.audit_from_admin_command",
             default_min_ms=100,
             default_max_ms=900,
+            default_position="after",
+        )
+        password_reset_timing = _timing_spec(
+            "windows.account_password_reset_from_add",
+            default_min_ms=950,
+            default_max_ms=1800,
+            default_position="after",
+        )
+        attribute_change_timing = _timing_spec(
+            "windows.account_attributes_from_add",
+            default_min_ms=1850,
+            default_max_ms=3200,
             default_position="after",
         )
 
@@ -301,10 +313,43 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "target_username": target_name,
                         "target_sid": target_sid,
                     },
-                    timing=timing,
+                    timing=audit_timing,
                     description="4720 account created from net user /add",
                 )
             )
+            if "password_reset" not in skip:
+                expanded.append(
+                    ExpandedEvent(
+                        method="generate_password_reset",
+                        kwargs={
+                            "actor": ctx.actor,
+                            "system": dc_system,
+                            "target_username": target_name,
+                            "target_sid": target_sid,
+                        },
+                        timing=password_reset_timing,
+                        description="4724 password set from net user /add",
+                    )
+                )
+            if "account_changed" not in skip:
+                expanded.append(
+                    ExpandedEvent(
+                        method="generate_account_changed",
+                        kwargs={
+                            "actor": ctx.actor,
+                            "system": dc_system,
+                            "target_username": target_name,
+                            "target_sid": target_sid,
+                            "password_last_set_to_event_time": True,
+                            "old_uac_value": "0x15",
+                            "new_uac_value": "0x10",
+                            "user_account_control": "\n\t\t\t%%2081",
+                            "primary_group_id": "-",
+                        },
+                        timing=attribute_change_timing,
+                        description="4738 account attributes changed from net user /add",
+                    )
+                )
 
         # net user <name> /delete -> 4726 (account deleted)
         match = re.search(r"net\s+user\s+(\S+)\s+/delete", cmd_lower)
@@ -321,7 +366,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "target_username": target_name,
                         "target_sid": target_sid,
                     },
-                    timing=timing,
+                    timing=audit_timing,
                     description="4726 account deleted from net user /delete",
                 )
             )
@@ -351,7 +396,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "member_username": member_name,
                         "member_sid": member_sid,
                     },
-                    timing=timing,
+                    timing=audit_timing,
                     description="4728 group member added from net group /add",
                 )
             )
@@ -375,7 +420,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         ),
                         "source_command_line": cmd,
                     },
-                    timing=timing,
+                    timing=audit_timing,
                     description="4698 scheduled task from schtasks /create",
                 )
             )
@@ -411,7 +456,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "service_file_name": svc_path,
                         "service_start_type": service_start_type,
                     },
-                    timing=timing,
+                    timing=audit_timing,
                     description="4697 service installed from sc create",
                 )
             )
@@ -426,7 +471,7 @@ class SupplementaryAuditEvents(ExpansionRule):
                         "system": ctx.target_system,
                         "subject_logon_id": ctx.logon_id,
                     },
-                    timing=timing,
+                    timing=audit_timing,
                     description="1102 log cleared from wevtutil cl",
                 )
             )

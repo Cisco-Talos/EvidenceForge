@@ -339,6 +339,67 @@ class TestFilesUidCorrelation:
 
         assert file_row["ts"] > http_row["ts"]
 
+    def test_http_file_timestamp_uses_final_monotonic_http_timestamp(self):
+        """files.log should follow http.log after same-UID timestamp repairs."""
+        files_fmt = load_format("zeek_files")
+        http_fmt = load_format("zeek_http")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            http_output = Path(tmpdir) / "http.json"
+            files_output = Path(tmpdir) / "files.json"
+            http_emitter = ZeekHttpEmitter(http_fmt, http_output)
+            files_emitter = ZeekFilesEmitter(files_fmt, files_output)
+            network = NetworkContext(
+                src_ip="10.0.0.1",
+                src_port=50000,
+                dst_ip="10.0.0.10",
+                dst_port=80,
+                protocol="tcp",
+                service="http",
+                zeek_uid="CHttpUIDShared1",
+                duration=2.0,
+            )
+            first = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, 500000, tzinfo=UTC),
+                event_type="connection",
+                network=network,
+                http=HttpContext(
+                    host="updates.example.test",
+                    uri="/index.html",
+                    trans_depth=1,
+                ),
+            )
+            second = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=network,
+                http=HttpContext(
+                    host="updates.example.test",
+                    uri="/agent.dat",
+                    trans_depth=2,
+                    resp_fuids=["FHttpFile1234567"],
+                    resp_mime_types=["application/octet-stream"],
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FHttpFile1234567",
+                    source="HTTP",
+                    duration=0.04,
+                    seen_bytes=8192,
+                ),
+            )
+
+            http_emitter.emit(first)
+            http_emitter.emit(second)
+            files_emitter.emit(second)
+            http_emitter.close()
+            files_emitter.close()
+
+            http_rows = [json.loads(line) for line in http_output.read_text().splitlines()]
+            file_row = json.loads(files_output.read_text().splitlines()[0])
+
+        assert len(http_rows) == 2
+        assert http_rows[1]["ts"] > http_rows[0]["ts"]
+        assert file_row["ts"] > http_rows[1]["ts"]
+
     def test_certificate_file_timestamp_follows_parent_ssl_record(self):
         """Certificate files should not predate the owning ssl.log row."""
         files_fmt = load_format("zeek_files")
@@ -524,6 +585,7 @@ class TestFilesUidCorrelation:
         assert rows[0]["sha256"] != "a" * 40
         assert rows[0]["md5"] == rows[1]["md5"]
         assert rows[0]["sha1"] == rows[1]["sha1"]
+        assert rows[0]["analyzers"] == ["X509", "MD5", "SHA1", "SHA256"]
 
     def test_certificate_file_sizes_vary_by_certificate_identity(self):
         """Certificate files should not collapse into a few fixed byte buckets."""

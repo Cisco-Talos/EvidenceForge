@@ -22,17 +22,26 @@
 
 """Tests for activity generator SSL/HTTP/FileTransfer context population."""
 
+import math
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 import pytest
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import HttpContext, NetworkContext, ProxyContext
+from evidenceforge.events.contexts import (
+    HttpContext,
+    NetworkContext,
+    OcspContext,
+    ProxyContext,
+    X509Context,
+)
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 
@@ -108,6 +117,7 @@ class TestSslContextPopulation:
             assert event.ssl.version in {"TLSv12", "TLSv13"}
             assert event.ssl.cipher != ""
             assert event.ssl.established is True
+            assert "S" in event.ssl.ssl_history
             if event.ssl.version == "TLSv13":
                 assert event.x509 is None
                 assert event.x509_chain == []
@@ -192,6 +202,7 @@ class TestSslContextPopulation:
         assert event.network.resp_bytes >= 1840
         assert event.ssl is not None
         assert event.ssl.established is True
+        assert "S" in event.ssl.ssl_history
 
     def test_http_over_tls_forces_established_ssl_context(self, activity_gen, monkeypatch):
         """Successful HTTP evidence on TLS cannot coexist with failed ssl.log state."""
@@ -236,6 +247,7 @@ class TestSslContextPopulation:
         assert event.ssl is not None
         assert event.ssl.established is True
         assert event.ssl.cipher
+        assert "S" in event.ssl.ssl_history
 
     def test_explicit_proxy_https_post_carries_body_bytes_to_egress(self, activity_gen):
         """Proxy egress should preserve canonical POST body size for exfil-style uploads."""
@@ -478,9 +490,9 @@ class TestSslContextPopulation:
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
         assert base_time < times[0] < times[1] < times[2]
-        assert timedelta(milliseconds=25) <= times[0] - base_time <= timedelta(milliseconds=120)
-        assert timedelta(milliseconds=60) <= times[1] - base_time <= timedelta(milliseconds=215)
-        assert timedelta(milliseconds=105) <= times[2] - base_time <= timedelta(milliseconds=325)
+        assert timedelta(milliseconds=35) <= times[0] - base_time <= timedelta(milliseconds=160)
+        assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(milliseconds=3501)
+        assert timedelta(milliseconds=45) <= times[2] - times[1] <= timedelta(milliseconds=181)
         assert times[2] - times[0] != timedelta(seconds=1)
         assert len({timestamp.microsecond % 1000 for timestamp in times}) == len(times)
 
@@ -494,6 +506,127 @@ class TestSslContextPopulation:
         assert logind_events[0].timestamp.microsecond % 1000 not in {
             timestamp.microsecond % 1000 for timestamp in times
         }
+
+    def test_ssh_ecar_login_source_time_follows_accepted_syslog(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            sshd_pid=6505,
+        )
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        accepted_event = next(
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.message.startswith("Accepted password")
+        )
+        ecar_login_time = gen._source_timing_planner.source_time(
+            ssh_event,
+            "source.ecar_session",
+            seed_parts=(
+                "login",
+                ssh_event.dst_host.hostname,
+                user.username,
+                "10.0.10.50",
+                51111,
+                "",
+                10,
+                "",
+                ssh_event.timestamp,
+            ),
+        )
+
+        assert ecar_login_time > accepted_event.timestamp
+        assert ecar_login_time > accepted_event.timestamp + timedelta(milliseconds=250)
+        delayed_for_observation_profile = replace(
+            ssh_event,
+            timestamp=ssh_event.timestamp + timedelta(milliseconds=750),
+            storyline_cluster_id="storyline-ssh",
+        )
+        delayed_ecar_time = EcarEmitter._session_timestamp(
+            object.__new__(EcarEmitter),
+            delayed_for_observation_profile,
+            delayed_for_observation_profile.dst_host,
+            "login",
+        )
+
+        assert delayed_ecar_time == ecar_login_time
+
+    def test_ocsp_repeated_response_profile_keeps_body_size_stable(self, activity_gen):
+        gen, _events = activity_gen
+        calls = []
+
+        def capture_connection(**kwargs):
+            calls.append(kwargs)
+
+        gen.generate_connection = capture_connection
+        tls_event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51111,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                zeek_uid="CsslOcspStable",
+                conn_state="SF",
+            ),
+            x509=X509Context(
+                fuid="Fcert",
+                certificate_serial="789E942DD4A61EF31D",
+                certificate_subject="CN=example.com",
+                certificate_issuer="CN=DigiCert TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            ),
+        )
+        ocsp_a = OcspContext(
+            id="FocspA",
+            serial_number="789E942DD4A61EF31D",
+            cert_status="good",
+            this_update=1710762449.0,
+            next_update=1711055820.0,
+        )
+        ocsp_b = OcspContext(
+            id="FocspB",
+            serial_number="789E942DD4A61EF31D",
+            cert_status="good",
+            this_update=1710762449.0,
+            next_update=1711055820.0,
+        )
+
+        gen._emit_ocsp_http_response(
+            tls_event,
+            cert_name="example.com",
+            ocsp=ocsp_a,
+            rng=random.Random(1),
+        )
+        gen._emit_ocsp_http_response(
+            tls_event,
+            cert_name="example.com",
+            ocsp=ocsp_b,
+            rng=random.Random(2),
+        )
+
+        assert len(calls) == 2
+        assert calls[0]["http"].response_body_len == calls[1]["http"].response_body_len
+        assert calls[0]["file_transfer"].total_bytes == calls[1]["file_transfer"].total_bytes
+        assert calls[0]["http"].tags == calls[1]["http"].tags == ["ocsp"]
 
     def test_ssh_systemd_session_ids_stay_in_same_integer_regime(self, activity_gen):
         gen, events = activity_gen
@@ -937,6 +1070,29 @@ class TestSslContextPopulation:
             assert event.x509 is None
             assert event.ssl.cert_chain_fuids == []
 
+    def test_single_observed_tls_clients_do_not_resume(self, activity_gen):
+        """TLS resumption should require prior client/server pair state."""
+        gen, events = activity_gen
+
+        for offset in range(20):
+            gen.generate_connection(
+                src_ip=f"198.51.100.{offset + 1}",
+                dst_ip="203.14.220.10",
+                time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC) + timedelta(seconds=offset),
+                dst_port=443,
+                proto="tcp",
+                service="ssl",
+                duration=2.0,
+                orig_bytes=1024,
+                resp_bytes=4096,
+                hostname="ehr-portal.example.org",
+                conn_state="SF",
+            )
+
+        tls_events = [event for event in events if event.ssl is not None]
+        assert len(tls_events) == 20
+        assert all(event.ssl.resumed is False for event in tls_events)
+
     def test_ocsp_status_and_update_window_are_cached_per_certificate(self, activity_gen):
         """OCSP responses should not expire at observation time or flip status per serial."""
         gen, events = activity_gen
@@ -1212,6 +1368,43 @@ class TestHttpContextPopulation:
 
         event = events[-1]
         assert event.network.resp_bytes > event.http.response_body_len
+
+    def test_large_tcp_transfer_counts_reverse_ack_packets(self, activity_gen):
+        """Large one-way TCP transfers should not keep single-digit ACK-side packet counts."""
+        gen, events = activity_gen
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.20",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=9.0,
+            orig_bytes=314_783_347,
+            resp_bytes=2631,
+            conn_state="SF",
+        )
+        upload = events[-1].network
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.20",
+            time=datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC),
+            dst_port=445,
+            proto="tcp",
+            service="smb",
+            duration=9.0,
+            orig_bytes=93_264,
+            resp_bytes=313_934_166,
+            conn_state="SF",
+        )
+        download = events[-1].network
+
+        assert upload.resp_pkts >= math.ceil((upload.orig_bytes or 0) / 1460 / 4)
+        assert upload.resp_ip_bytes >= (upload.resp_bytes or 0) + (upload.resp_pkts * 40)
+        assert download.orig_pkts >= math.ceil((download.resp_bytes or 0) / 1460 / 4)
+        assert download.orig_ip_bytes >= (download.orig_bytes or 0) + (download.orig_pkts * 40)
 
     def test_icmp_accounting_is_echo_like(self, activity_gen):
         """ICMP echo-style flows should not inherit bulk TCP byte/packet accounting."""

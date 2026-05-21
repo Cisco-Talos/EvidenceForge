@@ -255,3 +255,28 @@ class TestBackwardCompatibility:
 
         assert isinstance(_CDN_RANGES, list)
         assert len(_CDN_RANGES) >= 5
+
+    def test_public_aaaa_fallbacks_do_not_share_one_synthetic_prefix(self):
+        """Unmapped public IPv4s should not all collapse to one IPv6 prefix."""
+        from evidenceforge.generation.activity.network import _ipv4_to_fake_ipv6
+
+        sample_domains = [
+            "api.snapcraft.io",
+            "registry.npmjs.org",
+            "secure-client-updates.cisco.com",
+            "webex.com",
+            "stackoverflow.com",
+            "ocsp.digicert.com",
+            "updates.paloaltonetworks.com",
+            "archive.ubuntu.com",
+            "ocsp.sectigo.com",
+            "config.zscaler.net",
+        ]
+        prefixes = {
+            ":".join(_ipv4_to_fake_ipv6(ip).split(":")[:2])
+            for domain in sample_domains
+            for ip in get_forward_dns()[domain]
+        }
+
+        assert "2a09:bac0" not in prefixes
+        assert len(prefixes) >= 4

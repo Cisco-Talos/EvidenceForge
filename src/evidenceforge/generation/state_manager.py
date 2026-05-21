@@ -103,6 +103,7 @@ class StateManager:
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
+        self._windows_session_id_counters: dict[str, int] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
@@ -229,6 +230,45 @@ class StateManager:
                 event_time = self.state.current_time
             return f"0x{self._allocate_logon_luid(system, event_time):x}"
 
+    def _allocate_windows_session_id(
+        self,
+        system: str,
+        username: str,
+        logon_type: int,
+        session_kind: str,
+    ) -> int:
+        """Allocate a host-local Windows terminal session ID for interactive sessions."""
+        if logon_type not in {2, 7, 10, 11} or session_kind in {"network", "service", "ssh"}:
+            return 0
+
+        used_ids = {
+            session.session_id
+            for session in self.state.active_sessions.values()
+            if session.system == system and session.session_id > 0
+        }
+
+        if logon_type in {2, 11} and session_kind in {"interactive", "logon"}:
+            preferred = 1 + (_stable_seed(f"windows_console_session:{system}") % 2)
+            if preferred not in used_ids:
+                return preferred
+
+        initial = self._windows_session_id_counters.get(
+            system,
+            3 + (_stable_seed(f"windows_session_initial:{system}") % 3),
+        )
+        candidate = initial
+        while candidate in used_ids or candidate <= 0:
+            candidate += 1 + (_stable_seed(f"windows_session_gap:{system}:{candidate}") % 2)
+        self._windows_session_id_counters[system] = candidate + 1
+        logger.debug(
+            "Allocated Windows session ID %s for %s@%s type %s",
+            candidate,
+            username,
+            system,
+            logon_type,
+        )
+        return candidate
+
     def _mark_logon_id_used(self, logon_id: str) -> None:
         """Record externally supplied LogonIDs so generated sessions avoid reuse."""
         try:
@@ -252,6 +292,7 @@ class StateManager:
         transport_pid: int | None = None,
         start_time: datetime | None = None,
         logon_guid: str = "",
+        session_id: int | None = None,
     ) -> str:
         """Create a new active session.
 
@@ -280,6 +321,16 @@ class StateManager:
             logon_id = f"0x{val:x}"
 
             # Create session
+            windows_session_id = (
+                session_id
+                if session_id is not None
+                else self._allocate_windows_session_id(
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                )
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -287,6 +338,7 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=session_start_time,
                 source_ip=source_ip,
+                session_id=windows_session_id,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
@@ -326,6 +378,28 @@ class StateManager:
         with self._lock:
             return [s for s in self.state.active_sessions.values() if s.username == username]
 
+    def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[ActiveSession]:
+        """Get sessions that are active for a user at a specific event time.
+
+        Generation can enqueue a long-lived session's logoff before later
+        same-window activities are rendered. Those sessions are no longer in
+        active state, but they are still valid for events before the visible
+        logoff timestamp.
+        """
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            sessions: dict[str, ActiveSession] = {}
+            for session in self.state.active_sessions.values():
+                if session.username == username and ensure_utc(session.start_time) <= cutoff:
+                    sessions[session.logon_id] = session
+            for session, end_time in self._ended_sessions.values():
+                if (
+                    session.username == username
+                    and ensure_utc(session.start_time) <= cutoff < end_time
+                ):
+                    sessions[session.logon_id] = session
+            return list(sessions.values())
+
     def get_sessions_on_system(self, system: str) -> list[ActiveSession]:
         """Get all active sessions on a system.
 
@@ -350,6 +424,7 @@ class StateManager:
         session_kind: str = "logon",
         transport_pid: int | None = None,
         logon_guid: str = "",
+        session_id: int | None = None,
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -363,6 +438,16 @@ class StateManager:
                 return existing
             self._mark_logon_id_used(logon_id)
 
+            windows_session_id = (
+                session_id
+                if session_id is not None
+                else self._allocate_windows_session_id(
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                )
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -370,6 +455,7 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=ensure_utc(start_time),
                 source_ip=source_ip,
+                session_id=windows_session_id,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
@@ -394,6 +480,7 @@ class StateManager:
         transport_pid: int | None = None,
         network_close_time: datetime | None = None,
         logon_guid: str | None = None,
+        session_id: int | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -416,7 +503,21 @@ class StateManager:
                 session.network_close_time = ensure_utc(network_close_time)
             if logon_guid is not None:
                 session.logon_guid = logon_guid
+            if session_id is not None:
+                session.session_id = session_id
             return True
+
+    def get_session_id(self, logon_id: str) -> int:
+        """Return the canonical rendered session ID for an active or ended logon."""
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if session is not None:
+                return session.session_id
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
+            return ended[0].session_id if ended is not None else 0
 
     def get_or_create_session_logon_guid(
         self,
@@ -685,23 +786,78 @@ class StateManager:
         self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
         pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
-        pid += (slot * 29) + ordinal
+        pid += (slot * 2) + ordinal
         pid = self._normalize_linux_pid(pid)
 
         running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
         used = self._linux_pid_used_ids.setdefault(system, set())
         allocations = self._linux_pid_allocations.setdefault(system, [])
-        collision_salt = 0
-        while (
-            pid in running
-            or pid in used
-            or (
-                minimum_pid_exclusive is not None
-                and minimum_pid_exclusive < 4_194_304
-                and pid <= minimum_pid_exclusive
-            )
-            or self._linux_pid_matches_elapsed_delta(allocations, current_time, pid)
+        prior_visible_pid = max(
+            (
+                allocated_pid
+                for allocated_time, allocated_pid in allocations
+                if allocated_time <= current_time
+            ),
+            default=None,
+        )
+        if prior_visible_pid is not None and (
+            minimum_pid_exclusive is None or prior_visible_pid > minimum_pid_exclusive
         ):
+            minimum_pid_exclusive = prior_visible_pid
+        future_pid_exclusive = min(
+            (
+                allocated_pid
+                for allocated_time, allocated_pid in allocations
+                if allocated_time > current_time
+            ),
+            default=None,
+        )
+
+        def is_available(candidate: int) -> bool:
+            return (
+                candidate not in running
+                and candidate not in used
+                and (
+                    minimum_pid_exclusive is None
+                    or minimum_pid_exclusive >= 4_194_304
+                    or candidate > minimum_pid_exclusive
+                )
+                and (future_pid_exclusive is None or candidate < future_pid_exclusive)
+                and not self._linux_pid_matches_elapsed_delta(allocations, current_time, candidate)
+            )
+
+        def bounded_candidate(salt: int) -> int | None:
+            if future_pid_exclusive is None:
+                return None
+            lower_bound = max(499, minimum_pid_exclusive or 499)
+            if future_pid_exclusive <= lower_bound + 1:
+                return None
+            span = future_pid_exclusive - lower_bound - 1
+            start = (
+                _stable_seed(
+                    f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
+                )
+                % span
+            )
+            for offset in range(min(span, 4096)):
+                candidate = future_pid_exclusive - 1 - ((start + offset) % span)
+                if is_available(candidate):
+                    return candidate
+            return None
+
+        if not is_available(pid):
+            bounded = bounded_candidate(0)
+            if bounded is not None:
+                pid = bounded
+        collision_salt = 0
+        while not is_available(pid):
+            bounded = bounded_candidate(collision_salt + 1)
+            if bounded is not None:
+                pid = bounded
+                if is_available(pid):
+                    break
+            elif future_pid_exclusive is not None and pid >= future_pid_exclusive:
+                future_pid_exclusive = None
             bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
             pid = self._normalize_linux_pid(pid + bump)
             collision_salt += 1

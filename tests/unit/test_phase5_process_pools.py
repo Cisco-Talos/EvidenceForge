@@ -37,6 +37,7 @@ from evidenceforge.generation.activity import (
 from evidenceforge.generation.activity.system_processes import (
     _resolve_host_placeholders,
     load_system_processes,
+    pick_scheduled_task,
     pick_system_service_process,
 )
 from evidenceforge.generation.state_manager import StateManager
@@ -97,6 +98,19 @@ class TestProcessPoolSize:
             "SearchProtocolHost.exe": "search_indexer",
             "SearchFilterHost.exe": "search_indexer",
         }
+
+    def test_wmi_provider_host_uses_wbem_path(self):
+        """WMI Provider Host process templates should use the native wbem directory."""
+        data = load_system_processes()
+        wmi_paths = [
+            entry["image"]
+            for entries in data["system_services"].values()
+            for entry in entries
+            if entry["image"].lower().endswith("\\wmiprvse.exe")
+        ]
+
+        assert wmi_paths
+        assert all(path.endswith(r"\System32\wbem\WmiPrvSE.exe") for path in wmi_paths)
 
     def test_system_process_templates_avoid_windows_internal_path_artifacts(self):
         """Windows internal maintenance paths and pipe args should look source-native."""
@@ -163,6 +177,32 @@ class TestProcessPoolSize:
             for seed in range(100)
         ]
         assert all("ntdsutil.exe" not in image for image in picks)
+
+    def test_workstation_update_tasks_do_not_run_on_domain_controllers(self):
+        """Desktop updater scheduled tasks should stay on workstation hosts."""
+        workstation_update_exes = {
+            "googleupdate.exe",
+            "adobearm.exe",
+            "dropboxupdate.exe",
+            "zoomupdate.exe",
+            "onedrivestandaloneupdater.exe",
+            "dcu-cli.exe",
+            "hpimageassistant.exe",
+        }
+        dc_host = SimpleNamespace(os="Windows Server 2022", type="domain_controller")
+        ws_host = SimpleNamespace(os="Windows 11 Enterprise", type="workstation")
+
+        dc_picks = [
+            pick_scheduled_task(random.Random(seed), dc_host)[0].rsplit("\\", 1)[-1].lower()
+            for seed in range(300)
+        ]
+        ws_picks = [
+            pick_scheduled_task(random.Random(seed), ws_host)[0].rsplit("\\", 1)[-1].lower()
+            for seed in range(300)
+        ]
+
+        assert workstation_update_exes.isdisjoint(dc_picks)
+        assert workstation_update_exes.intersection(ws_picks)
 
 
 class TestBaselinePatterns:

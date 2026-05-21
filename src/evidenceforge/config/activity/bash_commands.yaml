@@ -91,12 +91,25 @@ common:
   - "journalctl --since '10 min ago' --no-pager -n 20"
   - "journalctl -xe --no-pager | tail -20"
   - "systemctl --failed --no-pager"
+  - "systemctl list-timers --all --no-pager | head"
+  - "systemd-analyze blame | head"
+  - "loginctl list-sessions"
+  - "loginctl user-status"
   - "tail -20 /var/log/syslog"
   - "tail -50 /var/log/auth.log"
+  - "tail -20 ~/.bash_history"
   - "grep -i error /var/log/syslog | tail"
   - "grep -i failed /var/log/auth.log | tail"
+  - "grep -i warning /var/log/syslog | tail"
   - "lsmod | head"
   - "dmesg --ctime | tail -20"
+  - "nmcli device status 2>/dev/null"
+  - "resolvectl status 2>/dev/null | head -30"
+  - "cat /etc/hosts"
+  - "find ~/Downloads -maxdepth 1 -type f 2>/dev/null | head"
+  - "du -sh ~/Downloads 2>/dev/null"
+  - "ls -lah ~/.config 2>/dev/null | head"
+  - "ls -lah ~/.local/share 2>/dev/null | head"
 
 sysadmin:
   - "systemctl status sshd"
@@ -140,12 +153,30 @@ sysadmin:
   - "ss -ltnp | grep {service}"
   - "sysctl -a 2>/dev/null | grep net.ipv4.ip_forward"
   - "journalctl -u {service} --since '30 min ago' --no-pager | tail -20"
+  - "journalctl -u NetworkManager --since '2 hours ago' --no-pager | tail -30"
+  - "journalctl -u systemd-resolved --since today --no-pager | tail -20"
+  - "systemctl status NetworkManager --no-pager"
+  - "systemctl status packagekit --no-pager"
+  - "systemctl status cups --no-pager"
+  - "systemctl status fwupd --no-pager"
+  - "loginctl session-status"
+  - "nmcli connection show --active"
+  - "nmcli device show | grep -E 'GENERAL.DEVICE|IP4.ADDRESS|IP4.GATEWAY'"
+  - "resolvectl query company.okta.com"
+  - "resolvectl query login.microsoftonline.com"
+  - "apt-cache policy google-chrome-stable 2>/dev/null"
+  - "apt-cache policy slack-desktop 2>/dev/null"
+  - "snap list 2>/dev/null | head"
+  - "flatpak list 2>/dev/null | head"
+  - "lpstat -p 2>/dev/null"
+  - "udevadm info --query=property --name=/dev/null | head"
+  - "find /etc/systemd/user -maxdepth 2 -type f 2>/dev/null | head"
 
 dba:
-  - "mysql -u root -p -e 'SHOW DATABASES'"
-  - "mysql -u root -p -e 'SHOW PROCESSLIST'"
-  - "mysql -u root -p -e 'SHOW SLAVE STATUS\\G'"
-  - "mysql -u root -p -e 'SELECT COUNT(*) FROM {db}.users'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW DATABASES'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW PROCESSLIST'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW SLAVE STATUS\\G'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SELECT COUNT(*) FROM {db}.users'"
   - "mysqldump --single-transaction --routines {db} > /tmp/{db}_backup.sql"
   - "mytop"
   - "pt-query-digest /var/log/mysql/slow.log | head -50"
@@ -157,8 +188,18 @@ dba:
   - "psql -c 'SELECT pg_size_pretty(pg_database_size(current_database()))'"
   - "pg_isready"
   - "cat /etc/mysql/my.cnf | grep -v '^#'"
-  - "mysql -u root -p -e 'SHOW VARIABLES LIKE \"max_connections\"'"
-  - "mysql -u root -p -e 'SHOW GLOBAL STATUS LIKE \"Threads_connected\"'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW VARIABLES LIKE \"max_connections\"'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW GLOBAL STATUS LIKE \"Threads_connected\"'"
+  - "psql -c '\\dt'"
+  - "psql -c 'SELECT now(), current_user'"
+  - "psql -c 'SELECT schemaname, relname FROM pg_stat_user_tables LIMIT 10'"
+  - "psql -c 'SELECT count(*) FROM pg_stat_activity'"
+  - "psql -c 'SELECT datname, numbackends FROM pg_stat_database'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW TABLE STATUS FROM {db} LIMIT 5'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SELECT NOW(), USER()'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW GLOBAL STATUS LIKE \"Uptime\"'"
+  - "redis-cli INFO stats | head -20"
+  - "redis-cli CLIENT LIST | head -5"
 
 webadmin:
   - "tail -f /var/log/apache2/access.log"
@@ -219,6 +260,22 @@ developer:
   - "cargo build 2>&1 | tail -5"
   - "go build ./..."
   - "find . -name '*.py' | xargs wc -l | tail -1"
+  - "git fetch --prune"
+  - "git status --short"
+  - "git diff --name-only"
+  - "git rev-parse --show-toplevel"
+  - "npm audit --omit=dev"
+  - "npm run lint"
+  - "python3 -m pip list --outdated | head"
+  - "python3 -m pip check"
+  - "docker compose ps"
+  - "docker compose pull"
+  - "kubectl config current-context"
+  - "kubectl get pods -A | head"
+  - "kubectl get events -A --sort-by=.lastTimestamp | tail"
+  - "curl -sS https://api.github.com/rate_limit | head"
+  - "jq --version"
+  - "grep -R \"feature_flag\" config/ 2>/dev/null | head"
 
 security:
   - "tail -500 /var/log/auth.log | grep 'Failed'"
@@ -248,6 +305,169 @@ security:
   - "md5sum /usr/bin/sudo"
   - "sha256sum /usr/bin/ssh"
   - "stat /etc/shadow"
+  - "journalctl -u sshd --since today --no-pager | grep -i failure | tail"
+  - "journalctl -u auditd --since today --no-pager | tail -30"
+  - "grep -i 'sudo:' /var/log/auth.log | tail -20"
+  - "grep -i 'invalid user' /var/log/auth.log | tail -20"
+  - "grep -i 'session opened' /var/log/auth.log | tail -20"
+  - "ss -tanp | grep ESTAB | head"
+  - "ip neigh show"
+  - "find /etc -type f -mtime -1 2>/dev/null | head"
+  - "find /var/tmp -type f -mtime -1 -ls 2>/dev/null | head"
+  - "sha256sum /bin/bash /usr/bin/sudo /usr/bin/ssh"
+  - "getent group sudo"
+  - "getent group docker"
+  - "systemctl status auditd --no-pager"
+  - "systemctl status fail2ban --no-pager"
+
+help_desk:
+  - "hostnamectl"
+  - "timedatectl"
+  - "loginctl list-sessions"
+  - "loginctl user-status"
+  - "loginctl seat-status seat0 2>/dev/null"
+  - "who -u"
+  - "journalctl -p warning --since '1 hour ago' --no-pager | tail -20"
+  - "journalctl -u NetworkManager --since today --no-pager | tail -30"
+  - "journalctl -b --no-pager | grep -i NetworkManager | tail -20"
+  - "journalctl --user -p warning --since '1 hour ago' --no-pager | tail -20"
+  - "systemctl status {service} --no-pager"
+  - "systemctl --user status 2>/dev/null | head -30"
+  - "systemctl --user list-units --failed 2>/dev/null"
+  - "systemctl --user list-timers 2>/dev/null | head"
+  - "nmcli device status"
+  - "nmcli general status"
+  - "nmcli radio all"
+  - "nmcli connection show --active"
+  - "nmcli -f NAME,TYPE,AUTOCONNECT connection show | head"
+  - "nmcli -f GENERAL.DEVICE,GENERAL.STATE device show 2>/dev/null | head -30"
+  - "resolvectl status 2>/dev/null | head -40"
+  - "resolvectl statistics 2>/dev/null"
+  - "resolvectl query login.microsoftonline.com"
+  - "resolvectl query company.okta.com"
+  - "getent hosts login.microsoftonline.com"
+  - "ip -br addr"
+  - "ip -4 addr show"
+  - "ip route get 8.8.8.8"
+  - "ip route get 1.1.1.1"
+  - "ip link show | head -30"
+  - "lpstat -p 2>/dev/null"
+  - "lpstat -d 2>/dev/null"
+  - "system-config-printer --version 2>/dev/null"
+  - "lsusb 2>/dev/null | head"
+  - "lspci 2>/dev/null | head"
+  - "bluetoothctl devices 2>/dev/null | head"
+  - "bluetoothctl show 2>/dev/null | head"
+  - "xdg-settings get default-web-browser 2>/dev/null"
+  - "gio info ~/Downloads 2>/dev/null | head -20"
+  - "du -sh ~/Downloads 2>/dev/null"
+  - "find ~/.cache -maxdepth 1 -type d 2>/dev/null | head"
+  - "du -sh ~/.cache/* 2>/dev/null | sort -h | tail"
+  - "find ~/.local/share/applications -maxdepth 1 -type f 2>/dev/null | head"
+  - "ls -la ~/.config/autostart 2>/dev/null"
+  - "tail -50 ~/.xsession-errors 2>/dev/null"
+
+data_analyst:
+  - "psql -c '\\l'"
+  - "psql -c '\\dt'"
+  - "psql -c 'SELECT count(*) FROM information_schema.tables'"
+  - "psql -c 'SELECT now(), current_database(), current_user'"
+  - "psql -c 'SELECT datname, numbackends FROM pg_stat_database'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW DATABASES'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW TABLES FROM {db}'"
+  - "mysql --defaults-extra-file=~/.my.cnf -e 'SELECT COUNT(*) FROM {db}.users'"
+  - "python3 -c 'import pandas as pd; print(pd.__version__)'"
+  - "python3 -m pip show pandas"
+  - "python3 -m pip show sqlalchemy"
+  - "ls -lh ~/Downloads 2>/dev/null | head"
+  - "find . -name '*.csv' -o -name '*.xlsx' | head"
+  - "du -sh ./data 2>/dev/null"
+  - "head -5 data.csv 2>/dev/null"
+  - "wc -l data.csv 2>/dev/null"
+  - "grep -R \"select .* from\" . 2>/dev/null | head"
+  - "jupyter --paths 2>/dev/null | head"
+  - "python3 --version"
+  - "env | grep -E 'ODBC|PG|MYSQL|SQL' | head"
+
+workflow_model:
+  selection_probability: 0.68
+
+workflows:
+  common:
+    - name: orient_shell
+      weight: 2
+      steps:
+        - ["pwd", "hostname -f", "whoami"]
+        - ["ls -lah", "ls -ltr", "ls -lh"]
+        - ["history | tail -15", "date", "uptime"]
+    - name: quick_health_check
+      weight: 2
+      steps:
+        - ["uptime", "hostnamectl", "timedatectl"]
+        - ["df -h /", "free -h", "ss -s"]
+        - ["journalctl -p warning --since '1 hour ago' --no-pager | tail -20", "systemctl --failed --no-pager"]
+  sysadmin:
+    - name: service_triage
+      weight: 5
+      steps:
+        - ["systemctl is-active {service}", "systemctl status {service} --no-pager"]
+        - ["journalctl -u {service} --since '30 min ago' --no-pager | tail -{n}", "journalctl -u {service} -n {n} --no-pager"]
+        - ["ss -ltnp | grep {service}", "ps aux | grep {service}"]
+        - ["systemctl cat {service} 2>/dev/null | head -40", "systemctl show {service} -p ActiveState -p SubState -p MainPID"]
+    - name: login_review
+      weight: 3
+      steps:
+        - ["last -20", "who -a"]
+        - ["tail -{n} /var/log/auth.log", "journalctl -u sshd --since '2 hours ago' --no-pager | tail -30"]
+        - ["grep -i 'failed password' /var/log/auth.log | tail -20", "grep -i 'session opened' /var/log/auth.log | tail -20"]
+  dba:
+    - name: database_health
+      weight: 5
+      steps:
+        - ["pg_isready", "mysql --defaults-extra-file=~/.my.cnf -e 'SELECT NOW(), USER()'"]
+        - ["psql -c 'SELECT count(*) FROM pg_stat_activity'", "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW PROCESSLIST'"]
+        - ["psql -c 'SELECT datname, numbackends FROM pg_stat_database'", "mysql --defaults-extra-file=~/.my.cnf -e 'SHOW GLOBAL STATUS LIKE \"Threads_connected\"'"]
+        - ["tail -{n} /var/log/mysql/error.log", "du -sh /var/lib/mysql/*"]
+  webadmin:
+    - name: web_service_check
+      weight: 5
+      steps:
+        - ["curl -s -o /dev/null -w '%{http_code}' http://localhost", "curl -sI https://localhost"]
+        - ["tail -{n} /var/log/nginx/access.log", "tail -{n} /var/log/apache2/error.log"]
+        - ["nginx -t", "apachectl configtest"]
+        - ["systemctl reload nginx", "systemctl status nginx --no-pager"]
+  developer:
+    - name: repo_check
+      weight: 5
+      steps:
+        - ["git status --short", "git status"]
+        - ["git diff --stat", "git log --oneline -10"]
+        - ["npm test", "python3 -m pytest -v", "make test"]
+        - ["docker compose ps", "docker logs --tail 50 {container}"]
+  security:
+    - name: auth_investigation
+      weight: 5
+      steps:
+        - ["tail -{n} /var/log/auth.log | grep 'Accepted'", "journalctl -u auditd --since today --no-pager | tail -30"]
+        - ["lastb -20", "grep -i 'invalid user' /var/log/auth.log | tail -20"]
+        - ["ss -tanp | grep ESTAB | head", "ip neigh show"]
+        - ["find /var/tmp -type f -mtime -1 -ls 2>/dev/null | head", "find /etc -type f -mtime -1 2>/dev/null | head"]
+  help_desk:
+    - name: desktop_connectivity
+      weight: 5
+      steps:
+        - ["nmcli device status", "nmcli general status", "nmcli connection show --active"]
+        - ["ip -br addr", "ip -4 addr show", "ip route get 8.8.8.8", "ip route get 1.1.1.1"]
+        - ["resolvectl query login.microsoftonline.com", "resolvectl query company.okta.com", "getent hosts login.microsoftonline.com", "resolvectl status 2>/dev/null | head -40"]
+        - ["journalctl -u NetworkManager --since '1 hour ago' --no-pager | tail -20", "journalctl -b --no-pager | grep -i NetworkManager | tail -20", "systemctl --user status 2>/dev/null | head -30", "systemctl --user list-units --failed 2>/dev/null"]
+  data_analyst:
+    - name: analyst_data_check
+      weight: 5
+      steps:
+        - ["python3 -c 'import pandas as pd; print(pd.__version__)'", "python3 --version"]
+        - ["find . -name '*.csv' -o -name '*.xlsx' | head", "ls -lh ~/Downloads 2>/dev/null | head"]
+        - ["head -5 data.csv 2>/dev/null", "wc -l data.csv 2>/dev/null"]
+        - ["psql -c 'SELECT now(), current_database(), current_user'", "env | grep -E 'ODBC|PG|MYSQL|SQL' | head"]
 
 # QWERTY keyboard adjacency map for generative typo model.
 # Each key maps to its physical neighbors on a standard US keyboard.

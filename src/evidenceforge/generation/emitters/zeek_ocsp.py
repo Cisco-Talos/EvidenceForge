@@ -22,10 +22,15 @@
 
 """Zeek ocsp.log emitter."""
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_files import (
+    _bounded_file_transfer_observation,
+    _related_http_analyzer_timestamp,
+)
 from evidenceforge.utils.rng import _stable_seed
 
 
@@ -45,9 +50,8 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         ocsp = event.ocsp
-        analyzer_delay_ms = 1000 + (_stable_seed(f"zeek_ocsp_ts:{ocsp.id}") % 5001)
         event_data: dict[str, Any] = {
-            "ts": self._offset_timestamp(event.timestamp, analyzer_delay_ms),
+            "ts": _ocsp_analyzer_timestamp(event),
             "id": ocsp.id,
             "hashAlgorithm": ocsp.hash_algorithm,
             "issuerNameHash": ocsp.issuer_name_hash,
@@ -62,6 +66,8 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
                 self.format_def.name if self.format_def else "zeek_ocsp", []
             ),
         }
+        if event.network is not None and event.network.zeek_uid:
+            event_data["conn_uids"] = [event.network.zeek_uid]
         if event._nat_swaps_by_sensor:
             event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
@@ -71,3 +77,25 @@ class ZeekOcspEmitter(SensorMultiplexEmitter):
         render_data.setdefault("revoketime", None)
         render_data.setdefault("revokereason", None)
         return self._render_zeek_json(render_data)
+
+
+def _ocsp_analyzer_timestamp(event: SecurityEvent) -> datetime | float:
+    """Return an OCSP analyzer time inside the owning HTTP response file window."""
+    ocsp = event.ocsp
+    if ocsp is None:
+        return event.timestamp
+    if event.network is not None and event.file_transfer is not None:
+        file_ts, file_duration = _bounded_file_transfer_observation(
+            event,
+            min_start=_related_http_analyzer_timestamp(event),
+        )
+        duration_us = max(0, int(file_duration * 1_000_000))
+        if duration_us <= 1:
+            return file_ts
+        offset_us = 1 + (
+            _stable_seed(f"zeek_ocsp_ts:{ocsp.id}:{event.network.zeek_uid}") % (duration_us - 1)
+        )
+        return file_ts + timedelta(microseconds=offset_us)
+
+    analyzer_delay_ms = 1 + (_stable_seed(f"zeek_ocsp_ts:{ocsp.id}") % 8)
+    return event.timestamp + timedelta(milliseconds=analyzer_delay_ms)

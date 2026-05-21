@@ -224,5 +224,5 @@ class TestIdsFalsePositiveSignatures:
     def test_protocol_artifact_signatures_are_not_baseline_false_positives(self):
         signatures = {sig["sid"]: sig for sig in load_ids_signatures()["signatures"]}
 
-        for sid in (255, 2000536, 2000537, 2000545, 2019876):
+        for sid in (255, 2000536, 2000537, 2000545, 2002106, 2019876, 2024364):
             assert signatures[sid]["baseline_fp_allowed"] is False

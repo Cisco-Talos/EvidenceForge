@@ -49,6 +49,66 @@ mappings:
     external: true
     dns_tags: [onedrive]
 
+  - exe: [Slack.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn]
+
+  - exe: [Zoom.exe, CptHost.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn]
+
+  - exe: [Webex.exe, CiscoCollabHost.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn]
+
+  - exe: [Dropbox.exe, DropboxUpdate.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [storage, cdn, background]
+
+  - exe: [GoogleDriveFS.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn, background]
+
+  - exe: [SelfService.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, background]
+
+  - exe: [vpnui.exe, vpnagent.exe, PanGPA.exe, PanGPS.exe, ZSATray.exe, ZSAService.exe, ZSATunnel.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [background, saas]
+
+  - exe: [PBIDesktop.exe, tableau.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [saas, cdn]
+
+  - exe: [Postman.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [dev, saas]
+
+  - exe: [dbeaver.exe]
+    service: ssl
+    port: 443
+    external: true
+    dns_tags: [dev, background]
+
   # Dev tools → external HTTPS (registries, repos, CI/CD)
   - exe: [Code.exe, git, npm, cargo, docker, kubectl]
     service: ssl
@@ -75,6 +135,21 @@ mappings:
     external: false
 
   - exe: [psql]
+    service: postgresql
+    port: 5432
+    external: false
+
+  - exe: [dbeaver.exe, PBIDesktop.exe]
+    service: mssql
+    port: 1433
+    external: false
+
+  - exe: [dbeaver.exe]
+    service: mysql
+    port: 3306
+    external: false
+
+  - exe: [dbeaver.exe, tableau.exe]
     service: postgresql
     port: 5432
     external: false

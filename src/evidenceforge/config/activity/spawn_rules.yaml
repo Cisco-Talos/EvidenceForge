@@ -30,6 +30,19 @@ windows:
       - powerpnt.exe
       - Teams.exe
       - OneDrive.exe
+      - Slack.exe
+      - Zoom.exe
+      - Webex.exe
+      - Dropbox.exe
+      - GoogleDriveFS.exe
+      - SelfService.exe
+      - vpnui.exe
+      - PanGPA.exe
+      - ZSATray.exe
+      - PBIDesktop.exe
+      - tableau.exe
+      - Postman.exe
+      - dbeaver.exe
       - Acrobat.exe
       - 7zFM.exe
       - notepad++.exe
@@ -85,6 +98,50 @@ windows:
     children:
       - onedrive.exe
 
+  slack.exe:
+    command_templates:
+      - '"C:\Users\{username}\AppData\Local\slack\Slack.exe" --startup'
+    lifetime: long
+    children:
+      - slack.exe
+
+  zoom.exe:
+    command_templates:
+      - '"C:\Users\{username}\AppData\Roaming\Zoom\bin\Zoom.exe" --background'
+    lifetime: long
+    children:
+      - zoom.exe
+      - CptHost.exe
+
+  webex.exe:
+    command_templates:
+      - '"C:\Program Files\Cisco Spark\Webex.exe" --autostart'
+    lifetime: long
+    children:
+      - Webex.exe
+      - CiscoCollabHost.exe
+
+  dropbox.exe:
+    command_templates:
+      - '"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /systemstartup'
+    lifetime: long
+    children:
+      - Dropbox.exe
+
+  googledrivefs.exe:
+    command_templates:
+      - '"C:\Program Files\Google\Drive File Stream\97.0.1.0\GoogleDriveFS.exe" --startup'
+    lifetime: long
+    children:
+      - GoogleDriveFS.exe
+
+  postman.exe:
+    command_templates:
+      - '"C:\Users\{username}\AppData\Local\Postman\Postman.exe" --process-start-args'
+    lifetime: long
+    children:
+      - Postman.exe
+
   cmd.exe:
     command_templates:
       - "C:\\Windows\\System32\\cmd.exe"
@@ -135,6 +192,7 @@ windows:
       - gpupdate.exe
       - gpresult.exe
       - certutil.exe
+      - dbeaver.exe
 
   powershell.exe:
     command_templates:
@@ -178,6 +236,7 @@ windows:
       - gpupdate.exe
       - gpresult.exe
       - certutil.exe
+      - dbeaver.exe
 
   code.exe:
     command_templates:
@@ -214,6 +273,16 @@ windows:
       - spoolsv.exe
       - lsaiso.exe
       - msdtc.exe
+      - GoogleUpdate.exe
+      - GoogleUpdater.exe
+      - AdobeARM.exe
+      - AdobeARMservice.exe
+      - DropboxUpdate.exe
+      - ZoomUpdate.exe
+      - vpnagent.exe
+      - PanGPS.exe
+      - ZSAService.exe
+      - ZSATunnel.exe
 
   svchost.exe:
     command_templates:

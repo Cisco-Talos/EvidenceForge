@@ -116,6 +116,30 @@ def test_non_pkinit_profile_leaves_certificate_fields_empty(monkeypatch):
     assert fields["cert_thumbprint"] == ""
 
 
+def test_kerberos_transport_profile_picks_udp_and_tcp(monkeypatch):
+    def load_transport_config():
+        return {
+            "transport_profiles": {
+                "default": {
+                    "udp": 3,
+                    "tcp": 1,
+                }
+            }
+        }
+
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", load_transport_config)
+
+    picks = {kerberos_realism.pick_kerberos_transport(random.Random(seed)) for seed in range(40)}
+
+    assert picks == {"udp", "tcp"}
+
+
+def test_kerberos_transport_profile_falls_back_to_tcp(monkeypatch):
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", lambda: {})
+
+    assert kerberos_realism.pick_kerberos_transport(random.Random(1)) == "tcp"
+
+
 def test_kerberos_realism_overlay_overrides_nested_weight(tmp_path, monkeypatch):
     overlay_dir = tmp_path / ".eforge" / "config" / "activity"
     overlay_dir.mkdir(parents=True)

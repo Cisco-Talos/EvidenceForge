@@ -110,8 +110,16 @@ def _load_ipv6_prefixes() -> dict:
     if _CACHED_IPV6_PREFIXES is not None:
         return _CACHED_IPV6_PREFIXES
     data = load_dns_registry()
-    _CACHED_IPV6_PREFIXES = data.get("ipv6_prefixes", {"default": "2a09:bac0", "ranges": []})
+    _CACHED_IPV6_PREFIXES = data.get("ipv6_prefixes", {"default": "2600:1407", "ranges": []})
     return _CACHED_IPV6_PREFIXES
+
+
+def _fallback_ipv6_prefix(config: dict, ipv4: str) -> str:
+    """Choose a stable non-provider-specific fallback IPv6 prefix for a public IPv4."""
+    pool = config.get("default_pool", [])
+    if isinstance(pool, list) and pool:
+        return str(pool[_stable_seed(f"ipv6_prefix:{ipv4}") % len(pool)])
+    return str(config.get("default", "2600:1407"))
 
 
 def _ipv4_to_fake_ipv6(ipv4: str) -> str:
@@ -128,7 +136,7 @@ def _ipv4_to_fake_ipv6(ipv4: str) -> str:
         return f"fd00:{o1:02x}{o2:02x}:{o3:04x}::1"
 
     config = _load_ipv6_prefixes()
-    prefix = config.get("default", "2a09:bac0")
+    prefix = _fallback_ipv6_prefix(config, ipv4)
     for entry in config.get("ranges", []):
         if entry["lo"] <= o0 <= entry["hi"]:
             prefix = entry["prefix"]

@@ -4,6 +4,7 @@
 """Tests for process lifetime realism helpers."""
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
+    _session_active_for_activity,
     _windows_foreground_lifetime,
 )
 from evidenceforge.generation.engine.baseline import _eligible_for_hourly_module_load
@@ -106,6 +108,54 @@ def test_linux_http_cli_commands_have_short_lifetimes(image: str, command_line: 
 
     assert lifetime is not None
     assert lifetime[1] <= 12.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line"),
+    [
+        ("/usr/bin/vim", "vim /opt/company/webapp/main.py"),
+        ("/usr/bin/nano", "nano /etc/nginx/nginx.conf"),
+        ("/usr/bin/emacs", "emacs -nw /opt/company/webapp/index.js"),
+    ],
+)
+def test_linux_terminal_editors_have_interactive_lifetimes(image: str, command_line: str) -> None:
+    lifetime = _linux_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[0] >= 20.0
+
+
+@pytest.mark.parametrize(
+    ("image", "command_line", "minimum"),
+    [
+        ("/usr/bin/mysql", "mysql -u root -p -e 'SHOW PROCESSLIST'", 8.0),
+        ("/usr/bin/psql", "psql -c 'SELECT count(*) FROM pg_stat_activity'", 1.5),
+        ("/usr/bin/systemctl", "systemctl status mysql --no-pager", 0.8),
+        ("/usr/bin/journalctl", "journalctl -u systemd-resolved -n 20", 0.8),
+        ("/usr/bin/du", "du -sh /var/lib/mysql/*", 0.8),
+    ],
+)
+def test_linux_io_commands_have_source_visible_lifetimes(
+    image: str, command_line: str, minimum: float
+) -> None:
+    lifetime = _linux_foreground_lifetime(image, command_line)
+
+    assert lifetime is not None
+    assert lifetime[0] >= minimum
+
+
+def test_ssh_session_activity_stops_before_transport_close() -> None:
+    start = datetime(2024, 3, 18, 20, 20, 0, tzinfo=UTC)
+    close = start + timedelta(minutes=7)
+    session = SimpleNamespace(start_time=start, network_close_time=close)
+
+    assert _session_active_for_activity(session, close - timedelta(seconds=2), margin_seconds=1.5)
+    assert not _session_active_for_activity(
+        session,
+        close - timedelta(milliseconds=500),
+        margin_seconds=1.5,
+    )
+    assert not _session_active_for_activity(session, close + timedelta(milliseconds=1))
 
 
 def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None:
@@ -220,6 +270,64 @@ def test_expired_linux_curl_is_not_valid_for_later_network_attribution() -> None
         system,
         proc,
         start + timedelta(minutes=5),
+    )
+
+
+def test_future_process_is_not_valid_for_network_attribution() -> None:
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    proc = _process(
+        r"C:\Program Files\Mozilla Firefox\firefox.exe",
+        r'"C:\Program Files\Mozilla Firefox\firefox.exe" -osint -url https://example.test',
+        start + timedelta(seconds=30),
+    )
+    system = System(
+        hostname="WS-01",
+        ip="10.10.1.20",
+        os="Windows 11",
+        type="workstation",
+    )
+    generator = ActivityGenerator(StateManager(), {})
+
+    assert generator._foreground_process_expired_for_attribution(system, proc, start)
+
+
+def test_reserved_kerberos_port_skips_active_connection_tuple() -> None:
+    start = datetime(2024, 3, 18, 13, 28, 11, tzinfo=UTC)
+    generator = ActivityGenerator(StateManager(), {})
+    source_ip = "10.10.1.31"
+    dc_ip = "10.10.2.10"
+    dc_hostname = "DC-01"
+    source_port = 54613
+
+    generator._reserve_kerberos_source_port(source_ip, dc_hostname, start, source_port)
+    generator._remember_connection_tuple(
+        source_ip,
+        source_port,
+        dc_ip,
+        88,
+        "tcp",
+        start,
+        duration=7.0,
+    )
+
+    assert (
+        generator._find_reserved_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            start + timedelta(seconds=1),
+            dst_ip=dc_ip,
+        )
+        is None
+    )
+    assert (
+        generator._find_reserved_kerberos_source_port(
+            source_ip,
+            dc_hostname,
+            start + timedelta(seconds=10),
+            dst_ip=dc_ip,
+            window_seconds=10.0,
+        )
+        == source_port
     )
 
 

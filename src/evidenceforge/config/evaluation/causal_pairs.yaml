@@ -150,6 +150,10 @@ pairs:
       before: TargetUserName
       after: TargetUserName
     extra_match: Computer
+    # Service-ticket requests can legitimately reuse a cached or pre-window TGT.
+    # A later visible matching TGT on the same DC is not proof that the current
+    # 4769 inverted Kerberos causality.
+    allow_missing_prior: true
 
   - name: "Kerberos TGT before domain logon"
     before:

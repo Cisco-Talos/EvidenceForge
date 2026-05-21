@@ -35,10 +35,16 @@ import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
+    _linux_baseline_pam_close_lead,
+    _linux_baseline_pam_open_lead,
+    _linux_baseline_session_initiator,
+    _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
     _module_matches_process,
+    _sample_lock_duration,
     _ufw_block_syn_packet_len,
     _ufw_block_ttl,
     _windows_scheduled_task_offsets,
@@ -71,6 +77,68 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
+    """Lock/unlock durations should carry human-scale second and millisecond texture."""
+    rng = random.Random(7)
+    meeting_durations = [_sample_lock_duration(rng, "meeting") for _ in range(50)]
+    lunch_durations = [_sample_lock_duration(rng, "lunch") for _ in range(50)]
+
+    assert all(duration.total_seconds() >= 127 for duration in meeting_durations)
+    assert any(duration.microseconds for duration in meeting_durations + lunch_durations)
+    assert any(duration.total_seconds() % 60 for duration in meeting_durations + lunch_durations)
+    assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
+    assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
+    assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
+
+
+def test_linux_baseline_session_initiator_creates_pam_session_message():
+    """Ambient logind session noise should have a concrete PAM initiator."""
+    app_name, service, message = _linux_baseline_session_initiator(
+        "admin",
+        rng=random.Random(7),
+    )
+
+    assert app_name in {"CRON", "login", "sudo"}
+    assert service in {"cron", "login", "sudo"}
+    assert "pam_unix(" in message
+    assert ":session): session opened for user admin(uid=" in message
+
+
+def test_linux_baseline_pam_leads_leave_visible_ordering_margin():
+    """Ambient PAM rows should lead logind rows by more than timestamp texture."""
+    rng = random.Random(11)
+    open_leads = [_linux_baseline_pam_open_lead(rng) for _ in range(50)]
+    close_leads = [_linux_baseline_pam_close_lead(rng) for _ in range(50)]
+
+    assert min(open_leads) >= timedelta(seconds=3)
+    assert max(open_leads) <= timedelta(seconds=8)
+    assert min(close_leads) >= timedelta(milliseconds=1200)
+    assert max(close_leads) <= timedelta(milliseconds=4200)
+
+
+def test_linux_transient_syslog_pid_uses_host_pid_allocator():
+    """Short-lived PAM/sudo syslog records should use one invocation PID per call."""
+    state_manager = Mock()
+    state_manager.allocate_transient_linux_pid.side_effect = [24123, 24171]
+    event_time = datetime(2024, 3, 18, 12, 5, tzinfo=UTC)
+
+    first = _linux_transient_syslog_pid(
+        state_manager,
+        "WEB-EXT-01",
+        event_time,
+        random.Random(3),
+    )
+    second = _linux_transient_syslog_pid(
+        state_manager,
+        "WEB-EXT-01",
+        event_time + timedelta(seconds=20),
+        random.Random(3),
+    )
+
+    assert [first, second] == [24123, 24171]
+    assert state_manager.allocate_transient_linux_pid.call_count == 2
 
 
 @pytest.fixture
@@ -870,8 +938,9 @@ class TestDhcpLease:
             and call[0][0].syslog.app_name == "dhclient"
         ]
         syslog_messages = [event.syslog.message for event in syslog_events]
+        interface = linux_primary_interface(linux)
         assert syslog_messages == [
-            "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
+            f"DHCPREQUEST for 10.0.10.2 on {interface} to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
             "bound to 10.0.10.2 -- renewal in 3600 seconds.",
         ]

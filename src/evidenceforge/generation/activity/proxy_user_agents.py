@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 from evidenceforge.generation.activity.helpers import _get_os_category
+from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
     from evidenceforge.models.scenario import System
@@ -118,7 +119,7 @@ def _pick_domain_override_agent(
         return None
 
     os_name = source_system.os.lower()
-    for override in overrides.values():
+    for override_name, override in overrides.items():
         if not isinstance(override, dict):
             continue
         os_keywords = override.get("os_keywords", [])
@@ -133,6 +134,19 @@ def _pick_domain_override_agent(
             for candidate in hosts
         )
         if host_matches and any(str(keyword).lower() in os_name for keyword in os_keywords):
+            if str(override.get("stickiness", "request")).lower() == "source_host":
+                source_key = ":".join(
+                    str(part)
+                    for part in (
+                        getattr(source_system, "hostname", ""),
+                        getattr(source_system, "ip", ""),
+                        getattr(source_system, "os", ""),
+                    )
+                )
+                stable_rng = random.Random(
+                    _stable_seed(f"proxy_domain_ua:{override_name}:{source_key}:{host}")
+                )
+                return stable_rng.choice(user_agents)
             return rng.choice(user_agents)
     return None
 

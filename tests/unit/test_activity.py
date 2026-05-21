@@ -66,6 +66,26 @@ def test_linux_trivial_command_lifetime_is_subsecond():
     assert lifetime[1] <= 0.8
 
 
+def test_zeek_connection_observation_time_varies_submillisecond_suffixes():
+    """Burst flows should not preserve one generated microsecond suffix across tuples."""
+    base = datetime(2024, 3, 18, 14, 11, 22, 705641, tzinfo=UTC)
+
+    observed = [
+        _zeek_conn_observation_time(
+            base + timedelta(milliseconds=idx * 307),
+            "10.10.3.10",
+            32768 + idx,
+            "10.10.2.20",
+            port,
+            "tcp",
+            "",
+        )
+        for idx, port in enumerate([22, 80, 445, 443, 3306])
+    ]
+
+    assert len({ts.microsecond % 1000 for ts in observed}) > 1
+
+
 class TestApacheRawSyslogNormalization:
     def test_embedded_timestamp_regex_matches_apache_variants(self):
         """Apache raw syslog timestamp normalization should keep common timestamp variants."""
@@ -423,6 +443,65 @@ class TestActivityGenerator:
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
 
+    def test_generate_logon_reuses_active_workstation_session_over_long_window(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Repeated local workstation sign-ins should reuse the durable session."""
+        first_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        later_time = first_time + timedelta(minutes=45)
+        state_manager.set_current_time(first_time)
+
+        logon_id = activity_gen.generate_logon(test_user, test_system, first_time, logon_type=2)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        reused_logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            later_time,
+            logon_type=2,
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert reused_logon_id == logon_id
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert sessions[0].last_activity_time == later_time
+        emitted_types = [
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "logon" not in emitted_types
+
+    def test_generate_logon_reuses_session_with_future_rendered_logoff(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Out-of-order future logoff rendering must not create overlapping Type 2 sessions."""
+        first_time = datetime(2024, 1, 15, 13, 1, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 13, 8, 0, tzinfo=UTC)
+        logoff_time = datetime(2024, 1, 15, 15, 51, 0, tzinfo=UTC)
+
+        logon_id = activity_gen.generate_logon(test_user, test_system, first_time, logon_type=2)
+        activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id, logon_type=2)
+        assert state_manager.get_sessions_for_user(test_user.username) == []
+        assert [
+            session.logon_id
+            for session in state_manager.get_sessions_for_user_at(test_user.username, second_time)
+        ] == [logon_id]
+
+        mock_emitters["windows_event_security"].reset_mock()
+        reused_logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            second_time,
+            logon_type=2,
+        )
+
+        assert reused_logon_id == logon_id
+        emitted_types = [
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "logon" not in emitted_types
+
     def test_interactive_logons_get_distinct_userinit_parents(
         self, activity_gen, test_user, test_system, state_manager
     ):
@@ -439,17 +518,29 @@ class TestActivityGenerator:
         )
         activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
 
+        other_user = User(
+            username="otheruser",
+            full_name="Other User",
+            email="other@example.com",
+            enabled=True,
+        )
+
         first_logon = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
         second_logon = activity_gen.generate_logon(
-            test_user,
+            other_user,
             test_system,
             timestamp + timedelta(minutes=30),
             logon_type=2,
         )
 
-        sessions = {
-            session.logon_id: session for session in state_manager.get_sessions_for_user("testuser")
-        }
+        sessions = {}
+        for username in ("testuser", "otheruser"):
+            sessions.update(
+                {
+                    session.logon_id: session
+                    for session in state_manager.get_sessions_for_user(username)
+                }
+            )
         first_explorer = state_manager.get_process(
             test_system.hostname, sessions[first_logon].explorer_pid
         )
@@ -891,11 +982,60 @@ class TestActivityGenerator:
         assert subject_session is not None
         assert subject_session.start_time < timestamp
 
+    def test_account_changed_password_set_uses_event_time(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """4738 password punch-down should render a real PasswordLastSet timestamp."""
+        timestamp = datetime(2024, 3, 18, 16, 14, 35, tzinfo=UTC)
+
+        activity_gen.generate_account_changed(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc-audit",
+            target_sid="S-1-5-21-1-2-3-1109",
+            password_last_set_to_event_time=True,
+            old_uac_value="0x15",
+            new_uac_value="0x10",
+            user_account_control="\n\t\t\t%%2081",
+            primary_group_id="-",
+        )
+
+        account_event = [
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "account_changed"
+        ][0]
+        account_context = account_event.account_management
+        assert account_context.password_last_set == "3/18/2024 4:14:35 PM"
+        assert account_context.old_uac_value == "0x15"
+        assert account_context.new_uac_value == "0x10"
+        assert account_context.user_account_control == "\n\t\t\t%%2081"
+        assert account_context.primary_group_id == "-"
+
     def test_regular_user_logon_is_not_randomly_elevated(
         self, activity_gen, test_user, test_system
     ):
         """Ordinary users should not receive 4672 without a privileged role."""
         assert activity_gen._should_elevate(test_user) is False
+
+    def test_help_desk_persona_does_not_imply_special_privileges(self, activity_gen, test_system):
+        """Delegated support users need explicit admin groups for 4672 privileges."""
+        user = User(
+            username="help.desk",
+            full_name="Help Desk",
+            email="help.desk@example.com",
+            persona="help_desk",
+            groups=["it-support"],
+            enabled=True,
+        )
+
+        assert activity_gen._special_privilege_profile_name(user, 2, test_system.hostname) == (
+            "regular_user"
+        )
+        assert activity_gen._should_elevate(user, logon_type=2, hostname=test_system.hostname) is (
+            False
+        )
 
     def test_generate_logon_interactive_uses_no_source_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1375,6 +1515,136 @@ class TestActivityGenerator:
         assert unlock_logon.timestamp == unlock.timestamp + timedelta(milliseconds=50)
         assert unlock_logon.auth.source_ip == "-"
 
+    def test_workstation_lock_unlock_carry_state_session_id(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4800, 4801, and Type 7 4624 should carry the canonical session ID."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x4f2a1b"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=5),
+            session_id=5,
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=5),
+            logon_id,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        lock = next(event for event in events if event.event_type == "workstation_locked")
+        unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+        unlock_logon = next(
+            event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
+        )
+
+        assert lock.auth.session_id == 5
+        assert unlock.auth.session_id == 5
+        assert unlock_logon.auth.session_id == 5
+
+    def test_workstation_unlock_prefers_locked_session_over_newer_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A 4801 should unlock the locked terminal session, not a newer active one."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        locked_logon_id = "0x2664c4e"
+        newer_logon_id = "0x2802b88"
+        state_manager.register_session(
+            logon_id=locked_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=30),
+            session_id=5,
+        )
+        state_manager.register_session(
+            logon_id=newer_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.25",
+            start_time=lock_time + timedelta(minutes=20),
+            session_id=6,
+            session_kind="rdp",
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, locked_logon_id)
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=35),
+            newer_logon_id,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+        unlock_logon = next(
+            event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
+        )
+
+        assert unlock.auth.logon_id == locked_logon_id
+        assert unlock.auth.session_id == 5
+        assert unlock_logon.auth.logon_id == locked_logon_id
+        assert unlock_logon.auth.session_id == 5
+
+    def test_workstation_lock_ignores_second_locked_session_for_user_host(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """One user/host should not visibly enter a second locked state before unlock."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first_logon_id = "0x2664c4e"
+        second_logon_id = "0x2700ea3"
+        state_manager.register_session(
+            logon_id=first_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=30),
+            session_id=5,
+        )
+        state_manager.register_session(
+            logon_id=second_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.25",
+            start_time=lock_time + timedelta(minutes=10),
+            session_id=6,
+            session_kind="rdp",
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, first_logon_id)
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=20),
+            second_logon_id,
+        )
+
+        locks = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "workstation_locked"
+        ]
+
+        assert len(locks) == 1
+        assert locks[0].auth.logon_id == first_logon_id
+        assert locks[0].auth.session_id == 5
+
     def test_workstation_lock_ignores_duplicate_before_unlock(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1568,6 +1838,31 @@ class TestActivityGenerator:
         events = [call.args[0] for call in bash_emitter.emit.call_args_list]
         assert events[0].timestamp == timestamp
         assert events[1].timestamp >= timestamp + timedelta(seconds=45)
+
+    def test_bash_history_preserves_transfer_command_dwell(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Archive and transfer commands should keep the shell busy for realistic dwell."""
+        linux = System(hostname="DB-PROD-01", ip="10.0.0.2", os="Ubuntu 22.04", type="server")
+        user = User(username="root", full_name="Root", email="root@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        bash_emitter = Mock()
+        bash_emitter.can_handle.return_value = True
+        mock_emitters["bash_history"] = bash_emitter
+        activity_gen.dispatcher.emitters = mock_emitters
+
+        activity_gen.generate_bash_command(user, linux, timestamp, "gzip -9 /tmp/rpt.sql")
+        activity_gen.generate_bash_command(
+            user,
+            linux,
+            timestamp + timedelta(seconds=1),
+            "scp /tmp/rpt.sql.gz root@10.10.2.30:/tmp/rpt.sql.gz",
+        )
+
+        events = [call.args[0] for call in bash_emitter.emit.call_args_list]
+        assert events[0].timestamp == timestamp
+        assert events[1].timestamp >= timestamp + timedelta(seconds=14)
 
     def test_same_user_bash_history_avoids_same_second_across_hosts(
         self, activity_gen, state_manager, mock_emitters
@@ -2025,6 +2320,78 @@ class TestActivityGenerator:
         assert network_events
         assert network_events[-1].network.dst_ip == web_server.ip
         assert network_events[-1].network.dst_port == 22
+
+    def test_sqlcmd_unresolved_host_emits_failed_network_attempt(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Explicit sqlcmd targets should not render as process-only activity."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._ip_to_system = {test_system.ip: test_system}
+        activity_gen._all_system_ips = [test_system.ip]
+        activity_gen._ad_domain = "example.com"
+        process_name = (
+            r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe"
+        )
+        command_line = 'sqlcmd.exe -S sqlprod01 -Q "SELECT 1"'
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=process_name,
+            command_line=command_line,
+            username="testuser",
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+
+        activity_gen._emit_process_network_correlation(
+            test_system,
+            process_name,
+            command_line,
+            timestamp,
+            pid,
+            random.Random(2),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert network_events
+        assert network_events[-1].network.dst_port == 1433
+        assert network_events[-1].network.conn_state == "S0"
+        assert network_events[-1].network.resp_bytes == 0
+        assert network_events[-1].network.initiating_pid == pid
+
+        assert network_events[-1].network.dst_ip != test_system.ip
+        assert network_events[-1].network.dst_ip.startswith("10.0.0.")
+
+    def test_sqlcmd_local_instance_does_not_emit_network_attempt(
+        self, activity_gen, test_system, mock_emitters
+    ):
+        """Local SQL Server instances should stay host-local."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process_name = (
+            r"C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe"
+        )
+        command_line = 'sqlcmd.exe -S SQLEXPRESS -Q "SELECT 1"'
+
+        activity_gen._emit_process_network_correlation(
+            test_system,
+            process_name,
+            command_line,
+            timestamp,
+            4242,
+            random.Random(2),
+        )
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        ]
+        assert not network_events
 
     def test_process_follow_on_file_event_after_process_create(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -2499,6 +2866,37 @@ class TestActivityGenerator:
         assert event.timestamp > process_start
         assert event.process.start_time == process_start
 
+    def test_image_load_materializes_username_placeholder(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Endpoint module-load paths should never leak literal username placeholders."""
+        session_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(session_start)
+        logon_id = activity_gen.generate_logon(test_user, test_system, session_start)
+        pid = activity_gen.generate_process(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=5),
+            logon_id,
+            r"C:\Program Files\Zoom\bin\Zoom.exe",
+            r'"C:\Program Files\Zoom\bin\Zoom.exe"',
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            session_start + timedelta(seconds=6),
+            pid,
+            r"C:\Program Files\Zoom\bin\Zoom.exe",
+            r"C:\Users\{username}\AppData\Roaming\Zoom\bin\zVideoApp.dll",
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.event_type == "image_load"
+        assert "{username}" not in event.image_load.image_loaded
+        assert f"\\Users\\{test_user.username}\\" in event.image_load.image_loaded
+
     def test_user_session_process_identity_resolved_before_emit(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -2753,6 +3151,46 @@ class TestActivityGenerator:
         ]
         assert "workstation_unlocked" not in emitted_types
         assert "logon" not in emitted_types
+
+    def test_unlock_reauth_ecar_login_uses_child_session_object(
+        self, activity_gen, test_user, test_system, mock_emitters
+    ):
+        """eCAR Type 7 re-auth should not reuse the durable session object lifecycle."""
+        mock_emitters["ecar"] = Mock()
+        activity_gen.dispatcher.emitters = mock_emitters
+        start = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            start,
+            logon_type=2,
+            source_ip="-",
+        )
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            start + timedelta(minutes=5),
+            logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            start + timedelta(minutes=7),
+            logon_id,
+        )
+
+        ecar_logons = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+
+        assert [event.auth.logon_type for event in ecar_logons] == [2, 7]
+        assert ecar_logons[0].edr.object_id
+        assert ecar_logons[1].edr.object_id
+        assert ecar_logons[1].edr.object_id != ecar_logons[0].edr.object_id
+        assert ecar_logons[1].edr.actor_id == ecar_logons[0].edr.object_id
 
     def test_workstation_lock_unlock_reject_network_session_luid(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -3279,6 +3717,112 @@ class TestActivityGenerator:
         assert event.event_type == "wfp_connection"
         assert event.network.initiating_pid == pid
         assert event.process.image.endswith("powershell.exe")
+
+    def test_kerberos_connection_can_render_udp_transport(
+        self, activity_gen, test_system, state_manager, mock_emitters, monkeypatch
+    ):
+        """Kerberos/88 network evidence should not be forced to TCP-only."""
+        from evidenceforge.generation.activity import kerberos_realism
+
+        monkeypatch.setattr(
+            kerberos_realism,
+            "load_kerberos_realism",
+            lambda: {"transport_profiles": {"default": {"udp": 1, "tcp": 0}}},
+        )
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc_system.ip: dc_system}
+        activity_gen._dc_systems = [dc_system]
+        state_manager.set_current_time(timestamp)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\lsass.exe",
+            command_line="lsass.exe",
+            username="SYSTEM",
+            integrity_level="System",
+            logon_id="0x3e7",
+        )
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=dc_system.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            duration=3.0,
+            orig_bytes=5000,
+            resp_bytes=32000,
+            conn_state="RSTR",
+            pid=pid,
+            source_system=test_system,
+            emit_dns=False,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert connection_event.network.protocol == "udp"
+        assert connection_event.network.ip_proto == 17
+        assert connection_event.network.duration <= 0.16
+        assert connection_event.network.orig_bytes <= 1300
+        assert connection_event.network.resp_bytes <= 1400
+        assert connection_event.network.conn_state == "SF"
+        wfp_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        )
+        assert wfp_event.network.protocol == "udp"
+        assert wfp_event.network.ip_proto == 17
+
+    def test_udp_kerberos_no_payload_failure_has_no_zeek_service(
+        self, activity_gen, test_system, state_manager, mock_emitters
+    ):
+        """Zeek should not analyzer-label zero-payload UDP port 88 attempts as krb."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        dc_system = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {test_system.ip: test_system, dc_system.ip: dc_system}
+        activity_gen._dc_systems = [dc_system]
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip=test_system.ip,
+            dst_ip=dc_system.ip,
+            time=timestamp,
+            dst_port=88,
+            proto="udp",
+            service="kerberos",
+            conn_state="S0",
+            source_system=test_system,
+            emit_dns=False,
+        )
+
+        connection_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 88
+        )
+        assert connection_event.network.conn_state == "S0"
+        assert connection_event.network.protocol == "udp"
+        assert connection_event.network.orig_bytes == 0
+        assert connection_event.network.resp_bytes == 0
+        assert connection_event.network.service == ""
 
     def test_generate_connection_skips_wfp_for_stale_process_pid(
         self, activity_gen, test_system, state_manager, mock_emitters
@@ -3941,6 +4485,73 @@ class TestActivityGenerator:
         assert child.process.parent_pid != wrong_parent_pid
         assert child.process.logon_id == new_logon_id
 
+    def test_generate_process_rejects_one_shot_shell_parent(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Short-lived shell wrappers should not parent unrelated later commands."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x33333"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+            start_time=timestamp - timedelta(minutes=5),
+        )
+        state_manager.set_current_time(timestamp - timedelta(seconds=20))
+        explorer_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\explorer.exe",
+            command_line="explorer.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        activity_gen._system_pids = {
+            test_system.hostname: {
+                "explorer": explorer_pid,
+                "winlogon": 4,
+                "services": 4,
+                "svchost_dcom": 4,
+            }
+        }
+        state_manager.set_current_time(timestamp - timedelta(seconds=10))
+        one_shot_parent_pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=explorer_pid,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line='powershell.exe -NoProfile -Command "Get-LocalUser"',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        activity_gen._record_user_process(
+            test_system,
+            test_user,
+            one_shot_parent_pid,
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        )
+
+        activity_gen.generate_process(
+            test_user,
+            test_system,
+            timestamp,
+            logon_id,
+            r"C:\Windows\System32\whoami.exe",
+            "whoami.exe",
+            parent_pid=one_shot_parent_pid,
+        )
+
+        process_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "process_create"
+        ]
+        child = process_events[-1]
+        assert child.process.parent_pid != one_shot_parent_pid
+
     def test_generate_connection_emits_zeek(self, activity_gen, state_manager, mock_emitters):
         """generate_connection should open connection and dispatch SecurityEvent."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -4005,6 +4616,78 @@ class TestActivityGenerator:
             "ssh",
         )
 
+    def test_generate_connection_preserves_public_vip_for_inbound_web_host(
+        self,
+        state_manager,
+    ):
+        """Explicit public-hostname traffic should keep the caller's inbound VIP."""
+        captured = []
+
+        class _Visibility:
+            _vip_to_real_ip = {"203.14.220.10": "10.10.3.10"}
+
+            @staticmethod
+            def is_connection_visible(_src_ip, _dst_ip):
+                return True
+
+        class _Dispatcher:
+            visibility_engine = _Visibility()
+
+            @staticmethod
+            def dispatch(event):
+                captured.append(event)
+
+            @staticmethod
+            def record_filtered_network_observation():
+                return None
+
+        generator = ActivityGenerator(state_manager, {}, dispatcher=_Dispatcher())
+        web_server = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+            public_hostnames=["ehr-portal.meridianhcs.com"],
+        )
+        generator._ip_to_system = {web_server.ip: web_server}
+        timestamp = datetime(2024, 3, 18, 13, 20, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        generator.generate_connection(
+            src_ip="185.70.41.45",
+            dst_ip="203.14.220.10",
+            time=timestamp,
+            dst_port=443,
+            proto="tcp",
+            service="http",
+            duration=1.2,
+            orig_bytes=18432,
+            resp_bytes=912,
+            conn_state="SF",
+            http=HttpContext(
+                method="POST",
+                host="ehr-portal.meridianhcs.com",
+                uri="/ehr/admin/upload.php",
+                user_agent="Mozilla/5.0",
+                request_body_len=18432,
+                response_body_len=912,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/html"],
+            ),
+            hostname="ehr-portal.meridianhcs.com",
+            preserve_dst_ip=True,
+        )
+
+        event = captured[-1]
+        assert event.network.dst_ip == "203.14.220.10"
+        assert event.dst_host is not None
+        assert event.dst_host.hostname == "WEB-EXT-01"
+        assert "web_server" in event.dst_host.roles
+        assert event.http is not None
+        assert event.http.uri == "/ehr/admin/upload.php"
+
     def test_generate_connection_emits_nearby_kdc_audit_for_internal_kerberos_flows(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -4028,18 +4711,19 @@ class TestActivityGenerator:
         )
         activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
 
-        activity_gen.generate_connection(
-            src_ip=source.ip,
-            dst_ip=dc.ip,
-            time=timestamp,
-            dst_port=88,
-            proto="tcp",
-            service="kerberos",
-            duration=1.0,
-            orig_bytes=500,
-            resp_bytes=2500,
-            source_system=source,
-        )
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=True):
+            activity_gen.generate_connection(
+                src_ip=source.ip,
+                dst_ip=dc.ip,
+                time=timestamp,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=2500,
+                source_system=source,
+            )
 
         events = [
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -4055,6 +4739,55 @@ class TestActivityGenerator:
         assert service.timestamp < connection.timestamp
         assert (connection.timestamp - tgt.timestamp).total_seconds() < 1
         assert tgt.kerberos.source_port == connection.network.src_port
+        assert service.kerberos.source_port == connection.network.src_port
+
+    def test_generate_connection_can_use_cached_tgt_for_internal_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Cached-TGT client flows can emit DC 4769 evidence without a fresh visible 4768."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.1.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds", "kerberos"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=False):
+            activity_gen.generate_connection(
+                src_ip=source.ip,
+                dst_ip=dc.ip,
+                time=timestamp,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=2500,
+                source_system=source,
+            )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        event_types = [event.event_type for event in events]
+        service = next(event for event in events if event.event_type == "kerberos_service")
+        connection = next(event for event in events if event.event_type == "connection")
+
+        assert "kerberos_tgt" not in event_types
+        assert service.timestamp < connection.timestamp
+        assert service.kerberos.target_username == "WEB-EXT-01$@CORP.LOCAL"
         assert service.kerberos.source_port == connection.network.src_port
 
     def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(
@@ -4466,6 +5199,7 @@ class TestActivityGenerator:
             for idx, cert in enumerate(event.x509_chain)
         )
         assert event.network.duration >= (max_cert_delay_ms / 1000.0)
+        assert event.network.duration >= 1.05 + (0.075 * len(event.x509_chain))
 
     def test_http_connection_duration_covers_zeek_http_offset(
         self, activity_gen, state_manager, mock_emitters
@@ -4616,6 +5350,45 @@ class TestActivityGenerator:
         first_event = emitter.emit.call_args_list[0][0][0]
         assert first_event.event_type in ("logon", "failed_logon")
 
+    def test_execute_baseline_activity_logon_reuses_active_workstation_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Baseline logon activity should not mint same-user Type 2 bursts."""
+        session_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        activity_time = session_time + timedelta(seconds=20)
+        state_manager.set_current_time(session_time)
+        logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            session_time,
+            logon_type=2,
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        class FixedInteractiveRng(random.Random):
+            def random(self) -> float:
+                return 0.5
+
+            def choices(self, population, weights=None, *, cum_weights=None, k=1):
+                return [2]
+
+        with patch.object(generator_module, "_get_rng", return_value=FixedInteractiveRng()):
+            activity_gen.execute_baseline_activity(
+                test_user,
+                test_system,
+                activity_time,
+                "logon",
+            )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert sessions[0].last_activity_time == activity_time
+        emitted_types = [
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "logon" not in emitted_types
+
     def test_execute_baseline_activity_process_creates_session(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -4679,6 +5452,35 @@ class TestActivityGenerator:
         event_types = [c[0][0].event_type for c in emitter.emit.call_args_list]
         assert "logon" in event_types
         assert "process_create" in event_types
+
+    def test_execute_baseline_activity_process_shifts_to_near_future_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Near-future workstation sessions should absorb out-of-order foreground work."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        future_logon_time = datetime(2024, 1, 15, 10, 4, 0, tzinfo=UTC)
+        state_manager.set_current_time(future_logon_time)
+        logon_id = activity_gen.generate_logon(test_user, test_system, future_logon_time)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.execute_baseline_activity(test_user, test_system, process_time, "process_code")
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert [session.logon_id for session in sessions] == [logon_id]
+        emitter = mock_emitters["windows_event_security"]
+        emitted_events = [c[0][0] for c in emitter.emit.call_args_list]
+        event_types = [event.event_type for event in emitted_events]
+        assert "logon" not in event_types
+        process_events = [
+            event
+            for event in emitted_events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and not event.process.image.endswith("explorer.exe")
+        ]
+        assert len(process_events) == 1
+        assert process_events[0].timestamp > future_logon_time
+        assert process_events[0].process.logon_id == logon_id
 
     def test_execute_baseline_linux_foreground_process_terminates_promptly(
         self, activity_gen, test_user, state_manager, mock_emitters
@@ -4861,6 +5663,220 @@ class TestActivityGenerator:
         ]
         assert terminate_events
         assert process_events[-1].timestamp < terminate_events[-1].timestamp
+
+    def test_generate_bash_command_serializes_foreground_children(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Sequential foreground commands in one shell should not overlap."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.2.50",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc456"
+        state_manager.set_current_time(command_time - timedelta(seconds=60))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=command_time - timedelta(seconds=30),
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time,
+            "mysqldump --defaults-extra-file=/home/alice/.my.cnf webapp > /tmp/webapp.sql",
+        )
+        activity_gen.generate_bash_command(
+            test_user,
+            linux,
+            command_time + timedelta(seconds=1),
+            "gzip /tmp/webapp.sql",
+        )
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        mysqldump_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/mysqldump"
+        )
+        gzip_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/gzip"
+        )
+        mysqldump_terminate = next(
+            event
+            for event in events
+            if event.event_type == "process_terminate"
+            and event.process is not None
+            and event.process.pid == mysqldump_create.process.pid
+        )
+
+        assert mysqldump_create.process.parent_pid == bash_pid
+        assert gzip_create.process.parent_pid == bash_pid
+        assert gzip_create.timestamp > mysqldump_terminate.timestamp
+
+    def test_linux_foreground_completion_updates_user_shell_without_parent_state(
+        self, activity_gen, test_user
+    ):
+        """Storyline shell chains should serialize even when parent shell state is sparse."""
+        command_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="DB-PROD-01",
+            ip="10.0.2.50",
+            os="Ubuntu 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc456"
+        parent_pid = 707122
+        gzip_done = command_time + timedelta(seconds=42)
+
+        activity_gen.remember_linux_foreground_process_completion(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            termination_time=gzip_done,
+            process_name="/usr/bin/gzip",
+            command_line="gzip -9 /tmp/rpt_0318.sql",
+        )
+        reserved = activity_gen.reserve_linux_foreground_process_start(
+            system=linux,
+            username=test_user.username,
+            logon_id=logon_id,
+            parent_pid=parent_pid,
+            requested_time=command_time + timedelta(seconds=1),
+            process_name="/usr/bin/scp",
+            command_line="scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt_0318.sql.gz",
+        )
+        scheduled_history = activity_gen._schedule_bash_history_time(
+            test_user,
+            linux,
+            command_time + timedelta(seconds=1),
+            "scp /tmp/rpt_0318.sql.gz root@10.10.2.30:/tmp/rpt_0318.sql.gz",
+        )
+
+        assert reserved > gzip_done
+        assert scheduled_history > gzip_done
+
+    def test_linux_process_activity_reserves_busy_foreground_shell(
+        self, activity_gen, test_user, state_manager, mock_emitters
+    ):
+        """Baseline Linux process activity should wait for the active foreground command."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux = System(
+            hostname="WS-LNGUYEN-01",
+            ip="10.0.2.60",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        logon_id = "0xabc789"
+        state_manager.set_current_time(process_time - timedelta(seconds=60))
+        systemd_pid = state_manager.create_process(
+            linux.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd --system",
+            "root",
+            "System",
+        )
+        sshd_pid = state_manager.create_process(
+            linux.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D [listener]",
+            "root",
+            "System",
+        )
+        session = state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=linux.hostname,
+            logon_type=10,
+            source_ip="10.0.0.50",
+            start_time=process_time - timedelta(seconds=30),
+        )
+        bash_pid = state_manager.create_process(
+            linux.hostname,
+            sshd_pid,
+            "/bin/bash",
+            "-bash",
+            test_user.username,
+            "Medium",
+            logon_id,
+        )
+        session.session_shell_pid = bash_pid
+        activity_gen._system_pids = {
+            linux.hostname: {"systemd": systemd_pid, "sshd": sshd_pid, "bash": bash_pid}
+        }
+        blocked_until = process_time + timedelta(seconds=30)
+        activity_gen._foreground_shell_next_time[
+            (linux.hostname, test_user.username, logon_id, bash_pid)
+        ] = blocked_until
+
+        with patch.dict(
+            generator_module.PROCESS_TEMPLATES_LINUX,
+            {"process_system": [("/usr/bin/npm", "npm install")]},
+        ):
+            activity_gen.execute_baseline_activity(test_user, linux, process_time, "process_system")
+
+        events = [
+            call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        npm_create = next(
+            event
+            for event in events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and event.process.image == "/usr/bin/npm"
+        )
+
+        assert npm_create.process.parent_pid == bash_pid
+        assert npm_create.timestamp > blocked_until
 
     def test_process_user_apps_bash_pool_respects_database_role(
         self, activity_gen, test_user, monkeypatch, mock_emitters
@@ -5079,6 +6095,18 @@ class TestActivityGenerator:
             "mysqldump --single-transaction ehr patients",
         )
 
+    def test_linux_shell_process_argv_expands_home_shortcuts_for_user(self):
+        """eCAR process argv should render generated home shortcuts as absolute paths."""
+        process = generator_module._linux_command_process_from_shell(
+            "tail -50 ~/.xsession-errors 2>/dev/null",
+            username="aisha.johnson",
+        )
+
+        assert process == (
+            "/usr/bin/tail",
+            "tail -50 /home/aisha.johnson/.xsession-errors",
+        )
+
     def test_backgrounded_long_running_shell_command_keeps_ampersand_out_of_process_argv(self):
         """Background markers belong to shell history, not child process argv."""
         process = generator_module._linux_command_process_from_shell("tail -f /var/log/syslog &")
@@ -5156,12 +6184,12 @@ class TestActivityGenerator:
     def test_linux_mysql_query_argument_remains_shell_safe(self):
         """SQL passed through mysql -e should keep shell metacharacters quoted."""
         process = generator_module._linux_command_process_from_shell(
-            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'"
+            "mysql --defaults-extra-file=~/.my.cnf -e 'SELECT COUNT(*) FROM appdb.users'"
         )
 
         assert process == (
             "/usr/bin/mysql",
-            "mysql -u root -p -e 'SELECT COUNT(*) FROM appdb.users'",
+            "mysql '--defaults-extra-file=~/.my.cnf' -e 'SELECT COUNT(*) FROM appdb.users'",
         )
 
     def test_linux_shell_control_operators_split_process_argv(self):
@@ -5289,6 +6317,49 @@ class TestActivityGenerator:
         assert "cat /etc/shadow" in command_lines
         assert "head -5" in command_lines
         assert all("|" not in command for command in command_lines)
+
+    def test_parameterize_command_uses_scenario_internal_domain(self, activity_gen, test_user):
+        """Internal URL placeholders should not leak default corp.local vocabulary."""
+        activity_gen._ad_domain = "meridianhcs.local"
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+        )
+
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            "curl -sS -o /dev/null -w '%{http_code}' {internal_url}",
+            username=test_user.username,
+            system=linux,
+        )
+
+        assert "meridianhcs.local" in command
+        assert "corp.local" not in command
+
+    def test_parameterize_command_uses_scenario_ldap_base_dn(self, activity_gen, test_user):
+        """LDAP command templates should derive base DNs from the scenario domain."""
+        activity_gen._ad_domain = "meridianhcs.local"
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "openldap"],
+        )
+
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            'ldapsearch -x -H ldap://{ssh_target} -b "{ldap_base_dn}" "(objectClass=user)"',
+            username=test_user.username,
+            system=linux,
+        )
+
+        assert "dc=meridianhcs,dc=local" in command
+        assert "dc=corp,dc=local" not in command
+        assert "{ldap_base_dn}" not in command
 
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters

@@ -205,6 +205,96 @@ class TestStateManagerInit:
 
         assert 8_000 <= pid < 180_000
 
+    def test_linux_pids_increase_across_time_bucket_boundary(self):
+        """Linux PIDs should not sawtooth downward at five-minute boundaries."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+
+        sm.set_current_time(boot_time + timedelta(minutes=4, seconds=59))
+        first_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 first.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(minutes=5, seconds=1))
+        second_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 second.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+
+        assert second_pid > first_pid
+
+    def test_linux_pids_keep_chronological_shape_when_allocated_out_of_order(self):
+        """Out-of-order generation should not make earlier Linux PIDs look newer."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+
+        sm.set_current_time(boot_time + timedelta(minutes=5, seconds=1))
+        later_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 later.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(minutes=4, seconds=59))
+        earlier_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/python3",
+            command_line="python3 earlier.py",
+            username="alice",
+            integrity_level="Medium",
+        )
+
+        assert earlier_pid < later_pid
+
+    def test_linux_pids_keep_parent_child_shape_before_future_process(self):
+        """Earlier parent/child allocations should fit below known future PIDs."""
+        sm = StateManager()
+        boot_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.register_boot_time("linux01", boot_time)
+
+        sm.set_current_time(boot_time + timedelta(minutes=5, seconds=1))
+        later_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/usr/bin/journalctl",
+            command_line="journalctl -p warning",
+            username="alice",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(seconds=35))
+        parent_pid = sm.create_process(
+            system="linux01",
+            parent_pid=0,
+            image="/bin/sh",
+            command_line="/bin/sh -c debian-sa1",
+            username="sysstat",
+            integrity_level="Medium",
+        )
+        sm.set_current_time(boot_time + timedelta(seconds=38))
+        child_pid = sm.create_process(
+            system="linux01",
+            parent_pid=parent_pid,
+            image="/usr/lib/sysstat/debian-sa1",
+            command_line="debian-sa1 1 1",
+            username="sysstat",
+            integrity_level="Medium",
+        )
+
+        assert parent_pid < child_pid < later_pid
+
     def test_linux_transient_syslog_pids_share_process_namespace(self):
         """Syslog-only transient PIDs should not come from a separate low random pool."""
         sm = StateManager()
@@ -257,6 +347,61 @@ class TestSessionManagement:
         assert session.system == "WS-01"
         assert session.logon_type == 2
         assert session.source_ip == "192.168.1.50"
+        assert session.session_id > 0
+        assert sm.get_session_id(logon_id) == session.session_id
+
+    def test_windows_session_ids_are_canonical_and_collision_safe(self):
+        """Overlapping Windows interactive sessions should not hash-collide by LogonID."""
+        sm = StateManager()
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(base)
+
+        console = sm.create_session(
+            "aisha.johnson",
+            "WS-AJOHNSON-01",
+            2,
+            "-",
+            session_kind="interactive",
+        )
+        rdp = sm.create_session(
+            "aisha.johnson",
+            "WS-AJOHNSON-01",
+            10,
+            "10.10.1.10",
+            session_kind="rdp",
+            start_time=base + timedelta(minutes=5),
+        )
+        network = sm.create_session(
+            "aisha.johnson",
+            "WS-AJOHNSON-01",
+            3,
+            "10.10.1.20",
+            session_kind="network",
+            start_time=base + timedelta(minutes=6),
+        )
+
+        console_session_id = sm.get_session_id(console)
+        rdp_session_id = sm.get_session_id(rdp)
+
+        assert console_session_id > 0
+        assert rdp_session_id > 0
+        assert console_session_id != rdp_session_id
+        assert sm.get_session_id(network) == 0
+
+    def test_ssh_sessions_do_not_get_windows_session_ids(self):
+        """Linux SSH-style sessions should not consume Windows terminal IDs."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        ssh = sm.create_session(
+            "marcus.chen",
+            "DB-PROD-01",
+            10,
+            "10.10.1.10",
+            session_kind="ssh",
+        )
+
+        assert sm.get_session_id(ssh) == 0
 
     def test_create_session_uses_host_local_monotonic_luids(self):
         """New LogonIDs on one host should follow source-native LUID ordering."""
@@ -432,6 +577,8 @@ class TestSessionManagement:
         assert sm.get_session(original) is session
         assert session.start_time == datetime(2024, 1, 15, 15, 39, 9, 751464, UTC)
         assert int(reassigned, 16) > int(intervening, 16)
+        assert sm.get_session_id(original) == session.session_id
+        assert sm.get_session_id(reassigned) == session.session_id
 
     def test_create_session_keeps_host_ranges_unique(self):
         """Host-local LUID sequences should not collide in global state."""

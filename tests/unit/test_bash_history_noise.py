@@ -193,7 +193,15 @@ class TestBaselineLinuxBashHistory:
         assert "ps" in pool_str
 
         # Role-specific pools should exist and be non-empty
-        for role in ("sysadmin", "dba", "webadmin", "developer", "security"):
+        for role in (
+            "sysadmin",
+            "dba",
+            "webadmin",
+            "developer",
+            "security",
+            "help_desk",
+            "data_analyst",
+        ):
             pool = commands.get(role, [])
             assert len(pool) >= 5, f"{role} command pool has only {len(pool)} commands"
 
@@ -204,6 +212,19 @@ class TestBaselineLinuxBashHistory:
         typo_model = commands.get("typo_model", {})
         assert 0 <= typo_model.get("max_rate", -1) <= 1
         assert typo_model.get("short_history_max_typos", -1) <= 1
+
+        workflow_model = commands.get("workflow_model", {})
+        assert 0 <= workflow_model.get("selection_probability", -1) <= 1
+        workflows = commands.get("workflows", {})
+        for role in ("common", "sysadmin", "developer", "help_desk"):
+            assert workflows.get(role), f"{role} workflow pool is empty"
+
+    def test_stock_workstation_personas_use_dedicated_bash_pools(self):
+        """Help desk and data analyst personas should hit their own expanded pools."""
+        from evidenceforge.generation.activity.bash_commands import _get_role_pool
+
+        assert _get_role_pool("help_desk", "generic") == "help_desk"
+        assert _get_role_pool("data_analyst", "generic") == "data_analyst"
 
     def test_short_history_typo_cap_suppresses_extra_typos(self, monkeypatch):
         """Short bash histories should not accumulate multiple generated typos."""
@@ -261,6 +282,115 @@ class TestBaselineLinuxBashHistory:
         counts = Counter(picked)
         assert max(counts.values()) <= 6
 
+    def test_high_signal_admin_checks_have_low_global_repeat_budget(self):
+        """Exact diagnostic commands should not repeat broadly across users/hosts."""
+        from evidenceforge.generation.activity import bash_commands
+
+        target = "systemctl --failed --no-pager"
+        pool = [target, *(f"echo host-check-{index}" for index in range(12))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(7)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 3 and target in values:
+                    return target
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(30)
+        ]
+
+        assert Counter(picked)[target] <= 2
+
+    def test_high_signal_admin_check_variants_share_repeat_budget(self):
+        """Equivalent diagnostic command variants should not bypass repeat caps."""
+        from evidenceforge.generation.activity import bash_commands
+
+        targets = ("systemctl status sshd", "systemctl status sshd --no-pager")
+        pool = [*targets, *(f"echo host-check-{index}" for index in range(12))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(11)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 4 in (1, 2):
+                    return targets[self.calls % len(targets)]
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(30)
+        ]
+
+        counts = Counter(picked)
+        assert counts["systemctl status sshd"] + counts["systemctl status sshd --no-pager"] <= 2
+
+    def test_high_signal_network_diagnostics_have_low_repeat_budgets(self):
+        """Common desktop/network triage commands should not dominate generated histories."""
+        from evidenceforge.generation.activity import bash_commands
+
+        targets = (
+            "ip -br addr",
+            "journalctl -p warning --since '1 hour ago' --no-pager | tail -20",
+            "resolvectl status 2>/dev/null | head -40",
+        )
+        pool = [*targets, *(f"echo host-check-{index}" for index in range(20))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(17)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 2 and targets[self.calls % len(targets)] in values:
+                    return targets[self.calls % len(targets)]
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(60)
+        ]
+
+        counts = Counter(picked)
+        for target in targets:
+            assert counts[target] <= 2
+
     def test_bash_picker_suppresses_same_user_repeats_across_hosts(self):
         """A user's command memory should carry across parallel SSH hosts."""
         from evidenceforge.generation.activity import bash_commands
@@ -287,6 +417,144 @@ class TestBaselineLinuxBashHistory:
         )
 
         assert command == "pwd"
+
+    def test_bash_picker_keeps_desktop_commands_off_servers(self):
+        """Server SSH sessions should not receive workstation device/home commands."""
+        from evidenceforge.generation.activity import bash_commands
+
+        bash_commands.reset_bash_command_memory()
+
+        command = bash_commands._choose_template_with_memory(
+            random.Random(3),
+            [
+                "bluetoothctl devices 2>/dev/null | head",
+                "tail -50 ~/.xsession-errors 2>/dev/null",
+                "journalctl -u sshd --since '1 hour ago'",
+            ],
+            {},
+            ["ssh", "gunicorn", "systemd-resolved"],
+            "APP-INT-01",
+            "aisha.johnson",
+        )
+
+        assert command == "journalctl -u sshd --since '1 hour ago'"
+
+    def test_bash_session_picker_prefers_coherent_workflows(self, monkeypatch):
+        """A shell session should be able to emit a related command sequence."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = {
+            "common": ["ls"],
+            "sysadmin": ["fallback"],
+            "params": {"service": ["nginx"], "n": ["20"]},
+            "typo_model": {"max_rate": 0},
+            "workflow_model": {"selection_probability": 1.0},
+            "workflows": {
+                "sysadmin": [
+                    {
+                        "name": "service_triage",
+                        "weight": 1,
+                        "steps": [
+                            ["systemctl status {service} --no-pager"],
+                            ["journalctl -u {service} --since '30 min ago' --no-pager | tail -{n}"],
+                            ["ss -ltnp | grep {service}"],
+                        ],
+                    }
+                ]
+            },
+        }
+        monkeypatch.setattr(bash_commands, "load_bash_commands", lambda: commands)
+        bash_commands.reset_bash_command_memory()
+
+        picked = bash_commands.pick_bash_session_commands(
+            random.Random(1),
+            "sysadmin",
+            "WEB-01",
+            ["nginx"],
+            username="deploy",
+            command_count=3,
+        )
+
+        assert [command for command, _is_typo in picked] == [
+            "systemctl status nginx --no-pager",
+            "journalctl -u nginx --since '30 min ago' --no-pager | tail -20",
+            "ss -ltnp | grep nginx",
+        ]
+
+    def test_bash_session_picker_fills_workflow_shortfall(self, monkeypatch):
+        """Short configured workflows should fall back to role-aware picker slots."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = {
+            "common": ["pwd"],
+            "sysadmin": ["echo fallback-one", "echo fallback-two"],
+            "params": {},
+            "typo_model": {"max_rate": 0},
+            "workflow_model": {"selection_probability": 1.0},
+            "workflows": {
+                "sysadmin": [
+                    {
+                        "name": "short",
+                        "steps": [["hostname -f"]],
+                    }
+                ]
+            },
+        }
+        monkeypatch.setattr(bash_commands, "load_bash_commands", lambda: commands)
+        bash_commands.reset_bash_command_memory()
+
+        picked = bash_commands.pick_bash_session_commands(
+            random.Random(3),
+            "sysadmin",
+            "APP-INT-01",
+            ["gunicorn"],
+            username="aisha.johnson",
+            command_count=3,
+        )
+
+        assert picked[0] == ("hostname -f", False)
+        assert len(picked) == 3
+        assert {command for command, _is_typo in picked[1:]} <= {
+            "echo fallback-one",
+            "echo fallback-two",
+            "pwd",
+        }
+
+    def test_bash_session_workflow_steps_do_not_force_exhausted_repeats(self, monkeypatch):
+        """Small workflow pools should fall back instead of becoming exact-repeat fingerprints."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = {
+            "common": ["pwd"],
+            "sysadmin": [*(f"echo fallback-{index}" for index in range(12))],
+            "params": {},
+            "typo_model": {"max_rate": 0},
+            "workflow_model": {"selection_probability": 1.0},
+            "workflows": {
+                "sysadmin": [
+                    {
+                        "name": "tiny",
+                        "steps": [["systemctl status sshd --no-pager"]],
+                    }
+                ]
+            },
+        }
+        monkeypatch.setattr(bash_commands, "load_bash_commands", lambda: commands)
+        bash_commands.reset_bash_command_memory()
+
+        picked = [
+            bash_commands.pick_bash_session_commands(
+                random.Random(index),
+                "sysadmin",
+                f"WEB-{index}",
+                ["ssh"],
+                username=f"deploy-{index}",
+                command_count=2,
+            )[0][0]
+            for index in range(12)
+        ]
+
+        assert Counter(picked)["systemctl status sshd --no-pager"] <= 2
 
 
 class TestBashHistoryChronological:

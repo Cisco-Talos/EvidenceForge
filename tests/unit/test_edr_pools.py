@@ -30,6 +30,7 @@ class TestLoadEdrPools:
         assert "registry_keys_hkcu" in pools
         assert "registry_keys_hklm" in pools
         assert "dll_pool" in pools
+        assert "runmru_commands" in pools
 
     def test_all_sections_non_empty(self):
         pools = load_edr_pools()
@@ -39,6 +40,7 @@ class TestLoadEdrPools:
             "registry_keys_hkcu",
             "registry_keys_hklm",
             "dll_pool",
+            "runmru_commands",
             "file_side_effect_profiles",
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
@@ -210,6 +212,47 @@ class TestTemplateMaterialization:
         assert "}}" not in value
         assert value.startswith(r"Interfaces\{")
         assert value.endswith(r"}\DhcpIPAddress")
+
+    def test_materializes_userassist_runpath_values(self):
+        import random
+
+        key, value_name, details = materialize_edr_template_group(
+            (
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{CEBFF5CD-ACE2-4F4F-9178-9926F41749EA}\Count",
+                "{userassist_value}",
+                "{userassist_binary}",
+            ),
+            random.Random(17),
+            "alice.smith",
+        )
+
+        assert "UserAssist" in key
+        assert value_name.startswith("HRZR_EHACNGU:")
+        assert not value_name.removeprefix("HRZR_EHACNGU").isdigit()
+        assert "\\" in value_name
+        detail_bytes = details.split()
+        assert len(detail_bytes) >= 32
+        assert all(len(byte) == 2 for byte in detail_bytes)
+
+    def test_materializes_runmru_values_with_user_texture(self):
+        import random
+
+        outputs = {
+            materialize_edr_template_group(
+                (
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU",
+                    "{runmru_name}",
+                    "{runmru_command}",
+                ),
+                random.Random(seed),
+                "alice.smith",
+            )
+            for seed in range(24)
+        }
+
+        assert len({details for _key, _value_name, details in outputs}) >= 8
+        assert all(details.endswith(r"\1") for _key, _value_name, details in outputs)
+        assert any("alice.smith" in details for _key, _value_name, details in outputs)
 
     def test_materializes_host_ip_context(self):
         import random
@@ -476,21 +519,24 @@ class TestOverlayValidation:
             "file_paths_windows": [r"C:\\Windows\\Temp\\x.tmp"],
             "file_paths_linux": ["/tmp/x.tmp"],
             "dll_pool": [r"C:\\Windows\\System32\\kernel32.dll"],
+            "runmru_commands": ["cmd.exe /k dir"],
             "registry_keys_hkcu": [["HKCU\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
             "registry_keys_hklm": [["HKLM\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
         }
-        merged = {**defaults, "file_paths_windows": [], "dll_pool": []}
+        merged = {**defaults, "file_paths_windows": [], "dll_pool": [], "runmru_commands": []}
 
         sanitized = _sanitize_edr_pools(defaults, merged)
 
         assert sanitized["file_paths_windows"] == defaults["file_paths_windows"]
         assert sanitized["dll_pool"] == defaults["dll_pool"]
+        assert sanitized["runmru_commands"] == defaults["runmru_commands"]
 
     def test_sanitize_malformed_registry_pool_falls_back_to_defaults(self):
         defaults = {
             "file_paths_windows": [r"C:\\Windows\\Temp\\x.tmp"],
             "file_paths_linux": ["/tmp/x.tmp"],
             "dll_pool": [r"C:\\Windows\\System32\\kernel32.dll"],
+            "runmru_commands": ["cmd.exe /k dir"],
             "registry_keys_hkcu": [["HKCU\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
             "registry_keys_hklm": [["HKLM\\Software\\X", "Enabled", "DWORD (0x00000001)"]],
         }

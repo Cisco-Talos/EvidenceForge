@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from evidenceforge.generation.activity.generator import _ephemeral_port
+from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
@@ -715,6 +715,30 @@ class WorldPlanner:
             storyline_protected=storyline_protected,
         ).session
 
+    def _find_windows_interactive_session(
+        self,
+        username: str,
+        target_system: System,
+        at_time: datetime,
+    ) -> ActiveSession | None:
+        """Return a durable same-user Windows interactive session, if one exists."""
+        host = self.world_model.hosts.get(target_system.hostname)
+        if host is None or host.os_category != "windows":
+            return None
+
+        cutoff = at_time.replace(tzinfo=UTC) if at_time.tzinfo is None else at_time.astimezone(UTC)
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(username, at_time)
+            if session.system == target_system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and self._session_start_sort_key(session) <= cutoff
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=self._session_start_sort_key)
+
     def bootstrap_user_session(
         self,
         user: User,
@@ -727,6 +751,18 @@ class WorldPlanner:
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
+        if allow_existing and session_kind in (None, "interactive"):
+            existing_interactive = self._find_windows_interactive_session(
+                user.username,
+                target_system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                if storyline_protected:
+                    existing_interactive.storyline_protected = True
+                return SessionBootstrapResult(session=existing_interactive, network_uid=None)
+
         existing = self._find_user_session(
             user.username, target_system.hostname, session_kind, at_time=time
         )
@@ -862,7 +898,6 @@ class WorldPlanner:
             load_catalog,
             resolve_image_path,
         )
-        from evidenceforge.generation.activity.helpers import _parameterize_command
 
         os_cat = self.world_model.hosts[system.hostname].os_category
         # _server_admin is a policy overlay: use the user's real persona for
@@ -921,7 +956,12 @@ class WorldPlanner:
                 templates = plat.get("command_templates", [])
                 if templates:
                     command_line = rng.choice(templates)
-                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = self.activity_generator._parameterize_command_for_system(
+                        rng,
+                        command_line,
+                        username=user.username,
+                        system=system,
+                    )
                 break
 
         # Backdate the process slightly, but never before the session started
@@ -942,6 +982,17 @@ class WorldPlanner:
             command_line=command_line,
             parent_pid=parent_pid,
         )
+        if target_exe.lower() == "ldapsearch":
+            lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
+            termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
+            self.activity_generator._remember_foreground_process_finalizer(
+                system=system,
+                user=user,
+                pid=pid,
+                process_name=image,
+                logon_id=session.logon_id,
+                termination_time=termination_time,
+            )
         self.activity_generator._record_user_process(system, user, pid, image)
         return pid
 
@@ -958,7 +1009,11 @@ class WorldPlanner:
         Returns the most recent session (by start_time) to avoid picking
         stale network sessions over newer SSH/RDP ones.
         """
-        sessions = self.state_manager.get_sessions_for_user(username)
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(username, at_time)
+            if at_time is not None
+            else self.state_manager.get_sessions_for_user(username)
+        )
         host_sessions = [s for s in sessions if s.system == hostname]
         if at_time is not None:
             cutoff = (
@@ -1076,12 +1131,24 @@ class WorldPlanner:
         rng: random.Random,
     ) -> SessionBootstrapResult:
         source_pid = -1
+        source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
         if plan.source_system is not None:
+            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                username=user.username,
+                source_system=plan.source_system,
+                source_process_time=source_process_time,
+                rng=rng,
+            )
+            if aligned_source_time > source_process_time:
+                shift = aligned_source_time - source_process_time
+                source_process_time = aligned_source_time
+                logon_time += shift
+                activity_time += shift
             source_pid = self._ensure_rdp_client_process(
                 user=user,
                 source_system=plan.source_system,
                 target_system=plan.target_system,
-                time=logon_time - timedelta(milliseconds=rng.randint(1800, 3200)),
+                time=source_process_time,
                 rng=rng,
             )
         logon_id = self.state_manager.create_session(
@@ -1107,6 +1174,44 @@ class WorldPlanner:
             )
         session.last_activity_time = activity_time
         return SessionBootstrapResult(session=session, network_uid=uid)
+
+    def _align_rdp_source_after_future_workstation_session(
+        self,
+        *,
+        username: str,
+        source_system: System,
+        source_process_time: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Move source-side RDP work after an already-planned workstation session."""
+        host = self.world_model.hosts.get(source_system.hostname)
+        if host is None or host.os_category != "windows":
+            return source_process_time
+
+        source_utc = (
+            source_process_time.replace(tzinfo=UTC)
+            if source_process_time.tzinfo is None
+            else source_process_time.astimezone(UTC)
+        )
+        hour_end = source_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        future_sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(username)
+            if session.system == source_system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and source_utc < self._session_start_sort_key(session) < hour_end
+        ]
+        if not future_sessions:
+            return source_process_time
+
+        next_session = min(future_sessions, key=self._session_start_sort_key)
+        aligned = self._session_start_sort_key(next_session) + timedelta(
+            seconds=rng.uniform(20.0, 90.0)
+        )
+        if aligned >= hour_end:
+            return source_process_time
+        return aligned
 
     def _ensure_rdp_client_process(
         self,

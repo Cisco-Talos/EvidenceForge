@@ -239,6 +239,7 @@ class SyslogProgramEntry(BaseModel, extra="forbid"):
     system_types: list[str] | None = None
     transient: bool | None = None
     weight: int = Field(default=10, gt=0)
+    max_per_host_window: int | None = Field(default=None, gt=0)
 
 
 # --- TLS Issuers ---
@@ -343,6 +344,42 @@ class TlsOcspResponder(BaseModel, extra="forbid"):
     domains: list[str]
 
 
+class TlsOcspRequestPathConfig(BaseModel, extra="forbid"):
+    """OCSP GET request-path shape settings in tls_realism.yaml."""
+
+    min_encoded_chars: int = 72
+    max_encoded_chars: int = 150
+    include_padding_probability: float = 0.35
+    der_prefixes: list[str] = Field(default_factory=list)
+
+    @field_validator("min_encoded_chars", "max_encoded_chars")
+    @classmethod
+    def encoded_length_valid(cls, v: int) -> int:
+        if v < 32 or v > 512:
+            raise ValueError("encoded length must be between 32 and 512")
+        return v
+
+    @field_validator("include_padding_probability")
+    @classmethod
+    def padding_probability_valid(cls, v: float) -> float:
+        if not 0 <= v <= 1:
+            raise ValueError("include_padding_probability must be between 0 and 1")
+        return v
+
+    @field_validator("der_prefixes")
+    @classmethod
+    def der_prefixes_valid(cls, v: list[str]) -> list[str]:
+        if any(not prefix for prefix in v):
+            raise ValueError("der_prefixes entries must be non-empty")
+        return v
+
+    @model_validator(mode="after")
+    def encoded_range_valid(self) -> TlsOcspRequestPathConfig:
+        if self.max_encoded_chars < self.min_encoded_chars:
+            raise ValueError("max_encoded_chars must be >= min_encoded_chars")
+        return self
+
+
 class TlsOcspConfig(BaseModel, extra="forbid"):
     """OCSP behavior settings in tls_realism.yaml."""
 
@@ -350,6 +387,7 @@ class TlsOcspConfig(BaseModel, extra="forbid"):
     this_update_max_skew_seconds: int
     next_update_min_seconds: int
     next_update_max_seconds: int
+    request_path: TlsOcspRequestPathConfig = Field(default_factory=TlsOcspRequestPathConfig)
     responders: list[TlsOcspResponder] = Field(default_factory=list)
     status_weights: dict[Literal["good", "unknown", "revoked"], int]
     suppress_revoked_suffixes: list[str] = Field(default_factory=list)
@@ -448,6 +486,45 @@ class TlsSubjectKeyProfile(BaseModel, extra="forbid"):
         return self
 
 
+class TlsAuthorityProfile(BaseModel, extra="forbid"):
+    """Stable metadata for a known public or enterprise certificate authority."""
+
+    subject: str
+    issuer: str
+    not_valid_before: int
+    not_valid_after: int
+    key_type: Literal["rsa", "ecdsa"]
+    key_length: int
+
+    @field_validator("subject", "issuer")
+    @classmethod
+    def distinguished_name_non_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("authority profile distinguished names must be non-empty")
+        return v
+
+    @field_validator("not_valid_before", "not_valid_after")
+    @classmethod
+    def validity_epoch_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("authority profile validity epochs must be positive")
+        return v
+
+    @field_validator("key_length")
+    @classmethod
+    def key_length_valid(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("authority profile key_length must be positive")
+        return v
+
+    @model_validator(mode="after")
+    def validity_window_ordered(self) -> Self:
+        """Reject public CA profiles with inverted validity windows."""
+        if self.not_valid_after <= self.not_valid_before:
+            raise ValueError("authority profile not_valid_after must be after not_valid_before")
+        return self
+
+
 class TlsCertificateChainConfig(BaseModel, extra="forbid"):
     """Certificate-chain behavior settings in tls_realism.yaml."""
 
@@ -458,6 +535,7 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
     intermediate_not_before_max_days: int
     key_types: list[TlsKeyType]
     subject_key_profiles: list[TlsSubjectKeyProfile] = Field(default_factory=list)
+    authority_profiles: list[TlsAuthorityProfile] = Field(default_factory=list)
     templates: list[TlsChainTemplate]
 
     @field_validator(
@@ -763,12 +841,33 @@ class KerberosCertificateProfile(BaseModel, extra="forbid"):
         return v
 
 
+class KerberosTransportProfile(BaseModel, extra="forbid"):
+    """TCP/UDP transport weights for Kerberos network exchanges."""
+
+    udp: int = 0
+    tcp: int = 0
+
+    @field_validator("udp", "tcp")
+    @classmethod
+    def weight_non_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("transport weights must be non-negative")
+        return v
+
+    @model_validator(mode="after")
+    def has_positive_weight(self) -> KerberosTransportProfile:
+        if self.udp + self.tcp <= 0:
+            raise ValueError("transport profile must have a positive total weight")
+        return self
+
+
 class KerberosRealismConfig(BaseModel, extra="forbid"):
     """Root schema for kerberos_realism.yaml."""
 
     tgt_success: KerberosTgtSuccessConfig
     tgt_failure: KerberosTgtFailureConfig
     certificate_profiles: dict[str, KerberosCertificateProfile] = Field(default_factory=dict)
+    transport_profiles: dict[str, KerberosTransportProfile] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def referenced_certificate_profiles_exist(self) -> KerberosRealismConfig:
@@ -782,6 +881,8 @@ class KerberosRealismConfig(BaseModel, extra="forbid"):
         )
         if missing:
             raise ValueError(f"unknown certificate_profile references: {missing}")
+        if self.transport_profiles and "default" not in self.transport_profiles:
+            raise ValueError("transport_profiles must include a default profile")
         return self
 
 
@@ -989,6 +1090,28 @@ class DnsTunnelTtlEntry(BaseModel, extra="forbid"):
     weight: float = Field(gt=0, allow_inf_nan=False)
 
 
+class ExternalScannerPortWeight(BaseModel, extra="forbid"):
+    """A weighted destination port in an external scanner profile."""
+
+    port: int = Field(ge=1, le=65535)
+    weight: float = Field(gt=0, allow_inf_nan=False)
+
+
+class ExternalScannerPortProfile(BaseModel, extra="forbid"):
+    """A source-sticky external scanner port preference profile."""
+
+    name: str
+    weight: float = Field(gt=0, allow_inf_nan=False)
+    ports: list[ExternalScannerPortWeight]
+
+    @field_validator("ports")
+    @classmethod
+    def ports_non_empty(cls, v: list[ExternalScannerPortWeight]) -> list[ExternalScannerPortWeight]:
+        if not v:
+            raise ValueError("ports must not be empty")
+        return v
+
+
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
     """Local interactive 4625 profile."""
 
@@ -1129,6 +1252,7 @@ class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
     """A domain-specific proxy User-Agent profile."""
 
     os_keywords: list[str]
+    stickiness: Literal["request", "source_host"] = "request"
     hosts: list[str]
     user_agents: list[str]
 
@@ -1484,6 +1608,7 @@ class ScheduledTaskEntry(BaseModel, extra="forbid"):
     command_templates: list[str]
     parent: str
     params: dict[str, list[str]] | None = None
+    system_types: list[str] | None = None
 
 
 class SystemServiceEntry(BaseModel, extra="forbid"):

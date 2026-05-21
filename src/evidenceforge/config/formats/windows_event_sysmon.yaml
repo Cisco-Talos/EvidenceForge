@@ -352,6 +352,9 @@ variants:
       - name: Image
         type: string
         required: true
+      - name: User
+        type: string
+        required: true
       - name: TargetFilename
         type: string
         required: true
@@ -581,6 +584,7 @@ output:
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetFilename">{{ TargetFilename }}</Data>
         <Data Name="CreationUtcTime">{{ CreationUtcTime }}</Data>
         {% elif EventID == 12 %}

@@ -27,7 +27,8 @@ should see a TGT request (4768) and service ticket request (4769) before
 the target system logs the 4624.
 """
 
-from datetime import UTC, datetime
+import random
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
@@ -164,6 +165,47 @@ class TestDCKerberosOnLogon:
         assert service_name.endswith("/FILE-SRV-01")
         assert service_name.startswith(("cifs/", "host/", "ldap/"))
         assert not service_name.startswith("krbtgt/")
+
+    def test_kerberos_ticket_times_do_not_preserve_base_fractional_suffix(self, activity_gen):
+        """Related DC Kerberos rows should not look like whole-ms shifts from one clock value."""
+        anchor = datetime(2024, 3, 15, 10, 0, 0, 500_000, tzinfo=UTC)
+        tgt_time, tgs_time = activity_gen._kerberos_ticket_times(
+            anchor,
+            random.Random(17),
+            tgs_before_ms=(20, 100),
+            tgt_before_tgs_ms=(35, 240),
+        )
+
+        assert tgt_time < tgs_time < anchor
+        assert anchor.microsecond % 1000 == 0
+        assert tgt_time.microsecond % 1000 != 0
+        assert tgs_time.microsecond % 1000 != 0
+        assert tgt_time.microsecond % 1000 != tgs_time.microsecond % 1000
+
+    def test_cached_tgt_suppresses_fresh_visible_tgt(self, activity_gen):
+        """The Kerberos cache model allows later service tickets without fresh 4768 pairs."""
+        rng = random.Random(22)
+        now = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        activity_gen._remember_kerberos_tgt_cache(
+            "john.smith",
+            "10.10.10.50",
+            "DC-01",
+            now - timedelta(minutes=5),
+            rng,
+        )
+
+        decisions = [
+            activity_gen._should_emit_visible_kerberos_tgt(
+                "john.smith",
+                "10.10.10.50",
+                "DC-01",
+                now + timedelta(minutes=idx),
+                rng,
+            )
+            for idx in range(8)
+        ]
+
+        assert decisions.count(False) >= 6
 
     def test_kerberos_logon_produces_dc_events_deterministically(
         self, activity_gen, mock_emitters, windows_system, test_user

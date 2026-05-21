@@ -274,10 +274,23 @@ class TestProxyUriOsFiltering:
         ua = pick_proxy_user_agent(
             random.Random(42),
             source,
+            hostname="download.windowsupdate.com",
+        )
+
+        assert ua.startswith("Windows-Update-Agent/")
+        assert ua == pick_proxy_user_agent(
+            random.Random(99),
+            source,
+            hostname="download.windowsupdate.com",
+        )
+
+        trust_list_ua = pick_proxy_user_agent(
+            random.Random(42),
+            source,
             hostname="ctldl.windowsupdate.com",
         )
 
-        assert ua == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+        assert trust_list_ua == "Microsoft-CryptoAPI/10.0"
 
         update_ua = pick_proxy_user_agent(
             random.Random(42),
@@ -297,11 +310,38 @@ class TestProxyUriOsFiltering:
 
         assert internal_ocsp_ua == "Microsoft-CryptoAPI/10.0"
 
-    def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
-        """Domain-specific proxy UA rules should override inherited browser session UAs."""
-        from evidenceforge.events.contexts import HttpContext
-        from evidenceforge.generation.activity.generator import ActivityGenerator
-        from evidenceforge.generation.state_manager import StateManager
+    def test_windows_update_user_agents_vary_by_source_host(self):
+        """The Windows Update override should be sticky per host, not globally flat."""
+        from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+        from evidenceforge.models.scenario import System
+
+        observed = set()
+        for idx in range(30):
+            source = System(
+                hostname=f"WS-{idx:02d}",
+                ip=f"10.10.1.{idx + 20}",
+                os="Windows 11",
+                type="workstation",
+            )
+            first = pick_proxy_user_agent(
+                random.Random(1),
+                source,
+                hostname="download.windowsupdate.com",
+            )
+            second = pick_proxy_user_agent(
+                random.Random(999),
+                source,
+                hostname="download.windowsupdate.com",
+            )
+            assert first == second
+            assert first.startswith("Windows-Update-Agent/")
+            observed.add(first)
+
+        assert len(observed) >= 3
+
+    def test_vendor_update_user_agents_stay_domain_specific(self):
+        """Updater/security-client UAs should not cross vendor domains."""
+        from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
         from evidenceforge.models.scenario import System
 
         source = System(
@@ -309,6 +349,33 @@ class TestProxyUriOsFiltering:
             ip="10.10.10.1",
             os="Windows 11",
             type="workstation",
+        )
+        expected = {
+            "dellupdater.dell.com": "Dell Command Update/5.1",
+            "download.lenovo.com": "Lenovo System Update",
+            "hpia.hpcloud.hp.com": "HP Image Assistant",
+            "secure-client-updates.cisco.com": "Cisco Secure Client/5.1.4 Windows",
+            "updates.paloaltonetworks.com": "GlobalProtect/6.2.3 Windows",
+            "config.zscaler.net": "Zscaler Client Connector/4.3.0",
+            "gateway.zscaler.net": "Zscaler Client Connector/4.3.0",
+        }
+
+        for hostname, user_agent in expected.items():
+            assert pick_proxy_user_agent(random.Random(42), source, hostname=hostname) == user_agent
+
+    def test_http_context_ua_is_overridden_for_infrastructure_domain(self):
+        """Domain-specific proxy UA rules should override inherited browser session UAs."""
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System, User
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
         )
         proxy = System(
             hostname="proxy01",
@@ -318,6 +385,15 @@ class TestProxyUriOsFiltering:
             roles=["forward_proxy"],
         )
         generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "meridianhcs.local"
+        generator._netbios_domain = "MERIDIAN"
+        generator._users_by_username = {
+            "alex.morgan": User(
+                username="alex.morgan",
+                full_name="Alex Morgan",
+                email="alex.morgan@meridianhcs.local",
+            )
+        }
 
         context = generator._build_proxy_context(
             src_ip=source.ip,
@@ -340,7 +416,66 @@ class TestProxyUriOsFiltering:
             ),
         )
 
-        assert context.user_agent == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+        assert context.user_agent == "Microsoft-CryptoAPI/10.0"
+        assert context.username == "MERIDIAN\\WS-01$"
+
+    def test_proxy_context_uses_assigned_user_for_workstation_browser(self):
+        """Authenticated proxy logs should carry user identity for workstation browsing."""
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System, User
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.10.20.5",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "meridianhcs.local"
+        generator._netbios_domain = "MERIDIAN"
+        generator._users_by_username = {
+            "alex.morgan": User(
+                username="alex.morgan",
+                full_name="Alex Morgan",
+                email="alex.morgan@meridianhcs.local",
+            )
+        }
+
+        context = generator._build_proxy_context(
+            src_ip=source.ip,
+            dst_ip="93.184.216.34",
+            dst_port=443,
+            service="ssl",
+            duration=0.4,
+            orig_bytes=400,
+            resp_bytes=4096,
+            hostname="example.com",
+            source_system=source,
+            proxy_sys=proxy,
+            http=HttpContext(
+                method="GET",
+                uri="/portal",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                status_code=200,
+                response_body_len=4096,
+                resp_mime_types=["text/html"],
+            ),
+        )
+
+        assert context.username == "MERIDIAN\\alex.morgan"
 
 
 class TestProxyUriTemplateSubstitution:

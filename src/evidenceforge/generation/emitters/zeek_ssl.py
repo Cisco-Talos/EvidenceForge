@@ -22,11 +22,14 @@
 
 """Zeek ssl.log emitter."""
 
+from datetime import timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.tls_realism import ssl_analyzer_delay
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 
 class ZeekSslEmitter(SensorMultiplexEmitter):
@@ -51,9 +54,39 @@ class ZeekSslEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
         ssl = event.ssl
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=event.timestamp,
+        )
+        within = None
+        if net.duration is not None and net.duration > 0:
+            latest = conn_ts + timedelta(seconds=max(0.0, net.duration - 0.000001))
+            within = (conn_ts, latest)
+        event_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_ssl_analyzer",
+            seed_parts=(
+                net.zeek_uid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            ),
+            not_before=conn_ts,
+            within=within,
+        )
         event_data: dict[str, Any] = {
-            "ts": event.timestamp
-            + ssl_analyzer_delay(zeek_uid=net.zeek_uid, event_timestamp=event.timestamp),
+            "ts": event_ts,
             "uid": net.zeek_uid,
             "id.orig_h": net.src_ip,
             "id.orig_p": net.src_port,

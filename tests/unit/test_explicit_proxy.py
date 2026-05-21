@@ -541,6 +541,71 @@ class TestExplicitProxyVisibility:
         assert client_event.process.username == user.username
         assert client_event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
 
+    def test_browser_proxy_owner_process_not_spaced_after_client_flow(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="client-tap",
+                    monitoring_segments=["workstations"],
+                    direction="outbound",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+        user, _svchost_pid, _explorer_pid = _seed_proxy_client_user_session(generator)
+        workstation = generator._ip_to_system["10.0.1.10"]
+        user_session = generator.state_manager.get_sessions_for_user(user.username)[0]
+        request_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        generator._last_browser_launch_by_session[
+            (workstation.hostname, user.username, user_session.logon_id)
+        ] = request_time - timedelta(seconds=1)
+        generator._build_proxy_context = Mock(
+            return_value=ProxyContext(
+                client_ip=workstation.ip,
+                method="CONNECT",
+                url="r.bing.com:443",
+                host="r.bing.com",
+                status_code=200,
+                sc_bytes=220,
+                cs_bytes=340,
+                time_taken=900,
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+                ),
+                content_type="",
+                cache_result="NONE",
+                referrer="-",
+                proxy_fqdn="PROXY-01.example.org",
+            )
+        )
+
+        generator.generate_connection(
+            src_ip=workstation.ip,
+            dst_ip="204.79.197.200",
+            time=request_time,
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=workstation,
+            hostname="r.bing.com",
+            conn_state="SF",
+        )
+
+        client_event = next(
+            call.args[0]
+            for call in emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network.src_ip == workstation.ip
+            and call.args[0].network.dst_ip == "10.0.3.10"
+            and call.args[0].network.dst_port == 8080
+        )
+        assert client_event.process is not None
+        assert client_event.process.start_time < client_event.timestamp
+
     def test_connect_target_browser_hint_uses_origin_https_url(self):
         generator = ActivityGenerator(StateManager(), {})
 
@@ -1741,6 +1806,10 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.cs_bytes < 1000
         assert proxy_event.proxy.sc_bytes < 2500
         assert proxy_event.proxy.time_taken < 2000
+        http_event = emitters["zeek_http"].emit.call_args.args[0]
+        assert http_event.http.method == "CONNECT"
+        assert http_event.http.status_code == 403
+        assert http_event.http.response_body_len == proxy_event.proxy.sc_bytes
         assert ("10.0.3.10", "93.184.216.34", 443) not in _conn_pairs(emitters)
 
     def test_cache_hit_request_stops_before_origin_side_sources(self):
@@ -1978,7 +2047,7 @@ class TestExplicitProxyVisibility:
         assert http_event.http.method == "CONNECT"
         assert http_event.http.status_code == 407
         assert http_event.http.request_body_len == 0
-        assert http_event.http.response_body_len == 0
+        assert http_event.http.response_body_len == proxy_event.proxy.sc_bytes
         assert not emitters["zeek_ssl"].emit.called
 
     def test_supplied_denied_proxy_context_stops_before_origin_side_sources(self):
@@ -2080,9 +2149,11 @@ class TestExplicitProxyVisibility:
             )
 
             http_event = emitters["zeek_http"].emit.call_args.args[0]
+            proxy_event = emitters["proxy_access"].emit.call_args.args[0]
             assert http_event.http.status_code == status_code
             assert http_event.http.status_msg in configured_messages[status_code]
             assert http_event.http.status_msg != "Proxy Error"
+            assert http_event.http.response_body_len == proxy_event.proxy.sc_bytes
             assert not emitters["zeek_ssl"].emit.called
 
     def test_port_only_web_connection_resolves_origin_from_proxy(self):
@@ -2131,6 +2202,7 @@ class TestExplicitProxyVisibility:
         dns_events = [call.args[0] for call in emitters["zeek_dns"].emit.call_args_list]
         assert dns_events
         assert all(event.network.src_ip == "10.0.3.10" for event in dns_events)
+        assert all(event.network.dst_ip == "10.0.0.1" for event in dns_events)
         assert all("10.0.0.1" not in event.dns.answers for event in dns_events)
         assert all(event.dns.query != "PROXY-01.example.org" for event in dns_events)
         assert any(event.dns.query == "example.com" for event in dns_events)

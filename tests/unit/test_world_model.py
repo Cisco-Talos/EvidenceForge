@@ -23,7 +23,7 @@
 """Unit tests for the compiled world model and planner layer."""
 
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -268,6 +268,43 @@ def test_world_planner_preallocates_sessions_before_logon_emission(
     assert call_kwargs["logon_type"] == 2
 
 
+def test_world_planner_reuses_durable_windows_interactive_session(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Later workstation activity should not bootstrap another Type 2 session."""
+    start_time = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
+    first = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=start_time,
+        rng=random.Random(17),
+        session_kind="interactive",
+        allow_existing=False,
+    )
+    mock_emitters["windows_event_security"].reset_mock()
+
+    second = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=start_time + timedelta(minutes=55),
+        rng=random.Random(23),
+        session_kind="interactive",
+    )
+
+    assert second.session.logon_id == first.session.logon_id
+    assert state_manager.get_sessions_for_user("alice.admin") == [first.session]
+    assert first.session.last_activity_time == start_time + timedelta(minutes=55)
+    emitted_types = [
+        call.args[0].event_type
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+    ]
+    assert "logon" not in emitted_types
+
+
 def test_world_planner_bootstraps_ssh_session(
     planner: WorldPlanner,
     state_manager: StateManager,
@@ -331,6 +368,166 @@ def test_world_planner_bootstraps_rdp_session_with_owned_state(
     assert rdp_connections[0].protocol == "tcp"
     assert rdp_connections[0].initiating_pid > 0
     assert rdp_connections[0].source_system == "WKS-01"
+
+
+def test_world_planner_moves_rdp_source_after_future_workstation_session(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Out-of-order RDP source activity should not create an earlier duplicate Type 2 logon."""
+    future_session_start = datetime(2024, 1, 15, 10, 8, 0, tzinfo=UTC)
+    state_manager.set_current_time(future_session_start)
+    source_logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip="-",
+        start_time=future_session_start,
+        session_kind="interactive",
+    )
+    mock_emitters["windows_event_security"].reset_mock()
+
+    result = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["APP-01"],
+        time=datetime(2024, 1, 15, 10, 1, 0, tzinfo=UTC),
+        rng=random.Random(11),
+        session_kind="rdp",
+        source_system=systems["WKS-01"],
+        allow_existing=False,
+    )
+
+    assert result.session.start_time > future_session_start
+    mstsc_processes = [
+        proc
+        for proc in state_manager.list_running_processes()
+        if proc.system == "WKS-01" and proc.image.endswith("mstsc.exe")
+    ]
+    assert len(mstsc_processes) == 1
+    assert mstsc_processes[0].start_time > future_session_start
+    assert mstsc_processes[0].logon_id == source_logon_id
+    emitted_logons = [
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type == "logon"
+    ]
+    source_logons = [
+        event
+        for event in emitted_logons
+        if event.dst_host and event.dst_host.hostname == systems["WKS-01"].hostname
+    ]
+    assert source_logons == []
+
+
+def test_connection_owner_process_uses_scenario_internal_urls(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+    systems: dict[str, System],
+    users: dict[str, User],
+    state_manager: StateManager,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Catalog-owned connection processes should not leak default corp.local URLs."""
+    world_model = WorldModel(scenario, "meridianhcs.local")
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=users["dev.user"].username,
+        system=systems["WKS-02"].hostname,
+        logon_type=2,
+        source_ip=systems["WKS-02"].ip,
+        session_kind="interactive",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    monkeypatch.setattr(
+        "evidenceforge.generation.world_model.get_service_to_exes",
+        lambda: {"ssl": ["firefox.exe"]},
+    )
+
+    pid = planner.ensure_connection_process(
+        user=users["dev.user"],
+        system=systems["WKS-02"],
+        session=session,
+        time=session_time,
+        service="ssl",
+        rng=random.Random(3),
+    )
+
+    proc = state_manager.get_process(systems["WKS-02"].hostname, pid)
+    assert proc is not None
+    assert "meridianhcs.local" in proc.command_line
+    assert "corp.local" not in proc.command_line
+
+
+def test_ldapsearch_connection_process_uses_scenario_base_dn_and_short_lifetime(
+    monkeypatch: pytest.MonkeyPatch,
+    scenario: Scenario,
+    systems: dict[str, System],
+    users: dict[str, User],
+    state_manager: StateManager,
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Server-side LDAP helper processes should not leak corp.local or stay open forever."""
+    world_model = WorldModel(scenario, "meridianhcs.local")
+    dispatcher = EventDispatcher(state_manager=state_manager, emitters=mock_emitters)
+    activity_generator = ActivityGenerator(state_manager, mock_emitters, dispatcher=dispatcher)
+    activity_generator._ad_domain = world_model.ad_domain
+    activity_generator._ip_to_system = dict(world_model.systems_by_ip)
+    activity_generator._all_system_ips = [
+        system.ip for system in world_model.scenario.environment.systems
+    ]
+    planner = WorldPlanner(world_model, state_manager, activity_generator)
+    session_time = datetime(2024, 1, 15, 10, 20, 0, tzinfo=UTC)
+    state_manager.set_current_time(session_time)
+    logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["DB-01"].hostname,
+        logon_type=11,
+        source_ip=systems["WKS-01"].ip,
+        session_kind="ssh",
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    monkeypatch.setattr(
+        "evidenceforge.generation.world_model.get_service_to_exes",
+        lambda: {"ldap": ["ldapsearch"]},
+    )
+
+    pid = planner.ensure_connection_process(
+        user=users["alice.admin"],
+        system=systems["DB-01"],
+        session=session,
+        time=session_time,
+        service="ldap",
+        rng=random.Random(3),
+    )
+    proc = state_manager.get_process(systems["DB-01"].hostname, pid)
+    assert proc is not None
+    assert "dc=meridianhcs,dc=local" in proc.command_line
+    assert "dc=corp,dc=local" not in proc.command_line
+
+    activity_generator.finalize_foreground_process_lifetimes(session_time + timedelta(minutes=1))
+    events = [call.args[0] for call in mock_emitters["windows_event_security"].emit.call_args_list]
+    creates = [event for event in events if event.event_type == "process_create"]
+    terminates = [event for event in events if event.event_type == "process_terminate"]
+
+    assert any(event.process and event.process.pid == pid for event in creates)
+    terminate = next(event for event in terminates if event.process and event.process.pid == pid)
+    create = next(event for event in creates if event.process and event.process.pid == pid)
+    assert create.timestamp < terminate.timestamp
+    assert (terminate.timestamp - session_time).total_seconds() < 10
 
 
 def test_find_user_session_handles_mixed_timezone_start_times(

@@ -57,6 +57,7 @@ class AuthContext:
     full_name: str = ""
     user_sid: str = ""
     logon_id: str = ""  # Allocated by StateManager.create_session()
+    session_id: int = 0  # Windows terminal/session ID for interactive sources
     logon_type: int = 2
     auth_package: str = "Negotiate"
     result: str = "success"  # "success" | "failure"
@@ -348,7 +349,7 @@ class SslContext:
     server_name: str = ""  # SNI hostname
     resumed: bool = False
     established: bool = True
-    ssl_history: str = ""  # e.g., "CsiI"
+    ssl_history: str = ""  # e.g., "CSOXYFFD"
     cert_chain_fuids: list[str] = field(default_factory=list)
 
 

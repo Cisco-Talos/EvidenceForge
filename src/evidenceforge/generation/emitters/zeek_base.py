@@ -131,15 +131,21 @@ def _sensor_clock_adjustment_us(hostname: str, ts: Any) -> int:
     return max(timing.clock_skew_min_us, min(timing.clock_skew_max_us, skew))
 
 
-def _sensor_path_delay_us(hostname: str, original_uid: Any) -> int:
-    """Return per-flow capture timestamp variance for a sensor observation."""
+def _sensor_path_delay_us(hostname: str, original_uid: Any = None) -> int:
+    """Return stable capture timestamp delay for a sensor observation."""
     timing = network_sensor_observation_timing()
-    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}:{original_uid}")
+    seed = _stable_seed(f"zeek_sensor_path_delay:{hostname}")
     # Tap placement, NIC timestamping, Zeek scheduling, and capture buffering
-    # add a small positive delay. The profile keeps this consistent with a
-    # well-synced sensor fleet instead of synthetic hundreds-of-ms offsets.
+    # add a small positive delay. Keep the baseline stable by sensor, then add
+    # bounded flow-local capture texture so repeated Core/DMZ observations do
+    # not collapse into a tiny set of exact offsets.
     width = timing.path_delay_max_us - timing.path_delay_min_us + 1
-    return timing.path_delay_min_us + (seed % max(1, width))
+    baseline = timing.path_delay_min_us + (seed % max(1, width))
+    if original_uid is None:
+        return baseline
+    jitter_seed = _stable_seed(f"zeek_sensor_path_delay_jitter:{hostname}:{original_uid}")
+    jitter = (jitter_seed % 12001) - 6000
+    return max(timing.path_delay_min_us, min(timing.path_delay_max_us, baseline + jitter))
 
 
 def _jitter_numeric_observation(
@@ -199,6 +205,81 @@ def _jitter_duration_observation(
         )
 
 
+def _extend_lossless_duration_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+    *,
+    max_delta_seconds: float,
+) -> None:
+    """Apply small positive end-time texture for a lossless sensor observation."""
+    value = render_data.get("duration")
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return
+    if value <= 0:
+        return
+    seed = _stable_seed(f"zeek_sensor_lossless_duration:{hostname}:{uid}")
+    fraction = 0.00075 + ((seed % 1200) / 1_000_000)
+    try:
+        raw_delta = max(0.000001, value * fraction)
+        if raw_delta > max_delta_seconds:
+            cap_seed = _stable_seed(f"zeek_sensor_lossless_duration_cap:{hostname}:{uid}")
+            cap_fraction = 0.25 + ((cap_seed % 73_000) / 100_000)
+            delta = max_delta_seconds * cap_fraction
+        else:
+            delta = raw_delta
+        render_data["duration"] = value + delta
+    except OverflowError:
+        logger.debug(
+            "Skipping Zeek lossless sensor duration texture for out-of-range value on %s",
+            hostname,
+        )
+
+
+def _texture_lossless_tcp_packetization(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+) -> None:
+    """Add tiny packetization/IP-byte differences for an independent TCP tap."""
+    if str(render_data.get("proto") or "").lower() != "tcp":
+        return
+    changed = False
+    for side in ("orig", "resp"):
+        packets = render_data.get(f"{side}_pkts")
+        payload = render_data.get(f"{side}_bytes")
+        ip_bytes = render_data.get(f"{side}_ip_bytes")
+        if not all(isinstance(value, int) for value in (packets, payload, ip_bytes)):
+            continue
+        if packets <= 0 or payload < 0 or ip_bytes < 0:
+            continue
+        if packets > 10**18 or payload > 10**18 or ip_bytes > 10**18:
+            continue
+        seed = _stable_seed(f"zeek_sensor_lossless_packets:{hostname}:{uid}:{side}")
+        if seed % 3 == 0:
+            continue
+        extra_packets = 1 + (seed % 2)
+        render_data[f"{side}_pkts"] = packets + extra_packets
+        render_data[f"{side}_ip_bytes"] = ip_bytes + (extra_packets * 40) + (seed % 97)
+        changed = True
+    if changed:
+        return
+    for side in ("orig", "resp"):
+        packets = render_data.get(f"{side}_pkts")
+        payload = render_data.get(f"{side}_bytes")
+        ip_bytes = render_data.get(f"{side}_ip_bytes")
+        if not all(isinstance(value, int) for value in (packets, payload, ip_bytes)):
+            continue
+        if packets <= 0 or payload < 0 or ip_bytes < 0:
+            continue
+        if packets > 10**18 or payload > 10**18 or ip_bytes > 10**18:
+            continue
+        seed = _stable_seed(f"zeek_sensor_lossless_packets:fallback:{hostname}:{uid}:{side}")
+        render_data[f"{side}_pkts"] = packets + 1
+        render_data[f"{side}_ip_bytes"] = ip_bytes + 40 + (seed % 53)
+        return
+
+
 def _jitter_payload_counter_with_floor(
     render_data: dict[str, Any],
     field: str,
@@ -246,6 +327,62 @@ def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
     return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
 
 
+def _extend_locked_sensor_timing_field(
+    render_data: dict[str, Any],
+    field: str,
+    hostname: str,
+    uid: Any,
+    *,
+    max_delta_seconds: float,
+) -> bool:
+    """Add tiny sensor-local timing texture while preserving packet accounting."""
+    value = render_data.get(field)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    if value <= 0 or value > 10**18:
+        return False
+    seed = _stable_seed(f"zeek_sensor_locked_timing:{hostname}:{uid}:{field}")
+    fraction = 0.0005 + ((seed % 6500) / 1_000_000)
+    try:
+        raw_delta = value * fraction
+        if raw_delta < 0.000001:
+            raw_delta = 0.000001
+        if raw_delta > max_delta_seconds:
+            cap_fraction = 0.2 + (((seed >> 8) % 7000) / 10_000)
+            raw_delta = max_delta_seconds * cap_fraction
+        render_data[field] = value + raw_delta
+    except OverflowError:
+        logger.debug(
+            "Skipping Zeek locked packet-accounting timing texture for %s on %s",
+            field,
+            hostname,
+        )
+        return False
+    return True
+
+
+def _texture_locked_packet_accounting_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+) -> None:
+    """Vary sensor-local timing for DNS/ICMP while keeping packet sizes exact."""
+    _extend_locked_sensor_timing_field(
+        render_data,
+        "duration",
+        hostname,
+        uid,
+        max_delta_seconds=0.05,
+    )
+    _extend_locked_sensor_timing_field(
+        render_data,
+        "rtt",
+        hostname,
+        uid,
+        max_delta_seconds=0.025,
+    )
+
+
 def _apply_sensor_observation_variance(
     render_data: dict[str, Any],
     hostname: str,
@@ -280,6 +417,14 @@ def _apply_sensor_observation_variance(
                 added_missed_bytes = True
                 lossy_observation = True
     if not lossy_observation:
+        if not render_data.get("_lock_duration"):
+            _extend_lossless_duration_observation(
+                render_data,
+                hostname,
+                original_uid,
+                max_delta_seconds=0.75,
+            )
+        _texture_lossless_tcp_packetization(render_data, hostname, original_uid)
         _enforce_http_body_invariants(render_data)
         _enforce_ip_byte_invariants(render_data)
         return
@@ -706,10 +851,10 @@ class SensorMultiplexEmitter(LogEmitter):
                             original_dst_ip,
                             swaps["dst_ip"],
                         )
-                # Each sensor has independent clock skew/drift plus per-flow
+                # Each sensor has independent clock skew/drift plus stable
                 # capture timing. Apply it to every sensor in a multi-sensor
-                # observation so cross-sensor deltas can be positive or
-                # negative instead of always "secondary = primary + delay".
+                # observation so cross-sensor deltas are sensor/path-shaped
+                # rather than per-record random.
                 ts = render_data.get("ts")
                 if len(targets) > 1 and ts is not None:
                     sensor_delay_us = _sensor_clock_adjustment_us(
@@ -720,10 +865,14 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                     elif isinstance(ts, (int, float)):
                         render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                if i > 0:
-                    if render_data.get(
-                        "_allow_sensor_observation_variance"
-                    ) and not _locks_sensor_packet_accounting(render_data):
+                if i > 0 and render_data.get("_allow_sensor_observation_variance"):
+                    if _locks_sensor_packet_accounting(render_data):
+                        _texture_locked_packet_accounting_observation(
+                            render_data,
+                            hostname,
+                            original_uid,
+                        )
+                    else:
                         _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)

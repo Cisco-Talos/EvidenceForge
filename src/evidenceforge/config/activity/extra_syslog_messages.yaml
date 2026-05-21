@@ -21,9 +21,9 @@ programs:
     system_types: [workstation]
     weight: 3
     messages:
-      - "<info>  [{}] dhcp4 (ens160): state changed renew -> bound"
-      - "<info>  [{}] device (ens160): state change: disconnected -> prepare"
-      - "<info>  [{}] device (ens160): state change: ip-config -> activated"
+      - "<info>  [{}] dhcp4 ({interface}): state changed renew -> bound"
+      - "<info>  [{}] device ({interface}): state change: disconnected -> prepare"
+      - "<info>  [{}] device ({interface}): state change: ip-config -> activated"
       - "<info>  [{}] manager: NetworkManager state is now CONNECTED_GLOBAL"
 
   - app: dbus-daemon
@@ -65,8 +65,13 @@ programs:
         - "1"
         - "2"
         - "3"
+      fd:
+        - "4"
+        - "6"
+        - "7"
+        - "9"
     messages:
-      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {}"
+      - "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {fd}"
       - "configuration reload completed after SIGHUP, reload id {}"
       - "omfwd: target {relay_target} using disk-assisted queue {queue_name}, checkpoint {}"
       - "action '{action_name}' resumed after retry {}, next retry disabled"
@@ -172,20 +177,26 @@ programs:
     transient: true
     roles: [web_server, forward_proxy]
     weight: 1
+    max_per_host_window: 1
     params:
       web_user:
         - www-data
         - nginx
         - apache
       denied_command:
-        - /bin/cat /etc/shadow
-        - /usr/bin/head /etc/shadow
-        - /usr/bin/tail /var/log/auth.log
+        - /usr/bin/tail -n 50 /var/log/nginx/error.log
+        - /usr/bin/tail -n 80 /var/log/apache2/error.log
         - /usr/bin/find /root -maxdepth 1
+        - /usr/bin/find /var/www -maxdepth 2 -name .env
+        - /usr/bin/find /srv -maxdepth 2 -type f -name backup*.tar.gz
         - /usr/bin/id
-        - /usr/bin/curl -s http://169.254.169.254/latest/meta-data/
         - /bin/ls /root
-        - /usr/bin/grep -R password /etc
+        - /usr/bin/grep -R DB_PASSWORD /var/www
+        - /usr/bin/grep -R password /var/www
+        - /usr/bin/journalctl -u nginx -n 20
+        - /usr/bin/journalctl -u apache2 -n 20
+        - /usr/bin/stat /etc/passwd
+        - /usr/bin/ls -la /etc/ssl/private
       denied_tty:
         - unknown
         - pts/0
@@ -195,7 +206,7 @@ programs:
 
   - app: dhclient
     messages:
-      - "DHCPREQUEST for {ip} on ens160 to {server} port 67"
+      - "DHCPREQUEST for {ip} on {interface} to {server} port 67"
       - "DHCPACK of {ip} from {server}"
       - "bound to {ip} -- renewal in {renewal} seconds."
 
@@ -226,6 +237,10 @@ programs:
         - /usr/lib/packagekit/packagekitd
         - /usr/bin/nmcli
         - /usr/bin/timedatectl
+      agent_process_path:
+        - /usr/libexec/polkit-gnome-authentication-agent-1
+        - /usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1
+        - /usr/libexec/kf5/polkit-kde-authentication-agent-1
       subject_user:
         - root
         - deploy
@@ -271,6 +286,101 @@ programs:
       - "search-names transaction /{}"
       - "resolve transaction /{}"
       - "get-updates transaction /{}"
+
+  - app: fwupd
+    system_types: [workstation]
+    weight: 1
+    params:
+      device:
+        - "UEFI dbx"
+        - "System Firmware"
+        - "Thunderbolt Controller"
+        - "USB-C Dock"
+      metadata_age:
+        - "2"
+        - "6"
+        - "14"
+    messages:
+      - "metadata is {metadata_age} days old, scheduling refresh"
+      - "{device}: firmware version unchanged after LVFS metadata check"
+      - "{device}: no updates available"
+
+  - app: tracker-miner-fs-3
+    system_types: [workstation]
+    distro: ubuntu
+    weight: 1
+    params:
+      indexed_path:
+        - /home/admin/Documents
+        - /home/admin/Downloads
+        - /home/deploy/Documents
+        - /home/ubuntu/Documents
+      file_count:
+        - "12"
+        - "27"
+        - "43"
+        - "68"
+    messages:
+      - "Indexed {file_count} file(s) under {indexed_path}"
+      - "Miner finished crawling {indexed_path}"
+      - "Resetting tracker extract task after idle timeout {}"
+
+  - app: gnome-shell
+    system_types: [workstation]
+    distro: ubuntu
+    weight: 1
+    params:
+      extension_name:
+        - appindicatorsupport@rgcjonas.gmail.com
+        - ubuntu-dock@ubuntu.com
+        - desktop-icons@csoriano
+      monitor_id:
+        - "0"
+        - "1"
+      old_keysym:
+        - Super_L
+        - XF86AudioMute
+        - Print
+      new_keysym:
+        - Super_L
+        - XF86AudioRaiseVolume
+        - Print
+    messages:
+      - "Extension {extension_name} already enabled"
+      - "Window manager warning: Overwriting existing binding of keysym {old_keysym} with keysym {new_keysym}"
+      - "Monitor {monitor_id} configuration unchanged after hotplug event"
+
+  - app: cups-browsed
+    system_types: [workstation]
+    weight: 1
+    params:
+      printer_name:
+        - CORP-PRINT-01
+        - FRONTDESK-MFP
+        - FINANCE-MFP
+      queue_name:
+        - ipp_everywhere
+        - driverless
+    messages:
+      - "Created local queue {printer_name} ({queue_name})"
+      - "Printer {printer_name} was not found by DNS-SD, keeping stale queue for now"
+      - "Browse remote printer {printer_name} at {}"
+
+  - app: avahi-daemon
+    system_types: [workstation]
+    weight: 1
+    params:
+      service_name:
+        - "_ipp._tcp"
+        - "_ipps._tcp"
+        - "_workstation._tcp"
+      interface:
+        - ens160
+        - wlan0
+    messages:
+      - "Registering new address record for {interface}."
+      - "Service \"{service_name}\" successfully established."
+      - "Withdrawing address record for {interface}."
 
   - app: unattended-upgr
     distro: ubuntu

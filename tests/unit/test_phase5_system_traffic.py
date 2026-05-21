@@ -23,12 +23,15 @@
 """Unit tests for Phase 5.4: Background Traffic & System Activity."""
 
 import random
+import re
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.system_processes import load_system_processes
 from evidenceforge.generation.engine.baseline import (
     BaselineMixin,
@@ -39,6 +42,7 @@ from evidenceforge.generation.engine.baseline import (
     _kernel_uptime_stamp,
     _machine_account_ntlm_offset_seconds,
     _machine_account_tgs_gap_ms,
+    _networkmanager_message_timestamp,
     _pick_dc_kerberos_service,
     _pick_dc_kerberos_target,
     _registry_writer_candidates,
@@ -81,6 +85,170 @@ def test_kernel_uptime_stamp_tracks_event_timestamp_fraction():
     assert first_stamp == "2333187.345076"
     assert second_stamp == "2333187.997014"
     assert float(second_stamp) > float(first_stamp)
+
+
+def test_networkmanager_message_timestamp_uses_epoch_time():
+    """NetworkManager bracket timestamps should be epoch-style source timestamps."""
+    ts = datetime(2024, 3, 18, 12, 8, 39, 757990, tzinfo=UTC)
+
+    assert _networkmanager_message_timestamp(ts) == "1710763719.7580"
+
+
+def test_linux_primary_interface_is_stable_per_host(linux_system):
+    """Linux interface naming should be host-stable instead of per-message random."""
+    first = linux_primary_interface(linux_system)
+    second = linux_primary_interface(linux_system)
+
+    assert first == second
+    assert first in {"ens160", "ens192", "enp0s3", "eth0", "eno1"}
+
+
+def test_extra_syslog_interface_templates_use_host_primary_interface(linux_system):
+    """Interface-bearing syslog templates should honor the host primary interface."""
+    primary_interface = linux_primary_interface(linux_system)
+
+    networkmanager_msg = render_extra_syslog_message(
+        {
+            "messages": [
+                "<info>  [{}] device ({interface}): state change: disconnected -> prepare"
+            ],
+            "params": {"interface": ["eth0"]},
+        },
+        random.Random(3),
+        positional_value="1710763719.7580",
+        values={"interface": primary_interface},
+    )
+    resolved_msg = render_extra_syslog_message(
+        {
+            "messages": [
+                "Flushed positive cache scope {scope} after DNS server {dns_server} changed features."
+            ],
+            "params": {"scope": ["eth0", "br0"]},
+        },
+        random.Random(3),
+        positional_value=123456,
+        values={"dns_server": "10.0.0.1", "scope": primary_interface},
+    )
+
+    assert f"({primary_interface})" in networkmanager_msg
+    assert f"scope {primary_interface} " in resolved_msg
+
+
+def test_rsyslog_fd_state_stays_process_local(linux_system):
+    """Rsyslog file descriptors should look like small per-process integers."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    rng = random.Random(7)
+
+    fds = [engine._next_rsyslog_fd(linux_system.hostname, rng) for _ in range(12)]
+
+    assert min(fds) >= 4
+    assert max(fds) <= 64
+    assert fds == sorted(fds)
+
+
+def test_polkit_messages_use_low_session_and_bus_values(linux_system, state_manager):
+    """Polkit payloads should not contain random six-digit sessions or bus IDs."""
+    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
+    rng = random.Random(11)
+    timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+
+    messages = [
+        engine._render_polkit_syslog_message(
+            entry,
+            rng,
+            system=linux_system,
+            timestamp=timestamp + timedelta(seconds=i),
+        )
+        for i in range(20)
+    ]
+
+    session_ids = [
+        int(match.group(1))
+        for message in messages
+        if (match := re.search(r"unix-session:(\d+)", message))
+    ]
+    bus_ids = [
+        int(match.group(1)) for message in messages if (match := re.search(r":1\.(\d+)", message))
+    ]
+    process_ids = [
+        int(match.group(1))
+        for message in messages
+        if (match := re.search(r"unix-process:(\d+):", message))
+    ]
+
+    assert session_ids
+    assert max(session_ids) < 1000
+    assert bus_ids
+    assert max(bus_ids) < 1000
+    assert len(set(bus_ids)) > 4
+    assert process_ids
+    assert min(process_ids) >= 300
+
+
+def test_polkit_action_messages_pair_action_with_source_native_program(linux_system, state_manager):
+    """Polkit authorization rows should not mix unrelated actions and binaries."""
+    from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    engine.state_manager = state_manager
+    entry = next(item for item in load_extra_syslog_messages() if item["app"] == "polkitd")
+    rng = random.Random(19)
+    timestamp = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    allowed_paths = {
+        "org.freedesktop.systemd1.manage-units": {
+            "/usr/bin/systemctl",
+            "/usr/bin/loginctl",
+        },
+        "org.freedesktop.login1.reboot": {
+            "/usr/bin/systemctl",
+            "/usr/bin/loginctl",
+        },
+        "org.freedesktop.packagekit.system-update": {
+            "/usr/lib/packagekit/packagekitd",
+            "/usr/bin/pkcon",
+        },
+        "org.freedesktop.NetworkManager.settings.modify.system": {
+            "/usr/bin/nmcli",
+            "/usr/sbin/NetworkManager",
+        },
+        "org.freedesktop.timedate1.set-timezone": {
+            "/usr/bin/timedatectl",
+        },
+    }
+
+    messages = [
+        engine._render_polkit_syslog_message(
+            {**entry, "messages": [message]},
+            rng,
+            system=linux_system,
+            timestamp=timestamp + timedelta(seconds=idx),
+        )
+        for idx, message in enumerate(entry["messages"])
+        if "action {action_id}" in message
+    ]
+
+    assert messages
+    for message in messages:
+        action = re.search(r"action ([^ ]+)", message).group(1)
+        path = re.search(r"\[([^]]+)\]", message)
+        if path is not None:
+            assert path.group(1) in allowed_paths[action]
+
+
+def test_dbus_bus_state_stays_source_native(linux_system):
+    """D-Bus bus suffixes should stay in a realistic low integer regime."""
+    engine = type("FakeEngine", (BaselineMixin,), {})()
+    rng = random.Random(13)
+
+    bus_ids = [engine._next_dbus_bus_id(linux_system.hostname, rng) for _ in range(20)]
+
+    assert min(bus_ids) >= 12
+    assert max(bus_ids) < 1000
+    assert bus_ids == sorted(bus_ids)
 
 
 def test_anacron_lifecycle_emits_once_per_host_day(linux_system):
@@ -170,6 +338,7 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     )
     term_calls = engine.activity_generator.generate_system_process_termination.call_args_list
     assert [call.kwargs["pid"] for call in term_calls] == [41201, 41200]
+    assert term_calls[0].kwargs["time"] >= ts + timedelta(seconds=1)
 
 
 @pytest.fixture
@@ -658,6 +827,233 @@ class TestInfrastructureDetection:
 
         assert infra["dc"] == ["10.0.0.5"]
         assert infra["dns"] == ["10.0.0.5"]  # DC also serves DNS
+
+    def test_kerberos_connection_packets_cover_nearby_dc_audits(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """One visible Kerberos tuple should account for all nearby KDC audit exchanges."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="WS-01",
+            ip="10.10.1.36",
+            os="Windows 10",
+            type="workstation",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        src_port = 50209
+
+        activity_gen.generate_kerberos_tgt(
+            username=f"{client.hostname}$",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts,
+            source_port=src_port,
+        )
+        activity_gen.generate_kerberos_service_ticket(
+            username=f"{client.hostname}$",
+            service_name=f"cifs/{dc.hostname}",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts + timedelta(milliseconds=200),
+            source_port=src_port,
+        )
+        activity_gen.generate_kerberos_preauth_failed(
+            username="expired.user",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts + timedelta(milliseconds=230),
+            source_port=src_port,
+        )
+        mock_emitters["zeek_conn"].reset_mock()
+
+        activity_gen.generate_connection(
+            src_ip=client.ip,
+            dst_ip=dc.ip,
+            time=ts + timedelta(milliseconds=250),
+            dst_port=88,
+            proto="udp",
+            service="kerberos",
+            duration=0.015,
+            orig_bytes=300,
+            resp_bytes=300,
+            src_port=src_port,
+            source_system=client,
+            conn_state="SF",
+            emit_dns=False,
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.network.orig_pkts >= 3
+        assert event.network.resp_pkts >= 3
+        assert event.network.history == "DdDdDd"
+
+    def test_connection_driven_kerberos_audits_are_counted_in_packets(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """Auto-generated DC audit companions should be reflected in Zeek packet counts."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="APP-01",
+            ip="10.10.2.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=True):
+            activity_gen.generate_connection(
+                src_ip=client.ip,
+                dst_ip=dc.ip,
+                time=ts,
+                dst_port=88,
+                proto="udp",
+                service="kerberos",
+                duration=0.015,
+                orig_bytes=260,
+                resp_bytes=260,
+                src_port=49937,
+                source_system=client,
+                conn_state="SF",
+                emit_dns=False,
+            )
+
+        audit_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert len(audit_events) == 2
+        assert event.network.orig_pkts >= len(audit_events)
+        assert event.network.resp_pkts >= len(audit_events)
+        assert event.network.history == "DdDd"
+
+    def test_tcp_kerberos_audit_companions_force_successful_packet_shape(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """KDC audit companions should not pair with a reset-only TCP shape."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="APP-01",
+            ip="10.10.2.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=True):
+            activity_gen.generate_connection(
+                src_ip=client.ip,
+                dst_ip=dc.ip,
+                time=ts,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=0.2,
+                orig_bytes=600,
+                resp_bytes=1600,
+                src_port=56502,
+                source_system=client,
+                conn_state="SF",
+                emit_dns=False,
+            )
+
+        audit_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type in {"kerberos_tgt", "kerberos_service"}
+        ]
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert len(audit_events) == 2
+        assert event.network.conn_state == "SF"
+        assert event.network.resp_pkts >= len(audit_events)
+        assert event.network.history not in {"ShAR", "Sr", "S"}
+
+    def test_standalone_kerberos_audit_avoids_recent_used_connection_port(
+        self,
+        activity_gen,
+        mock_emitters,
+    ):
+        """A later standalone audit should not attach to an already rendered flow tuple."""
+        dc = System(
+            hostname="DC-01",
+            ip="10.10.2.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            roles=["domain_controller"],
+        )
+        client = System(
+            hostname="WS-01",
+            ip="10.10.1.32",
+            os="Windows 10",
+            type="workstation",
+        )
+        activity_gen._ad_domain = "meridianhcs.local"
+        activity_gen._ip_to_system = {dc.ip: dc, client.ip: client}
+        activity_gen._dc_systems = [dc]
+        ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
+        src_port = 59885
+
+        activity_gen.generate_connection(
+            src_ip=client.ip,
+            dst_ip=dc.ip,
+            time=ts,
+            dst_port=88,
+            proto="udp",
+            service="kerberos",
+            duration=0.015,
+            orig_bytes=260,
+            resp_bytes=260,
+            src_port=src_port,
+            source_system=client,
+            conn_state="SF",
+            emit_dns=False,
+        )
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_kerberos_service_ticket(
+            username=f"{client.hostname}$",
+            service_name="cifs/FILE-SRV-01",
+            source_ip=client.ip,
+            dc_hostname=dc.hostname,
+            time=ts + timedelta(seconds=1),
+        )
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.kerberos.source_port != src_port
 
     def test_service_defaults_windows(self):
         from evidenceforge.generation.engine import GenerationEngine

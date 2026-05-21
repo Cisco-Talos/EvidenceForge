@@ -4,6 +4,7 @@
 """Tests for bulk/periodic event types and shared timing engine."""
 
 import random
+import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -1359,6 +1360,7 @@ class TestDnsTunnelEventSpec:
         assert not any(
             answer.startswith(("status=", "node=", "cdn=", "cache=", "edge-", "ack."))
             or "ttl=30" in answer
+            or re.search(r"\bslot-\d+-t\d+-", answer)
             for answer in answers
         )
 

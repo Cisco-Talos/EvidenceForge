@@ -32,6 +32,7 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
     FileTransferContext,
+    HttpContext,
     NetworkContext,
     OcspContext,
     SslContext,
@@ -41,6 +42,7 @@ from evidenceforge.formats import load_format
 from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
+from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ocsp import ZeekOcspEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
 from evidenceforge.generation.emitters.zeek_x509 import ZeekX509Emitter
@@ -278,7 +280,7 @@ class TestSslUidCorrelation:
             assert ssl_data["cert_chain_fuids"] == [x509_data["id"]]
             assert files_data["fuid"] == x509_data["id"]
             assert files_data["source"] == "SSL"
-            assert files_data["analyzers"] == ["X509"]
+            assert files_data["analyzers"] == ["X509", "MD5", "SHA1", "SHA256"]
             assert files_data["sha1"] == x509_data["fingerprint"]
             assert files_data["sha256"] != x509_data["fingerprint"]
             assert files_data["md5"] != files_data["sha256"][:32]
@@ -415,6 +417,101 @@ class TestSslUidCorrelation:
                 assert files_row["conn_uids"] == [conn_row["uid"]]
                 assert files_row["ts"] > conn_row["ts"]
 
+    def test_ocsp_timestamp_stays_inside_http_file_and_connection_lifetime(self):
+        """OCSP analyzer rows should not outlive their linked HTTP file transfer."""
+        conn_fmt = load_format("zeek_conn")
+        http_fmt = load_format("zeek_http")
+        files_fmt = load_format("zeek_files")
+        ocsp_fmt = load_format("zeek_ocsp")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            http_emitter = ZeekHttpEmitter(http_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            ocsp_emitter = ZeekOcspEmitter(ocsp_fmt, out_dir, sensor_hostnames=["core", "dmz"])
+            event_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            event = SecurityEvent(
+                timestamp=event_time,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CMySpecificUID123",
+                    duration=0.75,
+                    conn_state="SF",
+                    history="ShADadfF",
+                    orig_bytes=320,
+                    resp_bytes=1500,
+                    orig_pkts=5,
+                    orig_ip_bytes=520,
+                    resp_pkts=8,
+                    resp_ip_bytes=1820,
+                ),
+                http=HttpContext(
+                    method="GET",
+                    host="ocsp.example.com",
+                    uri="/status/abcdef123456",
+                    user_agent="Microsoft-CryptoAPI/10.0",
+                    response_body_len=1200,
+                    status_code=200,
+                    status_msg="OK",
+                    resp_fuids=["Focsp12345678901"],
+                    resp_mime_types=["application/ocsp-response"],
+                    tags=["ocsp"],
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="Focsp12345678901",
+                    source="HTTP",
+                    mime_type="application/ocsp-response",
+                    duration=0.012,
+                    local_orig=False,
+                    is_orig=False,
+                    seen_bytes=1200,
+                    total_bytes=1200,
+                ),
+                ocsp=OcspContext(
+                    id="Focsp12345678901",
+                    issuer_name_hash="issuer-name",
+                    issuer_key_hash="issuer-key",
+                    serial_number="01",
+                    cert_status="good",
+                    this_update=1705310000.0,
+                    next_update=1705900000.0,
+                ),
+            )
+            event._sensor_hostnames_by_format = {
+                "zeek_conn": ["core", "dmz"],
+                "zeek_http": ["core", "dmz"],
+                "zeek_files": ["core", "dmz"],
+                "zeek_ocsp": ["core", "dmz"],
+            }
+
+            conn_emitter.emit(event)
+            http_emitter.emit(event)
+            files_emitter.emit(event)
+            ocsp_emitter.emit(event)
+            conn_emitter.close()
+            http_emitter.close()
+            files_emitter.close()
+            ocsp_emitter.close()
+
+            for sensor in ("core", "dmz"):
+                conn_row = json.loads((out_dir / sensor / "conn.json").read_text())
+                http_row = json.loads((out_dir / sensor / "http.json").read_text())
+                files_row = json.loads((out_dir / sensor / "files.json").read_text())
+                ocsp_row = json.loads((out_dir / sensor / "ocsp.json").read_text())
+                assert files_row["fuid"] == ocsp_row["id"]
+                assert files_row["conn_uids"] == [conn_row["uid"]]
+                assert http_row["resp_fuids"] == [ocsp_row["id"]]
+                assert http_row["ts"] < files_row["ts"] <= ocsp_row["ts"]
+                assert ocsp_row["ts"] <= files_row["ts"] + files_row["duration"]
+                assert ocsp_row["ts"] <= conn_row["ts"] + conn_row["duration"]
+                assert "conn_uids" not in ocsp_row
+
     def test_x509_renders_san_dns(self):
         """x509.san_dns should render as Zeek's san.dns field."""
         x509_fmt = load_format("zeek_x509")
@@ -530,7 +627,8 @@ class TestSslUidCorrelation:
             rows = [json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()]
 
         for leaf_row, intermediate_row in zip(rows[0::2], rows[1::2], strict=True):
-            gaps.append(round(intermediate_row["ts"] - leaf_row["ts"], 3))
+            gaps.append(round(intermediate_row["ts"] - leaf_row["ts"], 6))
+        assert any(gap != 0.001 for gap in gaps)
         assert len(set(gaps)) > 1
 
     def test_tls_analyzer_logs_have_stage_timestamp_offsets(self):
@@ -627,7 +725,7 @@ class TestSslUidCorrelation:
         assert conn_ts < ssl_ts <= conn_ts + (ssl_window.max_ms / 1000) + 0.001
         assert ssl_offset_us % 1000 != 0
         assert ssl_ts < x509_ts <= conn_ts + ((ssl_window.max_ms + x509_window.max_ms) / 1000)
-        assert x509_ts < ocsp_ts < conn_ts + 6.1
+        assert conn_ts < ocsp_ts < conn_ts + 6.1
         assert ocsp_row["id"] == "Focsp12345678901"
         assert "revoketime" not in ocsp_row
         assert "revokereason" not in ocsp_row
@@ -637,12 +735,152 @@ class TestSslUidCorrelation:
         files_by_fuid = {row["fuid"]: row for row in file_rows}
         ocsp_file_row = files_by_fuid[ocsp_row["id"]]
         assert ocsp_file_row["conn_uids"] == ["CMySpecificUID123"]
+        assert ocsp_file_row["ts"] <= ocsp_ts <= ocsp_file_row["ts"] + ocsp_file_row["duration"]
         assert files_by_fuid["Fabcdef1234567890"]["source"] == "SSL"
         assert ocsp_file_row["tx_hosts"] == ["8.8.8.8"]
         assert ocsp_file_row["rx_hosts"] == ["10.0.0.1"]
         assert "uid" not in ocsp_file_row
         assert "id.orig_h" not in ocsp_file_row
         assert ocsp_file_row["mime_type"] == "application/ocsp-response"
+
+    def test_tls_certificate_files_and_x509_share_ordered_timeline(self):
+        """SSL certificate files and x509 rows should follow one ordered chain timeline."""
+        ssl_fmt = load_format("zeek_ssl")
+        x509_fmt = load_format("zeek_x509")
+        files_fmt = load_format("zeek_files")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            ssl_emitter = ZeekSslEmitter(ssl_fmt, out_dir / "ssl.json")
+            x509_emitter = ZeekX509Emitter(x509_fmt, out_dir / "x509.json")
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+            leaf = X509Context(
+                fuid="Fleafordered1234",
+                fingerprint="a" * 40,
+                certificate_serial="01",
+                certificate_subject="CN=www.example.com",
+                certificate_issuer="CN=Example Intermediate CA",
+                certificate_not_valid_before=1700000000.0,
+                certificate_not_valid_after=1730000000.0,
+            )
+            intermediate = X509Context(
+                fuid="Fintordered12345",
+                fingerprint="b" * 40,
+                certificate_serial="02",
+                certificate_subject="CN=Example Intermediate CA",
+                certificate_issuer="CN=Example Root CA",
+                certificate_not_valid_before=1600000000.0,
+                certificate_not_valid_after=1900000000.0,
+                basic_constraints_ca=True,
+            )
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    conn_state="SF",
+                    zeek_uid="COrderedTlsUID1",
+                    duration=3.0,
+                ),
+                ssl=SslContext(
+                    version="TLSv12",
+                    cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    cert_chain_fuids=[leaf.fuid, intermediate.fuid],
+                ),
+                x509=leaf,
+                x509_chain=[leaf, intermediate],
+            )
+
+            ssl_emitter.emit(event)
+            files_emitter.emit(event)
+            x509_emitter.emit(event)
+            ssl_emitter.close()
+            files_emitter.close()
+            x509_emitter.close()
+
+            ssl_row = json.loads((out_dir / "ssl.json").read_text().splitlines()[0])
+            file_rows = [
+                json.loads(line) for line in (out_dir / "files.json").read_text().splitlines()
+            ]
+            x509_rows = [
+                json.loads(line) for line in (out_dir / "x509.json").read_text().splitlines()
+            ]
+
+        files_by_fuid = {row["fuid"]: row for row in file_rows}
+        x509_by_id = {row["id"]: row for row in x509_rows}
+        assert ssl_row["cert_chain_fuids"] == [leaf.fuid, intermediate.fuid]
+        assert files_by_fuid[leaf.fuid]["depth"] == 0
+        assert files_by_fuid[intermediate.fuid]["depth"] == 1
+        assert files_by_fuid[leaf.fuid]["ts"] < files_by_fuid[intermediate.fuid]["ts"]
+        assert x509_by_id[leaf.fuid]["ts"] > files_by_fuid[leaf.fuid]["ts"]
+        assert x509_by_id[intermediate.fuid]["ts"] > files_by_fuid[intermediate.fuid]["ts"]
+        assert x509_by_id[leaf.fuid]["ts"] < x509_by_id[intermediate.fuid]["ts"]
+
+    def test_tls_certificate_file_depth_spacing_is_not_constant(self):
+        """TLS certificate file depth gaps should be ordered and non-uniform."""
+        files_fmt = load_format("zeek_files")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        gaps: list[float] = []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            files_emitter = ZeekFilesEmitter(files_fmt, out_dir / "files.json")
+            for idx in range(24):
+                leaf = X509Context(
+                    fuid=f"Ffileleaf{idx:08d}",
+                    fingerprint=f"{idx:040x}"[-40:],
+                    certificate_serial="01",
+                    certificate_subject=f"CN=leaf{idx}.example.com",
+                    certificate_issuer="CN=Example Intermediate CA",
+                    certificate_not_valid_before=1700000000.0,
+                    certificate_not_valid_after=1730000000.0,
+                )
+                intermediate = X509Context(
+                    fuid=f"Ffileint{idx:09d}",
+                    fingerprint=f"{idx + 10_000:040x}"[-40:],
+                    certificate_serial="02",
+                    certificate_subject="CN=Example Intermediate CA",
+                    certificate_issuer="CN=Example Root CA",
+                    certificate_not_valid_before=1600000000.0,
+                    certificate_not_valid_after=1900000000.0,
+                    basic_constraints_ca=True,
+                )
+                event = SecurityEvent(
+                    timestamp=base_ts + timedelta(seconds=idx),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=52000 + idx,
+                        dst_ip="8.8.8.8",
+                        dst_port=443,
+                        protocol="tcp",
+                        service="ssl",
+                        conn_state="SF",
+                        zeek_uid=f"CFileChain{idx:05d}",
+                        duration=3.0,
+                    ),
+                    x509=leaf,
+                    x509_chain=[leaf, intermediate],
+                )
+                files_emitter.emit(event)
+            files_emitter.close()
+
+            rows = [json.loads(line) for line in (out_dir / "files.json").read_text().splitlines()]
+
+        for leaf_row, intermediate_row in zip(rows[0::2], rows[1::2], strict=True):
+            assert leaf_row["depth"] == 0
+            assert intermediate_row["depth"] == 1
+            gap = round(intermediate_row["ts"] - leaf_row["ts"], 6)
+            assert gap > 0
+            gaps.append(gap)
+        assert 0.001 not in gaps
+        assert len(set(gaps)) > 10
 
     def test_x509_timestamp_stays_inside_parent_connection(self):
         """x509 analyzer rows should not outlive their owning connection interval."""
@@ -773,6 +1011,71 @@ class TestSslUidCorrelation:
 
         assert conn_row["duration"] > 0.8
         assert conn_row["duration"] != 0.8
+
+    def test_tls_conn_duration_floor_applies_to_ssl_service_without_ssl_context(self):
+        """Completed ssl service rows should not flatline at the minimum TLS duration."""
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir / "conn.json")
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CServiceOnlyTLS123",
+                    conn_state="SF",
+                    duration=1.2,
+                ),
+            )
+
+            conn_emitter.emit(event)
+            conn_emitter.close()
+
+            conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
+
+        assert conn_row["duration"] > 1.2
+        assert conn_row["duration"] != 1.2
+
+    def test_tls_conn_duration_floor_breaks_ssl_context_duration_sentinel(self):
+        """Completed TLS rows with SSL context should not keep the generic 1.2s duration."""
+        conn_fmt = load_format("zeek_conn")
+        base_ts = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, out_dir / "conn.json")
+            event = SecurityEvent(
+                timestamp=base_ts,
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="8.8.8.8",
+                    dst_port=443,
+                    protocol="tcp",
+                    service="ssl",
+                    zeek_uid="CContextTLS123456",
+                    conn_state="SF",
+                    duration=1.2,
+                ),
+                ssl=SslContext(version="TLSv12", cipher="TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"),
+            )
+
+            conn_emitter.emit(event)
+            conn_emitter.close()
+
+            conn_row = json.loads((out_dir / "conn.json").read_text().splitlines()[0])
+
+        assert conn_row["duration"] > 1.2
+        assert conn_row["duration"] != 1.2
 
     def test_x509_rejects_partial_handshake(self):
         """x509.log should not emit certificates for incomplete TLS handshakes."""
