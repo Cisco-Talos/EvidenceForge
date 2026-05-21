@@ -13560,8 +13560,21 @@ class ActivityGenerator:
                 process_name,
                 ntpath.basename(process_name),
             )
-        network_source_ip = source_ip or self._explicit_credentials_source_ip(system, target_server)
-        network_source_port = source_port
+        if process_pid > 0:
+            time = self._clamp_after_visible_process_create(
+                system,
+                process_pid,
+                time,
+                "source.windows_explicit_credentials_after_process_create",
+            )
+        network_source_ip = self._explicit_credentials_source_ip(
+            system,
+            target_server,
+            source_ip,
+        )
+        network_source_port = (
+            source_port if not source_ip or source_ip.strip() == network_source_ip else 0
+        )
         if network_source_ip not in {"", "-"} and network_source_port <= 0:
             network_source_port = _ephemeral_port(_get_rng(), _get_os_category(system.os))
         event = SecurityEvent(
@@ -13630,10 +13643,33 @@ class ActivityGenerator:
             email=f"administrator@{self._valid_fallback_email_domain()}",
         )
 
-    def _explicit_credentials_source_ip(self, system: System, target_server: str) -> str:
+    def _explicit_credentials_source_ip(
+        self,
+        system: System,
+        target_server: str,
+        source_ip: str = "",
+    ) -> str:
         """Return source network metadata for remote explicit-credential use."""
         target = target_server.strip().lower()
         if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
+            default_source_ip = "-"
+        else:
+            system_domain = getattr(system, "domain", "")
+            local_names = {
+                system.hostname.lower(),
+                f"{system.hostname}.{system_domain}".lower() if system_domain else "",
+                system.ip,
+            }
+            target_host = target.split(".", 1)[0]
+            default_source_ip = (
+                "-"
+                if target in local_names or target_host == system.hostname.lower()
+                else system.ip
+            )
+        explicit_source_ip = source_ip.strip()
+        if explicit_source_ip in {"", "-"}:
+            return default_source_ip
+        if default_source_ip == "-":
             return "-"
         system_domain = getattr(system, "domain", "")
         local_names = {
@@ -13641,10 +13677,9 @@ class ActivityGenerator:
             f"{system.hostname}.{system_domain}".lower() if system_domain else "",
             system.ip,
         }
-        target_host = target.split(".", 1)[0]
-        if target in local_names or target_host == system.hostname.lower():
-            return "-"
-        return system.ip
+        if explicit_source_ip.lower() in local_names:
+            return system.ip
+        return default_source_ip
 
     def _ensure_explicit_credentials_subject_logon(
         self,

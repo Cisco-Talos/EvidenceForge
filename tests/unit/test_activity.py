@@ -4402,6 +4402,33 @@ class TestActivityGenerator:
         assert explicit.auth.source_ip == test_system.ip
         assert 49152 <= explicit.auth.source_port <= 65535
 
+    def test_generate_explicit_credentials_ignores_unrelated_source_ip_override(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A 4648 on a workstation should not borrow another host's source address."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.99",
+            source_port=50001,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == test_system.ip
+        assert explicit.auth.source_port != 50001
+        assert 49152 <= explicit.auth.source_port <= 65535
+
     def test_generate_explicit_credentials_local_target_keeps_blank_network_endpoint(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -4425,6 +4452,42 @@ class TestActivityGenerator:
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
         assert explicit.auth.source_ip == "-"
         assert explicit.auth.source_port == 0
+
+    def test_generate_explicit_credentials_clamps_after_visible_process_create(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4648 should not render before the visible create for its caller process."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        explicit_time = process_time + timedelta(milliseconds=100)
+        state_manager.set_current_time(process_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\runas.exe",
+            command_line="runas.exe /user:admin01 cmd.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        visible_create_time = explicit_time + timedelta(seconds=1)
+        activity_gen._process_source_create_times[(test_system.hostname, pid)] = visible_create_time
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=explicit_time,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=pid,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.process_pid == pid
+        assert explicit.timestamp > visible_create_time
 
     def test_generate_explicit_credentials_skips_linux_local_target_on_windows(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
