@@ -1001,6 +1001,67 @@ class StorylineMixin:
             return None
         return service_user, "0x3e7", service_pid
 
+    def _linux_native_service_user_for_storyline_actor(
+        self,
+        actor: User,
+        system: System,
+        time: datetime,
+    ) -> User:
+        """Return the OS-native Linux service user for web-service storyline actors."""
+        if _get_os_category(system.os) != "linux":
+            return actor
+        if actor.username.lower() not in {"apache", "www-data", "nginx", "httpd", "tomcat"}:
+            return actor
+
+        raw_system_pids = getattr(self.activity_generator, "_system_pids", {})
+        if not isinstance(raw_system_pids, dict):
+            return actor
+        system_pids = raw_system_pids.get(
+            system.hostname,
+            {},
+        )
+        if not isinstance(system_pids, dict):
+            return actor
+        for key in ("apache2", "httpd", "nginx", "php-fpm"):
+            pid = int(system_pids.get(key, 0) or 0)
+            if pid <= 0:
+                continue
+            proc = self.state_manager.get_process(system.hostname, pid)
+            if proc is None or not proc.username:
+                continue
+            if isinstance(proc.start_time, datetime) and proc.start_time > time:
+                continue
+            native_username = proc.username
+            if native_username == actor.username:
+                return actor
+            return User(
+                username=native_username,
+                full_name=f"{native_username} service",
+                email=f"{native_username}@example.local",
+                groups=list(actor.groups),
+                enabled=actor.enabled,
+                persona=actor.persona,
+                primary_system=actor.primary_system,
+            )
+        return actor
+
+    @staticmethod
+    def _process_has_following_same_host_connection(
+        system: System,
+        future_specs: Sequence[Any],
+    ) -> bool:
+        """Return whether a just-created process owns a later same-host connection."""
+        for future in future_specs:
+            future_type = getattr(future, "type", "")
+            if future_type == "connection":
+                source_ip = getattr(future, "source_ip", None) or system.ip
+                if source_ip == system.ip:
+                    return True
+                continue
+            if future_type in {"process", "logoff", "logon", "ssh_session"}:
+                return False
+        return False
+
     @staticmethod
     def _scheduled_task_lookup_key(system: System, task_name: str) -> tuple[str, str]:
         """Return a normalized host/task key for correlating schtasks with 4698."""
@@ -1656,6 +1717,7 @@ class StorylineMixin:
                         time=event_t,
                         activity=storyline_event.activity,
                         explicit_types=explicit_types,
+                        future_specs=storyline_event.events[i + 1 :],
                     )
                     if malicious_event:
                         self.malicious_events.append(malicious_event)
@@ -1721,6 +1783,7 @@ class StorylineMixin:
                     time=event_t,
                     activity=storyline_event.activity,
                     explicit_types=explicit_types,
+                    future_specs=storyline_event.events[i + 1 :],
                 )
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
@@ -1783,6 +1846,7 @@ class StorylineMixin:
                     time=event_t,
                     activity=rh_event.activity,
                     explicit_types=explicit_types,
+                    future_specs=rh_event.events[i + 1 :],
                 )
                 if result:
                     # Track as red herring, not malicious
@@ -1800,6 +1864,7 @@ class StorylineMixin:
         time: datetime,
         activity: str,
         explicit_types: set[str],
+        future_specs: Sequence[Any] = (),
     ) -> dict | None:
         """Execute a single typed event from the storyline events list.
 
@@ -1944,18 +2009,28 @@ class StorylineMixin:
                 else:
                     logon_id = target_session.logon_id
 
+            process_actor = self._linux_native_service_user_for_storyline_actor(
+                actor,
+                system,
+                time,
+            )
             process_name = _normalize_storyline_process_image(
                 spec.process_name,
                 os_category,
-                username=actor.username,
+                username=process_actor.username,
             )
             command_line = spec.command_line or process_name
-            shell_key = (system.hostname, actor.username)
+            shell_key = (system.hostname, process_actor.username)
 
             if os_category == "linux":
                 if not hasattr(self, "_storyline_shell_available_at"):
                     self._storyline_shell_available_at: dict[tuple[str, str], datetime] = {}
-                available_at = self._storyline_shell_available_at.get(shell_key)
+                available_times = [
+                    ts
+                    for key in {shell_key, (system.hostname, actor.username)}
+                    if (ts := self._storyline_shell_available_at.get(key)) is not None
+                ]
+                available_at = max(available_times) if available_times else None
                 if available_at is not None and time < available_at:
                     time = available_at + timedelta(seconds=rng.uniform(0.3, 2.0))
 
@@ -1975,7 +2050,7 @@ class StorylineMixin:
 
                 inferred_process = _linux_command_process_from_shell(
                     command_line,
-                    username=actor.username,
+                    username=process_actor.username,
                 )
                 if inferred_process is not None:
                     inferred_image, inferred_command_line = inferred_process
@@ -1989,10 +2064,9 @@ class StorylineMixin:
                     process_command_line = shell_command_line
 
             output_file = self._extract_output_file(command_line, os_category)
-            process_actor = actor
             process_logon_id = logon_id
             service_context = self._storyline_service_context_for_process(
-                actor=actor,
+                actor=process_actor,
                 system=system,
                 time=time,
                 process_name=process_name,
@@ -2001,7 +2075,7 @@ class StorylineMixin:
                 process_actor, process_logon_id, parent_pid = service_context
             else:
                 parent_pid = self.activity_generator._resolve_parent(
-                    system, actor, time, logon_id, process_name
+                    system, process_actor, time, process_logon_id, process_name
                 )
             if os_category == "linux":
                 reserved_start_time = (
@@ -2018,7 +2092,7 @@ class StorylineMixin:
                 if isinstance(reserved_start_time, datetime):
                     time = reserved_start_time
                 scheduled_bash_time = self.activity_generator.generate_bash_command(
-                    actor,
+                    process_actor,
                     system,
                     time,
                     command_line,
@@ -2358,6 +2432,11 @@ class StorylineMixin:
                     terminate_immediately = (
                         _linux_foreground_lifetime(process_name, process_command_line) is not None
                     )
+                    if terminate_immediately and self._process_has_following_same_host_connection(
+                        system,
+                        future_specs,
+                    ):
+                        terminate_immediately = False
                 if terminate_immediately:
                     self.activity_generator.generate_process_termination(
                         user=process_actor,

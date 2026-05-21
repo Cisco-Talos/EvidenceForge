@@ -129,6 +129,129 @@ class TestStorylineCommandNetworks:
 
         assert target == ("DB-PROD-01", 14330, "tds")
 
+    def test_linux_web_storyline_actor_uses_native_service_user(self):
+        state = StateManager()
+        ts = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        state.set_current_time(ts - timedelta(minutes=5))
+        web_system = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        systemd_pid = state.create_process(
+            "WEB-EXT-01",
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd",
+            "root",
+            "System",
+        )
+        apache_pid = state.create_process(
+            "WEB-EXT-01",
+            systemd_pid,
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
+            "System",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = state
+        engine.activity_generator = SimpleNamespace(
+            _system_pids={"WEB-EXT-01": {"apache2": apache_pid}},
+        )
+        actor = User(
+            username="apache",
+            full_name="Apache Service",
+            email="apache@example.local",
+        )
+
+        native_actor = engine._linux_native_service_user_for_storyline_actor(
+            actor,
+            web_system,
+            ts,
+        )
+
+        assert native_actor.username == "www-data"
+        assert native_actor.email == "www-data@example.local"
+
+    def test_foreground_process_defers_termination_for_following_same_host_connection(self):
+        web_system = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+
+        assert StorylineMixin._process_has_following_same_host_connection(
+            web_system,
+            [
+                SimpleNamespace(type="raw"),
+                SimpleNamespace(type="connection", source_ip=""),
+            ],
+        )
+        assert not StorylineMixin._process_has_following_same_host_connection(
+            web_system,
+            [
+                SimpleNamespace(type="process"),
+                SimpleNamespace(type="connection", source_ip=""),
+            ],
+        )
+
+    def test_apache_raw_syslog_uses_canonical_vip_tuple_and_listener_pid(self):
+        ts = datetime(2024, 3, 18, 13, 20, 1, tzinfo=UTC)
+        state = StateManager()
+        state.set_current_time(ts - timedelta(minutes=10))
+        web_system = System(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        systemd_pid = state.create_process(
+            "WEB-EXT-01",
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd",
+            "root",
+            "System",
+        )
+        apache_pid = state.create_process(
+            "WEB-EXT-01",
+            systemd_pid,
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
+            "System",
+        )
+        generator = object.__new__(ActivityGenerator)
+        generator.state_manager = state
+        generator._system_pids = {"WEB-EXT-01": {"apache2": apache_pid}}
+        generator._recent_connection_tuples = {
+            ("185.70.41.45", 53742, "203.0.113.10", 443, "tcp"): ts.timestamp() - 5
+        }
+        generator.dispatcher = SimpleNamespace(
+            visibility_engine=SimpleNamespace(
+                _real_ip_to_vip={"10.10.3.10": "203.0.113.10"},
+            ),
+        )
+
+        fields = generator._normalize_apache_raw_syslog(
+            ts,
+            {
+                "pid": 2418,
+                "message": "[Mon Mar 18 07:20:42.128744 2024] [proxy_fcgi:error] "
+                "[pid 2418] [client 185.70.41.45:53218] PHP message",
+            },
+            web_system,
+        )
+
+        assert fields["pid"] == apache_pid
+        assert f"[pid {apache_pid}]" in fields["message"]
+        assert "[client 185.70.41.45:53742]" in fields["message"]
+
     def test_resolve_storyline_network_target_matches_fqdn(self):
         engine = object.__new__(StorylineMixin)
         engine._ad_domain = "meridianhcs.local"

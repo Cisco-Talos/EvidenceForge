@@ -2424,6 +2424,7 @@ def _proxy_action_for_context(
 # fractional seconds or timezone tokens.
 _APACHE_EMBEDDED_TS_RE = re.compile(r"\[[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} [^\]]{1,40} \d{4}\]")
 _APACHE_CLIENT_RE = re.compile(r"\[client (?P<ip>\d{1,3}(?:\.\d{1,3}){3}):(?P<port>\d+)\]")
+_APACHE_PID_RE = re.compile(r"\[pid (?P<pid>\d+)\]")
 
 
 def _tls_san_dns_names(cert_name: str) -> list[str]:
@@ -14706,16 +14707,15 @@ class ActivityGenerator:
         apache_time = ensure_utc(time).strftime("%a %b %d %H:%M:%S.%f %Y")
         message = _APACHE_EMBEDDED_TS_RE.sub(f"[{apache_time}]", message, count=1)
 
+        listener_pid = self._apache_listener_pid(system, time)
+        if listener_pid is not None:
+            fields["pid"] = listener_pid
+            message = _APACHE_PID_RE.sub(f"[pid {listener_pid}]", message, count=1)
+
         client_match = _APACHE_CLIENT_RE.search(message)
         if client_match and system is not None:
             client_ip = client_match.group("ip")
-            recent_port = self._recent_source_port_for_connection(
-                client_ip,
-                system.ip,
-                dst_port=443,
-                proto="tcp",
-                reference_time=time,
-            )
+            recent_port = self._recent_apache_client_port(client_ip, system, time)
             if recent_port is not None:
                 message = _APACHE_CLIENT_RE.sub(
                     f"[client {client_ip}:{recent_port}]",
@@ -14725,6 +14725,43 @@ class ActivityGenerator:
 
         fields["message"] = message
         return fields
+
+    def _apache_listener_pid(self, system: "System | None", time: datetime) -> int | None:
+        """Return the live Apache listener PID for source-native Apache log fragments."""
+        if system is None:
+            return None
+        system_pids = getattr(self, "_system_pids", {}).get(system.hostname, {})
+        for key in ("apache2", "httpd", "nginx"):
+            pid = int(system_pids.get(key, 0) or 0)
+            if pid > 0 and self._is_pid_active_at(system, pid, time):
+                return pid
+        return None
+
+    def _recent_apache_client_port(
+        self,
+        client_ip: str,
+        system: "System",
+        reference_time: datetime,
+    ) -> int | None:
+        """Return a recent canonical web-request source port for Apache raw logs."""
+        candidate_dst_ips = [system.ip]
+        visibility = getattr(getattr(self, "dispatcher", None), "visibility_engine", None)
+        real_to_vip = getattr(visibility, "_real_ip_to_vip", {}) if visibility is not None else {}
+        vip_ip = real_to_vip.get(system.ip)
+        if vip_ip and vip_ip not in candidate_dst_ips:
+            candidate_dst_ips.append(vip_ip)
+
+        for dst_ip in candidate_dst_ips:
+            recent_port = self._recent_source_port_for_connection(
+                client_ip,
+                dst_ip,
+                dst_port=443,
+                proto="tcp",
+                reference_time=reference_time,
+            )
+            if recent_port is not None:
+                return recent_port
+        return None
 
     def _recent_source_port_for_connection(
         self,
