@@ -617,6 +617,70 @@ class TestSslContextPopulation:
         }
         assert syslog_pids == {first_conn.network.responding_pid}
 
+    def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=4.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+        first_conn = next(event for event in events if event.event_type == "connection")
+
+        gen.generate_syslog_event(
+            system=target,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            app_name="sshd",
+            message="Connection from 10.0.10.50 port 51111 on 10.0.20.10 port 22",
+            pid=6505,
+            facility=10,
+        )
+        gen.generate_syslog_event(
+            system=target,
+            time=datetime(2024, 1, 15, 10, 0, 2, tzinfo=UTC),
+            app_name="sshd",
+            message="Accepted publickey for admin from 10.0.10.50 port 51111 ssh2",
+            pid=6505,
+            facility=10,
+        )
+        gen.generate_syslog_event(
+            system=target,
+            time=datetime(2024, 1, 15, 10, 0, 3, tzinfo=UTC),
+            app_name="sshd",
+            message="pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
+            pid=6505,
+            facility=10,
+        )
+
+        syslog_pids = [
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
+        ]
+        assert syslog_pids == [
+            first_conn.network.responding_pid,
+            first_conn.network.responding_pid,
+            first_conn.network.responding_pid,
+        ]
+
     def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 

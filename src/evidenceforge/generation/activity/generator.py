@@ -7791,6 +7791,18 @@ class ActivityGenerator:
             self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
         ] = pid
 
+    def _remember_ssh_pid_alias(self, hostname: str, observed_pid: int | None, pid: int) -> None:
+        if observed_pid is None or observed_pid <= 0 or pid <= 0 or observed_pid == pid:
+            return
+        if not hasattr(self, "_ssh_pid_aliases"):
+            self._ssh_pid_aliases: dict[tuple[str, int], int] = {}
+        self._ssh_pid_aliases[(hostname, observed_pid)] = pid
+
+    def _ssh_pid_alias(self, hostname: str, pid: int | None) -> int | None:
+        if pid is None or pid <= 0 or not hasattr(self, "_ssh_pid_aliases"):
+            return None
+        return self._ssh_pid_aliases.get((hostname, pid))
+
     def ssh_responder_pid_for_tuple(
         self,
         source_ip: str,
@@ -7842,6 +7854,50 @@ class ActivityGenerator:
         )
         self._remember_ssh_responder_pid(source_ip, source_port, target_system.ip, sshd_pid)
         return sshd_pid
+
+    def _normalize_sshd_syslog_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        message: str,
+        pid: int | None,
+    ) -> int | None:
+        alias = self._ssh_pid_alias(system.hostname, pid)
+        if alias is not None:
+            return alias
+
+        source_ip = ""
+        source_port = 0
+        conn_match = re.match(
+            r"^Connection from (?P<src_ip>\S+) port (?P<src_port>\d+) "
+            r"on (?P<dst_ip>\S+) port 22$",
+            message,
+        )
+        if conn_match:
+            source_ip = conn_match.group("src_ip")
+            source_port = int(conn_match.group("src_port"))
+        else:
+            accepted_match = re.match(
+                r"^Accepted \S+ for (?:invalid user )?\S+ "
+                r"from (?P<src_ip>\S+) port (?P<src_port>\d+) ",
+                message,
+            )
+            if accepted_match:
+                source_ip = accepted_match.group("src_ip")
+                source_port = int(accepted_match.group("src_port"))
+
+        if not source_ip or source_port <= 0:
+            return pid
+
+        responder_pid = self.ensure_linux_ssh_responder_process(
+            target_system=system,
+            time=time,
+            source_ip=source_ip,
+            source_port=source_port,
+        )
+        self._remember_ssh_pid_alias(system.hostname, pid, responder_pid)
+        return responder_pid
 
     def reserve_ssh_source_port(
         self,
@@ -15349,6 +15405,14 @@ class ActivityGenerator:
         HostContext + SyslogContext and dispatches to the syslog emitter.
         """
         from evidenceforge.events.contexts import SyslogContext
+
+        if app_name == "sshd" and _get_os_category(system.os) == "linux":
+            pid = self._normalize_sshd_syslog_pid(
+                system=system,
+                time=time,
+                message=message,
+                pid=pid,
+            )
 
         event = SecurityEvent(
             timestamp=time,
