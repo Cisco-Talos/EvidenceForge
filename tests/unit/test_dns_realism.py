@@ -903,7 +903,7 @@ class TestWeirdProtocolConstraint:
         assert event.dns.AA is True
         assert event.dns.TTLs[0] == float(_dns_base_ttl("DC-01.example.org", True))
 
-    def test_sensor_duration_jitter_respects_dns_rtt(self, timestamp, tmp_path):
+    def test_sensor_duration_texture_preserves_dns_rtt_floor(self, timestamp, tmp_path):
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(
             format_def=fmt,
@@ -933,10 +933,13 @@ class TestWeirdProtocolConstraint:
         emitter.emit(event)
         emitter.flush()
 
-        for path in tmp_path.glob("zeek-*/conn.json"):
-            for line in path.read_text().splitlines():
-                row = json.loads(line)
-                assert row["duration"] == event.dns.rtt
+        rows = {
+            path.parent.name: json.loads(path.read_text().splitlines()[0])
+            for path in tmp_path.glob("zeek-*/conn.json")
+        }
+        assert rows["zeek-a"]["duration"] == event.dns.rtt
+        assert rows["zeek-b"]["duration"] > event.dns.rtt
+        assert rows["zeek-b"]["duration"] - rows["zeek-a"]["duration"] <= 0.05
 
     def test_generic_dns_service_accounting_is_clamped(
         self, activity_gen, timestamp, state_manager, mock_emitters

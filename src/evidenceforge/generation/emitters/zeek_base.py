@@ -327,6 +327,62 @@ def _locks_sensor_packet_accounting(render_data: dict[str, Any]) -> bool:
     return render_data.get("id.orig_p") == 53 or render_data.get("id.resp_p") == 53
 
 
+def _extend_locked_sensor_timing_field(
+    render_data: dict[str, Any],
+    field: str,
+    hostname: str,
+    uid: Any,
+    *,
+    max_delta_seconds: float,
+) -> bool:
+    """Add tiny sensor-local timing texture while preserving packet accounting."""
+    value = render_data.get(field)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    if value <= 0 or value > 10**18:
+        return False
+    seed = _stable_seed(f"zeek_sensor_locked_timing:{hostname}:{uid}:{field}")
+    fraction = 0.0005 + ((seed % 6500) / 1_000_000)
+    try:
+        raw_delta = value * fraction
+        if raw_delta < 0.000001:
+            raw_delta = 0.000001
+        if raw_delta > max_delta_seconds:
+            cap_fraction = 0.2 + (((seed >> 8) % 7000) / 10_000)
+            raw_delta = max_delta_seconds * cap_fraction
+        render_data[field] = value + raw_delta
+    except OverflowError:
+        logger.debug(
+            "Skipping Zeek locked packet-accounting timing texture for %s on %s",
+            field,
+            hostname,
+        )
+        return False
+    return True
+
+
+def _texture_locked_packet_accounting_observation(
+    render_data: dict[str, Any],
+    hostname: str,
+    uid: Any,
+) -> None:
+    """Vary sensor-local timing for DNS/ICMP while keeping packet sizes exact."""
+    _extend_locked_sensor_timing_field(
+        render_data,
+        "duration",
+        hostname,
+        uid,
+        max_delta_seconds=0.05,
+    )
+    _extend_locked_sensor_timing_field(
+        render_data,
+        "rtt",
+        hostname,
+        uid,
+        max_delta_seconds=0.025,
+    )
+
+
 def _apply_sensor_observation_variance(
     render_data: dict[str, Any],
     hostname: str,
@@ -809,10 +865,14 @@ class SensorMultiplexEmitter(LogEmitter):
                         render_data["ts"] = ts + timedelta(microseconds=sensor_delay_us)
                     elif isinstance(ts, (int, float)):
                         render_data["ts"] = ts + sensor_delay_us / 1_000_000
-                if i > 0:
-                    if render_data.get(
-                        "_allow_sensor_observation_variance"
-                    ) and not _locks_sensor_packet_accounting(render_data):
+                if i > 0 and render_data.get("_allow_sensor_observation_variance"):
+                    if _locks_sensor_packet_accounting(render_data):
+                        _texture_locked_packet_accounting_observation(
+                            render_data,
+                            hostname,
+                            original_uid,
+                        )
+                    else:
                         _apply_sensor_observation_variance(render_data, hostname, original_uid)
                 _enforce_http_body_invariants(render_data)
                 _enforce_ip_byte_invariants(render_data)

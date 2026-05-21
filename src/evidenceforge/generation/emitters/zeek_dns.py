@@ -123,6 +123,7 @@ class ZeekDnsEmitter(SensorMultiplexEmitter):
             event_data["answers"] = dns.answers
         if dns.TTLs:
             event_data["TTLs"] = dns.TTLs
+        event_data["_allow_sensor_observation_variance"] = True
 
         # Sensor hostname routing (set by dispatcher for network visibility)
         event_data["_sensor_hostnames"] = event._sensor_hostnames_by_format.get(

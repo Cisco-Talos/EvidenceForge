@@ -29,9 +29,10 @@ from pathlib import Path
 from threading import Barrier, Thread
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, X509Context
+from evidenceforge.events.contexts import DnsContext, NetworkContext, X509Context
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
+from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
@@ -230,6 +231,78 @@ class TestPerSensorDirectoryRouting:
                 assert row["orig_ip_bytes"] == row["resp_ip_bytes"] == 148
                 assert row["orig_ip_bytes"] - row["orig_bytes"] == 28
                 assert row["resp_ip_bytes"] - row["resp_bytes"] == 28
+            assert dmz["duration"] != core["duration"]
+            assert 0 < dmz["duration"] - core["duration"] <= 0.05
+
+    def test_dns_sensor_observation_textures_timing_not_packet_accounting(self):
+        """Dual DNS sensors should vary timing while preserving packet sizes."""
+        conn_fmt = load_format("zeek_conn")
+        dns_fmt = load_format("zeek_dns")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            conn_emitter = ZeekEmitter(conn_fmt, base, sensor_hostnames=["core", "dmz"])
+            dns_emitter = ZeekDnsEmitter(dns_fmt, base, sensor_hostnames=["core", "dmz"])
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=41710,
+                    dst_ip="10.0.0.53",
+                    dst_port=53,
+                    protocol="udp",
+                    service="dns",
+                    zeek_uid="CTestDns1234567",
+                    duration=0.024625,
+                    orig_bytes=80,
+                    resp_bytes=177,
+                    orig_pkts=1,
+                    resp_pkts=1,
+                    orig_ip_bytes=108,
+                    resp_ip_bytes=205,
+                    conn_state="SF",
+                    history="Dd",
+                    ip_proto=17,
+                ),
+                dns=DnsContext(
+                    query="updates.example.com",
+                    answers=["10.0.0.20"],
+                    TTLs=[300.0],
+                    trans_id=4242,
+                    rtt=0.024625,
+                ),
+            )
+            event._sensor_hostnames_by_format = {
+                "zeek_conn": ["core", "dmz"],
+                "zeek_dns": ["core", "dmz"],
+            }
+
+            conn_emitter.emit(event)
+            dns_emitter.emit(event)
+            conn_emitter.close()
+            dns_emitter.close()
+
+            core_conn = json.loads((base / "core" / "conn.json").read_text().splitlines()[0])
+            dmz_conn = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+            core_dns = json.loads((base / "core" / "dns.json").read_text().splitlines()[0])
+            dmz_dns = json.loads((base / "dmz" / "dns.json").read_text().splitlines()[0])
+
+            for field in (
+                "orig_bytes",
+                "resp_bytes",
+                "orig_pkts",
+                "resp_pkts",
+                "orig_ip_bytes",
+                "resp_ip_bytes",
+                "history",
+            ):
+                assert core_conn[field] == dmz_conn[field]
+            assert dmz_conn["duration"] != core_conn["duration"]
+            assert 0 < dmz_conn["duration"] - core_conn["duration"] <= 0.05
+            assert dmz_dns["rtt"] != core_dns["rtt"]
+            assert 0 < dmz_dns["rtt"] - core_dns["rtt"] <= 0.025
+            assert core_dns["query"] == dmz_dns["query"] == "updates.example.com"
+            assert core_dns["answers"] == dmz_dns["answers"] == ["10.0.0.20"]
 
     def test_udp_dns_ip_bytes_use_valid_header_accounting(self):
         """UDP DNS rows should not render impossible IP-header deltas."""

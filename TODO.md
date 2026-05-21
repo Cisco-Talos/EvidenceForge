@@ -36,8 +36,9 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
-- [ ] **IN PROGRESS** Run ten additional family-level iteration-test assessment/fix loops using the strengthened loop prompt, starting at loop 179 from loop-178 Windows source-native and session-continuity findings.
-- [ ] **IN PROGRESS** Loop 182 family fix — align web-exploit source-native identity, process ownership, and network provenance across WEB-EXT-01 web access, Apache syslog, eCAR, Zeek, and firewall evidence.
+- [ ] **IN PROGRESS** Run ten additional family-level iteration-test assessment/fix loops using the strengthened loop prompt, starting at loop 179 from loop-178 Windows source-native and session-continuity findings. Completed loops 179-182; loop 183 is selecting the next family-level target from current rendered evidence.
+- [ ] **IN PROGRESS** Loop 183 family fix — select and fix the next broad root cause from current iteration-test output/reports, with owning-layer changes, focused regression tests, regenerated data, eval artifacts, and reviewer-finding probes.
+- [x] Loop 182 family fix — aligned web-exploit source-native identity, process ownership, and network provenance across WEB-EXT-01 web access, Apache syslog, eCAR, Zeek, and firewall evidence; final output scored 95.93 across 76,267 records, with all web-exploit provenance probes passing.
 - [x] Loop 181 family fix — enforced Linux foreground command serialization and dependent side-effect ordering across bash history, eCAR process lifetimes, and network transfer evidence; regenerated loop-181 output scored 96.25 across 79,550 records, with zero eCAR foreground-shell violations and the DB dump/gzip/scp rendered probe passing.
 - [x] Loop 180 blind-review deliberation summary — synthesized the four provided expert reports into `scenarios/iteration-test/blind-test/loop-180/deliberation.md` without inspecting generated data.
 - [x] Strengthen the family-level iteration-loop prompt so future fixes must define the owning abstraction, inventory sibling paths, prove family-wide behavior, reject path-shaped patches, and self-grade narrow/partial fixes.
