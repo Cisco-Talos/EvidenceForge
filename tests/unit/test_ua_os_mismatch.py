@@ -368,13 +368,14 @@ class TestProxyUriOsFiltering:
         from evidenceforge.events.contexts import HttpContext
         from evidenceforge.generation.activity.generator import ActivityGenerator
         from evidenceforge.generation.state_manager import StateManager
-        from evidenceforge.models.scenario import System
+        from evidenceforge.models.scenario import System, User
 
         source = System(
             hostname="WS-01",
             ip="10.10.10.1",
             os="Windows 11",
             type="workstation",
+            assigned_user="alex.morgan",
         )
         proxy = System(
             hostname="proxy01",
@@ -384,6 +385,15 @@ class TestProxyUriOsFiltering:
             roles=["forward_proxy"],
         )
         generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "meridianhcs.local"
+        generator._netbios_domain = "MERIDIAN"
+        generator._users_by_username = {
+            "alex.morgan": User(
+                username="alex.morgan",
+                full_name="Alex Morgan",
+                email="alex.morgan@meridianhcs.local",
+            )
+        }
 
         context = generator._build_proxy_context(
             src_ip=source.ip,
@@ -407,6 +417,65 @@ class TestProxyUriOsFiltering:
         )
 
         assert context.user_agent == "Microsoft-CryptoAPI/10.0"
+        assert context.username == "MERIDIAN\\WS-01$"
+
+    def test_proxy_context_uses_assigned_user_for_workstation_browser(self):
+        """Authenticated proxy logs should carry user identity for workstation browsing."""
+        from evidenceforge.events.contexts import HttpContext
+        from evidenceforge.generation.activity.generator import ActivityGenerator
+        from evidenceforge.generation.state_manager import StateManager
+        from evidenceforge.models.scenario import System, User
+
+        source = System(
+            hostname="WS-01",
+            ip="10.10.10.1",
+            os="Windows 11",
+            type="workstation",
+            assigned_user="alex.morgan",
+        )
+        proxy = System(
+            hostname="proxy01",
+            ip="10.10.20.5",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        generator = ActivityGenerator(StateManager(), {})
+        generator._ad_domain = "meridianhcs.local"
+        generator._netbios_domain = "MERIDIAN"
+        generator._users_by_username = {
+            "alex.morgan": User(
+                username="alex.morgan",
+                full_name="Alex Morgan",
+                email="alex.morgan@meridianhcs.local",
+            )
+        }
+
+        context = generator._build_proxy_context(
+            src_ip=source.ip,
+            dst_ip="93.184.216.34",
+            dst_port=443,
+            service="ssl",
+            duration=0.4,
+            orig_bytes=400,
+            resp_bytes=4096,
+            hostname="example.com",
+            source_system=source,
+            proxy_sys=proxy,
+            http=HttpContext(
+                method="GET",
+                uri="/portal",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                status_code=200,
+                response_body_len=4096,
+                resp_mime_types=["text/html"],
+            ),
+        )
+
+        assert context.username == "MERIDIAN\\alex.morgan"
 
 
 class TestProxyUriTemplateSubstitution:

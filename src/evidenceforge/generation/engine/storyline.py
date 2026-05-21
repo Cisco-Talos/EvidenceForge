@@ -3390,8 +3390,19 @@ class StorylineMixin:
                             if proxy_method == "CONNECT"
                             else f"http://{beacon_host}{spec.uri or '/'}"
                         )
+                        proxy_user_agent = spec.user_agent or "Mozilla/5.0"
+                        proxy_source_system = getattr(
+                            self.activity_generator,
+                            "_ip_to_system",
+                            {},
+                        ).get(beacon_src_ip)
                         proxy_ctx = ProxyContext(
                             client_ip=beacon_src_ip,
+                            username=self.activity_generator._proxy_username_for_source(
+                                source_system=proxy_source_system,
+                                user_agent=proxy_user_agent,
+                                cache_result="DENIED",
+                            ),
                             method=proxy_method,
                             url=proxy_url,
                             host=beacon_host,
@@ -3399,7 +3410,7 @@ class StorylineMixin:
                             sc_bytes=rng.randint(500, 2000),
                             cs_bytes=rng.randint(180, 520),
                             time_taken=rng.randint(20, 1500),
-                            user_agent=spec.user_agent or "Mozilla/5.0",
+                            user_agent=proxy_user_agent,
                             content_type="text/html",
                             cache_result="DENIED",
                             referrer=spec.referrer or "",

@@ -1805,6 +1805,18 @@ _PROXY_CS_OVERHEAD = (80, 350)  # Via, X-Forwarded-For, etc.
 _PROXY_SC_OVERHEAD = (50, 250)  # Via, X-Cache, Age, etc.
 _AUTO_WEIRD_ENABLED = False  # weird.log realism is deferred; explicit contexts still render.
 _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S = 240
+_PROXY_MACHINE_USER_AGENT_MARKERS = (
+    "adobearm/",
+    "cisco secure client/",
+    "dell command update/",
+    "globalprotect/",
+    "googleupdate/",
+    "hp image assistant",
+    "lenovo system update",
+    "microsoft-cryptoapi/",
+    "windows-update-agent/",
+    "zscaler client connector/",
+)
 
 # Kerberos TGS service name distribution (weighted)
 _KERBEROS_SVC_DIST = (
@@ -2417,6 +2429,12 @@ def _proxy_action_for_context(
     if dst_port == 443 or normalized_url.startswith("https://"):
         return "ssl-inspect"
     return "forward"
+
+
+def _is_machine_context_proxy_user_agent(user_agent: str) -> bool:
+    """Return whether a proxy User-Agent usually authenticates as a device."""
+    normalized = user_agent.strip().lower()
+    return any(marker in normalized for marker in _PROXY_MACHINE_USER_AGENT_MARKERS)
 
 
 # Bound the free-form timestamp middle so malformed raw syslog messages cannot trigger
@@ -3929,6 +3947,39 @@ class ActivityGenerator:
             proxy_fqdn = f"{proxy_fqdn}.{ad_domain}"
         return proxy_fqdn
 
+    def _proxy_username_for_source(
+        self,
+        *,
+        source_system: Optional["System"],
+        user_agent: str,
+        cache_result: str,
+    ) -> str:
+        """Return the source-native authenticated proxy username for a client request."""
+        if source_system is None or cache_result.upper() == "AUTH_REQUIRED":
+            return ""
+
+        assigned_user = getattr(source_system, "assigned_user", None)
+        if not assigned_user or assigned_user in _SYSTEM_ACCOUNTS or assigned_user.endswith("$"):
+            return ""
+
+        system_type = (getattr(source_system, "type", "") or "").lower()
+        if system_type != "workstation":
+            return ""
+
+        netbios_domain = getattr(self, "_netbios_domain", "") or "CORP"
+        os_category = _get_os_category(getattr(source_system, "os", ""))
+        if os_category == "windows":
+            if _is_machine_context_proxy_user_agent(user_agent):
+                hostname = str(getattr(source_system, "hostname", "") or "").split(".", 1)[0]
+                if hostname:
+                    return f"{netbios_domain}\\{hostname}$"
+            return f"{netbios_domain}\\{assigned_user}"
+
+        ad_domain = getattr(self, "_ad_domain", "")
+        if ad_domain:
+            return f"{assigned_user}@{ad_domain}"
+        return assigned_user
+
     def _build_proxy_context(
         self,
         *,
@@ -4118,6 +4169,11 @@ class ActivityGenerator:
 
         return ProxyContext(
             client_ip=src_ip,
+            username=self._proxy_username_for_source(
+                source_system=source_system,
+                user_agent=user_agent,
+                cache_result=cache_result,
+            ),
             method=proxy_method,
             url=url,
             host=proxy_hostname,
@@ -9538,6 +9594,11 @@ class ActivityGenerator:
                 )
                 event.proxy = ProxyContext(
                     client_ip=src_ip,
+                    username=self._proxy_username_for_source(
+                        source_system=source_system,
+                        user_agent=user_agent,
+                        cache_result=cache_result,
+                    ),
                     method=proxy_method,
                     url=url,
                     host=proxy_hostname,
