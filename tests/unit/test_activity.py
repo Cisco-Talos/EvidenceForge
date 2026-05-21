@@ -1935,6 +1935,49 @@ class TestActivityGenerator:
         assert process_event.timestamp == scheduled_time
         assert bash_event.timestamp == scheduled_time
 
+    def test_linux_process_activity_skips_when_shell_schedule_exits_window(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Serialized Linux shell activity should not emit process rows after collection end."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._scenario_end_time = timestamp + timedelta(minutes=5)
+        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+            timestamp + timedelta(days=1)
+        )
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: ("/usr/bin/git", "git pull origin fix/memory-leak"),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        matching = [
+            event
+            for event in emitted
+            if (
+                (event.process and event.process.command_line == "git pull origin fix/memory-leak")
+                or (event.shell and event.shell.command == "git pull origin fix/memory-leak")
+            )
+        ]
+        assert matching == []
+
     def test_linux_process_activity_suppresses_service_user_bash_history(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
     ):

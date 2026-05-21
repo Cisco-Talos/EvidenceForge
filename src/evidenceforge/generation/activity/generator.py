@@ -2886,15 +2886,23 @@ class ActivityGenerator:
             logon_id=logon_id,
             termination_time=termination_time,
         )
-        self.generate_process_termination(
-            user=user,
-            system=system,
-            time=termination_time,
-            pid=pid,
-            process_name=process_name,
-            logon_id=logon_id,
-        )
+        if self._is_within_scenario_window(termination_time):
+            self.generate_process_termination(
+                user=user,
+                system=system,
+                time=termination_time,
+                pid=pid,
+                process_name=process_name,
+                logon_id=logon_id,
+            )
         return termination_time
+
+    def _is_within_scenario_window(self, event_time: datetime) -> bool:
+        """Return whether source-visible generated telemetry belongs inside the scenario."""
+        scenario_end = getattr(self, "_scenario_end_time", None)
+        if scenario_end is None:
+            return True
+        return ensure_utc(event_time) < ensure_utc(scenario_end)
 
     def _foreground_shell_key(
         self,
@@ -10593,6 +10601,8 @@ class ActivityGenerator:
         if _get_os_category(system.os) == "linux":
             command = _background_linux_shell_command_if_needed(command)
         time = self._schedule_bash_history_time(user, system, time, command)
+        if not self._is_within_scenario_window(time):
+            return None
         self._emit_bash_command_event(user, system, time, command)
         if emit_process_telemetry:
             self._maybe_emit_bash_process_telemetry(user, system, time, command)
@@ -10696,6 +10706,8 @@ class ActivityGenerator:
                     seed_text=command,
                 )
             process_time = base_process_time + timedelta(milliseconds=index * 35)
+            if not self._is_within_scenario_window(process_time):
+                continue
             network_close_time = getattr(session, "network_close_time", None)
             if network_close_time is not None:
                 if network_close_time.tzinfo is None:
@@ -12178,6 +12190,8 @@ class ActivityGenerator:
                         process_time = self._schedule_bash_history_time(
                             user, system, time, command_line
                         )
+                        if not self._is_within_scenario_window(process_time):
+                            return
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -12190,6 +12204,8 @@ class ActivityGenerator:
                             requested_time=process_time,
                             seed_text=command_line,
                         )
+                        if not self._is_within_scenario_window(process_time):
+                            return
                     pid = self.generate_process(
                         user,
                         system,
@@ -12357,6 +12373,8 @@ class ActivityGenerator:
                     process_time = self._schedule_bash_history_time(
                         user, system, time, command_line
                     )
+                    if not self._is_within_scenario_window(process_time):
+                        return
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -12368,6 +12386,8 @@ class ActivityGenerator:
                         requested_time=process_time,
                         seed_text=command_line,
                     )
+                    if not self._is_within_scenario_window(process_time):
+                        return
                     pid = self.generate_process(
                         user,
                         system,

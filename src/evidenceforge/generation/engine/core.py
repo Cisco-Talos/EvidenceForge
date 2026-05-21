@@ -302,6 +302,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
         self.activity_generator._ip_to_system = {s.ip: s for s in self.scenario.environment.systems}
         # Set scenario start time for pre-existing process chain logic
         self.activity_generator._scenario_start_time = self.start_time
+        self.activity_generator._scenario_end_time = self.end_time
         logger.info("Initialized activity generator")
 
         # Set initial state manager time (warm-up start if applicable)
