@@ -87,7 +87,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     get_suspicious_event_count,
     pick_suspicious_pattern,
 )
-from evidenceforge.models.scenario import Persona, User
+from evidenceforge.models.scenario import Persona, System, User
 from evidenceforge.utils.rng import _get_rng, _stable_seed
 
 logger = logging.getLogger(__name__)
@@ -7092,6 +7092,16 @@ class BaselineMixin:
 
             offset = rng.uniform(0, 3599)
             base_time = current_hour + timedelta(seconds=offset)
+            aligned_time = self._align_rsat_with_future_workstation_session(
+                admin,
+                ws,
+                base_time,
+                current_hour + timedelta(hours=1),
+                rng,
+            )
+            if aligned_time is None:
+                continue
+            base_time = aligned_time
             self.state_manager.set_current_time(base_time)
 
             logon_id = self._ensure_session_on_system(admin, ws, base_time, rng)
@@ -7155,6 +7165,40 @@ class BaselineMixin:
                     pid=mmc_pid,
                     source_system=ws,
                 )
+
+    def _align_rsat_with_future_workstation_session(
+        self,
+        user: User,
+        system: System,
+        base_time: datetime,
+        hour_end: datetime,
+        rng: random.Random,
+    ) -> datetime | None:
+        """Move RSAT work after an already-planned workstation session in this hour."""
+        if _get_os_category(system.os) != "windows":
+            return base_time
+
+        def _as_utc(value: datetime) -> datetime:
+            return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+        base_utc = _as_utc(base_time)
+        hour_end_utc = _as_utc(hour_end)
+        future_sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and base_utc < _as_utc(session.start_time) < hour_end_utc
+        ]
+        if not future_sessions:
+            return base_time
+
+        next_session = min(future_sessions, key=lambda session: _as_utc(session.start_time))
+        aligned = _as_utc(next_session.start_time) + timedelta(seconds=rng.uniform(20.0, 90.0))
+        if aligned >= hour_end_utc:
+            return None
+        return aligned
 
     def _resolve_rsat_workstation(self, admin, workstations, rng):
         """Find the admin's Windows workstation for RSAT sessions."""
