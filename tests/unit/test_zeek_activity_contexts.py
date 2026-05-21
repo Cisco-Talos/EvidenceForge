@@ -714,6 +714,12 @@ class TestSslContextPopulation:
         assert event.network.resp_ip_bytes is not None
         assert event.network.orig_ip_bytes > event.network.orig_bytes
         assert event.network.resp_ip_bytes > event.network.resp_bytes
+        assert (
+            event.network.orig_ip_bytes != event.network.orig_bytes + event.network.orig_pkts * 40
+        )
+        assert (
+            event.network.resp_ip_bytes != event.network.resp_bytes + event.network.resp_pkts * 40
+        )
 
     def test_ssh_session_records_transport_close_time(self, activity_gen):
         gen, events = activity_gen
@@ -1369,9 +1375,12 @@ class TestHttpContextPopulation:
         event = events[-1]
         assert event.network.resp_bytes > event.http.response_body_len
 
-    def test_large_tcp_transfer_counts_reverse_ack_packets(self, activity_gen):
+    def test_large_tcp_transfer_counts_reverse_ack_packets(self, activity_gen, monkeypatch):
         """Large one-way TCP transfers should not keep single-digit ACK-side packet counts."""
+        import evidenceforge.generation.activity.generator as generator_module
+
         gen, events = activity_gen
+        monkeypatch.setattr(generator_module, "_tcp_effective_mss_bytes", lambda _rng: 1200)
 
         gen.generate_connection(
             src_ip="10.0.10.50",
@@ -1403,8 +1412,46 @@ class TestHttpContextPopulation:
 
         assert upload.resp_pkts >= math.ceil((upload.orig_bytes or 0) / 1460 / 4)
         assert upload.resp_ip_bytes >= (upload.resp_bytes or 0) + (upload.resp_pkts * 40)
+        assert upload.orig_pkts > math.ceil((upload.orig_bytes or 0) / 1460)
+        assert upload.orig_ip_bytes != (upload.orig_bytes or 0) + (upload.orig_pkts * 52)
         assert download.orig_pkts >= math.ceil((download.resp_bytes or 0) / 1460 / 4)
         assert download.orig_ip_bytes >= (download.orig_bytes or 0) + (download.orig_pkts * 40)
+        assert download.resp_pkts > math.ceil((download.resp_bytes or 0) / 1460)
+        assert download.resp_ip_bytes != (download.resp_bytes or 0) + (download.resp_pkts * 52)
+
+    def test_http_enrichment_counts_control_packets(self, activity_gen, monkeypatch):
+        """HTTP body accounting should retain Zeek history control packets in conn.log counts."""
+        import evidenceforge.generation.activity.generator as generator_module
+
+        gen, events = activity_gen
+        monkeypatch.setattr(generator_module, "_tcp_success_history", lambda _rng: "ShADadf")
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="10.0.20.20",
+            time=datetime(2024, 1, 15, 10, 2, 0, tzinfo=UTC),
+            dst_port=8080,
+            proto="tcp",
+            service="http",
+            duration=1.2,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="app.internal",
+                uri="/download/report.csv",
+                version="1.1",
+                user_agent="Mozilla/5.0",
+                request_body_len=0,
+                response_body_len=11_396,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["text/csv"],
+            ),
+        )
+
+        net = events[-1].network
+        assert net.resp_pkts > math.ceil((net.resp_bytes or 0) / 1460)
+        assert net.resp_ip_bytes != (net.resp_bytes or 0) + (net.resp_pkts * 52)
 
     def test_icmp_accounting_is_echo_like(self, activity_gen):
         """ICMP echo-style flows should not inherit bulk TCP byte/packet accounting."""

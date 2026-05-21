@@ -1646,14 +1646,93 @@ _UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
 _TCP_OVERHEAD_VALUES = (40, 52, 60, 64)
 _TCP_OVERHEAD_WEIGHTS = (10, 75, 10, 5)
 _TCP_MSS_BYTES = 1460
+_TCP_MSS_VALUES = (1200, 1320, 1360, 1448, 1460)
+_TCP_MSS_WEIGHTS = (2, 4, 10, 22, 62)
 _TCP_ACK_FLOOR_PAYLOAD_BYTES = 64 * 1024
 
 
-def _tcp_payload_segment_count(payload_bytes: int | None) -> int:
+def _tcp_effective_mss_bytes(rng: random.Random) -> int:
+    """Return a plausible effective TCP MSS for source packet accounting."""
+    return rng.choices(_TCP_MSS_VALUES, weights=_TCP_MSS_WEIGHTS, k=1)[0]
+
+
+def _tcp_payload_segment_count(
+    payload_bytes: int | None,
+    mss_bytes: int = _TCP_MSS_BYTES,
+) -> int:
     """Return the minimum TCP payload segment count for Zeek packet accounting."""
     if payload_bytes is None or payload_bytes <= 0:
         return 0
-    return max(1, math.ceil(payload_bytes / _TCP_MSS_BYTES))
+    return max(1, math.ceil(payload_bytes / max(1, mss_bytes)))
+
+
+def _tcp_payload_packet_count(payload_bytes: int | None, rng: random.Random) -> int:
+    """Return source-visible TCP data packets with MSS and segmentation texture."""
+    segments = _tcp_payload_segment_count(payload_bytes, _tcp_effective_mss_bytes(rng))
+    if segments <= 0:
+        return 0
+    if segments >= 8:
+        extra_fraction = rng.choices(
+            (0.0, 0.001, 0.0025, 0.005, 0.01),
+            weights=(35, 20, 20, 15, 10),
+            k=1,
+        )[0]
+        if extra_fraction > 0:
+            segments += max(1, int(round(segments * extra_fraction)))
+        elif rng.random() < 0.35:
+            segments += 1
+    return segments
+
+
+def _tcp_history_packet_counts(history: str | None) -> tuple[int, int, int, int]:
+    """Return total and non-data packet markers by Zeek history side."""
+    text = history or ""
+    orig_total = sum(1 for char in text if char.isupper())
+    resp_total = sum(1 for char in text if char.islower())
+    orig_control = sum(1 for char in text if char.isupper() and char != "D")
+    resp_control = sum(1 for char in text if char.islower() and char != "d")
+    return orig_total, resp_total, orig_control, resp_control
+
+
+def _tcp_packet_counts_from_payload_and_history(
+    orig_bytes: int | None,
+    resp_bytes: int | None,
+    history: str | None,
+    rng: random.Random,
+) -> tuple[int, int]:
+    """Return TCP packet counts including payload segments and visible control packets."""
+    orig_total, resp_total, orig_control, resp_control = _tcp_history_packet_counts(history)
+    orig_data = _tcp_payload_packet_count(orig_bytes, rng)
+    resp_data = _tcp_payload_packet_count(resp_bytes, rng)
+
+    orig_pkts = max(orig_total, orig_data + orig_control) if orig_data else orig_total
+    resp_pkts = max(resp_total, resp_data + resp_control) if resp_data else resp_total
+    return _apply_tcp_ack_packet_floors(orig_pkts, resp_pkts, orig_bytes, resp_bytes, rng)
+
+
+def _tcp_ip_byte_count(
+    payload_bytes: int | None,
+    packet_count: int,
+    rng: random.Random,
+    *,
+    overhead_override: int | None = None,
+) -> int:
+    """Return TCP IP-byte accounting with header and control-packet texture."""
+    if packet_count <= 0:
+        return 0
+    if overhead_override is not None:
+        return (payload_bytes or 0) + packet_count * overhead_override
+    overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
+    option_extra = 0
+    if packet_count > 1:
+        textured_packets = min(
+            packet_count,
+            8192,
+            max(1, int(round(packet_count * rng.uniform(0.001, 0.018)))),
+        )
+        max_option_extra = packet_count * (max(_TCP_OVERHEAD_VALUES) - overhead)
+        option_extra = min(max_option_extra, textured_packets * rng.choice((4, 8, 12)))
+    return (payload_bytes or 0) + packet_count * overhead + option_extra
 
 
 def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:
@@ -9119,22 +9198,15 @@ class ActivityGenerator:
             elif resp_pkts == 0:
                 resp_bytes = 0
         elif proto == "tcp" and history and history != "-":
-            hist_orig = sum(1 for c in history if c.isupper())
-            hist_resp = sum(1 for c in history if c.islower())
-            byte_orig = max(1, _tcp_payload_segment_count(orig_bytes)) if orig_bytes else 1
-            byte_resp = max(1, _tcp_payload_segment_count(resp_bytes)) if resp_bytes else 0
-            orig_pkts = max(hist_orig, byte_orig)
-            resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
+            orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
+                orig_bytes,
+                resp_bytes,
+                history,
+                rng,
+            )
             if dst_port == 443 and conn_state == "SF":
                 orig_pkts += rng.choices([0, 1, 2, 3, 5], weights=[45, 25, 15, 10, 5], k=1)[0]
                 resp_pkts += rng.choices([0, 1, 2, 4, 8], weights=[35, 25, 20, 15, 5], k=1)[0]
-            orig_pkts, resp_pkts = _apply_tcp_ack_packet_floors(
-                orig_pkts,
-                resp_pkts,
-                orig_bytes,
-                resp_bytes,
-                rng,
-            )
         elif proto == "icmp":
             orig_pkts = 1
             resp_pkts = 1 if resp_bytes and resp_bytes > 0 else 0
@@ -9153,10 +9225,25 @@ class ActivityGenerator:
             overhead = 28
         else:
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-        # IP bytes = payload + (packets * header overhead). Zeek emits count
-        # fields as zero when a side has no packets; it does not drop the field.
-        orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
-        resp_ip_bytes = (resp_bytes or 0) + resp_pkts * overhead
+        # Zeek count fields are source-observed IP payload totals. TCP gets
+        # per-side header/control texture; UDP/ICMP keeps protocol-specific
+        # fixed accounting for source-native packet sizes.
+        if proto == "tcp":
+            orig_ip_bytes = _tcp_ip_byte_count(
+                orig_bytes,
+                orig_pkts,
+                rng,
+                overhead_override=packet_overhead_bytes,
+            )
+            resp_ip_bytes = _tcp_ip_byte_count(
+                resp_bytes,
+                resp_pkts,
+                rng,
+                overhead_override=packet_overhead_bytes,
+            )
+        else:
+            orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
+            resp_ip_bytes = (resp_bytes or 0) + resp_pkts * overhead
 
         ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
 
@@ -9979,13 +10066,13 @@ class ActivityGenerator:
                 event.network.resp_bytes = max(
                     event.network.resp_bytes or 0, rng.randint(900, 4500)
                 )
-            hist_orig = sum(1 for c in (event.network.history or "") if c.isupper())
-            hist_resp = sum(1 for c in (event.network.history or "") if c.islower())
-            event.network.orig_pkts = max(
-                hist_orig, max(1, ((event.network.orig_bytes or 0) // 1460) + 1)
-            )
-            event.network.resp_pkts = max(
-                hist_resp, max(1, ((event.network.resp_bytes or 0) // 1460) + 1)
+            event.network.orig_pkts, event.network.resp_pkts = (
+                _tcp_packet_counts_from_payload_and_history(
+                    event.network.orig_bytes,
+                    event.network.resp_bytes,
+                    event.network.history,
+                    rng,
+                )
             )
             if event.network.service == "ssl":
                 event.network.orig_pkts += rng.choices(
@@ -9998,21 +10085,15 @@ class ActivityGenerator:
                     weights=[35, 25, 20, 15, 5],
                     k=1,
                 )[0]
-            event.network.orig_pkts, event.network.resp_pkts = _apply_tcp_ack_packet_floors(
-                event.network.orig_pkts,
-                event.network.resp_pkts,
+            event.network.orig_ip_bytes = _tcp_ip_byte_count(
                 event.network.orig_bytes,
-                event.network.resp_bytes,
+                event.network.orig_pkts,
                 rng,
             )
-            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-            orig_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
-            resp_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
-            event.network.orig_ip_bytes = (
-                (event.network.orig_bytes or 0) + event.network.orig_pkts * overhead + orig_extra
-            )
-            event.network.resp_ip_bytes = (
-                (event.network.resp_bytes or 0) + event.network.resp_pkts * overhead + resp_extra
+            event.network.resp_ip_bytes = _tcp_ip_byte_count(
+                event.network.resp_bytes,
+                event.network.resp_pkts,
+                rng,
             )
 
         if (
@@ -10267,6 +10348,16 @@ class ActivityGenerator:
                     username="",
                 )
 
+        ssh_history = _tcp_success_history(rng)
+        ssh_orig_pkts, ssh_resp_pkts = _tcp_packet_counts_from_payload_and_history(
+            orig_bytes,
+            resp_bytes,
+            ssh_history,
+            rng,
+        )
+        ssh_orig_ip_bytes = _tcp_ip_byte_count(orig_bytes, ssh_orig_pkts, rng)
+        ssh_resp_ip_bytes = _tcp_ip_byte_count(resp_bytes, ssh_resp_pkts, rng)
+
         # Build compound SSH session event
         event = SecurityEvent(
             timestamp=time,
@@ -10293,11 +10384,11 @@ class ActivityGenerator:
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes,
                 conn_state="SF",
-                history=_tcp_success_history(_get_rng()),
-                orig_pkts=max(4, orig_bytes // 1460 + 1),
-                resp_pkts=max(4, resp_bytes // 1460 + 1),
-                orig_ip_bytes=orig_bytes + max(4, orig_bytes // 1460 + 1) * 40,
-                resp_ip_bytes=resp_bytes + max(4, resp_bytes // 1460 + 1) * 40,
+                history=ssh_history,
+                orig_pkts=ssh_orig_pkts,
+                resp_pkts=ssh_resp_pkts,
+                orig_ip_bytes=ssh_orig_ip_bytes,
+                resp_ip_bytes=ssh_resp_ip_bytes,
                 local_orig=_is_private_ip(source_ip),
                 local_resp=_is_private_ip(target_system.ip),
                 ip_proto=6,
