@@ -3313,7 +3313,7 @@ class ActivityGenerator:
 
         candidates = [
             session
-            for session in self.state_manager.get_sessions_for_user(user.username)
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
             if (
                 session.system == system.hostname
                 and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
@@ -14877,7 +14877,11 @@ class ActivityGenerator:
         logon_id: str = "",
     ) -> int | None:
         """Return the actor's live per-session shell when one owns the command."""
-        sessions = self.state_manager.get_sessions_for_user(user.username)
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(user.username, time)
+            if time is not None
+            else self.state_manager.get_sessions_for_user(user.username)
+        )
         if logon_id:
             sessions = [sess for sess in sessions if sess.logon_id == logon_id]
         for sess in sessions:
@@ -14979,7 +14983,11 @@ class ActivityGenerator:
 
         Returns None if no interactive session exists or explorer PID not set.
         """
-        sessions = self.state_manager.get_sessions_for_user(user.username)
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(user.username, time)
+            if time is not None
+            else self.state_manager.get_sessions_for_user(user.username)
+        )
         candidates = [
             session
             for session in sessions
@@ -15082,7 +15090,7 @@ class ActivityGenerator:
         not by arbitrary user applications that happen to be alive in the same
         session.
         """
-        sessions = self.state_manager.get_sessions_for_user(user.username)
+        sessions = self.state_manager.get_sessions_for_user_at(user.username, time)
         for session in sessions:
             if session.system != system.hostname:
                 continue
@@ -15320,7 +15328,7 @@ class ActivityGenerator:
                 "services", sys_pids.get("svchost_dcom", sys_pids.get("wininit", 4))
             )
 
-        sessions = self.state_manager.get_sessions_for_user(user.username)
+        sessions = self.state_manager.get_sessions_for_user_at(user.username, time)
         # Match by logon_id when available to avoid picking the wrong session
         # when a user has both interactive (type 2) and network (type 3) sessions
         # on the same host.

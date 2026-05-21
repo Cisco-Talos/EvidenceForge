@@ -471,6 +471,37 @@ class TestActivityGenerator:
         ]
         assert "logon" not in emitted_types
 
+    def test_generate_logon_reuses_session_with_future_rendered_logoff(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Out-of-order future logoff rendering must not create overlapping Type 2 sessions."""
+        first_time = datetime(2024, 1, 15, 13, 1, 0, tzinfo=UTC)
+        second_time = datetime(2024, 1, 15, 13, 8, 0, tzinfo=UTC)
+        logoff_time = datetime(2024, 1, 15, 15, 51, 0, tzinfo=UTC)
+
+        logon_id = activity_gen.generate_logon(test_user, test_system, first_time, logon_type=2)
+        activity_gen.generate_logoff(test_user, test_system, logoff_time, logon_id, logon_type=2)
+        assert state_manager.get_sessions_for_user(test_user.username) == []
+        assert [
+            session.logon_id
+            for session in state_manager.get_sessions_for_user_at(test_user.username, second_time)
+        ] == [logon_id]
+
+        mock_emitters["windows_event_security"].reset_mock()
+        reused_logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            second_time,
+            logon_type=2,
+        )
+
+        assert reused_logon_id == logon_id
+        emitted_types = [
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "logon" not in emitted_types
+
     def test_interactive_logons_get_distinct_userinit_parents(
         self, activity_gen, test_user, test_system, state_manager
     ):

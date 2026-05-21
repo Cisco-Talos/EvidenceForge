@@ -326,6 +326,28 @@ class StateManager:
         with self._lock:
             return [s for s in self.state.active_sessions.values() if s.username == username]
 
+    def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[ActiveSession]:
+        """Get sessions that are active for a user at a specific event time.
+
+        Generation can enqueue a long-lived session's logoff before later
+        same-window activities are rendered. Those sessions are no longer in
+        active state, but they are still valid for events before the visible
+        logoff timestamp.
+        """
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            sessions: dict[str, ActiveSession] = {}
+            for session in self.state.active_sessions.values():
+                if session.username == username and ensure_utc(session.start_time) <= cutoff:
+                    sessions[session.logon_id] = session
+            for session, end_time in self._ended_sessions.values():
+                if (
+                    session.username == username
+                    and ensure_utc(session.start_time) <= cutoff < end_time
+                ):
+                    sessions[session.logon_id] = session
+            return list(sessions.values())
+
     def get_sessions_on_system(self, system: str) -> list[ActiveSession]:
         """Get all active sessions on a system.
 
