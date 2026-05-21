@@ -188,6 +188,7 @@ class EcarEmitter(HostMultiplexEmitter):
     _sort_flat_file = True
     _sort_key = staticmethod(_ecar_sort_key)
     _defer_sorted_flush_until_close = True
+    _output_end_time: datetime | None = None
 
     _supported_types: set[str] = {
         "logon",
@@ -1637,6 +1638,28 @@ class EcarEmitter(HostMultiplexEmitter):
             deduped.append(line)
         return deduped
 
+    @classmethod
+    def _filter_after_output_window(
+        cls,
+        lines: list[str],
+        output_end_time: datetime | None,
+    ) -> list[str]:
+        """Drop renderer-shifted rows that land outside the scenario collection window."""
+        if output_end_time is None:
+            return lines
+        output_end_ms = int(output_end_time.timestamp() * 1000)
+        filtered: list[str] = []
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                filtered.append(line)
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            if timestamp_ms <= 0 or timestamp_ms < output_end_ms:
+                filtered.append(line)
+        return filtered
+
     def flush(self, force: bool = False) -> None:
         """Flush per-host eCAR records after final lifecycle normalization."""
         if force:
@@ -1656,6 +1679,10 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)
+                    writer.buffer = self._filter_after_output_window(
+                        writer.buffer,
+                        self._output_end_time,
+                    )
         super().flush(force=force)
 
     # Property keys that belong in the eCAR properties map.
