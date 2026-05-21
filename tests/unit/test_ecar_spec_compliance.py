@@ -653,8 +653,8 @@ class TestChronologicalOutput:
         )
         assert terminate_ts > module_ts
 
-    def test_close_rewrites_linux_pids_after_canonical_create_ordering(self, tmp_path, ts):
-        """Linux PID morphology should follow final rendered process-create order."""
+    def test_close_rewrites_linux_pids_by_source_timestamp_not_canonical_order(self, tmp_path, ts):
+        """Linux PID morphology should follow rendered source time, not canonical time."""
         fmt = Mock()
         fmt.output.template = "{}"
         fmt.output.header_template = None
@@ -700,7 +700,10 @@ class TestChronologicalOutput:
             key=lambda row: row["timestamp_ms"],
         )
         assert [row["pid"] for row in creates] == sorted(row["pid"] for row in creates)
-        assert creates[1]["pid"] > 5000
+        assert creates[0]["pid"] == 1000
+        assert creates[1]["pid"] == 5000
+        assert "_canonical_ms" not in creates[0]
+        assert "_canonical_ms" not in creates[1]
 
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []

@@ -1222,6 +1222,7 @@ class EcarEmitter(HostMultiplexEmitter):
             and record.get("object") == "PROCESS"
             and record.get("action") == "CREATE"
             and "_canonical_ms" in record
+            and not cls._looks_like_linux_process(record)
         ]
         create_indexes.sort(
             key=lambda index: (

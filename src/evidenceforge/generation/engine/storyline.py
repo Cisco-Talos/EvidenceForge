@@ -2317,10 +2317,16 @@ class StorylineMixin:
                         orig_bytes = 0
                         resp_bytes = 0
                         rendered_service = None
+                    connection_time = self._clamp_after_storyline_process_source_create(
+                        system=system,
+                        pid=pid,
+                        network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        rng=rng,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,
                         dst_ip=target_ip,
-                        time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        time=connection_time,
                         dst_port=dst_port,
                         proto="tcp",
                         service=rendered_service,
@@ -2344,7 +2350,12 @@ class StorylineMixin:
             if scp_target is not None:
                 dst_ip = self._resolve_storyline_network_target(scp_target)
                 if dst_ip:
-                    transfer_time = time + timedelta(milliseconds=rng.randint(250, 900))
+                    transfer_time = self._clamp_after_storyline_process_source_create(
+                        system=system,
+                        pid=pid,
+                        network_time=time + timedelta(milliseconds=rng.randint(250, 900)),
+                        rng=rng,
+                    )
                     source_port = self.activity_generator.reserve_ssh_source_port(
                         system.ip,
                         dst_ip,
