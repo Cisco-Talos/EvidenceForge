@@ -393,6 +393,34 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_proxy_user_agent_stickiness(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_user_agents
+
+        real_loader = proxy_user_agents.load_proxy_user_agents
+
+        def load_invalid_proxy_user_agents():
+            data = real_loader()
+            domain_overrides = dict(data.get("domain_overrides", {}))
+            windows_update = dict(domain_overrides["windows_update"])
+            windows_update["stickiness"] = "session"
+            domain_overrides["windows_update"] = windows_update
+            return {**data, "domain_overrides": domain_overrides}
+
+        monkeypatch.setattr(
+            proxy_user_agents,
+            "load_proxy_user_agents",
+            load_invalid_proxy_user_agents,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_user_agents.yaml (domain_overrides)"
+            and "Input should be 'request' or 'source_host'" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_unsafe_public_dns_templates(self, monkeypatch):
         from evidenceforge.generation.activity import public_dns_profiles
 

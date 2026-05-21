@@ -1230,6 +1230,7 @@ class ProxyUserAgentOverrideEntry(BaseModel, extra="forbid"):
     """A domain-specific proxy User-Agent profile."""
 
     os_keywords: list[str]
+    stickiness: Literal["request", "source_host"] = "request"
     hosts: list[str]
     user_agents: list[str]
 

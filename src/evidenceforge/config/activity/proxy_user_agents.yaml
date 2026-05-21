@@ -10,11 +10,18 @@
 domain_overrides:
   windows_update:
     os_keywords: ["windows"]
+    # Windows Update clients are host/patch-level sticky: one workstation should
+    # keep a stable agent across repeated requests, while the fleet should not
+    # collapse to one build string.
+    stickiness: source_host
     hosts:
       - download.windowsupdate.com
-      - ctldl.windowsupdate.com
     user_agents:
-      - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+      - "Windows-Update-Agent/10.0.19041.3636 Client-Protocol/2.31"
+      - "Windows-Update-Agent/10.0.19045.4046 Client-Protocol/2.33"
+      - "Windows-Update-Agent/10.0.22000.2538 Client-Protocol/2.35"
+      - "Windows-Update-Agent/10.0.22621.3155 Client-Protocol/2.40"
+      - "Windows-Update-Agent/10.0.22631.3155 Client-Protocol/2.40"
   google_update_windows:
     os_keywords: ["windows"]
     hosts:
@@ -32,6 +39,7 @@ domain_overrides:
   windows_cryptoapi:
     os_keywords: ["windows"]
     hosts:
+      - ctldl.windowsupdate.com
       - crl.microsoft.com
       - ocsp.digicert.com
       - crl3.digicert.com

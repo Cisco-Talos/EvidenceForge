@@ -16,7 +16,7 @@ domains:
   # --- Windows Update / Delivery Optimization ---
   download.windowsupdate.com:
     domain_class: windows_update
-    user_agent: "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+    user_agent: "Windows-Update-Agent/10.0.19045.4046 Client-Protocol/2.33"
     os: windows
     referrer_policy: none
     paths:

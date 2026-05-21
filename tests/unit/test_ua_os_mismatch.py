@@ -274,10 +274,23 @@ class TestProxyUriOsFiltering:
         ua = pick_proxy_user_agent(
             random.Random(42),
             source,
+            hostname="download.windowsupdate.com",
+        )
+
+        assert ua.startswith("Windows-Update-Agent/")
+        assert ua == pick_proxy_user_agent(
+            random.Random(99),
+            source,
+            hostname="download.windowsupdate.com",
+        )
+
+        trust_list_ua = pick_proxy_user_agent(
+            random.Random(42),
+            source,
             hostname="ctldl.windowsupdate.com",
         )
 
-        assert ua == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+        assert trust_list_ua == "Microsoft-CryptoAPI/10.0"
 
         update_ua = pick_proxy_user_agent(
             random.Random(42),
@@ -296,6 +309,35 @@ class TestProxyUriOsFiltering:
         )
 
         assert internal_ocsp_ua == "Microsoft-CryptoAPI/10.0"
+
+    def test_windows_update_user_agents_vary_by_source_host(self):
+        """The Windows Update override should be sticky per host, not globally flat."""
+        from evidenceforge.generation.activity.proxy_user_agents import pick_proxy_user_agent
+        from evidenceforge.models.scenario import System
+
+        observed = set()
+        for idx in range(30):
+            source = System(
+                hostname=f"WS-{idx:02d}",
+                ip=f"10.10.1.{idx + 20}",
+                os="Windows 11",
+                type="workstation",
+            )
+            first = pick_proxy_user_agent(
+                random.Random(1),
+                source,
+                hostname="download.windowsupdate.com",
+            )
+            second = pick_proxy_user_agent(
+                random.Random(999),
+                source,
+                hostname="download.windowsupdate.com",
+            )
+            assert first == second
+            assert first.startswith("Windows-Update-Agent/")
+            observed.add(first)
+
+        assert len(observed) >= 3
 
     def test_vendor_update_user_agents_stay_domain_specific(self):
         """Updater/security-client UAs should not cross vendor domains."""
@@ -364,7 +406,7 @@ class TestProxyUriOsFiltering:
             ),
         )
 
-        assert context.user_agent == "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+        assert context.user_agent == "Microsoft-CryptoAPI/10.0"
 
 
 class TestProxyUriTemplateSubstitution:
