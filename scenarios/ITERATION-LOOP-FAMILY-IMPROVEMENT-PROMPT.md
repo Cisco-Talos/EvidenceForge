@@ -15,6 +15,48 @@ recurring problem is broader: DNS, TLS/X.509, Sysmon/Windows identity, endpoint/
 Linux/syslog process semantics, Zeek/network observation, proxy/User-Agent binding, timing profiles,
 and storyline neatness keep producing sibling defects. Treat these as model gaps.
 
+## Family-Fix Quality Gate
+
+Before coding, write a short family contract for the selected target. Do this in notes, the loop
+report, or `TODO.md`; do not rely on implicit reasoning. The contract must answer:
+
+1. **Owning abstraction:** Which model, planner, state object, config loader, timing profile, or
+   canonical event/context owns the truth?
+2. **Family invariant:** What must always be true after the fix, independent of the specific
+   reviewer sample?
+3. **Entry-path inventory:** Which generation paths can create this family of evidence? Include
+   baseline, storyline, causal expansion, world planning, source timing, raw escape hatches,
+   direct emitter rendering, and any source-specific side effects that apply.
+4. **Consumer inventory:** Which logs/renderers/probes/eval rules consume the truth?
+5. **Sibling-risk statement:** Which sibling manifestations are expected to be fixed by the same
+   change, and which are explicitly out of scope?
+
+If you cannot name the owning abstraction, do not code yet. If the defect can be produced by more
+than one entry path, the primary fix must be a shared contract, helper, planner, state transition,
+config model, or validation rule. Caller-specific edits are allowed only as adapters into that
+shared contract.
+
+## Narrow-Fix Rejection Rules
+
+Reject a proposed fix as too narrow when any of these are true:
+
+- It checks for the exact hostname, username, command, domain, event ID sample, timestamp shape, or
+  reviewer artifact instead of the underlying source semantics.
+- It changes one emitter even though canonical context, state, routing, timing, or data config owns
+  the value.
+- It patches one caller while other callers can still create the same class of bad evidence.
+- It adds another fixed offset, sentinel value, or hardcoded enumerable pool without modeling the
+  source family.
+- It makes the latest probe pass but does not define what sibling defects should now be impossible.
+
+Narrow fixes are acceptable only when:
+
+- The family truly has a single owning source-native schema, such as one Windows event's field
+  placement.
+- The change is an adapter that routes a caller into a newly centralized model.
+- The loop report explicitly labels it as temporary containment and creates or names the follow-up
+  family fix.
+
 ## Required Workflow
 
 1. Read `TODO.md` first and mark this loop item `**IN PROGRESS**`.
@@ -32,13 +74,22 @@ and storyline neatness keep producing sibling defects. Treat these as model gaps
    - `scenario_polish`: authored names, tidy story, or training-exercise feel
    - `false_positive_or_unproven`: reviewer suspicion not supported by data/probes
 6. Pick one or two highest-leverage families, not one or two individual samples.
-7. Fix the root cause at the owning layer. Prefer canonical event/context/state, source timing,
+7. Write the Family-Fix Quality Gate contract for the chosen family before coding.
+8. Inventory sibling entry paths with `rg` and code inspection. For example, if fixing Windows
+   interactive sessions, list every path that can request or mint such a session before editing.
+9. Fix the root cause at the owning layer. Prefer canonical event/context/state, source timing,
    data-driven config, resolver/certificate/process/session models, or observation policy over
    emitter-only patches.
-8. Add focused tests for new behavior only. Do not spend this loop backfilling old missing tests.
-9. Regenerate the iteration-test scenario and run targeted probes that prove the whole family
-   improved, not just the reviewer sample.
-10. Save loop artifacts under the next `scenarios/iteration-test/blind-test/loop-N/` folder and
+10. If implementation starts turning into multiple caller-specific patches, stop and introduce a
+    shared planner/model/config/helper contract first. Then adapt callers to that contract.
+11. Add focused tests for new behavior only. Do not spend this loop backfilling old missing tests.
+12. Regenerate the iteration-test scenario and run targeted probes that prove the whole family
+    improved, not just the reviewer sample. The probe should include at least two sibling paths
+    when the entry-path inventory found more than one path.
+13. In the final report, classify each fix commit as `family_level`, `adapter_to_family_model`,
+    `source_native_single_schema`, `temporary_containment`, or `too_narrow`. Explain every
+    non-family classification in one sentence.
+14. Save loop artifacts under the next `scenarios/iteration-test/blind-test/loop-N/` folder and
     update `TODO.md` immediately when complete.
 
 ## Family-Level Priority Map
@@ -250,6 +301,20 @@ Choose the next loop target using this order:
 
 Do not choose a subjective scenario-polish issue ahead of a concrete source-native contradiction.
 Do not choose a narrow sample if a family-level model change would remove the whole class.
+
+## Done Criteria
+
+A loop is done only when all of these are true:
+
+- The report names the selected family, owning abstraction, invariant, entry paths, and consumers.
+- The code change is primarily at the owning abstraction or clearly adapts callers to it.
+- Tests cover both the central invariant and at least one non-sample sibling path.
+- Rendered-output probes check family behavior, not just absence of the original reviewer example.
+- The loop report identifies residual sibling risks instead of implying the family is solved.
+- The score movement discussion distinguishes latest-fix regression from deeper issue surfacing.
+
+If any item is missing, state that the loop delivered a partial fix and make the missing item the
+first candidate for the next loop.
 
 ## Implementation Rules
 
