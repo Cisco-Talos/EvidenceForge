@@ -6018,7 +6018,7 @@ class BaselineMixin:
                             k=1,
                         )[0]
                         spt = rng.randint(1024, 65535)
-                        dpt = rng.choice([22, 23, 25, 80, 443, 445, 3389, 8080])
+                        dpt = external_scanner_port_for_source(src_ip, rng)
                         packet_len = _ufw_block_syn_packet_len(src_ip)
                         ttl = _ufw_block_ttl(src_ip)
                         msg = (
