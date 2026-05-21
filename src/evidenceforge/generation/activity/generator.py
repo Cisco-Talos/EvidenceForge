@@ -10742,6 +10742,101 @@ class ActivityGenerator:
         session.process_tree_root = parent_pid
         return bash_pid
 
+    def _active_visible_linux_shell_pid(
+        self,
+        system: System,
+        username: str,
+        time: datetime,
+        logon_id: str = "",
+    ) -> int | None:
+        """Return a visible user shell that can own Linux child process telemetry."""
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        activity_time = ensure_utc(time)
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_exe = proc.image.rsplit("/", 1)[-1].lower()
+            if proc_exe not in {"bash", "sh", "zsh"}:
+                continue
+            if proc.username != username:
+                continue
+            if logon_id and proc.logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, activity_time):
+                continue
+            shell_start = ensure_utc(proc.start_time)
+            if (
+                scenario_start is not None
+                and activity_time >= scenario_start
+                and shell_start < scenario_start
+            ):
+                continue
+            candidates.append(proc)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda proc: ensure_utc(proc.start_time), reverse=True)
+        return candidates[0].pid
+
+    def ensure_linux_visible_shell_parent(
+        self,
+        user: User,
+        target_system: System,
+        activity_time: datetime,
+        logon_id: str = "",
+        logon_time: datetime | None = None,
+    ) -> int | None:
+        """Create or return a source-visible Linux shell parent for loose user work."""
+        activity_time = ensure_utc(activity_time)
+        existing = self._active_visible_linux_shell_pid(
+            target_system,
+            user.username,
+            activity_time,
+            logon_id,
+        )
+        if existing is not None:
+            return existing
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        parent_pid = sys_pids.get("systemd") or sys_pids.get("init")
+        if (
+            not parent_pid
+            or self.state_manager.get_process(target_system.hostname, parent_pid) is None
+        ):
+            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+
+        base_time = ensure_utc(logon_time) if logon_time is not None else activity_time
+        shell_seed = _stable_seed(
+            "linux_visible_shell_parent:"
+            f"{target_system.hostname}:{user.username}:{logon_id}:{activity_time.isoformat()}"
+        )
+        shell_time = base_time + timedelta(milliseconds=160 + (shell_seed % 1100))
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and shell_time < scenario_start
+        ):
+            scenario_floor = scenario_start + timedelta(milliseconds=350 + (shell_seed % 2200))
+            pre_command_gap = timedelta(seconds=3 + (shell_seed % 60))
+            shell_time = max(scenario_floor, activity_time - pre_command_gap)
+        latest_shell_time = activity_time - timedelta(milliseconds=120)
+        if shell_time > latest_shell_time:
+            shell_time = latest_shell_time
+
+        return self.generate_process(
+            user=user,
+            system=target_system,
+            time=shell_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
+
     def generate_bash_command(
         self,
         user: User,
@@ -16327,6 +16422,15 @@ class ActivityGenerator:
                     )
                     if session_shell_pid is not None:
                         return session_shell_pid
+                visible_shell_pid = self.ensure_linux_visible_shell_parent(
+                    user=self._user_model_for_username(process_username),
+                    target_system=system,
+                    activity_time=time,
+                    logon_id=logon_id,
+                    logon_time=session.start_time if session is not None else None,
+                )
+                if visible_shell_pid is not None:
+                    return visible_shell_pid
             return parent_pid
 
         resolved = self._resolve_parent(system, user, time, logon_id, process_name)

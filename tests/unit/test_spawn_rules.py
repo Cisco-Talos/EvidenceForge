@@ -1087,6 +1087,45 @@ class TestLinuxParentSelection:
         assert parent.image == "/bin/bash"
         assert parent.start_time >= scenario_start
 
+    def test_linux_generate_process_replaces_hidden_boot_shell_without_session(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """No-session Linux work should still avoid hidden boot bash parents."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(minutes=20)
+
+        first_pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id="",
+            process_name="/usr/bin/grep",
+            command_line="grep -i error /var/log/syslog",
+            parent_pid=pids["bash"],
+        )
+        second_pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time + timedelta(seconds=5),
+            logon_id="",
+            process_name="/usr/bin/tail",
+            command_line="tail -20 /var/log/syslog",
+            parent_pid=pids["bash"],
+        )
+
+        first = state_manager.get_process(linux_system.hostname, first_pid)
+        second = state_manager.get_process(linux_system.hostname, second_pid)
+        assert first is not None
+        assert second is not None
+        assert first.parent_pid != pids["bash"]
+        assert second.parent_pid == first.parent_pid
+        parent = state_manager.get_process(linux_system.hostname, first.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.start_time >= scenario_start
+
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(
             hostname="WEB-EXT-01",
