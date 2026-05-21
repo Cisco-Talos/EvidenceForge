@@ -6158,6 +6158,25 @@ class BaselineMixin:
                         _src_os,
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
+                    sshd_parent_pid = sys_pids.get("sshd", 0)
+                    if (
+                        sshd_parent_pid
+                        and self.state_manager.get_process(system.hostname, sshd_parent_pid) is None
+                    ):
+                        sshd_parent_pid = 0
+                    sshd_seed = _stable_seed(
+                        "baseline_ssh_responding_pid:"
+                        f"{system.hostname}:{ip}:{port}:{ts.isoformat()}"
+                    )
+                    sshd_pid = self.activity_generator.generate_system_process(
+                        system=system,
+                        time=ts + timedelta(milliseconds=8 + (sshd_seed % 72)),
+                        process_name="/usr/sbin/sshd",
+                        command_line="sshd: [accepted]",
+                        parent_pid=sshd_parent_pid,
+                        username="root",
+                        emit_linux_syslog=False,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=ip,
                         dst_ip=system.ip,
@@ -6169,9 +6188,9 @@ class BaselineMixin:
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
-                        pid=sys_pids.get("sshd", -1),
                         source_system=src_sys_obj,
                         conn_state="SF",
+                        responding_pid=sshd_pid,
                     )
                     observed_ssh_time = _zeek_conn_observation_time(
                         ts,
@@ -6181,10 +6200,6 @@ class BaselineMixin:
                         22,
                         "tcp",
                         "ssh",
-                    )
-                    sshd_pid = self.state_manager.allocate_transient_linux_pid(
-                        system.hostname,
-                        observed_ssh_time,
                     )
                     ssh_roster = self._get_server_ssh_users(system)
                     ssh_usernames = [user.username for user in ssh_roster]

@@ -494,6 +494,43 @@ class TestSslContextPopulation:
         }
         assert syslog_pids == {ssh_event.network.responding_pid}
 
+    def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=8.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        transport_events = [
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.command_line == "sshd: [accepted]"
+        ]
+        assert transport_events
+        assert conn_event.network.responding_pid == transport_events[0].process.pid
+
     def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 

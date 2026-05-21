@@ -8084,6 +8084,7 @@ class ActivityGenerator:
         process_image: str | None = None,
         preserve_dst_ip: bool = False,
         packet_overhead_bytes: int | None = None,
+        responding_pid: int = -1,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -9431,6 +9432,42 @@ class ActivityGenerator:
                     username="",
                 )
 
+        if (
+            responding_pid <= 0
+            and dst_host_ctx is not None
+            and dst_host_ctx.os_category == "linux"
+            and proto == "tcp"
+            and dst_port == 22
+            and service == "ssh"
+            and conn_state == "SF"
+        ):
+            target_system = None
+            if hasattr(self, "_ip_to_system"):
+                target_system = self._ip_to_system.get(dst_host_ctx.ip)
+            if target_system is not None:
+                sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+                global_sshd = sys_pids.get("sshd")
+                parent_pid = (
+                    global_sshd
+                    if global_sshd
+                    and self.state_manager.get_process(target_system.hostname, global_sshd)
+                    is not None
+                    else 0
+                )
+                sshd_seed = _stable_seed(
+                    "generic_ssh_responding_pid:"
+                    f"{target_system.hostname}:{src_ip}:{src_port}:{dst_ip}:{time.isoformat()}"
+                )
+                responding_pid = self.generate_system_process(
+                    system=target_system,
+                    time=time + timedelta(milliseconds=8 + (sshd_seed % 72)),
+                    process_name="/usr/sbin/sshd",
+                    command_line="sshd: [accepted]",
+                    parent_pid=parent_pid,
+                    username="root",
+                    emit_linux_syslog=False,
+                )
+
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
@@ -9461,6 +9498,7 @@ class ActivityGenerator:
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
+                responding_pid=responding_pid,
                 application_layer_only=http_application_layer_only,
             ),
             edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=conn_actor_id),
