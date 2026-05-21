@@ -9,9 +9,13 @@ from evidenceforge.generation.activity.application_catalog import (
     pick_app_and_command,
 )
 from evidenceforge.generation.activity.bash_commands import (
+    _below_global_repeat_limit,
+    _get_role_pool,
     _get_user_pool,
+    _remember_command,
     _resolve_template,
     load_bash_commands,
+    reset_bash_command_memory,
 )
 from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
 
@@ -116,6 +120,12 @@ class TestPerUserToolAffinity:
         assert all(command in db_pool for command in db_affinity)
         assert not any("apache2" in command or "nginx" in command for command in db_affinity)
 
+    def test_workstation_persona_pools_do_not_leak_to_servers(self):
+        """Desktop-oriented persona pools should only apply on workstation-like hosts."""
+        assert _get_role_pool("help_desk", "generic", workstation_like=True) == "help_desk"
+        assert _get_role_pool("help_desk", "generic", workstation_like=False) == "sysadmin"
+        assert _get_role_pool("data_analyst", "db", workstation_like=False) == "dba"
+
     def test_service_placeholder_prefers_host_services(self):
         """Generic service placeholders should not pull web services onto DB hosts."""
         command = _resolve_template(
@@ -137,6 +147,18 @@ class TestPerUserToolAffinity:
         )
 
         assert command == "systemctl status mysql"
+
+    def test_exact_command_global_repeat_budget_is_tight(self):
+        """Shared bash command memory should avoid fifth-repeat command-pool tells."""
+        reset_bash_command_memory()
+        command = "file /usr/bin/ls"
+
+        assert _below_global_repeat_limit(command, 120)
+        _remember_command("APP-01", "admin", command)
+        _remember_command("DB-01", "admin", command)
+        _remember_command("WEB-01", "admin", command)
+
+        assert not _below_global_repeat_limit(command, 120)
 
     def test_template_resolution_is_bounded_for_recursive_candidates(self):
         """Replacement values with the current token should not trigger unbounded expansion."""

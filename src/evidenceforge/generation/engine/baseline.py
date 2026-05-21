@@ -35,6 +35,7 @@ import logging
 import math
 import random
 import shlex
+import string
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -120,9 +121,15 @@ def _linux_baseline_session_initiator(
     user: str,
     *,
     rng: random.Random,
+    system_type: str = "server",
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
-    if user == "root":
+    if system_type == "server":
+        if user == "root":
+            service = rng.choices(("login", "sudo", "su"), weights=(18, 58, 24), k=1)[0]
+        else:
+            service = rng.choices(("login", "sudo"), weights=(34, 66), k=1)[0]
+    elif user == "root":
         service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
     else:
         service = rng.choices(("login", "sudo"), weights=(76, 24), k=1)[0]
@@ -133,6 +140,65 @@ def _linux_baseline_session_initiator(
         f"{user}(uid={_linux_uid_for_user(user)}) by {opener}"
     )
     return app_name, service, message
+
+
+def _linux_ambient_logind_probability(system_type: str) -> float:
+    """Return thinning probability for generic ambient logind session noise."""
+    if system_type == "server":
+        return 0.12
+    return 0.42
+
+
+def _extra_syslog_service_values(
+    system_services: list[str] | None, fallback: list[str]
+) -> list[str]:
+    """Return safe service placeholder values for extra syslog sudo commands."""
+    contextual: list[str] = []
+    for service in system_services or []:
+        normalized = service.strip().lower()
+        if not normalized or normalized in {"dns-client", "systemd"} or "{" in normalized:
+            continue
+        if normalized == "ssh":
+            normalized = "sshd"
+        contextual.append(normalized)
+    return contextual or fallback
+
+
+def _render_extra_sudo_command_template(
+    template: str,
+    rng: random.Random,
+    *,
+    system_services: list[str] | None,
+    fallback_services: list[str],
+    params: dict[str, Any] | None = None,
+) -> str:
+    """Resolve a sudo command template with host-aware service names."""
+    if "{" not in template:
+        return template
+    resolved_params = params or {}
+    render_values: dict[str, str] = {}
+    for _literal, field_name, _format_spec, _conversion in string.Formatter().parse(template):
+        if not field_name:
+            continue
+        field = field_name.split(".", 1)[0].split("[", 1)[0]
+        if field in render_values:
+            continue
+        if field == "service":
+            pool = _extra_syslog_service_values(system_services, fallback_services)
+        else:
+            values = resolved_params.get(field, [])
+            if isinstance(values, list):
+                pool = [str(value) for value in values if str(value).strip()]
+            elif isinstance(values, str) and values.strip():
+                pool = [values]
+            else:
+                pool = []
+        if pool:
+            render_values[field] = rng.choice(pool)
+    try:
+        return template.format(**render_values)
+    except (KeyError, IndexError, ValueError):
+        return template
 
 
 def _linux_baseline_pam_open_lead(rng: random.Random) -> timedelta:
@@ -1023,6 +1089,65 @@ class BaselineMixin:
         bus_state[hostname] = current
         return current
 
+    def _choose_extra_syslog_sudo_command(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        system: System,
+    ) -> str | None:
+        """Choose sudo COMMAND= text while avoiding cross-host command-pool fingerprints."""
+        params = entry.get("params") or {}
+        templates = [
+            str(command)
+            for command in params.get("sudo_command", [])
+            if isinstance(command, str) and command.strip()
+        ]
+        if not templates:
+            return None
+
+        global_counts = getattr(self, "_extra_syslog_sudo_command_counts", None)
+        if global_counts is None:
+            global_counts = {}
+            self._extra_syslog_sudo_command_counts = global_counts
+        host_counts = getattr(self, "_extra_syslog_sudo_command_host_counts", None)
+        if host_counts is None:
+            host_counts = {}
+            self._extra_syslog_sudo_command_host_counts = host_counts
+
+        fallback_services = [
+            str(service)
+            for service in params.get("service", [])
+            if isinstance(service, str) and service.strip()
+        ]
+        candidates: list[str] = []
+        for _ in range(72):
+            command = _render_extra_sudo_command_template(
+                rng.choice(templates),
+                rng,
+                system_services=system.services,
+                fallback_services=fallback_services,
+                params=params,
+            )
+            candidates.append(command)
+            if (
+                host_counts.get((system.hostname, command), 0) < 1
+                and global_counts.get(command, 0) < 4
+            ):
+                break
+        else:
+            command = min(
+                candidates,
+                key=lambda candidate: (
+                    global_counts.get(candidate, 0),
+                    host_counts.get((system.hostname, candidate), 0),
+                    candidate,
+                ),
+            )
+
+        global_counts[command] = global_counts.get(command, 0) + 1
+        host_counts[(system.hostname, command)] = host_counts.get((system.hostname, command), 0) + 1
+        return command
+
     def _polkit_session_pool(self, hostname: str, rng: random.Random) -> list[int]:
         """Return low, source-native session IDs that can represent pre-existing logind sessions."""
         pool_state = getattr(self, "_linux_polkit_session_pools", None)
@@ -1817,6 +1942,14 @@ class BaselineMixin:
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
             self._report_progress("phase_end", {"phase": "warmup"})
+            from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
+
+            # Warm-up pre-populates durable state but does not emit visible shell/syslog rows.
+            # Reset visible-output texture memory so non-emitted warm-up commands do not
+            # exhaust exact-repeat budgets for the actual collection window.
+            reset_bash_command_memory()
+            self._extra_syslog_sudo_command_counts = {}
+            self._extra_syslog_sudo_command_host_counts = {}
 
         # --- Real baseline: emit sensor startup and begin output ---
         self._emit_sensor_startup()
@@ -6086,6 +6219,8 @@ class BaselineMixin:
                                 severity=5,
                             )
                 elif source_roll < 0.32:
+                    if rng.random() >= _linux_ambient_logind_probability(sys_type):
+                        continue
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
@@ -6096,6 +6231,7 @@ class BaselineMixin:
                     pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
                         user,
                         rng=rng,
+                        system_type=sys_type,
                     )
                     pam_open_time = ts - _linux_baseline_pam_open_lead(rng)
                     pam_pid = _linux_transient_syslog_pid(
@@ -6495,6 +6631,18 @@ class BaselineMixin:
                             positional_value=rng.randint(1000, 99999),
                             system_services=system.services,
                             values={"fd": self._next_rsyslog_fd(system.hostname, rng)},
+                        )
+                    elif app == "sudo":
+                        values = {"interface": primary_interface}
+                        sudo_command = self._choose_extra_syslog_sudo_command(entry, rng, system)
+                        if sudo_command is not None:
+                            values["sudo_command"] = sudo_command
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(100000, 999999),
+                            system_services=system.services,
+                            values=values,
                         )
                     elif app == "dbus-daemon":
                         msg = render_extra_syslog_message(

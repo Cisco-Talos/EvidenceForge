@@ -220,11 +220,13 @@ class TestBaselineLinuxBashHistory:
             assert workflows.get(role), f"{role} workflow pool is empty"
 
     def test_stock_workstation_personas_use_dedicated_bash_pools(self):
-        """Help desk and data analyst personas should hit their own expanded pools."""
+        """Stock desktop persona pools should stay workstation-scoped."""
         from evidenceforge.generation.activity.bash_commands import _get_role_pool
 
-        assert _get_role_pool("help_desk", "generic") == "help_desk"
-        assert _get_role_pool("data_analyst", "generic") == "data_analyst"
+        assert _get_role_pool("help_desk", "generic", workstation_like=True) == "help_desk"
+        assert _get_role_pool("data_analyst", "generic", workstation_like=True) == "data_analyst"
+        assert _get_role_pool("help_desk", "generic", workstation_like=False) == "sysadmin"
+        assert _get_role_pool("data_analyst", "generic", workstation_like=False) == "dba"
 
     def test_short_history_typo_cap_suppresses_extra_typos(self, monkeypatch):
         """Short bash histories should not accumulate multiple generated typos."""
