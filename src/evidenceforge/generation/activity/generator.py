@@ -8653,6 +8653,79 @@ class ActivityGenerator:
                         _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
                     ).randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
                 )
+            client_pid = pid
+            client_process_image = process_image
+            caller_process_image = self._caller_explicit_proxy_process_image(
+                source_system=source_system,
+                pid=pid,
+                process_image=process_image,
+                time=time,
+                proxy_context=proxy_context,
+                proxy_sys=proxy_sys,
+                dst_port=dst_port,
+            )
+            if caller_process_image is not None:
+                client_process_image = caller_process_image
+                if source_system is not None:
+                    self.state_manager.update_process_activity_time(
+                        source_system.hostname,
+                        pid,
+                        time,
+                    )
+            else:
+                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+                    source_system=source_system,
+                    time=time,
+                    proxy_context=proxy_context,
+                    proxy_sys=proxy_sys,
+                    dst_port=dst_port,
+                )
+                if owned_client_pid > 0:
+                    client_pid = owned_client_pid
+                    client_process_image = owned_process_image
+
+            if src_port is None:
+                src_port = self._allocate_ephemeral_port(
+                    src_ip,
+                    proxy_sys.ip,
+                    listener_port,
+                    "tcp",
+                    time,
+                    self._os_for_ip(src_ip),
+                )
+
+            client_time = time
+            if client_pid > 0 and source_system is not None:
+                client_time = self._clamp_after_visible_process_create(
+                    source_system,
+                    client_pid,
+                    client_time,
+                    "source.windows_wfp_connection",
+                )
+
+            client_observed_time = _zeek_conn_observation_time(
+                client_time,
+                src_ip,
+                src_port,
+                proxy_sys.ip,
+                listener_port,
+                "tcp",
+                "http",
+            )
+            connect_window = get_timing_window(
+                "source.zeek_http_request",
+                default_min_ms=1,
+                default_max_ms=450,
+                default_position="after",
+                default_class="same_observation",
+            )
+            client_connect_visible_by = client_observed_time + timedelta(
+                milliseconds=connect_window.max_ms + 1
+            )
+            egress_time = time + egress_delay
+            if will_emit_egress:
+                egress_time = max(egress_time, client_connect_visible_by + egress_delay)
+
             proxy_client_cap = random.Random(
                 _stable_seed(
                     "proxy_client_duration_cap:"
@@ -8691,9 +8764,10 @@ class ActivityGenerator:
                 response_flush = random.Random(
                     _stable_seed(f"proxy_response_flush:{src_ip}:{dst_ip}:{time.timestamp()}")
                 ).uniform(0.02, 0.25)
+                egress_start_after_client = max(0.0, (egress_time - client_time).total_seconds())
                 client_duration = max(
                     client_duration,
-                    egress_delay.total_seconds() + egress_duration + response_flush,
+                    egress_start_after_client + egress_duration + response_flush,
                 )
                 proxy_context.time_taken = max(
                     proxy_context.time_taken,
@@ -8712,41 +8786,10 @@ class ActivityGenerator:
                     ),
                 )
 
-            client_pid = pid
-            client_process_image = process_image
-            caller_process_image = self._caller_explicit_proxy_process_image(
-                source_system=source_system,
-                pid=pid,
-                process_image=process_image,
-                time=time,
-                proxy_context=proxy_context,
-                proxy_sys=proxy_sys,
-                dst_port=dst_port,
-            )
-            if caller_process_image is not None:
-                client_process_image = caller_process_image
-                if source_system is not None:
-                    self.state_manager.update_process_activity_time(
-                        source_system.hostname,
-                        pid,
-                        time,
-                    )
-            else:
-                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
-                    source_system=source_system,
-                    time=time,
-                    proxy_context=proxy_context,
-                    proxy_sys=proxy_sys,
-                    dst_port=dst_port,
-                )
-                if owned_client_pid > 0:
-                    client_pid = owned_client_pid
-                    client_process_image = owned_process_image
-
             client_uid = self.generate_connection(
                 src_ip=src_ip,
                 dst_ip=proxy_sys.ip,
-                time=time,
+                time=client_time,
                 dst_port=listener_port,
                 proto="tcp",
                 service="http",
@@ -8820,7 +8863,7 @@ class ActivityGenerator:
                 self._emit_dns_lookup(
                     proxy_sys.ip,
                     dst_ip,
-                    time + egress_delay,
+                    egress_time,
                     hostname=proxy_context.host,
                     force_address=True,
                 )
@@ -8830,7 +8873,7 @@ class ActivityGenerator:
             self.generate_connection(
                 src_ip=proxy_sys.ip,
                 dst_ip=dst_ip,
-                time=time + egress_delay,
+                time=egress_time,
                 dst_port=dst_port,
                 proto=proto,
                 service=service,
@@ -8851,7 +8894,7 @@ class ActivityGenerator:
                 proxy_bypass=True,
             )
             if dst_port == 443:
-                self._explicit_proxy_tunnels[tunnel_key] = (time, client_uid)
+                self._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)
             return client_uid
 
         # Emit DNS lookup before connection via causal expansion.
