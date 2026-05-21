@@ -2261,6 +2261,23 @@ def validate_config() -> ValidationResult:
                             ),
                         )
                     )
+                    continue
+                literal_text = re.sub(
+                    r"\{[A-Za-z_][A-Za-z0-9_]*\}",
+                    "",
+                    template,
+                ).lower()
+                if re.search(r"[a-z]{3,}", literal_text):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (dns_tunnel_response_templates)",
+                            (
+                                f"entry {idx} contains readable literal text; "
+                                "DNS tunnel response templates should stay opaque"
+                            ),
+                        )
+                    )
         ttl_choices = net_params.get("dns_tunnel_ttl_choices", [])
         if not isinstance(ttl_choices, list) or not ttl_choices:
             result.issues.append(

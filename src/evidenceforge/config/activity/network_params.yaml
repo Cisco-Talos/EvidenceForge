@@ -81,21 +81,15 @@ dns_tunnel_rtt:
 
 dns_tunnel_response_templates:
   - "{token}"
-  - "v={token}"
-  - "id={token}"
-  - "d={token}"
-  - "rx={token}"
-  - "p={seq_hex};d={token}"
-  - "s={seq};d={token}"
-  - "m={token};c={seq_hex}"
-  - "r={seq_hex};b={token}"
-  - "ok:{seq}:{token}"
-  - "{edge}={token}"
-  - "n={seq_hex}.{token}"
-  - "x-{edge}:{seq_hex}:{token}"
-  - "srv.{edge}.{seq_hex}.{token}"
-  - "srv-{edge}-{seq_hex}:{token}"
-  - "xid:{token}:path-{edge}:n{seq}"
+  - "{token}.{seq_hex}"
+  - "{seq_hex}.{token}"
+  - "{edge}{seq_hex}{token}"
+  - "{token}-{edge}{seq_hex}"
+  - "_{edge}{token}"
+  - "{seq_hex}-{token}"
+  - "x{edge}{token}"
+  - "r{seq_hex}{token}"
+  - "m{edge}{token}"
 
 dns_tunnel_ttl_choices:
   - value: 0
