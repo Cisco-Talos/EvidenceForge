@@ -2343,6 +2343,7 @@ class StorylineMixin:
                         None,
                         rng,
                         _get_os_category(system.os),
+                        time=transfer_time,
                     )
                     self.activity_generator.generate_connection(
                         src_ip=system.ip,

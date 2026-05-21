@@ -40,6 +40,7 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
@@ -571,7 +572,7 @@ class TestSslContextPopulation:
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid
 
-    def test_ssh_session_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
+    def test_ssh_session_avoids_existing_destination_endpoint_tuple(self, activity_gen):
         gen, events = activity_gen
 
         user = User(username="admin", full_name="Admin User", email="admin@example.com")
@@ -609,13 +610,14 @@ class TestSslContextPopulation:
         )
 
         ssh_event = next(event for event in events if event.event_type == "ssh_session")
-        assert ssh_event.network.responding_pid == first_conn.network.responding_pid
+        assert ssh_event.network.src_port != first_conn.network.src_port
+        assert ssh_event.network.responding_pid != first_conn.network.responding_pid
         syslog_pids = {
             event.syslog.pid
             for event in events
             if event.syslog is not None and event.syslog.app_name == "sshd"
         }
-        assert syslog_pids == {first_conn.network.responding_pid}
+        assert syslog_pids == {ssh_event.network.responding_pid}
 
     def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
         gen, events = activity_gen
@@ -680,6 +682,58 @@ class TestSslContextPopulation:
             first_conn.network.responding_pid,
             first_conn.network.responding_pid,
         ]
+
+    def test_reserved_ssh_source_port_blocks_generic_tuple_reuse(
+        self,
+        activity_gen,
+        monkeypatch,
+    ):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        reserved = gen.reserve_ssh_source_port(
+            "10.0.10.50",
+            target.ip,
+            51111,
+            random.Random(7),
+            "linux",
+            time=base_time,
+        )
+
+        assert reserved == 51111
+
+        candidate_ports = iter([51111, 51112])
+        monkeypatch.setattr(
+            generator_module,
+            "_ephemeral_port",
+            lambda rng, os_category: next(candidate_ports),
+        )
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=base_time + timedelta(seconds=1),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=4.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        assert conn_event.network.src_port == 51112
 
     def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen

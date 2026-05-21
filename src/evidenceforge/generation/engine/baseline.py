@@ -6156,6 +6156,7 @@ class BaselineMixin:
                         _ephemeral_port(rng, _src_os),
                         rng,
                         _src_os,
+                        time=ts,
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
                     sshd_parent_pid = sys_pids.get("sshd", 0)

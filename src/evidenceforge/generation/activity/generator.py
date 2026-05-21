@@ -7906,16 +7906,30 @@ class ActivityGenerator:
         source_port: int | None,
         rng: random.Random,
         source_os: str,
+        time: datetime | None = None,
     ) -> int:
         """Reserve a per-source/destination SSH source port for unambiguous correlation."""
         candidate = source_port or _ephemeral_port(rng, source_os)
         for _ in range(100):
             key = (source_ip, target_ip, candidate)
-            if key not in self._ssh_source_ports:
+            recent_key = (source_ip, candidate, target_ip, 22, "tcp")
+            recent_seen = self._recent_connection_tuples.get(recent_key)
+            recent_is_active = (
+                time is not None
+                and recent_seen is not None
+                and time.timestamp() - recent_seen <= 86_400.0
+            )
+            if key not in self._ssh_source_ports and not recent_is_active:
                 self._ssh_source_ports.add(key)
+                if time is not None:
+                    self._remember_connection_tuple(
+                        source_ip, candidate, target_ip, 22, "tcp", time
+                    )
                 return candidate
             candidate = _ephemeral_port(rng, source_os)
         self._ssh_source_ports.add((source_ip, target_ip, candidate))
+        if time is not None:
+            self._remember_connection_tuple(source_ip, candidate, target_ip, 22, "tcp", time)
         return candidate
 
     def generate_process_termination(
@@ -10480,6 +10494,7 @@ class ActivityGenerator:
             source_port,
             rng,
             _src_os,
+            time=time,
         )
         duration = rng.uniform(30.0, 3600.0)
         if min_duration is not None:
