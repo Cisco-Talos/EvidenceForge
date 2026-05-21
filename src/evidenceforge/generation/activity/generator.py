@@ -10581,12 +10581,28 @@ class ActivityGenerator:
         session = self.state_manager.get_session(logon_id)
         if session is None or session.system != target_system.hostname:
             return None
-        if session.session_shell_pid is not None and self._is_pid_active_at(
-            target_system,
-            session.session_shell_pid,
-            activity_time,
-        ):
-            return session.session_shell_pid
+        logon_time = ensure_utc(logon_time)
+        activity_time = ensure_utc(activity_time)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        if session.session_shell_pid is not None:
+            shell_proc = self.state_manager.get_process(
+                target_system.hostname,
+                session.session_shell_pid,
+            )
+            if shell_proc is not None and self._is_pid_active_at(
+                target_system,
+                session.session_shell_pid,
+                activity_time,
+            ):
+                shell_start = ensure_utc(shell_proc.start_time)
+                if (
+                    scenario_start is None
+                    or activity_time < scenario_start
+                    or shell_start >= scenario_start
+                ):
+                    return session.session_shell_pid
 
         sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
         global_sshd = sys_pids.get("sshd")
@@ -10596,14 +10612,20 @@ class ActivityGenerator:
         ):
             return None
 
-        logon_time = ensure_utc(logon_time)
-        activity_time = ensure_utc(activity_time)
         shell_seed = _stable_seed(
             "linux_ssh_session_shell:"
             f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
         )
         sshd_delay_ms = 900 + (shell_seed % 1400)
         sshd_time = logon_time + timedelta(milliseconds=sshd_delay_ms)
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and sshd_time < scenario_start
+        ):
+            pre_command_gap = timedelta(seconds=5 + (shell_seed % 95))
+            scenario_floor = scenario_start + timedelta(milliseconds=500 + (shell_seed % 3000))
+            sshd_time = max(scenario_floor, activity_time - pre_command_gap)
         latest_parent_time = activity_time - timedelta(milliseconds=500)
         if sshd_time > latest_parent_time:
             sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)

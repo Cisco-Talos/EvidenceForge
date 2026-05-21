@@ -775,6 +775,20 @@ class WorldPlanner:
                 transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
+                if existing.session_kind == "ssh":
+                    ensure_shell = getattr(
+                        self.activity_generator,
+                        "ensure_linux_ssh_session_shell",
+                        None,
+                    )
+                    if ensure_shell is not None:
+                        ensure_shell(
+                            user=user,
+                            target_system=target_system,
+                            logon_id=existing.logon_id,
+                            logon_time=self._session_start_sort_key(existing),
+                            activity_time=time,
+                        )
                 if storyline_protected:
                     existing.storyline_protected = True
                 return SessionBootstrapResult(session=existing, network_uid=None)
