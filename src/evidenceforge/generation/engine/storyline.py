@@ -4303,7 +4303,8 @@ class StorylineMixin:
                     s
                     for s in sessions
                     if s.system == system.hostname
-                    and s.logon_type in (2, 10, 11)
+                    and s.logon_type in (2, 11)
+                    and s.session_kind not in {"network", "service", "rdp", "ssh"}
                     and s.start_time <= time
                 ),
                 key=lambda s: s.start_time,
@@ -4324,7 +4325,8 @@ class StorylineMixin:
                     s
                     for s in sessions
                     if s.system == system.hostname
-                    and s.logon_type in (2, 10, 11)
+                    and s.logon_type in (2, 11)
+                    and s.session_kind not in {"network", "service", "rdp", "ssh"}
                     and s.start_time <= time
                 ),
                 key=lambda s: s.start_time,

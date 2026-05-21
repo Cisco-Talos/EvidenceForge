@@ -1089,36 +1089,19 @@ class WorldPlanner:
             if marker is not None
         )
 
-        # Create per-session sshd child + bash login shell for realistic
-        # Linux process trees.  Each SSH session gets its own sshd fork
-        # (privilege separation) and bash PID so user commands have
-        # distinct parent PIDs per session.
-        sys_pids = getattr(self.activity_generator, "_system_pids", {}).get(
-            plan.target_system.hostname, {}
-        )
-        global_sshd = sys_pids.get("sshd")
-        if global_sshd and self.state_manager.get_process(plan.target_system.hostname, global_sshd):
-            # Per-session sshd child (privilege separation fork)
-            session_sshd_pid = self.state_manager.create_process(
-                plan.target_system.hostname,
-                global_sshd,
-                "/usr/sbin/sshd",
-                f"sshd: {user.username} [priv]",
-                "root",
-                "System",
+        # Create visible per-session sshd child + bash login shell for realistic
+        # Linux process trees. Each SSH session gets its own sshd fork
+        # (privilege separation) and bash PID so user commands have distinct
+        # parent PIDs and eCAR can observe the parent lifecycle.
+        ensure_shell = getattr(self.activity_generator, "ensure_linux_ssh_session_shell", None)
+        if ensure_shell is not None:
+            ensure_shell(
+                user=user,
+                target_system=plan.target_system,
                 logon_id=logon_id,
+                logon_time=logon_time,
+                activity_time=activity_time,
             )
-            # Per-session bash login shell
-            bash_pid = self.state_manager.create_process(
-                plan.target_system.hostname,
-                session_sshd_pid,
-                "/bin/bash",
-                "-bash",
-                user.username,
-                "Medium",
-                logon_id=logon_id,
-            )
-            session.session_shell_pid = bash_pid
 
         return SessionBootstrapResult(session=session, network_uid=uid)
 

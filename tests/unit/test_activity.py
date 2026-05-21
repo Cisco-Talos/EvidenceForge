@@ -3274,6 +3274,88 @@ class TestActivityGenerator:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
         )
 
+    def test_workstation_lock_unlock_reject_rdp_session_luid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A local workstation lock/unlock should never reuse a Type 10 RDP LUID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        rdp_logon_id = "0xabc124"
+        state_manager.register_session(
+            logon_id=rdp_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.55",
+            start_time=timestamp - timedelta(minutes=5),
+            session_kind="rdp",
+            session_id=6,
+        )
+
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            timestamp,
+            rdp_logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            rdp_logon_id,
+        )
+
+        emitted_types = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "workstation_locked" not in emitted_types
+        assert "workstation_unlocked" not in emitted_types
+        assert not any(
+            call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 7
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        )
+
+    def test_local_interactive_logon_does_not_reuse_rdp_session_luid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A fresh local Type 2 logon should not inherit an active RDP session LUID."""
+        rdp_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        local_time = rdp_time + timedelta(minutes=30)
+        rdp_logon_id = "0xabc125"
+        state_manager.register_session(
+            logon_id=rdp_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.55",
+            start_time=rdp_time,
+            session_kind="rdp",
+            session_id=6,
+        )
+
+        local_logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            local_time,
+            logon_type=2,
+            source_ip="-",
+        )
+
+        assert local_logon_id != rdp_logon_id
+        local_session = state_manager.get_session(local_logon_id)
+        assert local_session is not None
+        assert local_session.logon_type == 2
+        assert local_session.session_kind == "interactive"
+        logon_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        ]
+        assert any(
+            event.auth.logon_type == 2 and event.auth.logon_id == local_logon_id
+            for event in logon_events
+        )
+
     def test_credential_dump_command_uses_high_integrity_token(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

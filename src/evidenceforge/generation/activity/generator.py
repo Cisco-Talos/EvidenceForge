@@ -930,6 +930,8 @@ _WINDOWS_ELECTRON_CHILD_MARKERS = (
     "--utility-sub-type=",
 )
 _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = frozenset({2, 10, 11})
+_WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = frozenset({2, 11})
+_WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
 _SSH_SYSLOG_MICRO_JITTER_BANDS = {
     "connection": 101,
     "accepted": 301,
@@ -937,6 +939,14 @@ _SSH_SYSLOG_MICRO_JITTER_BANDS = {
     "logind": 701,
     "closed": 901,
 }
+
+
+def _is_windows_workstation_session(session: ActiveSession) -> bool:
+    """Return true when a session can own local workstation lock/unlock evidence."""
+    return (
+        session.logon_type in _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES
+        and session.session_kind not in _WINDOWS_REMOTE_SESSION_KINDS
+    )
 
 
 def _ssh_syslog_time(
@@ -3489,6 +3499,29 @@ class ActivityGenerator:
             return None
         return max(candidates, key=lambda session: session.start_time)
 
+    def _active_user_workstation_windows_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest local workstation session for this user/host."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if (
+                session.system == system.hostname
+                and _is_windows_workstation_session(session)
+                and _session_started_by(session, time)
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.start_time)
+
     def _session_id_for_logon(self, logon_id: str) -> int:
         """Return the canonical source-native session ID for a LogonID."""
         if not logon_id:
@@ -3518,7 +3551,7 @@ class ActivityGenerator:
                 session is not None
                 and session.system == system.hostname
                 and session.start_time <= time
-                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+                and _is_windows_workstation_session(session)
             ):
                 candidates.append((lock_timestamp, session))
 
@@ -5727,7 +5760,7 @@ class ActivityGenerator:
             logon_type = 2
             source_ip = None
         if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
-            existing_interactive = self._active_user_interactive_windows_session(
+            existing_interactive = self._active_user_workstation_windows_session(
                 user,
                 system,
                 time,
@@ -10536,6 +10569,74 @@ class ActivityGenerator:
         )
         return uid if network_visible else ""
 
+    def ensure_linux_ssh_session_shell(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        logon_time: datetime,
+        activity_time: datetime,
+    ) -> int | None:
+        """Create visible per-session sshd and login shell process state for SSH."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != target_system.hostname:
+            return None
+        if session.session_shell_pid is not None and self._is_pid_active_at(
+            target_system,
+            session.session_shell_pid,
+            activity_time,
+        ):
+            return session.session_shell_pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        global_sshd = sys_pids.get("sshd")
+        if (
+            not global_sshd
+            or self.state_manager.get_process(target_system.hostname, global_sshd) is None
+        ):
+            return None
+
+        logon_time = ensure_utc(logon_time)
+        activity_time = ensure_utc(activity_time)
+        shell_seed = _stable_seed(
+            "linux_ssh_session_shell:"
+            f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
+        )
+        sshd_delay_ms = 900 + (shell_seed % 1400)
+        sshd_time = logon_time + timedelta(milliseconds=sshd_delay_ms)
+        latest_parent_time = activity_time - timedelta(milliseconds=500)
+        if sshd_time > latest_parent_time:
+            sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
+
+        session_sshd_pid = self.generate_system_process(
+            system=target_system,
+            time=sshd_time,
+            process_name="/usr/sbin/sshd",
+            command_line=f"sshd: {user.username} [priv]",
+            parent_pid=global_sshd,
+            username="root",
+            emit_linux_syslog=False,
+        )
+
+        bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
+        latest_bash_time = activity_time - timedelta(milliseconds=120)
+        if bash_time > latest_bash_time:
+            bash_time = max(sshd_time + timedelta(milliseconds=20), latest_bash_time)
+
+        bash_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=bash_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=session_sshd_pid,
+            suppress_command_file_effect=True,
+        )
+        session.session_shell_pid = bash_pid
+        session.process_tree_root = session_sshd_pid
+        return bash_pid
+
     def generate_bash_command(
         self,
         user: User,
@@ -12074,8 +12175,12 @@ class ActivityGenerator:
                 logon_type = rng.choices([3, 2, 7, 11, 10], weights=[55, 20, 10, 10, 5], k=1)[0]
 
             active_interactive = None
-            if not is_service_account and sys_type not in ("server", "domain_controller"):
-                active_interactive = self._active_user_interactive_windows_session(
+            if (
+                logon_type in (2, 7, 11)
+                and not is_service_account
+                and sys_type not in ("server", "domain_controller")
+            ):
+                active_interactive = self._active_user_workstation_windows_session(
                     user,
                     system,
                     time,
@@ -13119,7 +13224,7 @@ class ActivityGenerator:
             session is None
             or session.system != system.hostname
             or session.start_time > time
-            or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            or not _is_windows_workstation_session(session)
         ):
             return
         if not hasattr(self, "_last_workstation_lock_time"):
@@ -13168,7 +13273,7 @@ class ActivityGenerator:
             session is None
             or session.system != system.hostname
             or session.start_time > time
-            or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            or not _is_windows_workstation_session(session)
         ):
             return
         if lock_time is not None:

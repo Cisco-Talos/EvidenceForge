@@ -308,14 +308,37 @@ def test_world_planner_reuses_durable_windows_interactive_session(
 def test_world_planner_bootstraps_ssh_session(
     planner: WorldPlanner,
     state_manager: StateManager,
+    activity_generator: ActivityGenerator,
+    mock_emitters: dict[str, Mock],
     systems: dict[str, System],
     users: dict[str, User],
 ) -> None:
     """SSH bootstrap should create a durable session plus correlated network metadata."""
+    seed_time = datetime(2024, 1, 15, 9, 55, 0, tzinfo=UTC)
     state_manager.register_boot_time(
         systems["DB-01"].hostname,
         datetime(2024, 1, 6, 10, 15, 0, tzinfo=UTC),
     )
+    state_manager.set_current_time(seed_time)
+    systemd_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        0,
+        "/usr/lib/systemd/systemd",
+        "/usr/lib/systemd/systemd",
+        "root",
+        "System",
+    )
+    sshd_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        systemd_pid,
+        "/usr/sbin/sshd",
+        "/usr/sbin/sshd -D",
+        "root",
+        "System",
+    )
+    activity_generator._system_pids = {
+        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid}
+    }
 
     result = planner.bootstrap_user_session(
         user=users["alice.admin"],
@@ -333,6 +356,24 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.source_ip == systems["WKS-01"].ip
     assert session.source_port > 0
     assert session.transport_pid is not None
+    assert session.session_shell_pid is not None
+    shell = state_manager.get_process(systems["DB-01"].hostname, session.session_shell_pid)
+    assert shell is not None
+    assert shell.image == "/bin/bash"
+    assert shell.logon_id == session.logon_id
+
+    process_events = [
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].event_type in {"process_create", "system_process_create"}
+    ]
+    bash_events = [
+        event
+        for event in process_events
+        if event.process is not None and event.process.pid == session.session_shell_pid
+    ]
+    assert bash_events
+    assert bash_events[0].process.parent_image == "/usr/sbin/sshd"
     assert session.transport_pid > 180_000
     assert result.network_uid
 
