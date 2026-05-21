@@ -270,6 +270,83 @@ class TestObservationProfiles:
         assert conn_event.timestamp == http_event.timestamp
         assert conn_event.timestamp > event.timestamp
 
+    def test_ecar_storyline_process_observation_delay_is_coherent(self, monkeypatch):
+        """Storyline eCAR process graphs should not orphan source-local references."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    }
+                },
+            },
+        )
+        policy = ObservationPolicy("ecar_storyline_process_delay_test")
+        host = HostContext(
+            hostname="WEB-EXT-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        )
+        process = ProcessContext(
+            pid=781856,
+            parent_pid=24118,
+            image="/bin/bash",
+            command_line="bash -c 'curl 45.33.32.30:8443'",
+            username="www-data",
+            start_time=_make_ts(),
+        )
+        create = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="process_create",
+            src_host=host,
+            process=process,
+            storyline_cluster_id="evt-005",
+        )
+        callback = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=1),
+            event_type="connection",
+            src_host=host,
+            process=process,
+            network=NetworkContext(
+                src_ip="10.10.3.10",
+                src_port=53836,
+                dst_ip="45.33.32.30",
+                dst_port=8443,
+                protocol="tcp",
+                zeek_uid="Ccallback123",
+            ),
+            storyline_cluster_id="evt-005",
+        )
+        terminate = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=10),
+            event_type="process_terminate",
+            src_host=host,
+            process=process,
+            storyline_cluster_id="evt-005",
+        )
+
+        create_decision = policy.decide("ecar", create)
+        callback_decision = policy.decide("ecar", callback)
+        terminate_decision = policy.decide("ecar", terminate)
+
+        assert create_decision.delay == callback_decision.delay == terminate_decision.delay
+        assert (
+            create.timestamp + create_decision.delay < callback.timestamp + callback_decision.delay
+        )
+        assert (
+            callback.timestamp + callback_decision.delay
+            < terminate.timestamp + terminate_decision.delay
+        )
+
     def test_syslog_ssh_lifecycle_delay_preserves_session_order(self, monkeypatch):
         """SSH lifecycle syslog rows with one sshd PID should share collection delay."""
         monkeypatch.setattr(

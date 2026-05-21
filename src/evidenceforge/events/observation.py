@@ -217,6 +217,18 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if (
+            source == "ecar"
+            and event.storyline_cluster_id
+            and event.process
+            and event.process.pid is not None
+        ):
+            image = event.process.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+            return (
+                "storyline-process:"
+                f"{event.storyline_cluster_id}:{event.process.username}:"
+                f"{event.process.pid}:{image}"
+            )
         if source == "syslog" and event.syslog and event.syslog.app_name == "sshd":
             pid = event.syslog.pid if event.syslog.pid not in (None, "") else ""
             if pid:
@@ -247,6 +259,8 @@ class ObservationPolicy:
     def _uses_coherent_source_identity(source: str, group: str) -> bool:
         """Return whether observation delay/drop should be shared within a source group."""
         if source == "syslog" and group.startswith("sshd:"):
+            return True
+        if source == "ecar" and group.startswith("storyline-process:"):
             return True
         if source == "zeek" and (group.startswith("uid:") or group.startswith("dns:")):
             return True
