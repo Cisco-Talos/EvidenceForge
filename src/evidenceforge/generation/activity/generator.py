@@ -10659,6 +10659,89 @@ class ActivityGenerator:
         session.process_tree_root = session_sshd_pid
         return bash_pid
 
+    def ensure_linux_session_shell(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        logon_time: datetime,
+        activity_time: datetime,
+    ) -> int | None:
+        """Create or return a visible Linux shell that owns session child processes."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != target_system.hostname:
+            return None
+        if session.session_kind == "ssh":
+            return self.ensure_linux_ssh_session_shell(
+                user=user,
+                target_system=target_system,
+                logon_id=logon_id,
+                logon_time=logon_time,
+                activity_time=activity_time,
+            )
+
+        logon_time = ensure_utc(logon_time)
+        activity_time = ensure_utc(activity_time)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        if session.session_shell_pid is not None:
+            shell_proc = self.state_manager.get_process(
+                target_system.hostname,
+                session.session_shell_pid,
+            )
+            if shell_proc is not None and self._is_pid_active_at(
+                target_system,
+                session.session_shell_pid,
+                activity_time,
+            ):
+                shell_start = ensure_utc(shell_proc.start_time)
+                if (
+                    scenario_start is None
+                    or activity_time < scenario_start
+                    or shell_start >= scenario_start
+                ):
+                    return session.session_shell_pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        parent_pid = sys_pids.get("systemd") or sys_pids.get("init")
+        if (
+            not parent_pid
+            or self.state_manager.get_process(target_system.hostname, parent_pid) is None
+        ):
+            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+
+        shell_seed = _stable_seed(
+            "linux_session_shell:"
+            f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
+        )
+        bash_time = logon_time + timedelta(milliseconds=180 + (shell_seed % 1200))
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and bash_time < scenario_start
+        ):
+            scenario_floor = scenario_start + timedelta(milliseconds=400 + (shell_seed % 2500))
+            pre_command_gap = timedelta(seconds=4 + (shell_seed % 75))
+            bash_time = max(scenario_floor, activity_time - pre_command_gap)
+        latest_bash_time = activity_time - timedelta(milliseconds=120)
+        if bash_time > latest_bash_time:
+            bash_time = latest_bash_time
+
+        bash_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=bash_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
+        session.session_shell_pid = bash_pid
+        session.process_tree_root = parent_pid
+        return bash_pid
+
     def generate_bash_command(
         self,
         user: User,
@@ -15993,12 +16076,8 @@ class ActivityGenerator:
             )
         is_network_logon = active_session and active_session.logon_type == 3
         is_service_logon = active_session and active_session.logon_type == 5
-        if (
-            os_cat == "linux"
-            and active_session is not None
-            and active_session.session_kind == "ssh"
-        ):
-            self.ensure_linux_ssh_session_shell(
+        if os_cat == "linux" and active_session is not None:
+            self.ensure_linux_session_shell(
                 user=user,
                 target_system=system,
                 logon_id=active_session.logon_id,
@@ -16235,6 +16314,19 @@ class ActivityGenerator:
             ):
                 return parent_pid
         elif parent_proc is not None and self._is_pid_active_at(system, parent_pid, time):
+            parent_exe = parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+            if parent_exe in {"bash", "sh", "zsh"}:
+                session = self.state_manager.get_session(logon_id)
+                if session is not None:
+                    session_shell_pid = self.ensure_linux_session_shell(
+                        user=self._user_model_for_username(process_username),
+                        target_system=system,
+                        logon_id=logon_id,
+                        logon_time=session.start_time,
+                        activity_time=time,
+                    )
+                    if session_shell_pid is not None:
+                        return session_shell_pid
             return parent_pid
 
         resolved = self._resolve_parent(system, user, time, logon_id, process_name)

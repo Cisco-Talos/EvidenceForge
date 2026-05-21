@@ -1198,9 +1198,13 @@ class TestParentPidSelection:
 
         proc = state_manager.get_process(linux_system.hostname, pid)
         bash_pid = pids["bash"]
-        assert proc.parent_pid == bash_pid, (
-            f"Linux user process parent should be bash ({bash_pid}), not {proc.parent_pid}"
-        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert proc.parent_pid != bash_pid
+        assert proc.parent_pid == session.session_shell_pid
+        parent_proc = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent_proc is not None
+        assert parent_proc.image == "/bin/bash"
 
     def test_process_tree_depth(self, state_manager, mock_emitters, win_system):
         """After creating a shell, subsequent processes should sometimes use it as parent."""

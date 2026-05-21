@@ -7,7 +7,7 @@ Process trees should use spawn rules to determine valid parent-child
 relationships instead of defaulting everything to explorer.exe.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -1047,6 +1047,45 @@ class TestLinuxParentSelection:
         parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
         assert parent is not None
         assert parent.image == "/bin/bash"
+
+    def test_linux_generate_process_replaces_hidden_boot_shell_parent(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Visible Linux process telemetry should materialize the owning shell parent."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(minutes=12)
+        state_manager.set_current_time(scenario_start - timedelta(minutes=30))
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=5,
+            source_ip="-",
+            session_kind="service",
+            start_time=scenario_start + timedelta(minutes=10),
+        )
+
+        pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id=logon_id,
+            process_name="/usr/bin/last",
+            command_line="last -n 50",
+            parent_pid=pids["bash"],
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        session = state_manager.get_session(logon_id)
+        assert proc is not None
+        assert session is not None
+        assert proc.parent_pid != pids["bash"]
+        assert proc.parent_pid == session.session_shell_pid
+        parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.start_time >= scenario_start
 
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(
