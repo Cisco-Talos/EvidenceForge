@@ -184,10 +184,11 @@ class TestThreadLocalRNG:
                 hostname="TEST-WS-01", ip="10.0.10.1", os="Windows 10", type="workstation"
             )
 
-            # Generate events from main thread
+            # Generate network logons from main thread. Local interactive logons
+            # intentionally reuse an active workstation session for realism.
             results_main = []
             for _ in range(5):
-                logon_id = ag.generate_logon(user, system, datetime.now())
+                logon_id = ag.generate_logon(user, system, datetime.now(), logon_type=3)
                 results_main.append(logon_id)
 
             # Generate events from worker threads
@@ -197,7 +198,7 @@ class TestThreadLocalRNG:
             def worker():
                 barrier.wait()  # Synchronize start
                 for _ in range(5):
-                    logon_id = ag.generate_logon(user, system, datetime.now())
+                    logon_id = ag.generate_logon(user, system, datetime.now(), logon_type=3)
                     results_thread.append(logon_id)
 
             threads = [Thread(target=worker) for _ in range(3)]

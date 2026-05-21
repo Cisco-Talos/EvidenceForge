@@ -37,6 +37,8 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
 - [ ] **IN PROGRESS** Run five family-level iteration-test assessment/fix loops using `eforge-assess`, starting from loop 173 P0/P1 findings.
+- [ ] **IN PROGRESS** Loop 178 durable Windows interactive-session follow-up — extend the loop-177 fix from second-scale Type 2 bursts to longer-window same-user workstation session reuse, then probe same-user Type 2 sessions before blind review.
+- [x] Loop 177 blind assessment and family-target selection — tight same-user Type 2 bursts dropped to zero in rendered probes, but blind average synthetic-confidence rose to 66.50 as reviewers surfaced longer-window interactive-session reuse, 4672 privilege realism, Zeek multi-sensor independence, and Sysmon PE metadata fidelity.
 - [x] Loop 176 blind assessment and family-target selection — bash workflow texture improved average synthetic-confidence from 70.50 to 61.50, and the next highest-leverage root cause is repeated same-user Type 2 workstation logon bursts from baseline session planning.
 - [x] Check regression-test coverage pattern for loop fixes and create a family-level iteration-loop improvement prompt — recent loop-era code fixes overwhelmingly include focused tests (136/138 sampled code `fix:` commits touched tests), so the new prompt emphasizes family-level model changes and probes instead of historical test backfill.
 - [x] Analyze iteration-test assessment loops for repeated findings, plateau causes, and durable realism improvements — conclusion: specific hard defects usually stay fixed, but broad source-native model families recur and the automated eval is saturated/misaligned with current expert findings.

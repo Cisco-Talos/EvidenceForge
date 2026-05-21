@@ -715,6 +715,30 @@ class WorldPlanner:
             storyline_protected=storyline_protected,
         ).session
 
+    def _find_windows_interactive_session(
+        self,
+        username: str,
+        target_system: System,
+        at_time: datetime,
+    ) -> ActiveSession | None:
+        """Return a durable same-user Windows interactive session, if one exists."""
+        host = self.world_model.hosts.get(target_system.hostname)
+        if host is None or host.os_category != "windows":
+            return None
+
+        cutoff = at_time.replace(tzinfo=UTC) if at_time.tzinfo is None else at_time.astimezone(UTC)
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user(username)
+            if session.system == target_system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and self._session_start_sort_key(session) <= cutoff
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=self._session_start_sort_key)
+
     def bootstrap_user_session(
         self,
         user: User,
@@ -727,6 +751,18 @@ class WorldPlanner:
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
+        if allow_existing and session_kind in (None, "interactive"):
+            existing_interactive = self._find_windows_interactive_session(
+                user.username,
+                target_system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                if storyline_protected:
+                    existing_interactive.storyline_protected = True
+                return SessionBootstrapResult(session=existing_interactive, network_uid=None)
+
         existing = self._find_user_session(
             user.username, target_system.hostname, session_kind, at_time=time
         )

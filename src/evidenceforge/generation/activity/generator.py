@@ -5337,6 +5337,15 @@ class ActivityGenerator:
         if logon_type == 10 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
             logon_type = 2
             source_ip = None
+        if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
+            existing_interactive = self._active_user_interactive_windows_session(
+                user,
+                system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                return existing_interactive.logon_id
         local_logon = logon_type in (2, 5, 7, 11)
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
@@ -11755,22 +11764,30 @@ class ActivityGenerator:
 
         # Process activities
         elif activity_type in PROCESS_TEMPLATES:
+            os_category = _get_os_category(system.os)
             # Get or create session for this user (with login cooldown)
-            sessions = self.state_manager.get_sessions_for_user(user.username)
-            active_session = (
-                next(
-                    (
-                        s
-                        for s in sessions
-                        if s.system == system.hostname
-                        and _session_started_by(s, time)
-                        and s.logon_type in (2, 10, 11)
-                    ),
-                    None,
+            if os_category == "windows":
+                active_session = self._active_user_interactive_windows_session(
+                    user,
+                    system,
+                    time,
                 )
-                if sessions
-                else None
-            )
+            else:
+                sessions = self.state_manager.get_sessions_for_user(user.username)
+                active_session = (
+                    next(
+                        (
+                            s
+                            for s in sessions
+                            if s.system == system.hostname
+                            and _session_active_for_activity(s, time)
+                            and s.logon_type in (2, 10, 11)
+                        ),
+                        None,
+                    )
+                    if sessions
+                    else None
+                )
 
             if active_session:
                 logon_id = active_session.logon_id
@@ -11782,8 +11799,6 @@ class ActivityGenerator:
                 logon_id = self.generate_logon(user, system, logon_time)
 
             # Phase 2.10: OS-aware process template selection
-            os_category = _get_os_category(system.os)
-
             # Map activity_type to catalog category
             _CATEGORY_MAP = {
                 "process_user_apps": "user_app",
@@ -14511,8 +14526,11 @@ class ActivityGenerator:
         "NETWORK SERVICE": "S-1-5-20",
     }
 
-    # Personas that represent admin/operator roles (get elevated privileges)
-    _ADMIN_PERSONAS = {"sysadmin", "security_analyst", "help_desk"}
+    # Personas that imply privileged Windows tokens without explicit group data.
+    # Help desk and security analyst roles often have delegated tools but should
+    # not automatically receive SeDebug/backup-style 4672 privileges on every
+    # routine workstation logon unless scenario groups mark them as admins.
+    _ADMIN_PERSONAS = {"sysadmin"}
 
     def _special_privilege_profile_name(
         self,

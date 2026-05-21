@@ -443,6 +443,34 @@ class TestActivityGenerator:
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
 
+    def test_generate_logon_reuses_active_workstation_session_over_long_window(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Repeated local workstation sign-ins should reuse the durable session."""
+        first_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        later_time = first_time + timedelta(minutes=45)
+        state_manager.set_current_time(first_time)
+
+        logon_id = activity_gen.generate_logon(test_user, test_system, first_time, logon_type=2)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        reused_logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            later_time,
+            logon_type=2,
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert reused_logon_id == logon_id
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert sessions[0].last_activity_time == later_time
+        emitted_types = [
+            call.args[0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "logon" not in emitted_types
+
     def test_interactive_logons_get_distinct_userinit_parents(
         self, activity_gen, test_user, test_system, state_manager
     ):
@@ -459,17 +487,29 @@ class TestActivityGenerator:
         )
         activity_gen._system_pids = {test_system.hostname: {"smss": smss_pid}}
 
+        other_user = User(
+            username="otheruser",
+            full_name="Other User",
+            email="other@example.com",
+            enabled=True,
+        )
+
         first_logon = activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=2)
         second_logon = activity_gen.generate_logon(
-            test_user,
+            other_user,
             test_system,
             timestamp + timedelta(minutes=30),
             logon_type=2,
         )
 
-        sessions = {
-            session.logon_id: session for session in state_manager.get_sessions_for_user("testuser")
-        }
+        sessions = {}
+        for username in ("testuser", "otheruser"):
+            sessions.update(
+                {
+                    session.logon_id: session
+                    for session in state_manager.get_sessions_for_user(username)
+                }
+            )
         first_explorer = state_manager.get_process(
             test_system.hostname, sessions[first_logon].explorer_pid
         )
@@ -947,6 +987,24 @@ class TestActivityGenerator:
     ):
         """Ordinary users should not receive 4672 without a privileged role."""
         assert activity_gen._should_elevate(test_user) is False
+
+    def test_help_desk_persona_does_not_imply_special_privileges(self, activity_gen, test_system):
+        """Delegated support users need explicit admin groups for 4672 privileges."""
+        user = User(
+            username="help.desk",
+            full_name="Help Desk",
+            email="help.desk@example.com",
+            persona="help_desk",
+            groups=["it-support"],
+            enabled=True,
+        )
+
+        assert activity_gen._special_privilege_profile_name(user, 2, test_system.hostname) == (
+            "regular_user"
+        )
+        assert activity_gen._should_elevate(user, logon_type=2, hostname=test_system.hostname) is (
+            False
+        )
 
     def test_generate_logon_interactive_uses_no_source_ip(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

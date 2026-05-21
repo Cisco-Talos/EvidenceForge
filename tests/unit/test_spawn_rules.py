@@ -945,7 +945,8 @@ class TestDualSessionParentSelection:
             user,
             win_system,
             datetime(2024, 3, 18, 11, 0, 0, tzinfo=UTC),
-            logon_type=2,
+            logon_type=10,
+            source_ip="10.0.10.50",
         )
         first_session = state_manager.get_session(first_logon_id)
         second_session = state_manager.get_session(second_logon_id)

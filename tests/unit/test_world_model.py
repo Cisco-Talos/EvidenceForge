@@ -268,6 +268,43 @@ def test_world_planner_preallocates_sessions_before_logon_emission(
     assert call_kwargs["logon_type"] == 2
 
 
+def test_world_planner_reuses_durable_windows_interactive_session(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+    users: dict[str, User],
+    mock_emitters: dict[str, Mock],
+) -> None:
+    """Later workstation activity should not bootstrap another Type 2 session."""
+    start_time = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
+    first = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=start_time,
+        rng=random.Random(17),
+        session_kind="interactive",
+        allow_existing=False,
+    )
+    mock_emitters["windows_event_security"].reset_mock()
+
+    second = planner.bootstrap_user_session(
+        user=users["alice.admin"],
+        target_system=systems["WKS-01"],
+        time=start_time + timedelta(minutes=55),
+        rng=random.Random(23),
+        session_kind="interactive",
+    )
+
+    assert second.session.logon_id == first.session.logon_id
+    assert state_manager.get_sessions_for_user("alice.admin") == [first.session]
+    assert first.session.last_activity_time == start_time + timedelta(minutes=55)
+    emitted_types = [
+        call.args[0].event_type
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+    ]
+    assert "logon" not in emitted_types
+
+
 def test_world_planner_bootstraps_ssh_session(
     planner: WorldPlanner,
     state_manager: StateManager,
