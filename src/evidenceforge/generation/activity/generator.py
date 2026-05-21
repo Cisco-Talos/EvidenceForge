@@ -7772,6 +7772,77 @@ class ActivityGenerator:
             return process.start_time + timedelta(milliseconds=offset_ms)
         return time
 
+    @staticmethod
+    def _ssh_responder_tuple_key(source_ip: str, source_port: int, target_ip: str) -> str:
+        return f"{source_ip}:{source_port}->{target_ip}:22/tcp"
+
+    def _remember_ssh_responder_pid(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+        pid: int,
+    ) -> None:
+        if pid <= 0:
+            return
+        if not hasattr(self, "_ssh_responder_pids"):
+            self._ssh_responder_pids: dict[str, int] = {}
+        self._ssh_responder_pids[
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        ] = pid
+
+    def ssh_responder_pid_for_tuple(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> int | None:
+        if not hasattr(self, "_ssh_responder_pids"):
+            return None
+        return self._ssh_responder_pids.get(
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        )
+
+    def ensure_linux_ssh_responder_process(
+        self,
+        *,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_port: int,
+    ) -> int:
+        """Return the destination-side sshd process that owns one SSH 5-tuple."""
+        remembered = self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
+        if remembered is not None:
+            running = self.state_manager.get_process(target_system.hostname, remembered)
+            if running is not None:
+                return remembered
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        global_sshd = sys_pids.get("sshd")
+        parent_pid = (
+            global_sshd
+            if global_sshd
+            and self.state_manager.get_process(target_system.hostname, global_sshd) is not None
+            else 0
+        )
+        sshd_seed = _stable_seed(
+            "ssh_responder_pid:"
+            f"{target_system.hostname}:{source_ip}:{source_port}:"
+            f"{target_system.ip}:{time.isoformat()}"
+        )
+        sshd_pid = self.generate_system_process(
+            system=target_system,
+            time=time + timedelta(milliseconds=8 + (sshd_seed % 72)),
+            process_name="/usr/sbin/sshd",
+            command_line="sshd: [accepted]",
+            parent_pid=parent_pid,
+            username="root",
+            emit_linux_syslog=False,
+        )
+        self._remember_ssh_responder_pid(source_ip, source_port, target_system.ip, sshd_pid)
+        return sshd_pid
+
     def reserve_ssh_source_port(
         self,
         source_ip: str,
@@ -9432,41 +9503,30 @@ class ActivityGenerator:
                     username="",
                 )
 
+        target_system = None
+        if dst_host_ctx is not None and hasattr(self, "_ip_to_system"):
+            target_system = self._ip_to_system.get(dst_host_ctx.ip)
+        target_has_ssh = target_system is not None and "ssh" in {
+            str(service_name).lower() for service_name in (target_system.services or [])
+        }
         if (
-            responding_pid <= 0
-            and dst_host_ctx is not None
+            dst_host_ctx is not None
             and dst_host_ctx.os_category == "linux"
+            and target_system is not None
             and proto == "tcp"
             and dst_port == 22
-            and service == "ssh"
             and conn_state == "SF"
+            and (service in {"", "ssh"} or target_has_ssh)
         ):
-            target_system = None
-            if hasattr(self, "_ip_to_system"):
-                target_system = self._ip_to_system.get(dst_host_ctx.ip)
-            if target_system is not None:
-                sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
-                global_sshd = sys_pids.get("sshd")
-                parent_pid = (
-                    global_sshd
-                    if global_sshd
-                    and self.state_manager.get_process(target_system.hostname, global_sshd)
-                    is not None
-                    else 0
+            if responding_pid <= 0:
+                responding_pid = self.ensure_linux_ssh_responder_process(
+                    target_system=target_system,
+                    time=time,
+                    source_ip=src_ip,
+                    source_port=src_port,
                 )
-                sshd_seed = _stable_seed(
-                    "generic_ssh_responding_pid:"
-                    f"{target_system.hostname}:{src_ip}:{src_port}:{dst_ip}:{time.isoformat()}"
-                )
-                responding_pid = self.generate_system_process(
-                    system=target_system,
-                    time=time + timedelta(milliseconds=8 + (sshd_seed % 72)),
-                    process_name="/usr/sbin/sshd",
-                    command_line="sshd: [accepted]",
-                    parent_pid=parent_pid,
-                    username="root",
-                    emit_linux_syslog=False,
-                )
+            else:
+                self._remember_ssh_responder_pid(src_ip, src_port, target_system.ip, responding_pid)
 
         event = SecurityEvent(
             timestamp=time,
@@ -10501,25 +10561,25 @@ class ActivityGenerator:
             accepted_delay_ms = conn_delay_ms + rng.randint(450, 3500)
             pam_delay_ms = accepted_delay_ms + rng.randint(45, 180)
             logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
-            if sshd_pid is None:
-                sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
-                global_sshd = sys_pids.get("sshd")
-                parent_pid = (
-                    global_sshd
-                    if global_sshd
-                    and self.state_manager.get_process(target_system.hostname, global_sshd)
-                    is not None
-                    else 0
-                )
-                sshd_pid = self.generate_system_process(
-                    system=target_system,
+            remembered_sshd_pid = self.ssh_responder_pid_for_tuple(
+                source_ip,
+                src_port,
+                target_system.ip,
+            )
+            if sshd_pid is None and remembered_sshd_pid is not None:
+                sshd_pid = remembered_sshd_pid
+            if (
+                sshd_pid is None
+                or self.state_manager.get_process(target_system.hostname, sshd_pid) is None
+            ):
+                sshd_pid = self.ensure_linux_ssh_responder_process(
+                    target_system=target_system,
                     time=time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
-                    process_name="/usr/sbin/sshd",
-                    command_line="sshd: [accepted]",
-                    parent_pid=parent_pid,
-                    username="root",
-                    emit_linux_syslog=False,
+                    source_ip=source_ip,
+                    source_port=src_port,
                 )
+            else:
+                self._remember_ssh_responder_pid(source_ip, src_port, target_system.ip, sshd_pid)
             event.network.responding_pid = sshd_pid
             if logon_id:
                 self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)

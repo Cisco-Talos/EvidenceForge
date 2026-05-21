@@ -4554,16 +4554,30 @@ class StorylineMixin:
         )
 
         self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
-        parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
-        sshd_pid = self.state_manager.create_process(
-            system=target_system.hostname,
-            parent_pid=parent_pid if parent_pid > 0 else 0,
-            image="/usr/sbin/sshd",
-            command_line=f"sshd: {target_user}@notty",
-            username=target_user,
-            integrity_level="High" if target_user == "root" else "Medium",
+        ensure_responder = getattr(
+            self.activity_generator,
+            "ensure_linux_ssh_responder_process",
+            None,
         )
+        if callable(ensure_responder):
+            sshd_pid = ensure_responder(
+                target_system=target_system,
+                time=transfer_time,
+                source_ip=source_system.ip,
+                source_port=source_port,
+            )
+        else:
+            parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
+            sshd_pid = self.state_manager.create_process(
+                system=target_system.hostname,
+                parent_pid=parent_pid if parent_pid > 0 else 0,
+                image="/usr/sbin/sshd",
+                command_line=f"sshd: {target_user}@notty",
+                username=target_user,
+                integrity_level="High" if target_user == "root" else "Medium",
+            )
         sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
+        parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
         ssh_syslog_seed = (
             target_system.hostname,
             source_system.ip,

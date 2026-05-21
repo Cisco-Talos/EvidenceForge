@@ -503,6 +503,7 @@ class TestSslContextPopulation:
             os="Ubuntu 24.04",
             type="server",
             roles=["web_server"],
+            services=["ssh"],
         )
         gen._ip_to_system = {target.ip: target}
 
@@ -531,6 +532,91 @@ class TestSslContextPopulation:
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid
 
+    def test_port_22_connection_without_service_sets_destination_side_transport_pid(
+        self, activity_gen
+    ):
+        gen, events = activity_gen
+
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            duration=0.4,
+            orig_bytes=120,
+            resp_bytes=200,
+            src_port=51111,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        transport_events = [
+            event
+            for event in events
+            if event.event_type == "system_process_create"
+            and event.process is not None
+            and event.process.command_line == "sshd: [accepted]"
+        ]
+        assert transport_events
+        assert conn_event.network.responding_pid == transport_events[0].process.pid
+
+    def test_ssh_session_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {target.ip: target}
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=4.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            conn_state="SF",
+        )
+        first_conn = next(event for event in events if event.event_type == "connection")
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 1, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        assert ssh_event.network.responding_pid == first_conn.network.responding_pid
+        syslog_pids = {
+            event.syslog.pid
+            for event in events
+            if event.syslog is not None and event.syslog.app_name == "sshd"
+        }
+        assert syslog_pids == {first_conn.network.responding_pid}
+
     def test_ssh_syslog_sub_events_are_source_ordered_with_subsecond_texture(self, activity_gen):
         gen, events = activity_gen
 
@@ -550,11 +636,13 @@ class TestSslContextPopulation:
             time=base_time,
             source_ip="10.0.10.50",
             source_port=51111,
-            sshd_pid=6505,
         )
 
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
         syslog_events = [
-            event for event in events if event.syslog is not None and event.syslog.pid == 6505
+            event
+            for event in events
+            if event.syslog is not None and event.syslog.pid == ssh_event.network.responding_pid
         ]
         messages = [event.syslog.message for event in syslog_events]
         times = [event.timestamp for event in syslog_events]
