@@ -1090,6 +1090,28 @@ class DnsTunnelTtlEntry(BaseModel, extra="forbid"):
     weight: float = Field(gt=0, allow_inf_nan=False)
 
 
+class ExternalScannerPortWeight(BaseModel, extra="forbid"):
+    """A weighted destination port in an external scanner profile."""
+
+    port: int = Field(ge=1, le=65535)
+    weight: float = Field(gt=0, allow_inf_nan=False)
+
+
+class ExternalScannerPortProfile(BaseModel, extra="forbid"):
+    """A source-sticky external scanner port preference profile."""
+
+    name: str
+    weight: float = Field(gt=0, allow_inf_nan=False)
+    ports: list[ExternalScannerPortWeight]
+
+    @field_validator("ports")
+    @classmethod
+    def ports_non_empty(cls, v: list[ExternalScannerPortWeight]) -> list[ExternalScannerPortWeight]:
+        if not v:
+            raise ValueError("ports must not be empty")
+        return v
+
+
 class WindowsFailedLogonLocalProfile(BaseModel, extra="forbid"):
     """Local interactive 4625 profile."""
 

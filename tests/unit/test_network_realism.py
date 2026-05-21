@@ -27,6 +27,10 @@ from evidenceforge.generation.activity.generator import (
     _UDP_OVERHEAD_WEIGHTS,
     _choose_ssl_history,
 )
+from evidenceforge.generation.activity.network_params import (
+    external_scanner_port_profile_for_source,
+    external_scanner_port_profiles,
+)
 from evidenceforge.generation.activity.proxy_user_agents import load_proxy_user_agents
 
 
@@ -66,6 +70,29 @@ class TestProtocolOverhead:
         assert counts[40] > 50
         # All 4 values should appear
         assert len(counts) == 4
+
+
+class TestExternalScannerProfiles:
+    """External scanner sources should have source-sticky, non-flat port preferences."""
+
+    def test_external_scanner_profiles_are_loaded(self):
+        profiles = external_scanner_port_profiles()
+
+        assert len(profiles) >= 4
+        assert all(profile["ports"] for profile in profiles)
+        assert any(profile["name"] == "web_recon" for profile in profiles)
+        assert any(profile["name"] == "windows_exposure" for profile in profiles)
+
+    def test_external_scanner_profiles_are_sticky_by_source(self):
+        observed = set()
+        for idx in range(40):
+            src_ip = f"198.51.100.{idx + 1}"
+            profile = external_scanner_port_profile_for_source(src_ip)
+
+            assert profile == external_scanner_port_profile_for_source(src_ip)
+            observed.add(profile["name"])
+
+        assert len(observed) >= 4
 
 
 class TestNtpTiming:

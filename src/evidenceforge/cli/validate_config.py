@@ -209,6 +209,7 @@ def validate_config() -> ValidationResult:
                 "oui_prefixes": None,
                 "public_ntp_servers": "name",
                 "dns_tunnel_ttl_choices": None,
+                "external_scanner_port_profiles": "name",
             },
             "dict_fields": {
                 "dns_tunnel_rtt",
@@ -1899,6 +1900,7 @@ def validate_config() -> ValidationResult:
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
         EndpointNoiseConfig,
+        ExternalScannerPortProfile,
         HostActivityProfilesConfig,
         KerberosRealismConfig,
         ObservationProfilesConfig,
@@ -2311,6 +2313,15 @@ def validate_config() -> ValidationResult:
                         "total dns_tunnel_ttl_choices weight must be finite",
                     )
                 )
+        scanner_profiles = net_params.get("external_scanner_port_profiles", [])
+        if scanner_profiles:
+            _SCHEMA_CHECKS.append(
+                (
+                    scanner_profiles,
+                    ExternalScannerPortProfile,
+                    "network_params.yaml (external_scanner_port_profiles)",
+                )
+            )
         rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
         allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
         if not isinstance(rcode_weights, dict) or not rcode_weights:

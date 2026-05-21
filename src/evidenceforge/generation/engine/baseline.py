@@ -70,6 +70,7 @@ from evidenceforge.generation.activity.ids_signatures import (
 )
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.activity.network import _generate_random_external_ip, _is_private_ip
+from evidenceforge.generation.activity.network_params import external_scanner_port_for_source
 from evidenceforge.generation.activity.process_access_patterns import (
     load_process_access_patterns,
     pick_granted_access,
@@ -2912,8 +2913,6 @@ class BaselineMixin:
         # Collect internal IPs from scenario systems
         internal_ips = [s.ip for s in self.scenario.environment.systems if s.ip]
 
-        # Commonly targeted ports for external scanning
-        _SCAN_PORTS = [22, 23, 80, 443, 445, 1433, 3389, 5432, 8080, 8443]
         # Ports rarely allowed in corporate firewalls
         _BLOCKED_PORTS = [23, 135, 137, 138, 139, 445, 1433, 3389, 5900, 6379]
 
@@ -3003,7 +3002,7 @@ class BaselineMixin:
                         k=1,
                     )[0]
                     dst_ip = _pick_public_scan_target()
-                    dst_port = rng.choice(_SCAN_PORTS)
+                    dst_port = external_scanner_port_for_source(src_ip, rng)
                     proto = "tcp"
                 elif roll < 0.80:
                     # Cross-segment blocked

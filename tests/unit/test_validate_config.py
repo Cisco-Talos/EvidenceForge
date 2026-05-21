@@ -939,6 +939,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_external_scanner_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {"name": "bad", "weight": 1, "ports": [{"port": 70000, "weight": 1}]}
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "less than or equal to 65535" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_overflowing_dns_tunnel_ttl_weight_total(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 

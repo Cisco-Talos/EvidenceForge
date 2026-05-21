@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import Any
 
 from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
-from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
 from evidenceforge.config.schemas import DnsTunnelRttConfig
 from evidenceforge.utils.rng import _stable_seed
 
@@ -38,6 +39,21 @@ _DEFAULT_PROXY_CONNECT_STATUS_MESSAGES: dict[int, list[str]] = {
     503: ["Service Unavailable"],
     504: ["Gateway Timeout"],
 }
+_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES: list[dict[str, Any]] = [
+    {
+        "name": "broad_low_rate",
+        "weight": 1.0,
+        "ports": [
+            {"port": 22, "weight": 1.0},
+            {"port": 23, "weight": 1.0},
+            {"port": 80, "weight": 1.0},
+            {"port": 443, "weight": 1.0},
+            {"port": 445, "weight": 1.0},
+            {"port": 3389, "weight": 1.0},
+            {"port": 8080, "weight": 1.0},
+        ],
+    }
+]
 
 
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +78,12 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         result["dns_tunnel_ttl_choices"] = extend_list(
             default.get("dns_tunnel_ttl_choices", []),
             overlay["dns_tunnel_ttl_choices"],
+        )
+    if "external_scanner_port_profiles" in overlay:
+        result["external_scanner_port_profiles"] = merge_keyed_list(
+            default.get("external_scanner_port_profiles", []),
+            overlay["external_scanner_port_profiles"],
+            "name",
         )
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
@@ -185,6 +207,61 @@ def dns_tunnel_rcode_weights() -> dict[str, float]:
 
     max_weight = max(cleaned.values())
     return {name: weight / max_weight for name, weight in cleaned.items()}
+
+
+def external_scanner_port_profiles() -> list[dict[str, Any]]:
+    """Return cleaned source-sticky external scanner destination-port profiles."""
+    raw_profiles = load_network_params().get("external_scanner_port_profiles", [])
+    if not isinstance(raw_profiles, list):
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    profiles: list[dict[str, Any]] = []
+    for raw_profile in raw_profiles:
+        if not isinstance(raw_profile, dict):
+            continue
+        name = str(raw_profile.get("name", "")).strip()
+        try:
+            profile_weight = float(raw_profile.get("weight", 1.0))
+        except (TypeError, ValueError):
+            continue
+        if not name or not math.isfinite(profile_weight) or profile_weight <= 0:
+            continue
+        ports: list[tuple[int, float]] = []
+        for raw_port in raw_profile.get("ports", []):
+            if not isinstance(raw_port, dict):
+                continue
+            try:
+                port = int(raw_port["port"])
+                weight = float(raw_port.get("weight", 1.0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 1 <= port <= 65535 and math.isfinite(weight) and weight > 0:
+                ports.append((port, weight))
+        if ports:
+            profiles.append({"name": name, "weight": profile_weight, "ports": ports})
+    return profiles or list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+
+def external_scanner_port_profile_for_source(src_ip: str) -> dict[str, Any]:
+    """Return a stable external scanner port profile for a scanner source IP."""
+    profiles = external_scanner_port_profiles()
+    rng = random.Random(_stable_seed(f"external_scanner_profile:{src_ip}"))
+    return rng.choices(
+        profiles,
+        weights=[float(profile["weight"]) for profile in profiles],
+        k=1,
+    )[0]
+
+
+def external_scanner_port_for_source(src_ip: str, rng: Any) -> int:
+    """Pick a destination port from the stable scanner profile for this source."""
+    profile = external_scanner_port_profile_for_source(src_ip)
+    ports = list(profile.get("ports", []))
+    if not ports:
+        return 443
+    values = [int(port) for port, _weight in ports]
+    weights = [float(weight) for _port, weight in ports]
+    return int(rng.choices(values, weights=weights, k=1)[0])
 
 
 def proxy_connect_status_messages() -> dict[int, list[str]]:
