@@ -1126,6 +1126,30 @@ class TestLinuxParentSelection:
         assert parent.image == "/bin/bash"
         assert parent.start_time >= scenario_start
 
+    def test_linux_resolve_parent_materializes_visible_shell_without_session(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Linux parent resolution should return the visible shell it materializes."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(hours=1, minutes=18)
+
+        parent_pid = ag._resolve_parent(
+            linux_system,
+            user,
+            event_time,
+            "",
+            "/usr/bin/grep",
+        )
+
+        assert parent_pid != pids["bash"]
+        parent = state_manager.get_process(linux_system.hostname, parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.username == user.username
+        assert parent.start_time >= scenario_start
+
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(
             hostname="WEB-EXT-01",

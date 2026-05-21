@@ -11118,13 +11118,17 @@ class ActivityGenerator:
                 parent_pid=parent_pid,
                 suppress_command_file_effect=True,
             )
+            running_proc = self.state_manager.get_process(system.hostname, pid)
+            actual_process_start = (
+                running_proc.start_time if running_proc is not None else process_time
+            )
             self._record_user_process(system, user, pid, image)
             lifetime = _linux_foreground_lifetime(image, process_command_line)
             if lifetime is not None:
                 termination_time = self._generate_bounded_foreground_process_termination(
                     user=user,
                     system=system,
-                    start_time=process_time,
+                    start_time=actual_process_start,
                     pid=pid,
                     process_name=image,
                     logon_id=session.logon_id,
@@ -12700,11 +12704,17 @@ class ActivityGenerator:
                             effect_command_line,
                         )
                         if lifetime is not None:
+                            running_proc = self.state_manager.get_process(system.hostname, pid)
+                            actual_process_start = (
+                                running_proc.start_time
+                                if running_proc is not None
+                                else process_time
+                            )
                             termination_time = (
                                 self._generate_bounded_foreground_process_termination(
                                     user=user,
                                     system=system,
-                                    start_time=process_time,
+                                    start_time=actual_process_start,
                                     pid=pid,
                                     process_name=effect_process_name,
                                     logon_id=logon_id,
@@ -12799,10 +12809,14 @@ class ActivityGenerator:
                     self._emit_bash_command_event(user, system, process_time, command_line)
                     lifetime = _linux_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
+                        running_proc = self.state_manager.get_process(system.hostname, pid)
+                        actual_process_start = (
+                            running_proc.start_time if running_proc is not None else process_time
+                        )
                         termination_time = self._generate_bounded_foreground_process_termination(
                             user=user,
                             system=system,
-                            start_time=process_time,
+                            start_time=actual_process_start,
                             pid=pid,
                             process_name=process_name,
                             logon_id=logon_id,
@@ -16171,14 +16185,6 @@ class ActivityGenerator:
             )
         is_network_logon = active_session and active_session.logon_type == 3
         is_service_logon = active_session and active_session.logon_type == 5
-        if os_cat == "linux" and active_session is not None:
-            self.ensure_linux_session_shell(
-                user=user,
-                target_system=system,
-                logon_id=active_session.logon_id,
-                logon_time=active_session.start_time,
-                activity_time=time,
-            )
         if is_network_logon:
             if remote_wrapper_pid is not None:
                 return remote_wrapper_pid
@@ -16244,6 +16250,29 @@ class ActivityGenerator:
             )
             if service_parent is not None:
                 return service_parent
+            shell_parent_allowed = not possible_parents or any(
+                parent in {"bash", "sh", "zsh"} for parent in possible_parents
+            )
+            if shell_parent_allowed:
+                if active_session is not None:
+                    session_shell_pid = self.ensure_linux_session_shell(
+                        user=user,
+                        target_system=system,
+                        logon_id=active_session.logon_id,
+                        logon_time=active_session.start_time,
+                        activity_time=time,
+                    )
+                    if session_shell_pid is not None:
+                        return session_shell_pid
+                visible_shell_pid = self.ensure_linux_visible_shell_parent(
+                    user=user,
+                    target_system=system,
+                    activity_time=time,
+                    logon_id=logon_id,
+                    logon_time=active_session.start_time if active_session is not None else None,
+                )
+                if visible_shell_pid is not None:
+                    return visible_shell_pid
             session_shell_pid = self._active_session_shell_pid(system, user, time, logon_id)
             if session_shell_pid is not None and any(
                 parent in {"bash", "sh", "zsh"} for parent in possible_parents
