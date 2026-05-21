@@ -14787,13 +14787,12 @@ class ActivityGenerator:
                 and remembered_dst == dst_ip
                 and remembered_dst_port == dst_port
                 and remembered_proto == proto
-                and seen_at <= ref_epoch
-                and ref_epoch - seen_at <= 1800
+                and abs(ref_epoch - seen_at) <= 1800
             ):
-                candidates.append((seen_at, remembered_port))
+                candidates.append((abs(ref_epoch - seen_at), remembered_port))
         if not candidates:
             return None
-        candidates.sort(reverse=True)
+        candidates.sort()
         return candidates[0][1]
 
     def generate_sensor_startup(

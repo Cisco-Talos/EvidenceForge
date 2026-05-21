@@ -230,7 +230,8 @@ class TestStorylineCommandNetworks:
         generator.state_manager = state
         generator._system_pids = {"WEB-EXT-01": {"apache2": apache_pid}}
         generator._recent_connection_tuples = {
-            ("185.70.41.45", 53742, "203.0.113.10", 443, "tcp"): ts.timestamp() - 5
+            ("185.70.41.45", 61522, "203.0.113.10", 443, "tcp"): ts.timestamp() - 1200,
+            ("185.70.41.45", 53742, "203.0.113.10", 443, "tcp"): ts.timestamp() + 26,
         }
         generator.dispatcher = SimpleNamespace(
             visibility_engine=SimpleNamespace(
