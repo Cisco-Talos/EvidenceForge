@@ -525,7 +525,10 @@ class TestWebAccessCorrelation:
         """Auto-generated HTTP contexts should not size static resources from flow bytes."""
         from evidenceforge.generation.activity import generator as generator_module
         from evidenceforge.generation.activity import proxy_uri
-        from evidenceforge.generation.activity.http_content import response_size_for_status
+        from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
+            response_size_for_status,
+        )
 
         monkeypatch.setattr(
             proxy_uri,
@@ -550,10 +553,13 @@ class TestWebAccessCorrelation:
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
         assert event.http.uri == "/favicon.ico"
-        assert event.http.response_body_len == response_size_for_status(
-            200,
-            "portal.example.com",
-            "/favicon.ico",
+        assert event.http.response_body_len == apply_transfer_size_variance(
+            response_size_for_status(200, "portal.example.com", "/favicon.ico"),
+            status_code=200,
+            host="portal.example.com",
+            uri="/favicon.ico",
+            content_type="image/x-icon",
+            variant_key=f"10.0.10.50:{event.http.user_agent}",
         )
         assert event.http.resp_mime_types == ["image/x-icon"]
 

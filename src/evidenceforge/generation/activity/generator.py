@@ -10021,6 +10021,7 @@ class ActivityGenerator:
                 ua = http_ua_override
             status_code, status_msg = _get_http_status(dst_ip, uri)
             from evidenceforge.generation.activity.http_content import (
+                apply_transfer_size_variance,
                 is_stable_resource_path,
                 response_mime_types_for_status,
                 response_size_for_mime,
@@ -10031,7 +10032,14 @@ class ActivityGenerator:
                 resp_body_len = 0
             else:
                 if status_code >= 300 or is_stable_resource_path(uri):
-                    resp_body_len = response_size_for_status(status_code, host, uri)
+                    resp_body_len = apply_transfer_size_variance(
+                        response_size_for_status(status_code, host, uri),
+                        status_code=status_code,
+                        host=host,
+                        uri=uri,
+                        content_type=mime_type,
+                        variant_key=f"{src_ip}:{ua}",
+                    )
                 else:
                     resp_body_len = resp_bytes or response_size_for_mime(rng, mime_type)
             from evidenceforge.generation.activity.referrer import pick_referrer
