@@ -4697,6 +4697,7 @@ class BaselineMixin:
             source_os=os_cat,
             browsing_intensity=intensity,
             port=conn.get("port", 443),
+            transfer_variant_key=f"{system.ip}:{hostname}:{os_cat}",
         )
 
         if not session_requests:
@@ -6797,6 +6798,7 @@ class BaselineMixin:
         from evidenceforge.events.contexts import HttpContext
         from evidenceforge.generation.activity.browsing_session import generate_browsing_session
         from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
             is_stable_resource_path,
             normalize_mime_type_for_path,
             response_mime_types_for_status,
@@ -6967,6 +6969,7 @@ class BaselineMixin:
                     browsing_intensity=str(profile.get("browsing_intensity", "normal")),
                     port=dst_port,
                     require_browser_like_domain=False,
+                    transfer_variant_key=f"{client_ip}:{chosen_ua}",
                 )
                 current_page_allowed = False
                 visible_requests = []
@@ -7067,7 +7070,14 @@ class BaselineMixin:
                 status = int(request.get("status", 200))
                 mime = normalize_mime_type_for_path(path, str(request.get("type", "text/html")))
                 resp_bytes = (
-                    response_size_for_status(status, http_host, path)
+                    apply_transfer_size_variance(
+                        response_size_for_status(status, http_host, path),
+                        status_code=status,
+                        host=http_host,
+                        uri=path,
+                        content_type=mime,
+                        variant_key=f"{client_ip}:{chosen_ua}",
+                    )
                     if status != 200 or is_stable_resource_path(path)
                     else response_size_for_mime(rng, mime)
                 )

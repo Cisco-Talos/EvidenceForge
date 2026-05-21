@@ -52,6 +52,7 @@ from evidenceforge.generation.activity.generator import (
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
+    apply_transfer_size_variance,
     is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
@@ -2202,7 +2203,14 @@ class StorylineMixin:
                         uri = f"{uri}?{parsed_url.query}"
                     mime_type = normalize_mime_type_for_path(uri, "text/plain")
                     response_body_len = (
-                        response_size_for_status(200, hostname, uri)
+                        apply_transfer_size_variance(
+                            response_size_for_status(200, hostname, uri),
+                            status_code=200,
+                            host=hostname,
+                            uri=uri,
+                            content_type=mime_type,
+                            variant_key=f"{system.ip}:{process_name}:{pid}",
+                        )
                         if is_stable_resource_path(uri)
                         else response_size_for_mime(rng, mime_type)
                     )
@@ -3694,7 +3702,14 @@ class StorylineMixin:
                 )
 
                 _response_body_len = (
-                    response_size_for_status(_status, scan_host, _uri)
+                    apply_transfer_size_variance(
+                        response_size_for_status(_status, scan_host, _uri),
+                        status_code=_status,
+                        host=scan_host,
+                        uri=_uri,
+                        content_type=_mime_type,
+                        variant_key=f"{scan_src_ip}:{scan_ua}",
+                    )
                     if _status >= 400 or is_stable_resource_path(_uri)
                     else response_size_for_mime(rng, _mime_type)
                 )

@@ -16,6 +16,7 @@ import random
 from dataclasses import dataclass
 
 from evidenceforge.generation.activity.http_content import (
+    apply_transfer_size_variance,
     is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
@@ -68,10 +69,24 @@ _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
 }
 
 
-def _response_size(rng: random.Random, hostname: str, path: str, content_type: str) -> int:
+def _response_size(
+    rng: random.Random,
+    hostname: str,
+    path: str,
+    content_type: str,
+    *,
+    transfer_variant_key: str | None = None,
+) -> int:
     """Generate a realistic response size for a given content type."""
     if is_stable_resource_path(path):
-        return response_size_for_status(200, hostname, path)
+        return apply_transfer_size_variance(
+            response_size_for_status(200, hostname, path),
+            status_code=200,
+            host=hostname,
+            uri=path,
+            content_type=content_type,
+            variant_key=transfer_variant_key,
+        )
     return response_size_for_mime(rng, content_type)
 
 
@@ -126,6 +141,8 @@ def _response_size_for_status_code(
     path: str,
     content_type: str,
     status_code: int,
+    *,
+    transfer_variant_key: str | None = None,
 ) -> int:
     """Generate a response body size consistent with the HTTP status."""
     if status_code in {204, 304}:
@@ -137,7 +154,13 @@ def _response_size_for_status_code(
         return max(128, int(full_size * rng.uniform(0.15, 0.65)))
     if status_code >= 400:
         return response_size_for_status(status_code, hostname, path)
-    return _response_size(rng, hostname, path, content_type)
+    return _response_size(
+        rng,
+        hostname,
+        path,
+        content_type,
+        transfer_variant_key=transfer_variant_key,
+    )
 
 
 def _sample_profile_timing_ms(
@@ -247,6 +270,7 @@ def generate_browsing_session(
     browsing_intensity: str = "normal",
     port: int = 443,
     require_browser_like_domain: bool = True,
+    transfer_variant_key: str | None = None,
 ) -> list[BrowsingRequest]:
     """Generate a complete browsing session as a list of HTTP requests.
 
@@ -264,6 +288,9 @@ def generate_browsing_session(
         require_browser_like_domain: When true, suppress sessions for
             certificate/update/telemetry domains. Set false for inbound
             web-server logs where the public host may not exist in dns_registry.
+        transfer_variant_key: Optional client/session key used to vary
+            source-visible bytes for cacheable resources while keeping origin
+            content stable.
 
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
@@ -358,6 +385,7 @@ def generate_browsing_session(
                     page.path,
                     page_content_type,
                     page_status,
+                    transfer_variant_key=transfer_variant_key,
                 ),
                 request_body_len=_request_size(rng, "GET"),
                 status_code=page_status,
@@ -399,6 +427,7 @@ def generate_browsing_session(
                         sub.path,
                         sub_content_type,
                         sub_status,
+                        transfer_variant_key=transfer_variant_key,
                     ),
                     request_body_len=_request_size(rng, sub.method),
                     status_code=sub_status,
