@@ -5248,6 +5248,35 @@ class TestActivityGenerator:
         assert "logon" in event_types
         assert "process_create" in event_types
 
+    def test_execute_baseline_activity_process_shifts_to_near_future_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Near-future workstation sessions should absorb out-of-order foreground work."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        future_logon_time = datetime(2024, 1, 15, 10, 4, 0, tzinfo=UTC)
+        state_manager.set_current_time(future_logon_time)
+        logon_id = activity_gen.generate_logon(test_user, test_system, future_logon_time)
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.execute_baseline_activity(test_user, test_system, process_time, "process_code")
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        assert [session.logon_id for session in sessions] == [logon_id]
+        emitter = mock_emitters["windows_event_security"]
+        emitted_events = [c[0][0] for c in emitter.emit.call_args_list]
+        event_types = [event.event_type for event in emitted_events]
+        assert "logon" not in event_types
+        process_events = [
+            event
+            for event in emitted_events
+            if event.event_type == "process_create"
+            and event.process is not None
+            and not event.process.image.endswith("explorer.exe")
+        ]
+        assert len(process_events) == 1
+        assert process_events[0].timestamp > future_logon_time
+        assert process_events[0].process.logon_id == logon_id
+
     def test_execute_baseline_linux_foreground_process_terminates_promptly(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

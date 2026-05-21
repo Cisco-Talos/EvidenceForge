@@ -3325,6 +3325,33 @@ class ActivityGenerator:
             return None
         return max(candidates, key=lambda session: session.start_time)
 
+    def _near_future_user_interactive_windows_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        *,
+        max_gap: timedelta = timedelta(minutes=10),
+    ) -> ActiveSession | None:
+        """Return a near-future Windows session that should own shifted baseline work."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        activity_time = ensure_utc(time)
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if (
+                session.system == system.hostname
+                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+                and session.session_kind not in {"network", "service"}
+                and activity_time < ensure_utc(session.start_time) <= activity_time + max_gap
+            )
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda session: ensure_utc(session.start_time))
+
     def _user_model_for_username(self, username: str) -> User:
         """Resolve a known scenario user, or build a safe fallback user object."""
         known_users = getattr(self, "_users_by_username", {})
@@ -11793,10 +11820,22 @@ class ActivityGenerator:
                 logon_id = active_session.logon_id
                 active_session.last_activity_time = time
             else:
-                # No active session on this system — create logon slightly before
-                # the process to maintain causal ordering
-                logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
-                logon_id = self.generate_logon(user, system, logon_time)
+                future_session = (
+                    self._near_future_user_interactive_windows_session(user, system, time)
+                    if os_category == "windows"
+                    else None
+                )
+                if future_session is not None:
+                    time = ensure_utc(future_session.start_time) + timedelta(
+                        seconds=_get_rng().uniform(20.0, 90.0)
+                    )
+                    logon_id = future_session.logon_id
+                    future_session.last_activity_time = time
+                else:
+                    # No active session on this system — create logon slightly before
+                    # the process to maintain causal ordering
+                    logon_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
+                    logon_id = self.generate_logon(user, system, logon_time)
 
             # Phase 2.10: OS-aware process template selection
             # Map activity_type to catalog category
