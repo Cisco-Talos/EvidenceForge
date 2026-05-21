@@ -4686,18 +4686,19 @@ class TestActivityGenerator:
         )
         activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
 
-        activity_gen.generate_connection(
-            src_ip=source.ip,
-            dst_ip=dc.ip,
-            time=timestamp,
-            dst_port=88,
-            proto="tcp",
-            service="kerberos",
-            duration=1.0,
-            orig_bytes=500,
-            resp_bytes=2500,
-            source_system=source,
-        )
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=True):
+            activity_gen.generate_connection(
+                src_ip=source.ip,
+                dst_ip=dc.ip,
+                time=timestamp,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=2500,
+                source_system=source,
+            )
 
         events = [
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
@@ -4713,6 +4714,55 @@ class TestActivityGenerator:
         assert service.timestamp < connection.timestamp
         assert (connection.timestamp - tgt.timestamp).total_seconds() < 1
         assert tgt.kerberos.source_port == connection.network.src_port
+        assert service.kerberos.source_port == connection.network.src_port
+
+    def test_generate_connection_can_use_cached_tgt_for_internal_kerberos_flows(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """Cached-TGT client flows can emit DC 4769 evidence without a fresh visible 4768."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        source = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.1.20",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["web_server"],
+        )
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.1.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+            services=["ad-ds", "kerberos"],
+            roles=["domain_controller"],
+        )
+        activity_gen._ip_to_system = {source.ip: source, dc.ip: dc}
+
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=False):
+            activity_gen.generate_connection(
+                src_ip=source.ip,
+                dst_ip=dc.ip,
+                time=timestamp,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=1.0,
+                orig_bytes=500,
+                resp_bytes=2500,
+                source_system=source,
+            )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        event_types = [event.event_type for event in events]
+        service = next(event for event in events if event.event_type == "kerberos_service")
+        connection = next(event for event in events if event.event_type == "connection")
+
+        assert "kerberos_tgt" not in event_types
+        assert service.timestamp < connection.timestamp
+        assert service.kerberos.target_username == "WEB-EXT-01$@CORP.LOCAL"
         assert service.kerberos.source_port == connection.network.src_port
 
     def test_generate_connection_reuses_recent_kdc_audit_for_kerberos_flows(

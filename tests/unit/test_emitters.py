@@ -1098,6 +1098,7 @@ class TestWindowsEventEmitter:
         emitter._shift_kerberos_tgts_before_service_tickets()
 
         assert tgt["TimeCreated"] < tgs["TimeCreated"]
+        assert tgt["TimeCreated"].microsecond % 1000 != tgs["TimeCreated"].microsecond % 1000
 
     def test_kerberos_tgt_shift_uses_source_port_specific_key(self, format_def, temp_output):
         """An older TGT on a different client port should not satisfy a later TGS."""

@@ -25,7 +25,7 @@
 import random
 import re
 from datetime import UTC, datetime, timedelta
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -922,21 +922,22 @@ class TestInfrastructureDetection:
         activity_gen._dc_systems = [dc]
         ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
 
-        activity_gen.generate_connection(
-            src_ip=client.ip,
-            dst_ip=dc.ip,
-            time=ts,
-            dst_port=88,
-            proto="udp",
-            service="kerberos",
-            duration=0.015,
-            orig_bytes=260,
-            resp_bytes=260,
-            src_port=49937,
-            source_system=client,
-            conn_state="SF",
-            emit_dns=False,
-        )
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=True):
+            activity_gen.generate_connection(
+                src_ip=client.ip,
+                dst_ip=dc.ip,
+                time=ts,
+                dst_port=88,
+                proto="udp",
+                service="kerberos",
+                duration=0.015,
+                orig_bytes=260,
+                resp_bytes=260,
+                src_port=49937,
+                source_system=client,
+                conn_state="SF",
+                emit_dns=False,
+            )
 
         audit_events = [
             call[0][0]
@@ -973,21 +974,22 @@ class TestInfrastructureDetection:
         activity_gen._dc_systems = [dc]
         ts = datetime(2024, 3, 18, 13, 18, 22, tzinfo=UTC)
 
-        activity_gen.generate_connection(
-            src_ip=client.ip,
-            dst_ip=dc.ip,
-            time=ts,
-            dst_port=88,
-            proto="tcp",
-            service="kerberos",
-            duration=0.2,
-            orig_bytes=600,
-            resp_bytes=1600,
-            src_port=56502,
-            source_system=client,
-            conn_state="SF",
-            emit_dns=False,
-        )
+        with patch.object(activity_gen, "_should_emit_visible_kerberos_tgt", return_value=True):
+            activity_gen.generate_connection(
+                src_ip=client.ip,
+                dst_ip=dc.ip,
+                time=ts,
+                dst_port=88,
+                proto="tcp",
+                service="kerberos",
+                duration=0.2,
+                orig_bytes=600,
+                resp_bytes=1600,
+                src_port=56502,
+                source_system=client,
+                conn_state="SF",
+                emit_dns=False,
+            )
 
         audit_events = [
             call[0][0]

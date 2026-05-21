@@ -4179,15 +4179,18 @@ class BaselineMixin:
                         dc_hostname = rng.choice(dc_hostnames)
                     if dc_hostname:
                         machine_principal = f"{system.hostname}$"
-                        tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
-                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
-                        if tgs_time <= tgt_time:
-                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
-                        self.activity_generator.generate_kerberos_tgt(
+                        tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
+                            ts,
+                            rng,
+                            tgs_before_ms=(8, 65),
+                            tgt_before_tgs_ms=(35, 240),
+                        )
+                        self.activity_generator._maybe_generate_kerberos_tgt(
                             username=machine_principal,
                             source_ip=system.ip,
                             dc_hostname=dc_hostname,
                             time=tgt_time,
+                            rng=rng,
                         )
                         service_name = rng.choices(
                             [
@@ -4410,15 +4413,18 @@ class BaselineMixin:
                         ):
                             dc_hostname = system.hostname
                             machine_principal = f"{src_sys.hostname}$"
-                            tgt_time = ts - timedelta(milliseconds=rng.randint(70, 240))
-                            tgs_time = ts - timedelta(milliseconds=rng.randint(8, 65))
-                            if tgs_time <= tgt_time:
-                                tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
-                            self.activity_generator.generate_kerberos_tgt(
+                            tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
+                                ts,
+                                rng,
+                                tgs_before_ms=(8, 65),
+                                tgt_before_tgs_ms=(35, 240),
+                            )
+                            self.activity_generator._maybe_generate_kerberos_tgt(
                                 username=machine_principal,
                                 source_ip=src_ip,
                                 dc_hostname=dc_hostname,
                                 time=tgt_time,
+                                rng=rng,
                             )
                             service_name = rng.choices(
                                 [
@@ -5075,15 +5081,18 @@ class BaselineMixin:
                         dc_hostname = rng.choice(dc_hostnames)
                     if dc_hostname:
                         machine_principal = f"{system.hostname}$"
-                        tgt_time = ts - timedelta(milliseconds=rng.randint(60, 220))
-                        tgs_time = ts - timedelta(milliseconds=rng.randint(8, 55))
-                        if tgs_time <= tgt_time:
-                            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(12, 48))
-                        self.activity_generator.generate_kerberos_tgt(
+                        tgt_time, tgs_time = self.activity_generator._kerberos_ticket_times(
+                            ts,
+                            rng,
+                            tgs_before_ms=(8, 55),
+                            tgt_before_tgs_ms=(35, 220),
+                        )
+                        self.activity_generator._maybe_generate_kerberos_tgt(
                             username=machine_principal,
                             source_ip=system.ip,
                             dc_hostname=dc_hostname,
                             time=tgt_time,
+                            rng=rng,
                         )
                         service_name = rng.choices(
                             [

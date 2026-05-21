@@ -1694,7 +1694,13 @@ class WindowsEventEmitter(LogEmitter):
                 _stable_seed(f"kerberos_tgt_before_tgs:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}")
                 % 181
             )
-            new_time = ts - timedelta(milliseconds=gap_ms)
+            gap_us = 41 + (
+                _stable_seed(
+                    f"kerberos_tgt_before_tgs_us:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}"
+                )
+                % 911
+            )
+            new_time = ts - timedelta(milliseconds=gap_ms, microseconds=gap_us)
             tgt_event["TimeCreated"] = new_time
             prior_tgt_by_key[key] = new_time
             moved.add(tgt_rowid)

@@ -2732,6 +2732,7 @@ class ActivityGenerator:
         self._recent_connection_tuples: dict[tuple[str, int, str, int, str], float] = {}
         self._kerberos_source_port_reservations: dict[tuple[str, str], list[tuple[float, int]]] = {}
         self._kerberos_audit_tuple_times: dict[tuple[str, str, int], list[float]] = {}
+        self._kerberos_tgt_cache_until: dict[tuple[str, str, str], datetime] = {}
         self._next_icmp_observation_ts_us: dict[tuple[str, int, str, int], int] = {}
         self._ssh_source_ports: set[tuple[str, str, int]] = set()
         self._terminated_process_keys: set[tuple[str, int, datetime | None]] = set()
@@ -3488,6 +3489,121 @@ class ActivityGenerator:
     def _kerberos_port_key(source_ip: str, dc_hostname: str) -> tuple[str, str]:
         """Return the source/DC key used for short Kerberos TCP exchanges."""
         return (source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."))
+
+    @staticmethod
+    def _kerberos_tgt_cache_key(
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+    ) -> tuple[str, str, str]:
+        """Return the source-native TGT cache identity for one client/DC account."""
+        principal = username.split("@", 1)[0].upper()
+        return (principal, source_ip.removeprefix("::ffff:"), dc_hostname.lower().rstrip("."))
+
+    @staticmethod
+    def _kerberos_source_time(
+        time: datetime,
+        *,
+        event_type: str,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        source_port: int,
+        service_name: str = "",
+    ) -> datetime:
+        """Return a source-native Kerberos audit timestamp with sub-ms texture."""
+        seed = _stable_seed(
+            "kerberos_source_time:"
+            f"{event_type}:{username}:{source_ip}:{dc_hostname}:{source_port}:"
+            f"{service_name}:{time.isoformat()}"
+        )
+        # Windows event timestamps are not obtained by adding whole milliseconds
+        # to a shared base event. Add deterministic sub-ms texture so related
+        # Kerberos rows do not preserve identical fractional suffixes.
+        return time + timedelta(microseconds=37 + (seed % 937))
+
+    @staticmethod
+    def _kerberos_ticket_times(
+        anchor_time: datetime,
+        rng: random.Random,
+        *,
+        tgs_before_ms: tuple[int, int] = (12, 90),
+        tgt_before_tgs_ms: tuple[int, int] = (35, 240),
+    ) -> tuple[datetime, datetime]:
+        """Return source-native-ish TGT and TGS times before an anchor event."""
+        tgs_time = anchor_time - timedelta(
+            milliseconds=rng.randint(*tgs_before_ms),
+            microseconds=rng.randint(83, 941),
+        )
+        tgt_time = tgs_time - timedelta(
+            milliseconds=rng.randint(*tgt_before_tgs_ms),
+            microseconds=rng.randint(97, 953),
+        )
+        return tgt_time, tgs_time
+
+    def _remember_kerberos_tgt_cache(
+        self,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Remember that a client has a reusable TGT beyond this visible moment."""
+        key = self._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
+        base_ttl = rng.randint(45 * 60, 8 * 60 * 60)
+        if username.endswith("$"):
+            base_ttl = rng.randint(60 * 60, 10 * 60 * 60)
+        expires_at = ensure_utc(time) + timedelta(seconds=base_ttl)
+        current = self._kerberos_tgt_cache_until.get(key)
+        self._kerberos_tgt_cache_until[key] = (
+            max(current, expires_at) if current is not None else expires_at
+        )
+
+    def _should_emit_visible_kerberos_tgt(
+        self,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        rng: random.Random,
+    ) -> bool:
+        """Return whether a TGS should be preceded by a visible fresh TGT."""
+        key = self._kerberos_tgt_cache_key(username, source_ip, dc_hostname)
+        current_time = ensure_utc(time)
+        cached_until = self._kerberos_tgt_cache_until.get(key)
+        if cached_until is not None and cached_until > current_time:
+            return rng.random() < 0.08
+
+        pre_window_cache_probability = 0.55 if username.endswith("$") else 0.35
+        if rng.random() < pre_window_cache_probability:
+            self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
+            return False
+        return True
+
+    def _maybe_generate_kerberos_tgt(
+        self,
+        *,
+        username: str,
+        source_ip: str,
+        dc_hostname: str,
+        time: datetime,
+        rng: random.Random,
+        source_port: int | None = None,
+        domain: str = "",
+    ) -> bool:
+        """Emit a TGT only when the client should not be using a cached ticket."""
+        if not self._should_emit_visible_kerberos_tgt(username, source_ip, dc_hostname, time, rng):
+            return False
+        self.generate_kerberos_tgt(
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=time,
+            domain=domain,
+            source_port=source_port,
+        )
+        return True
 
     @staticmethod
     def _is_domain_controller_system(system: Any | None) -> bool:
@@ -5729,15 +5845,18 @@ class ActivityGenerator:
 
         # TGT and service ticket requests both precede the target-host 4624.
         # Keep TGT before TGS, and TGS before member-host logon.
-        tgs_offset_ms = rng.randint(20, 100)
-        tgt_gap_ms = rng.randint(20, 100)
-        tgs_time = time - timedelta(milliseconds=tgs_offset_ms)
-        tgt_time = tgs_time - timedelta(milliseconds=tgt_gap_ms)
-        self.generate_kerberos_tgt(
+        tgt_time, tgs_time = self._kerberos_ticket_times(
+            time,
+            rng,
+            tgs_before_ms=(20, 100),
+            tgt_before_tgs_ms=(35, 240),
+        )
+        self._maybe_generate_kerberos_tgt(
             username=user.username,
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgt_time,
+            rng=rng,
         )
 
         role_names = {str(role).lower() for role in (getattr(system, "roles", []) or [])}
@@ -7635,16 +7754,19 @@ class ActivityGenerator:
                 f"{src_ip}:{dst_ip}:{source_system.hostname}:{time.timestamp()}"
             )
         )
-        tgt_time = time - timedelta(milliseconds=rng.randint(80, 260))
-        tgs_time = time - timedelta(milliseconds=rng.randint(12, 75))
-        if tgs_time <= tgt_time:
-            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+        tgt_time, tgs_time = self._kerberos_ticket_times(
+            time,
+            rng,
+            tgs_before_ms=(12, 75),
+            tgt_before_tgs_ms=(35, 260),
+        )
         machine_principal = f"{source_system.hostname}$"
-        self.generate_kerberos_tgt(
+        self._maybe_generate_kerberos_tgt(
             username=machine_principal,
             source_ip=src_ip,
             dc_hostname=dc_hostname,
             time=tgt_time,
+            rng=rng,
             source_port=src_port,
         )
         service_name = rng.choices(
@@ -12261,10 +12383,12 @@ class ActivityGenerator:
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
         logon_id = self.state_manager.allocate_logon_id(dc_hostname, time)
-        tgt_time = time - timedelta(milliseconds=rng.randint(70, 220))
-        tgs_time = time - timedelta(milliseconds=rng.randint(8, 65))
-        if tgs_time <= tgt_time:
-            tgs_time = tgt_time + timedelta(milliseconds=rng.randint(15, 55))
+        tgt_time, tgs_time = self._kerberos_ticket_times(
+            time,
+            rng,
+            tgs_before_ms=(8, 65),
+            tgt_before_tgs_ms=(35, 220),
+        )
         self.generate_kerberos_tgt(
             username=machine_username,
             source_ip=source_ip,
@@ -12362,6 +12486,14 @@ class ActivityGenerator:
             time,
             source_port,
         )
+        time = self._kerberos_source_time(
+            time,
+            event_type="kerberos_tgt",
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            source_port=source_port,
+        )
 
         event = SecurityEvent(
             timestamp=time,
@@ -12390,6 +12522,7 @@ class ActivityGenerator:
             time,
             source_port=source_port,
         )
+        self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
         self.dispatcher.dispatch(event)
 
     def generate_kerberos_tgt_renewal(
@@ -12411,6 +12544,14 @@ class ActivityGenerator:
             dc_hostname,
             time,
             source_port,
+        )
+        time = self._kerberos_source_time(
+            time,
+            event_type="kerberos_tgt_renewal",
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            source_port=source_port,
         )
 
         event = SecurityEvent(
@@ -12436,6 +12577,7 @@ class ActivityGenerator:
             time,
             source_port=source_port,
         )
+        self._remember_kerberos_tgt_cache(username, source_ip, dc_hostname, time, rng)
         self.dispatcher.dispatch(event)
 
     def generate_kerberos_service_ticket(
@@ -12458,6 +12600,15 @@ class ActivityGenerator:
             dc_hostname,
             time,
             source_port,
+        )
+        time = self._kerberos_source_time(
+            time,
+            event_type="kerberos_service",
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            source_port=source_port,
+            service_name=service_name,
         )
 
         event = SecurityEvent(
