@@ -357,10 +357,22 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.source_port > 0
     assert session.transport_pid is not None
     assert session.session_shell_pid is not None
+    assert session.source_ready_time is not None
     shell = state_manager.get_process(systems["DB-01"].hostname, session.session_shell_pid)
     assert shell is not None
     assert shell.image == "/bin/bash"
     assert shell.logon_id == session.logon_id
+    assert shell.start_time >= session.source_ready_time
+
+    early_command_time = session.source_ready_time - timedelta(seconds=1)
+    command_time = activity_generator.generate_bash_command(
+        users["alice.admin"],
+        systems["DB-01"],
+        early_command_time,
+        "whoami",
+    )
+    assert command_time is not None
+    assert command_time >= session.source_ready_time
 
     process_events = [
         call.args[0]

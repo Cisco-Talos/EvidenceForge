@@ -1017,6 +1017,12 @@ def _session_active_for_activity(
     return activity_time < network_close_time - timedelta(seconds=margin_seconds)
 
 
+def _session_source_ready_time(session: Any) -> datetime | None:
+    """Return when source-visible child activity may begin for this session."""
+    ready_time = getattr(session, "source_ready_time", None)
+    return ensure_utc(ready_time) if ready_time is not None else None
+
+
 def _extract_image_from_command(command_line: str) -> str:
     """Extract an executable image from a command line without truncating paths with spaces."""
     cleaned = command_line.strip()
@@ -10452,6 +10458,8 @@ class ActivityGenerator:
         )
 
         accepted_time: datetime | None = None
+        pam_time: datetime | None = None
+        logind_time: datetime | None = None
         # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
@@ -10473,6 +10481,8 @@ class ActivityGenerator:
                 accepted_delay_ms,
                 *ssh_syslog_seed,
             )
+            pam_time = _ssh_syslog_time(time, "pam", pam_delay_ms, *ssh_syslog_seed)
+            logind_time = _ssh_syslog_time(time, "logind", logind_delay_ms, *ssh_syslog_seed)
 
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
@@ -10500,7 +10510,7 @@ class ActivityGenerator:
                 "source.ecar_ssh_session_after_accept",
                 seed_parts=ssh_syslog_seed,
             )
-            self._source_timing_planner.source_time(
+            ecar_login_time = self._source_timing_planner.source_time(
                 event,
                 "source.ecar_session",
                 seed_parts=(
@@ -10514,8 +10524,19 @@ class ActivityGenerator:
                     session_obj_id,
                     event.timestamp,
                 ),
-                not_before=accepted_time + ecar_after_accept_gap,
+                not_before=pam_time + ecar_after_accept_gap,
             )
+            if logon_id:
+                ready_seed = _stable_seed(
+                    "ssh_session_source_ready:"
+                    f"{target_system.hostname}:{user.username}:{source_ip}:"
+                    f"{src_port}:{logon_id}:{time.isoformat()}"
+                )
+                self.state_manager.update_session_metadata(
+                    logon_id,
+                    source_ready_time=ecar_login_time
+                    + timedelta(milliseconds=80 + (ready_seed % 160)),
+                )
 
         self.dispatcher.dispatch(event)
 
@@ -10524,6 +10545,8 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             assert accepted_time is not None
+            assert pam_time is not None
+            assert logind_time is not None
             accepted_event = SecurityEvent(
                 timestamp=accepted_time,
                 event_type="syslog",
@@ -10544,7 +10567,7 @@ class ActivityGenerator:
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             hostname = target_system.hostname
             pam_event = SecurityEvent(
-                timestamp=_ssh_syslog_time(time, "pam", pam_delay_ms, *ssh_syslog_seed),
+                timestamp=pam_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -10561,7 +10584,6 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
-            logind_time = _ssh_syslog_time(time, "logind", logind_delay_ms, *ssh_syslog_seed)
             # Session ID: monotonic + unique per host. StateManager owns this
             # sequence because baseline syslog noise and explicit SSH sessions
             # both produce systemd-logind messages for the same host.
@@ -10617,11 +10639,12 @@ class ActivityGenerator:
                 activity_time,
             ):
                 shell_start = ensure_utc(shell_proc.start_time)
+                source_ready_time = _session_source_ready_time(session)
                 if (
                     scenario_start is None
                     or activity_time < scenario_start
                     or shell_start >= scenario_start
-                ):
+                ) and (source_ready_time is None or shell_start >= source_ready_time):
                     return session.session_shell_pid
 
         sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
@@ -10636,8 +10659,12 @@ class ActivityGenerator:
             "linux_ssh_session_shell:"
             f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
         )
+        source_ready_time = _session_source_ready_time(session)
+        source_floor = logon_time + timedelta(milliseconds=150)
+        if source_ready_time is not None:
+            source_floor = max(source_floor, source_ready_time + timedelta(milliseconds=50))
         sshd_delay_ms = 900 + (shell_seed % 1400)
-        sshd_time = logon_time + timedelta(milliseconds=sshd_delay_ms)
+        sshd_time = max(logon_time + timedelta(milliseconds=sshd_delay_ms), source_floor)
         if (
             scenario_start is not None
             and activity_time >= scenario_start
@@ -10646,8 +10673,9 @@ class ActivityGenerator:
             pre_command_gap = timedelta(seconds=5 + (shell_seed % 95))
             scenario_floor = scenario_start + timedelta(milliseconds=500 + (shell_seed % 3000))
             sshd_time = max(scenario_floor, activity_time - pre_command_gap)
-        latest_parent_time = activity_time - timedelta(milliseconds=500)
-        if sshd_time > latest_parent_time:
+        effective_activity_time = max(activity_time, sshd_time + timedelta(milliseconds=700))
+        latest_parent_time = effective_activity_time - timedelta(milliseconds=500)
+        if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
             sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
 
         session_sshd_pid = self.generate_system_process(
@@ -10661,8 +10689,11 @@ class ActivityGenerator:
         )
 
         bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
-        latest_bash_time = activity_time - timedelta(milliseconds=120)
-        if bash_time > latest_bash_time:
+        effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
+        latest_bash_time = effective_activity_time - timedelta(milliseconds=120)
+        if bash_time > latest_bash_time and latest_bash_time >= sshd_time + timedelta(
+            milliseconds=20
+        ):
             bash_time = max(sshd_time + timedelta(milliseconds=20), latest_bash_time)
 
         bash_pid = self.generate_process(
@@ -11174,6 +11205,12 @@ class ActivityGenerator:
         command: str,
     ) -> datetime:
         """Preserve foreground command dwell time for one user's shell history."""
+        requested_time = self._align_linux_bash_after_session_ready(
+            user,
+            system,
+            requested_time,
+            command,
+        )
         key = (system.hostname, user.username)
         scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
         scheduled_time = self._reserve_bash_history_second(user, system, scheduled_time, command)
@@ -11209,6 +11246,36 @@ class ActivityGenerator:
         self._bash_history_command_counts[key] = self._bash_history_command_counts.get(key, 0) + 1
         self._bash_history_next_time[key] = scheduled_time + timedelta(seconds=dwell_seconds)
         return scheduled_time
+
+    def _align_linux_bash_after_session_ready(
+        self,
+        user: User,
+        system: System,
+        requested_time: datetime,
+        command: str,
+    ) -> datetime:
+        """Shift visible Linux shell commands after SSH auth/PAM/eCAR session readiness."""
+        if _get_os_category(system.os) != "linux":
+            return requested_time
+        activity_time = ensure_utc(requested_time)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind == "ssh"
+            and _session_active_for_activity(session, activity_time)
+        ]
+        if not sessions:
+            return requested_time
+        session = max(sessions, key=lambda candidate: ensure_utc(candidate.start_time))
+        ready_time = _session_source_ready_time(session)
+        if ready_time is None or activity_time >= ready_time:
+            return requested_time
+        ready_seed = _stable_seed(
+            "linux_bash_after_ssh_ready:"
+            f"{system.hostname}:{user.username}:{session.logon_id}:{command}:{activity_time}"
+        )
+        return ready_time + timedelta(milliseconds=180 + (ready_seed % 420))
 
     def _reserve_bash_history_second(
         self,

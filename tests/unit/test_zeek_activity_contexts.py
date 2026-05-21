@@ -535,6 +535,12 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None and event.syslog.message.startswith("Accepted password")
         )
+        pam_event = next(
+            event
+            for event in events
+            if event.syslog is not None
+            and event.syslog.message.startswith("pam_unix(sshd:session)")
+        )
         ecar_login_time = gen._source_timing_planner.source_time(
             ssh_event,
             "source.ecar_session",
@@ -552,7 +558,8 @@ class TestSslContextPopulation:
         )
 
         assert ecar_login_time > accepted_event.timestamp
-        assert ecar_login_time > accepted_event.timestamp + timedelta(milliseconds=250)
+        assert ecar_login_time > pam_event.timestamp
+        assert ecar_login_time > pam_event.timestamp + timedelta(milliseconds=250)
         delayed_for_observation_profile = replace(
             ssh_event,
             timestamp=ssh_event.timestamp + timedelta(milliseconds=750),

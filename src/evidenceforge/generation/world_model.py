@@ -801,7 +801,13 @@ class WorldPlanner:
             source_system=source_system,
             source_ip_override=source_ip_override,
         )
-        logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
+        if plan.session_kind == "ssh":
+            # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
+            # process evidence. Give that source-native sequence room before
+            # the first user-visible command tied to the session.
+            logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+        else:
+            logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":

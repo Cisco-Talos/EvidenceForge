@@ -479,6 +479,7 @@ class StateManager:
         session_kind: str | None = None,
         transport_pid: int | None = None,
         network_close_time: datetime | None = None,
+        source_ready_time: datetime | None = None,
         logon_guid: str | None = None,
         session_id: int | None = None,
     ) -> bool:
@@ -501,6 +502,8 @@ class StateManager:
                 session.transport_pid = transport_pid
             if network_close_time is not None:
                 session.network_close_time = ensure_utc(network_close_time)
+            if source_ready_time is not None:
+                session.source_ready_time = ensure_utc(source_ready_time)
             if logon_guid is not None:
                 session.logon_guid = logon_guid
             if session_id is not None:
