@@ -1053,6 +1053,8 @@ class SysmonEventEmitter(LogEmitter):
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
+        if auth.session_id > 0:
+            return auth.session_id
         if auth.logon_type in {2, 7, 10, 11}:
             return 1 + (_stable_seed(f"sysmon_terminal_session:{logon_id or username}") % 8)
         return 0

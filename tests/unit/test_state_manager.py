@@ -347,6 +347,61 @@ class TestSessionManagement:
         assert session.system == "WS-01"
         assert session.logon_type == 2
         assert session.source_ip == "192.168.1.50"
+        assert session.session_id > 0
+        assert sm.get_session_id(logon_id) == session.session_id
+
+    def test_windows_session_ids_are_canonical_and_collision_safe(self):
+        """Overlapping Windows interactive sessions should not hash-collide by LogonID."""
+        sm = StateManager()
+        base = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(base)
+
+        console = sm.create_session(
+            "aisha.johnson",
+            "WS-AJOHNSON-01",
+            2,
+            "-",
+            session_kind="interactive",
+        )
+        rdp = sm.create_session(
+            "aisha.johnson",
+            "WS-AJOHNSON-01",
+            10,
+            "10.10.1.10",
+            session_kind="rdp",
+            start_time=base + timedelta(minutes=5),
+        )
+        network = sm.create_session(
+            "aisha.johnson",
+            "WS-AJOHNSON-01",
+            3,
+            "10.10.1.20",
+            session_kind="network",
+            start_time=base + timedelta(minutes=6),
+        )
+
+        console_session_id = sm.get_session_id(console)
+        rdp_session_id = sm.get_session_id(rdp)
+
+        assert console_session_id > 0
+        assert rdp_session_id > 0
+        assert console_session_id != rdp_session_id
+        assert sm.get_session_id(network) == 0
+
+    def test_ssh_sessions_do_not_get_windows_session_ids(self):
+        """Linux SSH-style sessions should not consume Windows terminal IDs."""
+        sm = StateManager()
+        sm.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
+
+        ssh = sm.create_session(
+            "marcus.chen",
+            "DB-PROD-01",
+            10,
+            "10.10.1.10",
+            session_kind="ssh",
+        )
+
+        assert sm.get_session_id(ssh) == 0
 
     def test_create_session_uses_host_local_monotonic_luids(self):
         """New LogonIDs on one host should follow source-native LUID ordering."""
@@ -522,6 +577,8 @@ class TestSessionManagement:
         assert sm.get_session(original) is session
         assert session.start_time == datetime(2024, 1, 15, 15, 39, 9, 751464, UTC)
         assert int(reassigned, 16) > int(intervening, 16)
+        assert sm.get_session_id(original) == session.session_id
+        assert sm.get_session_id(reassigned) == session.session_id
 
     def test_create_session_keeps_host_ranges_unique(self):
         """Host-local LUID sequences should not collide in global state."""

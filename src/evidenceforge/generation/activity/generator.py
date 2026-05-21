@@ -3325,6 +3325,43 @@ class ActivityGenerator:
             return None
         return max(candidates, key=lambda session: session.start_time)
 
+    def _session_id_for_logon(self, logon_id: str) -> int:
+        """Return the canonical source-native session ID for a LogonID."""
+        if not logon_id:
+            return 0
+        return self.state_manager.get_session_id(logon_id)
+
+    def _locked_user_interactive_windows_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> tuple[ActiveSession, datetime] | None:
+        """Return the newest locked interactive Windows session for this user/host."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        lock_times = getattr(self, "_last_workstation_lock_time", {})
+        candidates: list[tuple[datetime, ActiveSession]] = []
+        for (hostname, username, locked_logon_id), lock_time in lock_times.items():
+            if hostname != system.hostname or username != user.username:
+                continue
+            lock_timestamp = ensure_utc(lock_time)
+            if lock_timestamp > time:
+                continue
+            session = self.state_manager.get_session(locked_logon_id)
+            if (
+                session is not None
+                and session.system == system.hostname
+                and session.start_time <= time
+                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            ):
+                candidates.append((lock_timestamp, session))
+
+        if not candidates:
+            return None
+        return max(candidates, key=lambda candidate: candidate[0])
+
     def _near_future_user_interactive_windows_session(
         self,
         user: User,
@@ -5439,6 +5476,7 @@ class ActivityGenerator:
             require_nonzero=requires_logon_guid,
         )
         session_for_guid = self.state_manager.get_session(logon_id)
+        session_id = session_for_guid.session_id if session_for_guid is not None else 0
         if requires_logon_guid or not (session_for_guid and session_for_guid.logon_guid):
             self.state_manager.update_session_metadata(logon_id, logon_guid=auth_logon_guid)
         elevated = self._should_elevate(user, logon_type=logon_type, hostname=system.hostname)
@@ -5475,6 +5513,7 @@ class ActivityGenerator:
                 username=user.username,
                 user_sid=self._get_sid(user.username),
                 logon_id=logon_id,
+                session_id=session_id,
                 logon_type=logon_type,
                 auth_package=auth_pkg.get("AuthenticationPackageName", "Negotiate"),
                 source_ip=auth_source_ip,
@@ -6204,6 +6243,9 @@ class ActivityGenerator:
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
         session_source_ip = session.source_ip if session is not None else ""
         session_source_port = session.source_port if session is not None else 0
+        session_id = (
+            session.session_id if session is not None else self._session_id_for_logon(logon_id)
+        )
         event = SecurityEvent(
             timestamp=time,
             event_type="logoff",
@@ -6212,6 +6254,7 @@ class ActivityGenerator:
                 username=user.username,
                 user_sid=self._get_sid(user.username),
                 logon_id=logon_id,
+                session_id=session_id,
                 logon_type=logon_type,
                 source_ip=session_source_ip,
                 source_port=session_source_port,
@@ -6806,6 +6849,7 @@ class ActivityGenerator:
                 session.last_activity_time = time
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
         parent_obj_id = self.state_manager.get_process_object_id(system.hostname, parent_pid)
+        process_session_id = self._session_id_for_logon(process_logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_create",
@@ -6814,6 +6858,7 @@ class ActivityGenerator:
                 username=process_username,
                 user_sid=self._get_sid(process_username),
                 logon_id=process_logon_id,
+                session_id=process_session_id,
                 logon_type=process_logon_type,
                 elevated=_integrity in {"High", "System"},
             ),
@@ -7442,6 +7487,7 @@ class ActivityGenerator:
             "windows.process_exit_after_visible_create",
         )
         proc_obj_id = self.state_manager.get_process_object_id(system.hostname, pid)
+        process_session_id = self._session_id_for_logon(process_logon_id)
         event = SecurityEvent(
             timestamp=time,
             event_type="process_terminate",
@@ -7450,6 +7496,7 @@ class ActivityGenerator:
                 username=process_username,
                 user_sid=self._get_sid(process_username),
                 logon_id=process_logon_id,
+                session_id=process_session_id,
                 logon_type=session_logon_type or 0,
             ),
             process=ProcessContext(
@@ -12688,6 +12735,8 @@ class ActivityGenerator:
             return
         if not hasattr(self, "_last_workstation_lock_time"):
             self._last_workstation_lock_time = {}
+        if self._locked_user_interactive_windows_session(user, system, time) is not None:
+            return
         lock_key = (system.hostname, user.username, logon_id)
         if lock_key in self._last_workstation_lock_time:
             return
@@ -12703,6 +12752,7 @@ class ActivityGenerator:
                 username=user.username,
                 user_sid=self._get_sid(user.username),
                 logon_id=logon_id,
+                session_id=session.session_id,
             ),
         )
         self.dispatcher.dispatch(event)
@@ -12716,6 +12766,15 @@ class ActivityGenerator:
     ) -> None:
         """Generate workstation unlock event (4801 + 4624 type 7)."""
         session = self.state_manager.get_session(logon_id)
+        lock_times = getattr(self, "_last_workstation_lock_time", {})
+        lock_key = (system.hostname, user.username, logon_id)
+        lock_time = lock_times.get(lock_key)
+        if lock_time is None:
+            locked = self._locked_user_interactive_windows_session(user, system, time)
+            if locked is not None:
+                lock_time, session = locked
+                logon_id = session.logon_id
+                lock_key = (system.hostname, user.username, logon_id)
         if (
             session is None
             or session.system != system.hostname
@@ -12723,8 +12782,6 @@ class ActivityGenerator:
             or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
         ):
             return
-        lock_key = (system.hostname, user.username, logon_id)
-        lock_time = getattr(self, "_last_workstation_lock_time", {}).get(lock_key)
         if lock_time is not None:
             min_unlock_time = lock_time + timedelta(seconds=min_unlock_gap_seconds())
             if time < min_unlock_time:
@@ -12741,6 +12798,7 @@ class ActivityGenerator:
                 username=user.username,
                 user_sid=self._get_sid(user.username),
                 logon_id=logon_id,
+                session_id=session.session_id,
             ),
         )
         self.dispatcher.dispatch(event)

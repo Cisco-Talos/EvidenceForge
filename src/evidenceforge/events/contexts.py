@@ -57,6 +57,7 @@ class AuthContext:
     full_name: str = ""
     user_sid: str = ""
     logon_id: str = ""  # Allocated by StateManager.create_session()
+    session_id: int = 0  # Windows terminal/session ID for interactive sources
     logon_type: int = 2
     auth_package: str = "Negotiate"
     result: str = "success"  # "success" | "failure"

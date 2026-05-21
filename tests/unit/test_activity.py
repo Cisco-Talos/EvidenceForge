@@ -1515,6 +1515,136 @@ class TestActivityGenerator:
         assert unlock_logon.timestamp == unlock.timestamp + timedelta(milliseconds=50)
         assert unlock_logon.auth.source_ip == "-"
 
+    def test_workstation_lock_unlock_carry_state_session_id(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4800, 4801, and Type 7 4624 should carry the canonical session ID."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = "0x4f2a1b"
+        state_manager.register_session(
+            logon_id=logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=5),
+            session_id=5,
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=5),
+            logon_id,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        lock = next(event for event in events if event.event_type == "workstation_locked")
+        unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+        unlock_logon = next(
+            event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
+        )
+
+        assert lock.auth.session_id == 5
+        assert unlock.auth.session_id == 5
+        assert unlock_logon.auth.session_id == 5
+
+    def test_workstation_unlock_prefers_locked_session_over_newer_session(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A 4801 should unlock the locked terminal session, not a newer active one."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        locked_logon_id = "0x2664c4e"
+        newer_logon_id = "0x2802b88"
+        state_manager.register_session(
+            logon_id=locked_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=30),
+            session_id=5,
+        )
+        state_manager.register_session(
+            logon_id=newer_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.25",
+            start_time=lock_time + timedelta(minutes=20),
+            session_id=6,
+            session_kind="rdp",
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, locked_logon_id)
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=35),
+            newer_logon_id,
+        )
+
+        events = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+        unlock_logon = next(
+            event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
+        )
+
+        assert unlock.auth.logon_id == locked_logon_id
+        assert unlock.auth.session_id == 5
+        assert unlock_logon.auth.logon_id == locked_logon_id
+        assert unlock_logon.auth.session_id == 5
+
+    def test_workstation_lock_ignores_second_locked_session_for_user_host(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """One user/host should not visibly enter a second locked state before unlock."""
+        lock_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first_logon_id = "0x2664c4e"
+        second_logon_id = "0x2700ea3"
+        state_manager.register_session(
+            logon_id=first_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip="-",
+            start_time=lock_time - timedelta(minutes=30),
+            session_id=5,
+        )
+        state_manager.register_session(
+            logon_id=second_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.25",
+            start_time=lock_time + timedelta(minutes=10),
+            session_id=6,
+            session_kind="rdp",
+        )
+
+        activity_gen.generate_workstation_lock(test_user, test_system, lock_time, first_logon_id)
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            lock_time + timedelta(minutes=20),
+            second_logon_id,
+        )
+
+        locks = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "workstation_locked"
+        ]
+
+        assert len(locks) == 1
+        assert locks[0].auth.logon_id == first_logon_id
+        assert locks[0].auth.session_id == 5
+
     def test_workstation_lock_ignores_duplicate_before_unlock(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

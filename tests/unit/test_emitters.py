@@ -2289,6 +2289,47 @@ class TestWindowsEventEmitter:
         assert len(session_lines) == 2
         assert session_lines[0] == session_lines[1]
 
+    def test_lock_unlock_render_canonical_session_id_from_auth_context(
+        self, format_def, temp_output
+    ):
+        """4800/4801 SessionId should come from session state, not LogonID hashing."""
+        emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=1)
+        host = HostContext(
+            hostname="WKS-01",
+            fqdn="WKS-01.corp.local",
+            ip="10.0.0.50",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+            netbios_domain="CORP",
+        )
+        base_auth = {
+            "username": "jsmith",
+            "user_sid": "S-1-5-21-123-456-789-1001",
+        }
+        emitter.emit(
+            SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 30, 0, 0, tzinfo=UTC),
+                event_type="workstation_locked",
+                dst_host=host,
+                auth=AuthContext(**base_auth, logon_id="0x2664c4e", session_id=5),
+            )
+        )
+        emitter.emit(
+            SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 35, 0, 0, tzinfo=UTC),
+                event_type="workstation_unlocked",
+                dst_host=host,
+                auth=AuthContext(**base_auth, logon_id="0x2802b88", session_id=6),
+            )
+        )
+        emitter.close()
+        content = temp_output.read_text()
+        assert '<Data Name="TargetLogonId">0x2664c4e</Data>' in content
+        assert '<Data Name="SessionId">5</Data>' in content
+        assert '<Data Name="TargetLogonId">0x2802b88</Data>' in content
+        assert '<Data Name="SessionId">6</Data>' in content
+
     def test_duplicate_unlock_suppression_handles_many_paired_type7_logons(
         self, format_def, temp_output
     ):

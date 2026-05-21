@@ -103,6 +103,7 @@ class StateManager:
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
+        self._windows_session_id_counters: dict[str, int] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
@@ -229,6 +230,45 @@ class StateManager:
                 event_time = self.state.current_time
             return f"0x{self._allocate_logon_luid(system, event_time):x}"
 
+    def _allocate_windows_session_id(
+        self,
+        system: str,
+        username: str,
+        logon_type: int,
+        session_kind: str,
+    ) -> int:
+        """Allocate a host-local Windows terminal session ID for interactive sessions."""
+        if logon_type not in {2, 7, 10, 11} or session_kind in {"network", "service", "ssh"}:
+            return 0
+
+        used_ids = {
+            session.session_id
+            for session in self.state.active_sessions.values()
+            if session.system == system and session.session_id > 0
+        }
+
+        if logon_type in {2, 11} and session_kind in {"interactive", "logon"}:
+            preferred = 1 + (_stable_seed(f"windows_console_session:{system}") % 2)
+            if preferred not in used_ids:
+                return preferred
+
+        initial = self._windows_session_id_counters.get(
+            system,
+            3 + (_stable_seed(f"windows_session_initial:{system}") % 3),
+        )
+        candidate = initial
+        while candidate in used_ids or candidate <= 0:
+            candidate += 1 + (_stable_seed(f"windows_session_gap:{system}:{candidate}") % 2)
+        self._windows_session_id_counters[system] = candidate + 1
+        logger.debug(
+            "Allocated Windows session ID %s for %s@%s type %s",
+            candidate,
+            username,
+            system,
+            logon_type,
+        )
+        return candidate
+
     def _mark_logon_id_used(self, logon_id: str) -> None:
         """Record externally supplied LogonIDs so generated sessions avoid reuse."""
         try:
@@ -252,6 +292,7 @@ class StateManager:
         transport_pid: int | None = None,
         start_time: datetime | None = None,
         logon_guid: str = "",
+        session_id: int | None = None,
     ) -> str:
         """Create a new active session.
 
@@ -280,6 +321,16 @@ class StateManager:
             logon_id = f"0x{val:x}"
 
             # Create session
+            windows_session_id = (
+                session_id
+                if session_id is not None
+                else self._allocate_windows_session_id(
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                )
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -287,6 +338,7 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=session_start_time,
                 source_ip=source_ip,
+                session_id=windows_session_id,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
@@ -372,6 +424,7 @@ class StateManager:
         session_kind: str = "logon",
         transport_pid: int | None = None,
         logon_guid: str = "",
+        session_id: int | None = None,
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -385,6 +438,16 @@ class StateManager:
                 return existing
             self._mark_logon_id_used(logon_id)
 
+            windows_session_id = (
+                session_id
+                if session_id is not None
+                else self._allocate_windows_session_id(
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                )
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -392,6 +455,7 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=ensure_utc(start_time),
                 source_ip=source_ip,
+                session_id=windows_session_id,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
@@ -416,6 +480,7 @@ class StateManager:
         transport_pid: int | None = None,
         network_close_time: datetime | None = None,
         logon_guid: str | None = None,
+        session_id: int | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -438,7 +503,21 @@ class StateManager:
                 session.network_close_time = ensure_utc(network_close_time)
             if logon_guid is not None:
                 session.logon_guid = logon_guid
+            if session_id is not None:
+                session.session_id = session_id
             return True
+
+    def get_session_id(self, logon_id: str) -> int:
+        """Return the canonical rendered session ID for an active or ended logon."""
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if session is not None:
+                return session.session_id
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
+            return ended[0].session_id if ended is not None else 0
 
     def get_or_create_session_logon_guid(
         self,

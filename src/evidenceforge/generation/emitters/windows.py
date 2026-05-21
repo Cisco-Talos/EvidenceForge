@@ -628,7 +628,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        session_id = self._session_id_for_logon(auth.logon_id)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4800,
             "TimeCreated": event.timestamp,
@@ -650,7 +650,7 @@ class WindowsEventEmitter(LogEmitter):
         rng = random.Random()
         auth = event.auth
         host = self._get_host(event)
-        session_id = self._session_id_for_logon(auth.logon_id)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4801,
             "TimeCreated": event.timestamp,
