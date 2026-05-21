@@ -2894,6 +2894,7 @@ class ActivityGenerator:
         self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int], datetime] = {}
+        self._process_source_terminate_times: dict[tuple[str, int], datetime] = {}
         self._source_timing_planner = SourceTimingPlanner()
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
@@ -7610,6 +7611,10 @@ class ActivityGenerator:
         """Return the latest rendered source-create timestamp for a process."""
         return self._process_source_create_times.get((hostname, pid))
 
+    def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
+        """Return the rendered source-terminate timestamp for a process."""
+        return self._process_source_terminate_times.get((hostname, pid))
+
     def _clamp_after_visible_process_create(
         self,
         system: System,
@@ -7678,6 +7683,55 @@ class ActivityGenerator:
             "source.ecar_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
             not_before=ecar_not_before,
+        )
+
+    def _record_process_source_terminate_time(
+        self,
+        hostname: str,
+        pid: int,
+        event: SecurityEvent,
+    ) -> None:
+        """Remember the rendered eCAR source timestamp for process termination."""
+        self._plan_process_source_terminate_times(event)
+        source_timing = event.source_timing
+        if source_timing is None:
+            return
+        source_terminate_times = [
+            timestamp
+            for key, timestamp in source_timing.source_times.items()
+            if key.startswith("source.ecar_process_terminate|")
+        ]
+        if source_terminate_times:
+            self._process_source_terminate_times[(hostname, pid)] = max(source_terminate_times)
+
+    def _plan_process_source_terminate_times(self, event: SecurityEvent) -> None:
+        """Precompute eCAR terminate timestamps for source-visible shell ordering."""
+        host = event.src_host
+        proc = event.process
+        if host is None or proc is None or proc.start_time is None:
+            return
+        self._plan_process_source_create_times(event)
+        source_timing = event.source_timing
+        process_create_ts = proc.start_time
+        if source_timing is not None:
+            ecar_create_times = [
+                timestamp
+                for key, timestamp in source_timing.source_times.items()
+                if key.startswith("source.ecar_process_create|")
+            ]
+            if ecar_create_times:
+                process_create_ts = max(ecar_create_times)
+        canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
+        self._source_timing_planner.source_time(
+            event,
+            "source.ecar_process_terminate",
+            seed_parts=(
+                host.hostname,
+                proc.pid,
+                proc.start_time,
+                event.timestamp,
+            ),
+            not_before=max(event.timestamp, process_create_ts + canonical_lifetime),
         )
 
     def _emit_process_command_network_effects(
@@ -8040,6 +8094,7 @@ class ActivityGenerator:
             storyline_origin=from_storyline,
         )
 
+        self._record_process_source_terminate_time(system.hostname, pid, event)
         self.dispatcher.dispatch(event)
         termination_start_time = event.process.start_time if event.process is not None else None
         self._terminated_process_keys.add((system.hostname, pid, termination_start_time))

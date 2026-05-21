@@ -498,6 +498,8 @@ class _FakeActivityGenerator:
         self.processes: list[dict] = []
         self.process_terminations: list[dict] = []
         self.process_source_times: dict[tuple[str, int], datetime] = {}
+        self.process_source_termination_times: dict[tuple[str, int], datetime] = {}
+        self.process_source_termination_offset: timedelta | None = None
         self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
@@ -585,6 +587,18 @@ class _FakeActivityGenerator:
 
     def generate_process_termination(self, *args: Any, **kwargs: Any) -> None:
         self.process_terminations.append(kwargs)
+        system = kwargs.get("system")
+        pid = kwargs.get("pid")
+        termination_time = kwargs.get("time")
+        if (
+            system is not None
+            and isinstance(pid, int)
+            and isinstance(termination_time, datetime)
+            and self.process_source_termination_offset is not None
+        ):
+            self.process_source_termination_times[(system.hostname, pid)] = (
+                termination_time + self.process_source_termination_offset
+            )
 
     def generate_logon(self, *args: Any, **kwargs: Any) -> str:
         return "0xabc"
@@ -602,6 +616,9 @@ class _FakeActivityGenerator:
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_times.get((hostname, pid))
+
+    def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
+        return self.process_source_termination_times.get((hostname, pid))
 
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
@@ -1301,6 +1318,7 @@ class TestStorylineCommandSideEffects:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
+        engine.activity_generator.process_source_termination_offset = timedelta(seconds=20)
         engine.dispatcher = SimpleNamespace(visibility_engine=None, dispatch=lambda event: None)
         engine.malicious_events = []
         start_time = datetime(2026, 5, 11, 17, 15, tzinfo=UTC)
@@ -1346,8 +1364,10 @@ class TestStorylineCommandSideEffects:
         termination_times = [
             item["time"] for item in engine.activity_generator.process_terminations
         ]
+        source_termination_times = engine.activity_generator.process_source_termination_times
         assert termination_times[0] < process_times[1]
         assert termination_times[1] < process_times[2]
+        assert source_termination_times[(source.hostname, 4243)] < process_times[2]
         assert engine.activity_generator.connections
         assert engine.activity_generator.connections[0]["time"] > process_times[2]
 

@@ -2443,6 +2443,7 @@ class StorylineMixin:
             if lifetime is not None:
                 term_delay = rng.uniform(lifetime[0], lifetime[1])
                 term_time = time + timedelta(seconds=term_delay)
+                shell_release_time = term_time
                 terminate_immediately = False
                 if os_category == "linux":
                     from evidenceforge.generation.activity.generator import (
@@ -2467,6 +2468,15 @@ class StorylineMixin:
                         logon_id=process_logon_id,
                         from_storyline=True,
                     )
+                    source_term_getter = getattr(
+                        self.activity_generator,
+                        "process_source_terminate_time",
+                        None,
+                    )
+                    if callable(source_term_getter):
+                        source_term_time = source_term_getter(system.hostname, pid)
+                        if isinstance(source_term_time, datetime):
+                            shell_release_time = max(shell_release_time, source_term_time)
                 else:
                     self._queue_story_process_termination(
                         actor=process_actor,
@@ -2482,13 +2492,13 @@ class StorylineMixin:
                         username=process_actor.username,
                         logon_id=process_logon_id,
                         parent_pid=parent_pid,
-                        termination_time=term_time,
+                        termination_time=shell_release_time,
                         process_name=process_name,
                         command_line=process_command_line,
                     )
-                    self._storyline_shell_available_at[shell_key] = term_time
+                    self._storyline_shell_available_at[shell_key] = shell_release_time
                     process_shell_key = (system.hostname, process_actor.username)
-                    self._storyline_shell_available_at[process_shell_key] = term_time
+                    self._storyline_shell_available_at[process_shell_key] = shell_release_time
 
         elif spec.type == "connection":
             _c2_ips = ["159.65.43.201", "134.209.29.115", "167.71.156.88"]

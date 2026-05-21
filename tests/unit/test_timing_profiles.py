@@ -326,6 +326,48 @@ def test_windows_process_source_timing_respects_visible_parent_create():
     assert delayed_sysmon_time == sysmon_time
 
 
+def test_process_source_terminate_time_preserves_visible_ecar_lifetime():
+    """Stored source-terminate time should include eCAR create latency and lifetime."""
+    generator = object.__new__(ActivityGenerator)
+    generator._source_timing_planner = SourceTimingPlanner()
+    generator._process_source_create_times = {}
+    generator._process_source_terminate_times = {}
+    start_time = datetime(2024, 3, 18, 17, 15, 41, tzinfo=UTC)
+    terminate_time = start_time + timedelta(seconds=8)
+    event = SecurityEvent(
+        timestamp=terminate_time,
+        event_type="process_terminate",
+        src_host=HostContext(
+            hostname="DB-PROD-01",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+        ),
+        process=ProcessContext(
+            pid=699072,
+            parent_pid=698948,
+            image="/usr/bin/gzip",
+            command_line="",
+            username="root",
+            start_time=start_time,
+        ),
+    )
+
+    generator._record_process_source_terminate_time("DB-PROD-01", 699072, event)
+
+    source_terminate_time = generator.process_source_terminate_time("DB-PROD-01", 699072)
+    assert event.source_timing is not None
+    ecar_create_time = next(
+        value
+        for key, value in event.source_timing.source_times.items()
+        if key.startswith("source.ecar_process_create|")
+    )
+    assert source_terminate_time is not None
+    assert source_terminate_time >= terminate_time
+    assert source_terminate_time >= ecar_create_time + timedelta(seconds=8)
+
+
 def test_process_causal_audit_expansion_waits_for_visible_command_create():
     """Command-derived audit effects should not beat the visible 4688 command row."""
 
