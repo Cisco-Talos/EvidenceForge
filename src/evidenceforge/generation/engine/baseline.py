@@ -123,10 +123,10 @@ def _linux_baseline_session_initiator(
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
     if user == "root":
-        service = rng.choices(("cron", "sudo", "su"), weights=(72, 18, 10), k=1)[0]
+        service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
     else:
-        service = rng.choices(("login", "sudo", "cron"), weights=(55, 28, 17), k=1)[0]
-    app_name = "CRON" if service == "cron" else service
+        service = rng.choices(("login", "sudo"), weights=(76, 24), k=1)[0]
+    app_name = service
     opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
     message = (
         f"pam_unix({service}:session): session opened for user "
@@ -1407,6 +1407,7 @@ class BaselineMixin:
                 continue
 
             service = sched["service"]
+            sched_type = sched.get("type", "systemd_timer")
             frequency = sched.get("frequency", "daily")
             typical_hour = sched.get("typical_hour", 6)
             jitter_minutes = sched.get("jitter_minutes", 30)
@@ -1452,13 +1453,21 @@ class BaselineMixin:
                         slot_key, 1.0 - float(skip_probability)
                     ):
                         continue
-                    jitter_seconds = max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                    jitter_seconds = (
+                        0.0
+                        if sched_type == "cron"
+                        else max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                    )
                     ts = current_hour + timedelta(
-                        minutes=fm, seconds=rng.uniform(0, jitter_seconds)
+                        minutes=fm,
+                        seconds=0.0 if jitter_seconds == 0.0 else rng.uniform(0, jitter_seconds),
                     )
                     self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
             else:
-                ts = current_hour + timedelta(minutes=fire_minute, seconds=rng.uniform(0, 59))
+                ts = current_hour + timedelta(
+                    minutes=fire_minute,
+                    seconds=0.0 if sched_type == "cron" else rng.uniform(0, 59),
+                )
                 self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
 
     def _emit_scheduled_event(

@@ -95,15 +95,25 @@ def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
 
 def test_linux_baseline_session_initiator_creates_pam_session_message():
     """Ambient logind session noise should have a concrete PAM initiator."""
-    app_name, service, message = _linux_baseline_session_initiator(
-        "admin",
-        rng=random.Random(7),
+    samples = [
+        _linux_baseline_session_initiator("admin", rng=random.Random(seed)) for seed in range(30)
+    ]
+    samples.extend(
+        _linux_baseline_session_initiator("root", rng=random.Random(seed)) for seed in range(30)
     )
 
-    assert app_name in {"CRON", "login", "sudo"}
-    assert service in {"cron", "login", "sudo"}
-    assert "pam_unix(" in message
-    assert ":session): session opened for user admin(uid=" in message
+    assert {service for _app_name, service, _message in samples} <= {"login", "sudo", "su"}
+    assert all(app_name != "CRON" for app_name, _service, _message in samples)
+    assert all(service != "cron" for _app_name, service, _message in samples)
+    assert all("pam_unix(" in message for _app_name, _service, message in samples)
+    assert any(
+        ":session): session opened for user admin(uid=" in message
+        for _app_name, _service, message in samples
+    )
+    assert any(
+        ":session): session opened for user root(uid=" in message
+        for _app_name, _service, message in samples
+    )
 
 
 def test_linux_baseline_pam_leads_leave_visible_ordering_margin():

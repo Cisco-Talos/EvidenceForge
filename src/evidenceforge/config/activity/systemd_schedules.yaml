@@ -17,7 +17,9 @@
 #   services_any     - Optional service/package signal list (any match)
 #   host_probability - Optional deterministic per-host enable probability
 #   slot_skip_probability - Optional per-slot skip probability for frequent timers
-#   slot_jitter_seconds - Optional per-slot extra runtime jitter in seconds
+#   slot_jitter_seconds - Optional per-slot extra runtime jitter in seconds.
+#                         Cron jobs still launch on minute boundaries; this only
+#                         applies to systemd timers.
 #   process_path     - Path to the service binary (for process create events)
 #
 # For systemd_timer type:
