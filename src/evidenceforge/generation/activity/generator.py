@@ -15993,6 +15993,18 @@ class ActivityGenerator:
             )
         is_network_logon = active_session and active_session.logon_type == 3
         is_service_logon = active_session and active_session.logon_type == 5
+        if (
+            os_cat == "linux"
+            and active_session is not None
+            and active_session.session_kind == "ssh"
+        ):
+            self.ensure_linux_ssh_session_shell(
+                user=user,
+                target_system=system,
+                logon_id=active_session.logon_id,
+                logon_time=active_session.start_time,
+                activity_time=time,
+            )
         if is_network_logon:
             if remote_wrapper_pid is not None:
                 return remote_wrapper_pid

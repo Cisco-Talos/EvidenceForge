@@ -469,6 +469,83 @@ def test_world_planner_materializes_visible_shell_for_reused_ssh_session(
     assert bash_events[0].timestamp < activity_time
 
 
+def test_linux_parent_resolution_materializes_visible_shell_for_reused_ssh_logon(
+    state_manager: StateManager,
+    activity_generator: ActivityGenerator,
+    mock_emitters: dict[str, Mock],
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Direct Linux parent resolution should avoid hidden seeded bash parents."""
+    scenario_start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    pre_window_time = scenario_start - timedelta(minutes=20)
+    activity_time = scenario_start + timedelta(minutes=35)
+    activity_generator._scenario_start_time = scenario_start
+    state_manager.set_current_time(pre_window_time)
+    systemd_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        0,
+        "/usr/lib/systemd/systemd",
+        "/usr/lib/systemd/systemd",
+        "root",
+        "System",
+    )
+    sshd_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        systemd_pid,
+        "/usr/sbin/sshd",
+        "/usr/sbin/sshd -D",
+        "root",
+        "System",
+    )
+    hidden_bash_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        sshd_pid,
+        "/bin/bash",
+        "-bash",
+        users["alice.admin"].username,
+        "Medium",
+    )
+    logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["DB-01"].hostname,
+        logon_type=10,
+        source_ip=systems["WKS-01"].ip,
+        source_port=51512,
+        session_kind="ssh",
+        start_time=pre_window_time,
+    )
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    session.session_shell_pid = hidden_bash_pid
+    activity_generator._system_pids = {
+        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid}
+    }
+
+    parent_pid = activity_generator._resolve_parent(
+        systems["DB-01"],
+        users["alice.admin"],
+        activity_time,
+        logon_id,
+        "/usr/bin/git",
+    )
+
+    assert session.session_shell_pid is not None
+    assert parent_pid == session.session_shell_pid
+    assert parent_pid != hidden_bash_pid
+    visible_shell = state_manager.get_process(systems["DB-01"].hostname, parent_pid)
+    assert visible_shell is not None
+    assert visible_shell.image == "/bin/bash"
+    assert visible_shell.start_time >= scenario_start
+
+    bash_events = [
+        call.args[0]
+        for call in mock_emitters["windows_event_security"].emit.call_args_list
+        if call.args[0].process is not None and call.args[0].process.pid == parent_pid
+    ]
+    assert bash_events
+
+
 def test_world_planner_bootstraps_rdp_session_with_owned_state(
     planner: WorldPlanner,
     state_manager: StateManager,

@@ -1040,7 +1040,13 @@ class TestLinuxParentSelection:
         proc = state_manager.get_process(linux_system.hostname, pid)
         assert proc is not None
         assert proc.parent_pid != 4
-        assert proc.parent_pid == pids["bash"]
+        assert proc.parent_pid != pids["bash"]
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert proc.parent_pid == session.session_shell_pid
+        parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
 
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(
