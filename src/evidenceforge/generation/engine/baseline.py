@@ -2475,6 +2475,16 @@ class BaselineMixin:
                     self.scenario.environment.domain or "corp.local",
                 )
                 if result:
+                    aligned_time = self._align_rsat_with_future_workstation_session(
+                        result["user"],
+                        result["system"],
+                        result["time"],
+                        current_hour + timedelta(hours=1),
+                        rng,
+                    )
+                    if aligned_time is None:
+                        continue
+                    result["time"] = aligned_time
                     logon_id = self._ensure_session_on_system(
                         result["user"], result["system"], result["time"], rng
                     )
@@ -7203,7 +7213,7 @@ class BaselineMixin:
         hour_end: datetime,
         rng: random.Random,
     ) -> datetime | None:
-        """Move RSAT work after an already-planned workstation session in this hour."""
+        """Move foreground admin work after an already-planned workstation session."""
         if _get_os_category(system.os) != "windows":
             return base_time
 
