@@ -98,6 +98,24 @@ class TestTlsIssuers:
         issuer = pick_issuer(rng, "www.linkedin.com")
         assert "DigiCert SHA2 Extended Validation" in issuer["name"]
 
+    def test_expired_issuer_is_excluded_for_post_expiration_event_time(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "", event_time=datetime(2026, 2, 1, tzinfo=UTC))
+        assert issuer["name"] != "CN=R3, O=Let's Encrypt, C=US"
+        assert issuer["name"] != "CN=E1, O=Let's Encrypt, C=US"
+
+    def test_historical_event_time_can_still_select_historical_issuer(self):
+        issuer_names = {
+            pick_issuer(
+                random.Random(seed),
+                "",
+                event_time=datetime(2024, 1, 1, tzinfo=UTC),
+            )["name"]
+            for seed in range(500)
+        }
+        assert "CN=R3, O=Let's Encrypt, C=US" in issuer_names
+        assert "CN=E1, O=Let's Encrypt, C=US" in issuer_names
+
     def test_internal_test_domain_uses_enterprise_ca(self):
         rng = random.Random(42)
         issuer = pick_issuer(rng, "WKS-02.acme.test")

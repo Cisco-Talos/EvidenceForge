@@ -5019,7 +5019,7 @@ class ActivityGenerator:
         elif _is_ip_literal(cert_name):
             issuer_cfg = _raw_ip_tls_issuer(cert_name)
         else:
-            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name)
+            issuer_cfg = pick_issuer(cert_rng, server_name=cert_name, event_time=event.timestamp)
         key_type, key_length = pick_key_type(cert_rng, issuer_cfg)
         key_type, key_length = _tls_key_for_certificate_name(cert_name, key_type, key_length)
         is_ecdsa = key_type == "ecdsa"
