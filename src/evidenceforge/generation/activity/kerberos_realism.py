@@ -13,6 +13,7 @@ from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _CONFIG_PATH = get_activity_directory() / "kerberos_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
+_MAX_TRANSPORT_WEIGHT = 1_000_000
 
 
 def _merge_kerberos_realism(default: dict, overlay: dict) -> dict:
@@ -73,7 +74,7 @@ def pick_kerberos_transport(rng: random.Random, profile: str = "default") -> str
     profiles = cfg.get("transport_profiles", {})
     weights = profiles.get(profile) or profiles.get("default") or {}
     entries = [
-        (proto, int(weight))
+        (proto, min(int(weight), _MAX_TRANSPORT_WEIGHT))
         for proto, weight in weights.items()
         if proto in {"udp", "tcp"} and int(weight) > 0
     ]
@@ -81,7 +82,10 @@ def pick_kerberos_transport(rng: random.Random, profile: str = "default") -> str
         return "tcp"
     protocols = [entry[0] for entry in entries]
     protocol_weights = [entry[1] for entry in entries]
-    return rng.choices(protocols, weights=protocol_weights, k=1)[0]
+    try:
+        return rng.choices(protocols, weights=protocol_weights, k=1)[0]
+    except OverflowError:
+        return "tcp"
 
 
 def _pick_weighted_value(profiles: dict[str, dict[str, Any]], rng: random.Random) -> str:

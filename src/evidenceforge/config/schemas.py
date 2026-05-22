@@ -844,6 +844,7 @@ class KerberosCertificateProfile(BaseModel, extra="forbid"):
 class KerberosTransportProfile(BaseModel, extra="forbid"):
     """TCP/UDP transport weights for Kerberos network exchanges."""
 
+    _MAX_TRANSPORT_WEIGHT = 1_000_000
     udp: int = 0
     tcp: int = 0
 
@@ -852,6 +853,10 @@ class KerberosTransportProfile(BaseModel, extra="forbid"):
     def weight_non_negative(cls, v: int) -> int:
         if v < 0:
             raise ValueError("transport weights must be non-negative")
+        if v > cls._MAX_TRANSPORT_WEIGHT:
+            raise ValueError(
+                f"transport weights must be less than or equal to {cls._MAX_TRANSPORT_WEIGHT}"
+            )
         return v
 
     @model_validator(mode="after")

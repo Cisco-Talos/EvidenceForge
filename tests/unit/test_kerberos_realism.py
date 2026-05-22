@@ -140,6 +140,22 @@ def test_kerberos_transport_profile_falls_back_to_tcp(monkeypatch):
     assert kerberos_realism.pick_kerberos_transport(random.Random(1)) == "tcp"
 
 
+def test_kerberos_transport_profile_clamps_huge_weights(monkeypatch):
+    def load_transport_config():
+        return {
+            "transport_profiles": {
+                "default": {
+                    "udp": 10**1000,
+                    "tcp": 1,
+                }
+            }
+        }
+
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", load_transport_config)
+
+    assert kerberos_realism.pick_kerberos_transport(random.Random(1)) in {"udp", "tcp"}
+
+
 def test_kerberos_realism_overlay_overrides_nested_weight(tmp_path, monkeypatch):
     overlay_dir = tmp_path / ".eforge" / "config" / "activity"
     overlay_dir.mkdir(parents=True)
