@@ -10376,8 +10376,12 @@ class ActivityGenerator:
             if event.http is not None:
                 method = (event.http.method or "GET").upper()
                 if event.network.service == "http" and method != "CONNECT":
-                    event.network.orig_bytes, event.network.resp_bytes = _http_flow_payload_bytes(
-                        event.http
+                    derived_orig_bytes, derived_resp_bytes = _http_flow_payload_bytes(event.http)
+                    event.network.orig_bytes = max(
+                        event.network.orig_bytes or 0, derived_orig_bytes
+                    )
+                    event.network.resp_bytes = max(
+                        event.network.resp_bytes or 0, derived_resp_bytes
                     )
                 else:
                     request_overhead = rng.randint(180, 620)

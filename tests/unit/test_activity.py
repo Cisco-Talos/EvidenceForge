@@ -5176,10 +5176,10 @@ class TestActivityGenerator:
         assert second_event.network.application_layer_only is True
         assert second_event.http.trans_depth == 2
 
-    def test_generate_connection_derives_plain_http_bytes_from_http_context(
+    def test_generate_connection_plain_http_preserves_explicit_larger_bytes(
         self, activity_gen, state_manager, mock_emitters
     ):
-        """Single plain-HTTP transactions should not keep unrelated oversized conn bytes."""
+        """Plain HTTP should preserve explicit connection byte overrides when larger."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -5210,8 +5210,8 @@ class TestActivityGenerator:
         event = mock_emitters["zeek_conn"].emit.call_args[0][0]
 
         assert event.network.conn_state == "SF"
-        assert event.network.orig_bytes < 1_200
-        assert 120 <= event.network.resp_bytes < 900
+        assert event.network.orig_bytes == 4_900
+        assert event.network.resp_bytes == 44_000
         assert event.network.resp_bytes > event.http.response_body_len
 
     def test_generate_connection_does_not_reuse_http_uid_after_parent_close(self, state_manager):
