@@ -916,8 +916,14 @@ class EcarEmitter(HostMultiplexEmitter):
         """Return an eCAR terminate timestamp preserving rendered process lifetime."""
         if proc is None or proc.start_time is None:
             return event.timestamp
-        process_create_ts = self._process_create_timestamp(event, proc)
         canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
+        create_anchor_event = SecurityEvent(
+            timestamp=proc.start_time,
+            event_type="process_create",
+            src_host=event.src_host,
+            process=proc,
+        )
+        process_create_ts = self._process_create_timestamp(create_anchor_event, proc)
         return _SOURCE_TIMING.source_time(
             event,
             "source.ecar_process_terminate",
