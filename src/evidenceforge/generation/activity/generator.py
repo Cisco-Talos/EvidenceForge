@@ -7279,8 +7279,6 @@ class ActivityGenerator:
             storyline_origin=from_storyline,
         )
 
-        self._record_process_source_create_time(system.hostname, pid, event)
-
         # Phase 3: Dispatch to matching emitters
         self.dispatcher.dispatch(event)
         self._record_process_source_create_time(system.hostname, pid, event)
@@ -7589,7 +7587,6 @@ class ActivityGenerator:
         event: SecurityEvent,
     ) -> None:
         """Remember the latest rendered source timestamp for a process create."""
-        self._plan_process_source_create_times(event)
         source_timing = event.source_timing
         if source_timing is None:
             return

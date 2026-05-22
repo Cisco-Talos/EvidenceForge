@@ -371,7 +371,7 @@ class TestStorylineCommandNetworks:
         assert emitter.render_time is not None
         assert generator.process_source_create_time(system.hostname, pid) >= emitter.render_time
 
-    def test_activity_generator_preplans_process_create_time_before_threaded_dispatch(self):
+    def test_activity_generator_tracks_process_create_time_only_when_sources_render(self):
         captured: dict[str, Any] = {}
 
         class _CapturingDispatcher:
@@ -404,25 +404,8 @@ class TestStorylineCommandNetworks:
         )
 
         event = captured["event"]
-        assert event.source_timing is not None
-        source_keys = set(event.source_timing.source_times)
-        assert any(key.startswith("source.windows_security_process_create|") for key in source_keys)
-        assert any(key.startswith("source.sysmon_process_create|") for key in source_keys)
-        assert any(key.startswith("source.ecar_process_create|") for key in source_keys)
-        sysmon_time = next(
-            value
-            for key, value in event.source_timing.source_times.items()
-            if key.startswith("source.sysmon_process_create|")
-        )
-        security_time = next(
-            value
-            for key, value in event.source_timing.source_times.items()
-            if key.startswith("source.windows_security_process_create|")
-        )
-        assert security_time >= sysmon_time + timedelta(milliseconds=25)
-        assert generator.process_source_create_time(system.hostname, pid) == max(
-            event.source_timing.source_times.values()
-        )
+        assert event.source_timing is None
+        assert generator.process_source_create_time(system.hostname, pid) is None
 
     def test_process_owned_windows_connection_waits_for_visible_process_create(self):
         captured: list[Any] = []
