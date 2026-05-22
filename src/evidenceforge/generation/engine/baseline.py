@@ -6733,7 +6733,7 @@ class BaselineMixin:
                             facility=10,
                             severity=6,
                         )
-                    if limit_key:
+                    if limit_key and ts >= self.start_time:
                         self._extra_syslog_entry_counts[limit_key] = (
                             self._extra_syslog_entry_counts.get(limit_key, 0) + 1
                         )
