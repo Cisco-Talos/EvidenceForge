@@ -1276,8 +1276,8 @@ class TestDnsSupportQueryTypes:
             prior = seen.setdefault(query, (answer, ttl))
             assert prior == (answer, ttl)
 
-    def test_external_txt_context_ttls_use_resolver_cache_countdown(self, activity_gen, timestamp):
-        """Caller-provided public TXT TTLs should still age inside the resolver cache."""
+    def test_caller_provided_dns_context_ttls_are_preserved(self, activity_gen, timestamp):
+        """Caller-provided DNS TTL vectors should be preserved across query types."""
         first = DnsContext(
             query="zoom.us",
             query_type="TXT",
@@ -1304,8 +1304,22 @@ class TestDnsSupportQueryTypes:
             time=timestamp + timedelta(seconds=55),
         )
 
-        assert second.TTLs[0] < first.TTLs[0]
-        assert second.TTLs[0] <= first.TTLs[0] - 50
+        assert first.TTLs == [1800.0]
+        assert second.TTLs == [1800.0]
+
+        internal_a = DnsContext(
+            query="dc01.corp.local",
+            query_type="A",
+            qtype=1,
+            answers=["10.0.0.10"],
+            TTLs=[424242.0],
+        )
+        activity_gen._normalize_dns_context_for_resolver(
+            internal_a,
+            resolver_ip="10.0.0.1",
+            time=timestamp,
+        )
+        assert internal_a.TTLs == [424242.0]
 
     def test_external_rrset_ttl_countdown_is_generation_order_independent(
         self, activity_gen, timestamp
