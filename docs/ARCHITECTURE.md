@@ -363,6 +363,16 @@ detailed source-native field selection in the activity-generator adapter so
 existing storyline, baseline, world-planner, and higher-level bundle callers
 share one stable auth/session path.
 
+Kerberos/DC callers supply domain-logon ticket companions, visible KDC-flow audit
+companions, or explicit DC ticket events. The Kerberos/DC action bundles own the
+internal boundary for 4768 TGTs, 4769 service tickets, 4770 renewals, and 4771
+pre-authentication failures: DC host context, source endpoint semantics,
+source-port reservation, TGT cache behavior, source-native ticket timing,
+service-principal identity, and optional companion KDC network evidence. Causal
+domain-logon expansion, baseline KDC traffic, and standalone preauth failure
+paths now share the same bundle adapters instead of independently inventing
+ticket source ports or service-ticket context.
+
 Action bundles own cross-event concerns:
 
 - Deterministic action anchors for durable references.

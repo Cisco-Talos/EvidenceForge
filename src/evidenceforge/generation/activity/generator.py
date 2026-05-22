@@ -75,6 +75,18 @@ from evidenceforge.generation.actions import (
     FailedLogonRequest,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
+    KerberosConnectionAuditActionBundle,
+    KerberosConnectionAuditRequest,
+    KerberosLogonTicketsActionBundle,
+    KerberosLogonTicketsRequest,
+    KerberosPreauthFailureActionBundle,
+    KerberosPreauthFailureRequest,
+    KerberosServiceTicketActionBundle,
+    KerberosServiceTicketRequest,
+    KerberosTgtActionBundle,
+    KerberosTgtRenewalActionBundle,
+    KerberosTgtRenewalRequest,
+    KerberosTgtRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
     LogoffActionBundle,
@@ -6122,6 +6134,20 @@ class ActivityGenerator:
         auth_package: str,
         source_ip: str,
     ) -> None:
+        """Emit DC-side Kerberos evidence for a domain logon via an action bundle."""
+        request = KerberosLogonTicketsRequest(
+            user=user,
+            system=system,
+            time=time,
+            auth_package=auth_package,
+            source_ip=source_ip,
+        )
+        KerberosLogonTicketsActionBundle(self, request).execute()
+
+    def _execute_kerberos_logon_tickets_bundle(
+        self,
+        request: KerberosLogonTicketsRequest,
+    ) -> None:
         """Emit DC-side Kerberos TGT (4768) and service ticket (4769) for domain logons.
 
         In a real AD environment, when a user authenticates via Kerberos:
@@ -6135,6 +6161,12 @@ class ActivityGenerator:
         - System is not the DC itself
         - A DC is known in the scenario
         """
+        user = request.user
+        system = request.system
+        time = request.time
+        auth_package = request.auth_package
+        source_ip = request.source_ip
+
         # Only emit for explicit Kerberos auth on Windows systems.
         # "Negotiate" can fall back to NTLM, and CredSSP (RDP) uses its own
         # auth flow — only pure "Kerberos" auth triggers DC-side TGT/TGS.
@@ -8354,7 +8386,33 @@ class ActivityGenerator:
         service: str,
         source_system: System | None,
     ) -> None:
+        """Emit DC-side Kerberos audit companions via an action bundle."""
+        request = KerberosConnectionAuditRequest(
+            src_ip=src_ip,
+            src_port=src_port,
+            dst_ip=dst_ip,
+            time=time,
+            dst_port=dst_port,
+            proto=proto,
+            service=service,
+            source_system=source_system,
+        )
+        KerberosConnectionAuditActionBundle(self, request).execute()
+
+    def _execute_kerberos_connection_audit_bundle(
+        self,
+        request: KerberosConnectionAuditRequest,
+    ) -> None:
         """Ensure visible internal-to-DC Kerberos flows have nearby DC audit evidence."""
+        src_ip = request.src_ip
+        src_port = request.src_port
+        dst_ip = request.dst_ip
+        time = request.time
+        dst_port = request.dst_port
+        proto = request.proto
+        service = request.service
+        source_system = request.source_system
+
         if proto not in {"tcp", "udp"} or dst_port != 88 or service != "kerberos":
             return
         if source_system is None:
@@ -12921,7 +12979,26 @@ class ActivityGenerator:
         source_port: int | None = None,
     ) -> None:
         """Generate Kerberos TGT request event (4768) on the DC."""
+        request = KerberosTgtRequest(
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=time,
+            domain=domain,
+            source_port=source_port,
+        )
+        KerberosTgtActionBundle(self, request).execute()
+
+    def _execute_kerberos_tgt_bundle(self, request: KerberosTgtRequest) -> None:
+        """Generate Kerberos TGT request event (4768) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
+
+        username = request.username
+        source_ip = request.source_ip
+        dc_hostname = request.dc_hostname
+        time = request.time
+        domain = request.domain
+        source_port = request.source_port
 
         # Kerberos realm is always the DNS FQDN in uppercase, never NetBIOS short name
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
@@ -12984,7 +13061,29 @@ class ActivityGenerator:
         source_port: int | None = None,
     ) -> None:
         """Generate Kerberos TGT renewal event (4770) on the DC."""
+        request = KerberosTgtRenewalRequest(
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=time,
+            domain=domain,
+            source_port=source_port,
+        )
+        KerberosTgtRenewalActionBundle(self, request).execute()
+
+    def _execute_kerberos_tgt_renewal_bundle(
+        self,
+        request: KerberosTgtRenewalRequest,
+    ) -> None:
+        """Generate Kerberos TGT renewal event (4770) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
+
+        username = request.username
+        source_ip = request.source_ip
+        dc_hostname = request.dc_hostname
+        time = request.time
+        domain = request.domain
+        source_port = request.source_port
 
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
@@ -13040,7 +13139,31 @@ class ActivityGenerator:
         source_port: int | None = None,
     ) -> None:
         """Generate Kerberos service ticket request event (4769) on the DC."""
+        request = KerberosServiceTicketRequest(
+            username=username,
+            service_name=service_name,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=time,
+            domain=domain,
+            source_port=source_port,
+        )
+        KerberosServiceTicketActionBundle(self, request).execute()
+
+    def _execute_kerberos_service_ticket_bundle(
+        self,
+        request: KerberosServiceTicketRequest,
+    ) -> None:
+        """Generate Kerberos service ticket request event (4769) on the DC."""
         from evidenceforge.events.contexts import KerberosContext
+
+        username = request.username
+        service_name = request.service_name
+        source_ip = request.source_ip
+        dc_hostname = request.dc_hostname
+        time = request.time
+        domain = request.domain
+        source_port = request.source_port
 
         domain = domain or getattr(self, "_ad_domain", "corp.local").upper()
         rng = _get_rng()
@@ -13600,6 +13723,30 @@ class ActivityGenerator:
         emit_connection: bool = False,
     ) -> None:
         """Generate Kerberos pre-authentication failed event (4771) on DC."""
+        request = KerberosPreauthFailureRequest(
+            username=username,
+            source_ip=source_ip,
+            dc_hostname=dc_hostname,
+            time=time,
+            status=status,
+            source_port=source_port,
+            emit_connection=emit_connection,
+        )
+        KerberosPreauthFailureActionBundle(self, request).execute()
+
+    def _execute_kerberos_preauth_failure_bundle(
+        self,
+        request: KerberosPreauthFailureRequest,
+    ) -> None:
+        """Generate Kerberos pre-authentication failed event (4771) on DC."""
+        username = request.username
+        source_ip = request.source_ip
+        dc_hostname = request.dc_hostname
+        time = request.time
+        status = request.status
+        source_port = request.source_port
+        emit_connection = request.emit_connection
+
         rng = _get_rng()
         from evidenceforge.generation.activity.kerberos_realism import pick_tgt_failure_fields
 

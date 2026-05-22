@@ -37,6 +37,18 @@ from evidenceforge.generation.actions import (
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
     FailedLogonRequest,
+    KerberosConnectionAuditActionBundle,
+    KerberosConnectionAuditRequest,
+    KerberosLogonTicketsActionBundle,
+    KerberosLogonTicketsRequest,
+    KerberosPreauthFailureActionBundle,
+    KerberosPreauthFailureRequest,
+    KerberosServiceTicketActionBundle,
+    KerberosServiceTicketRequest,
+    KerberosTgtActionBundle,
+    KerberosTgtRenewalActionBundle,
+    KerberosTgtRenewalRequest,
+    KerberosTgtRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
     LogoffActionBundle,
@@ -590,6 +602,141 @@ class TestActivityGenerator:
         executor._execute_logon_bundle.assert_called_once_with(logon_request)
         executor._execute_logoff_bundle.assert_called_once_with(logoff_request)
         executor._execute_failed_logon_bundle.assert_called_once_with(failed_request)
+
+    def test_kerberos_dc_bundle_anchors_are_stable(self, test_user, test_system):
+        """Kerberos/DC requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = KerberosLogonTicketsRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            auth_package="Kerberos",
+            source_ip="10.0.0.44",
+        )
+        connection_request = KerberosConnectionAuditRequest(
+            src_ip="10.0.0.44",
+            src_port=51234,
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            source_system=test_system,
+        )
+        tgt_request = KerberosTgtRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        renewal_request = KerberosTgtRenewalRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        service_request = KerberosServiceTicketRequest(
+            username=test_user.username,
+            service_name="cifs/FILE-01",
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        failure_request = KerberosPreauthFailureRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+            status="0x18",
+        )
+
+        assert (
+            KerberosLogonTicketsActionBundle(Mock(), logon_request).anchor
+            == KerberosLogonTicketsActionBundle(Mock(), logon_request).anchor
+        )
+        assert (
+            KerberosConnectionAuditActionBundle(Mock(), connection_request).anchor
+            == KerberosConnectionAuditActionBundle(Mock(), connection_request).anchor
+        )
+        assert (
+            KerberosTgtActionBundle(Mock(), tgt_request).anchor
+            == KerberosTgtActionBundle(Mock(), tgt_request).anchor
+        )
+        assert (
+            KerberosTgtRenewalActionBundle(Mock(), renewal_request).anchor
+            == KerberosTgtRenewalActionBundle(Mock(), renewal_request).anchor
+        )
+        assert (
+            KerberosServiceTicketActionBundle(Mock(), service_request).anchor
+            == KerberosServiceTicketActionBundle(Mock(), service_request).anchor
+        )
+        assert (
+            KerberosPreauthFailureActionBundle(Mock(), failure_request).anchor
+            == KerberosPreauthFailureActionBundle(Mock(), failure_request).anchor
+        )
+
+    def test_kerberos_dc_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Kerberos/DC bundles should preserve the current generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = KerberosLogonTicketsRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            auth_package="Kerberos",
+            source_ip="10.0.0.44",
+        )
+        connection_request = KerberosConnectionAuditRequest(
+            src_ip="10.0.0.44",
+            src_port=51234,
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            source_system=test_system,
+        )
+        tgt_request = KerberosTgtRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        renewal_request = KerberosTgtRenewalRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        service_request = KerberosServiceTicketRequest(
+            username=test_user.username,
+            service_name="cifs/FILE-01",
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        failure_request = KerberosPreauthFailureRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        executor = Mock()
+
+        KerberosLogonTicketsActionBundle(executor, logon_request).execute()
+        KerberosConnectionAuditActionBundle(executor, connection_request).execute()
+        KerberosTgtActionBundle(executor, tgt_request).execute()
+        KerberosTgtRenewalActionBundle(executor, renewal_request).execute()
+        KerberosServiceTicketActionBundle(executor, service_request).execute()
+        KerberosPreauthFailureActionBundle(executor, failure_request).execute()
+
+        executor._execute_kerberos_logon_tickets_bundle.assert_called_once_with(logon_request)
+        executor._execute_kerberos_connection_audit_bundle.assert_called_once_with(
+            connection_request
+        )
+        executor._execute_kerberos_tgt_bundle.assert_called_once_with(tgt_request)
+        executor._execute_kerberos_tgt_renewal_bundle.assert_called_once_with(renewal_request)
+        executor._execute_kerberos_service_ticket_bundle.assert_called_once_with(service_request)
+        executor._execute_kerberos_preauth_failure_bundle.assert_called_once_with(failure_request)
 
     def test_generate_logon_reuses_active_workstation_session_over_long_window(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

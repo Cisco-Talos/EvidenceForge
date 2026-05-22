@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -212,6 +212,17 @@ network events carrying `IdsContext`; signature selection stays in scanner or
 baseline planning layers. Public scenario YAML, CLI behavior, output layout,
 concrete format names, and authoring skills remain unchanged for this slice.
 
+The Kerberos/DC service-ticket action-bundle extraction moves DC-side ticket and
+validation evidence behind internal Kerberos bundles. Causal domain-logon
+TGT/TGS companions, visible KDC-flow audit companions, direct TGT requests, TGT
+renewals, service-ticket requests, and pre-authentication failures now route
+through stable bundle adapters. The bundles define the ownership boundary for DC
+host context, source endpoint semantics, source-port reservation, TGT cache
+behavior, source-native ticket timing, service-principal identity, and optional
+companion KDC network evidence. Public scenario YAML, CLI behavior, output
+layout, concrete format names, and authoring skills remain unchanged for this
+slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -292,6 +303,10 @@ concrete format names, and authoring skills remain unchanged for this slice.
   construction from data-driven signatures, optional DNS payload construction for
   DNS signatures, web-scan preset IDS behavior, and existing IDS signature
   validation/rendering behavior.
+- Kerberos/DC probes cover stable logon-ticket, connection-audit, TGT, renewal,
+  service-ticket, and preauth-failure anchors; bundle-to-adapter delegation;
+  existing DC Kerberos logon expansion; KDC audit packet accounting; source-port
+  reuse/avoidance semantics; and existing Kerberos ordering behavior.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:
