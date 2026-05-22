@@ -45,6 +45,8 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.generation.actions import (
+    IdsAlertActionBundle,
+    IdsAlertRequest,
     PortScanActionBundle,
     PortScanRequest,
     ScpReceiverFileActionBundle,
@@ -4150,7 +4152,7 @@ class StorylineMixin:
             get_preset,
             parse_positive_finite_rate,
         )
-        from evidenceforge.events.contexts import HttpContext, IdsContext
+        from evidenceforge.events.contexts import HttpContext
         from evidenceforge.generation.activity.referrer import pick_scan_referrer
         from evidenceforge.utils.ua_template import render_ua
 
@@ -4328,23 +4330,35 @@ class StorylineMixin:
 
             ids_ctx = None
             if not is_tls and ids_ua_def and not ua_fired:
-                ids_ctx = IdsContext(
-                    sid=ids_ua_def["sid"],
-                    rev=ids_ua_def.get("rev", 1),
-                    message=ids_ua_def["message"],
-                    classification=ids_ua_def.get("classification", "web-application-attack"),
-                    priority=ids_ua_def.get("priority", 2),
-                )
+                ids_ctx = IdsAlertActionBundle(
+                    IdsAlertRequest(
+                        signature=ids_ua_def,
+                        time=tick_time,
+                        src_ip=scan_src_ip,
+                        dst_ip=scan_dst_ip,
+                        dst_port=spec.dst_port,
+                        proto="tcp",
+                        rng=rng,
+                        source="web_scan",
+                        direction="in",
+                    )
+                ).execute()
                 ua_fired = True
             elif not is_tls and isinstance(path_entry.get("ids"), dict):
                 path_ids = path_entry["ids"]
-                ids_ctx = IdsContext(
-                    sid=path_ids["sid"],
-                    rev=path_ids.get("rev", 1),
-                    message=path_ids["message"],
-                    classification=path_ids.get("classification", "web-application-attack"),
-                    priority=path_ids.get("priority", 2),
-                )
+                ids_ctx = IdsAlertActionBundle(
+                    IdsAlertRequest(
+                        signature=path_ids,
+                        time=tick_time,
+                        src_ip=scan_src_ip,
+                        dst_ip=scan_dst_ip,
+                        dst_port=spec.dst_port,
+                        proto="tcp",
+                        rng=rng,
+                        source="web_scan",
+                        direction="in",
+                    )
+                ).execute()
 
             if ids_ctx is None and ids_rate_def and request_count >= rate_threshold:
                 fire_rate = False
@@ -4353,13 +4367,19 @@ class StorylineMixin:
                 elif (tick_time - last_rate_alert_ts).total_seconds() >= next_rate_alert_delay:
                     fire_rate = True
                 if fire_rate:
-                    ids_ctx = IdsContext(
-                        sid=ids_rate_def["sid"],
-                        rev=ids_rate_def.get("rev", 1),
-                        message=ids_rate_def["message"],
-                        classification=ids_rate_def.get("classification", "attempted-recon"),
-                        priority=ids_rate_def.get("priority", 2),
-                    )
+                    ids_ctx = IdsAlertActionBundle(
+                        IdsAlertRequest(
+                            signature=ids_rate_def,
+                            time=tick_time,
+                            src_ip=scan_src_ip,
+                            dst_ip=scan_dst_ip,
+                            dst_port=spec.dst_port,
+                            proto="tcp",
+                            rng=rng,
+                            source="web_scan",
+                            direction="in",
+                        )
+                    ).execute()
                     last_rate_alert_ts = tick_time
                     next_rate_alert_delay = rng.uniform(45.0, 120.0)
 

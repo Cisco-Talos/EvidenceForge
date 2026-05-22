@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -202,6 +202,16 @@ expansion after process creation. Public scenario YAML, CLI behavior, output
 layout, concrete format names, and authoring skills remain unchanged for this
 slice.
 
+The IDS alert/signature action-bundle extraction moves signature-to-context
+construction behind `IdsAlertActionBundle`. Web-scan IDS preset alerts and
+baseline IDS false-positive alerts now ask the bundle to build canonical
+`IdsContext`, including `(gid, sid, rev)` rule identity,
+message/classification/priority normalization, and optional DNS payload context
+for DNS signatures. Snort/Suricata emitters continue to render only canonical
+network events carrying `IdsContext`; signature selection stays in scanner or
+baseline planning layers. Public scenario YAML, CLI behavior, output layout,
+concrete format names, and authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -278,6 +288,10 @@ slice.
   nmap command-probe anchors; bundle-to-adapter delegation; external DMZ target
   resolution; nmap process transport evidence; web-scan IDS/referrer behavior;
   and existing scanner source/destination semantics.
+- IDS alert probes cover stable IDS alert anchors, canonical `IdsContext`
+  construction from data-driven signatures, optional DNS payload construction for
+  DNS signatures, web-scan preset IDS behavior, and existing IDS signature
+  validation/rendering behavior.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

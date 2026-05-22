@@ -327,6 +327,13 @@ They may still request canonical network connections through the generator; do
 not duplicate scanner target fan-out, IDS scanner selection, or nmap transport
 side effects at individual call sites.
 
+For IDS alerts, build alert context through the IDS alert action bundle when a
+data-driven signature or preset rule is attached to canonical network evidence.
+The bundle owns `(gid, sid, rev)` identity, message/classification/priority
+normalization, and signature-owned DNS payload construction for DNS alerts.
+Emitters should only render `IdsContext`; they should not choose signatures or
+invent alert/DNS payloads.
+
 For modeled file transfers, use the file-transfer action bundles for transfer
 identity, Zeek files.log metadata, receiver endpoint file evidence, and
 source-visible timing. HTTP response bodies, substantial SMB reads/writes,

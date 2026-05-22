@@ -44,6 +44,8 @@ from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
 from evidenceforge.generation.actions import (
     BrowserSessionActionBundle,
     BrowserSessionRequest,
+    IdsAlertActionBundle,
+    IdsAlertRequest,
     ScheduledScanOverlapActionBundle,
     ScheduledScanOverlapRequest,
 )
@@ -6614,8 +6616,6 @@ class BaselineMixin:
                         ext_ip = rng.choices(_EXTERNAL_SCAN_IPS, weights=_weights, k=1)[0]
                     else:
                         ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
-                    from evidenceforge.events.contexts import IdsContext
-
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         if alert_proto in {"udp", "tcp"} and alert_dst_port == 53:
@@ -6642,18 +6642,27 @@ class BaselineMixin:
                         src_ip = ext_ip
                         dst_ip = public_target
                         source_system = None
-                    dns_ctx = None
-                    if (
-                        alert_proto in {"udp", "tcp"}
-                        and alert_dst_port == 53
-                        and sig_direction == "out"
-                    ):
-                        dns_ctx = _dns_context_for_ids_signature(
-                            sig,
-                            rng,
+                    ids_result = IdsAlertActionBundle(
+                        IdsAlertRequest(
+                            signature=sig,
+                            time=ts,
+                            src_ip=src_ip,
+                            dst_ip=dst_ip,
+                            dst_port=alert_dst_port,
+                            proto=alert_proto,
+                            rng=rng,
+                            source="baseline_ids_false_positive",
+                            direction=sig_direction,
                             ad_domain=self.scenario.environment.domain or "corp.local",
                             dns_server_ip=dst_ip,
+                            include_dns_payload=(
+                                alert_proto in {"udp", "tcp"}
+                                and alert_dst_port == 53
+                                and sig_direction == "out"
+                            ),
+                            dns_context_factory=_dns_context_for_ids_signature,
                         )
+                    ).execute_with_result()
 
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
@@ -6668,14 +6677,8 @@ class BaselineMixin:
                         orig_bytes=rng.randint(40, 2000),
                         resp_bytes=rng.randint(0, 1000),
                         source_system=source_system,
-                        dns=dns_ctx,
-                        ids=IdsContext(
-                            sid=sig["sid"],
-                            rev=sig.get("rev", 1),
-                            message=sig["message"],
-                            classification=sig["classification"],
-                            priority=sig["priority"],
-                        ),
+                        dns=ids_result.dns,
+                        ids=ids_result.ids,
                     )
 
         # Web access logs

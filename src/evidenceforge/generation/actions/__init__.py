@@ -56,6 +56,11 @@ from evidenceforge.generation.actions.file_transfer import (
     StagedArchiveSmbReadRequest,
     file_transfer_hashes,
 )
+from evidenceforge.generation.actions.ids_alert import (
+    IdsAlertActionBundle,
+    IdsAlertRequest,
+    IdsAlertResult,
+)
 from evidenceforge.generation.actions.linux_shell_command import (
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
@@ -115,6 +120,9 @@ __all__ = [
     "HttpResponseFileTransferActionBundle",
     "HttpResponseFileTransferRequest",
     "HttpResponseFileTransferResult",
+    "IdsAlertActionBundle",
+    "IdsAlertRequest",
+    "IdsAlertResult",
     "LogoffActionBundle",
     "LogoffRequest",
     "LogonActionBundle",

@@ -316,6 +316,13 @@ Zeek/web-access correlation. `ScheduledScanOverlapActionBundle` covers
 suspicious-but-benign scanner noise, and `NmapCommandProbeActionBundle` covers
 network probes caused by modeled nmap processes.
 
+IDS alert callers supply one data-driven signature or preset rule, and
+`IdsAlertActionBundle` builds the canonical alert context attached to network
+evidence. The bundle owns `(gid, sid, rev)` identity,
+message/classification/priority normalization, and optional signature-owned DNS
+payload construction for DNS alerts. Snort/Suricata emitters render `IdsContext`
+only; signature choice and alert payload construction remain upstream.
+
 File-transfer callers supply transfer intent layered on top of a transport path.
 `HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
 build Zeek files.log metadata, FUIDs, analyzers, hashes, MIME types, filenames,
