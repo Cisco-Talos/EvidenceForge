@@ -111,6 +111,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Fix quadratic syslog PAM opener backfill scan by using sorted per-user opener timestamps with `bisect_right` bounded-window lookup in close-path normalization; added regression coverage for future-only opener rows.
 - [x] Integrate final approved PR review outcomes into `dev` — accepted and adapted the remaining real fixes (#170, #171, #172, #188, #189, #191, #192, #194, #195, #196, #197, #212), then closed duplicate, superseded, or already-addressed PRs (#167, #168, #174, #190, #193, #213) with rationale.
 - [x] Reworked remaining real-but-not-ready PR fixes #165, #169, #204, and #207 against current `dev` — landed sidecar symlink-safe writes, bounded bash template expansion, raw Zeek OCSP optional-field defaults, and generation-safe extra syslog weights with focused coverage.
 - [x] Fix unbounded session offset allocation caches for far-future scenario times — replaced minute/four-hour catch-up caches with direct deterministic offsets and covered far-future allocation cases.
