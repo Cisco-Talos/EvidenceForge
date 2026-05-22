@@ -2270,6 +2270,7 @@ class StorylineMixin:
                 target_host, dst_port, service = remote_db_target
                 target_ip = self._resolve_storyline_network_target(target_host)
                 target_hostname = None if _IPV4_LITERAL_RE.fullmatch(target_host) else target_host
+                unresolved_single_label_fallback = False
                 if target_ip is None and target_hostname is not None:
                     ad_domain = getattr(self, "_ad_domain", "")
                     target_lower = target_hostname.rstrip(".").lower()
@@ -2282,6 +2283,7 @@ class StorylineMixin:
                             target_hostname = None
                         else:
                             target_ip = self._unresolved_database_target_ip(target_hostname)
+                            unresolved_single_label_fallback = target_ip is not None
                             if ad_domain:
                                 target_hostname = f"{target_hostname}.{ad_domain}"
                     elif not looks_internal:
@@ -2292,7 +2294,9 @@ class StorylineMixin:
                         target_ip = resolve_domain_ip(target_hostname, src_host=system.hostname)
                 if target_ip is not None:
                     target_system = self._system_for_ip(target_ip)
-                    failed_private_attempt = target_system is None and _is_private_ip(target_ip)
+                    failed_private_attempt = unresolved_single_label_fallback or (
+                        target_system is None and _is_private_ip(target_ip)
+                    )
                     firewall_ctx = None
                     conn_state = "SF"
                     duration = rng.uniform(0.6, 8.0)
