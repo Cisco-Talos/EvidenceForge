@@ -292,6 +292,15 @@ auth, and session timing. This keeps transport/session ownership separate from
 file evidence while preventing each caller from inventing transfer metadata
 independently.
 
+Linux shell-command callers supply one interactive shell command intent.
+`LinuxShellCommandActionBundle` owns the execution sequence around bash history:
+activity-key-to-command resolution, SSH/session-readiness alignment,
+per-user/per-host history scheduling, bash-history event emission, and optional
+foreground process telemetry through existing process helpers. The current slice
+keeps command pools, lifecycle clamps, and process side-effect builders as
+adapter hooks while moving the orchestration boundary above individual
+`SecurityEvent`s.
+
 Action bundles own cross-event concerns:
 
 - Deterministic action anchors for durable references.

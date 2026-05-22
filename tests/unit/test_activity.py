@@ -35,6 +35,8 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
+    LinuxShellCommandActionBundle,
+    LinuxShellCommandRequest,
     RdpSessionActionBundle,
     RdpSessionRequest,
     WindowsServiceInstallActionBundle,
@@ -1995,6 +1997,24 @@ class TestActivityGenerator:
 
         assert len(events) == 2
         assert len(set(event_seconds)) == 2
+
+    def test_linux_shell_command_bundle_anchor_is_stable(self):
+        """Identical shell command requests should have stable action anchors."""
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = LinuxShellCommandRequest(
+            user=user,
+            system=linux,
+            time=timestamp,
+            activity_type_or_command="whoami",
+            emit_process_telemetry=False,
+        )
+
+        assert (
+            LinuxShellCommandActionBundle(Mock(), request).anchor
+            == LinuxShellCommandActionBundle(Mock(), request).anchor
+        )
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch

@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -131,6 +131,14 @@ creation now routes through `ScpReceiverFileActionBundle` after the SSH bundle
 has owned transport/auth/session timing. Public scenario YAML, CLI behavior,
 output layout, and authoring skills remain unchanged for this slice.
 
+The Linux shell-command action-bundle extraction moves bash-history command
+execution orchestration into `LinuxShellCommandActionBundle`. The bundle resolves
+activity keys or literal commands, applies Linux source-native command
+preparation, schedules bash history after session readiness, emits the
+`bash_command` event, and optionally emits foreground process telemetry through
+existing adapter hooks. Public scenario YAML, CLI behavior, output layout, and
+authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -181,6 +189,10 @@ output layout, and authoring skills remain unchanged for this slice.
   anchors, HTTP response files.log metadata, SMB transfer direction/filename/hash
   construction, staged-archive SMB read preservation, and SCP receiver file
   ordering after source-visible process creation.
+- Linux shell-command probes cover stable shell-command anchors plus preservation
+  of bash-history dwell, same-user cross-host second deconfliction, scheduled
+  bash/process timing, process telemetry suppression, alias/interpreter/pipeline
+  process expansion, and foreground serialization.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

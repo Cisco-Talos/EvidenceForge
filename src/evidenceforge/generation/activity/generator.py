@@ -69,6 +69,8 @@ from evidenceforge.generation.actions import (
     ExplicitCredentialUseRequest,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
+    LinuxShellCommandActionBundle,
+    LinuxShellCommandRequest,
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
     RdpSessionActionBundle,
@@ -10460,8 +10462,25 @@ class ActivityGenerator:
                 process lifecycle telemetry. Storyline process events set this to False
                 because the typed process event already owns the canonical process.
         """
-        # Activity type pools: if the arg matches a known key, pick from pool.
-        # Otherwise treat as a literal command (supports typos, direct strings, etc.)
+        return LinuxShellCommandActionBundle(
+            self,
+            LinuxShellCommandRequest(
+                user=user,
+                system=system,
+                time=time,
+                activity_type_or_command=activity_type_or_command,
+                emit_process_telemetry=emit_process_telemetry,
+            ),
+        ).execute()
+
+    def _resolve_bash_command(
+        self,
+        user: User,
+        system: System,
+        activity_type_or_command: str,
+    ) -> str:
+        """Return the concrete bash command for an activity key or literal command."""
+
         _activity_type_commands = {
             "process_code": [
                 "vim script.py",
@@ -10578,27 +10597,23 @@ class ActivityGenerator:
                     ]
             command = _get_rng().choice(command_list)
         else:
-            # Literal command string (direct commands, typos, etc.)
             command = activity_type_or_command
+        return command
 
-        if _is_noninteractive_bash_user(user):
-            logger.debug(
-                "Skipping bash_history for noninteractive web service user %s on %s",
-                user.username,
-                system.hostname,
-            )
-            return None
+    @staticmethod
+    def _should_skip_bash_history(user: User, system: System) -> bool:
+        """Return true when bash-history evidence should be suppressed."""
+
+        _ = system
+        return _is_noninteractive_bash_user(user)
+
+    @staticmethod
+    def _prepare_bash_history_command(system: System, command: str) -> str:
+        """Return a source-native command suitable for bash history."""
 
         if _get_os_category(system.os) == "linux":
-            command = _background_linux_shell_command_if_needed(command)
-        time = self._schedule_bash_history_time(user, system, time, command)
-        if not self._is_within_scenario_window(time):
-            return None
-        self._emit_bash_command_event(user, system, time, command)
-        if emit_process_telemetry:
-            self._maybe_emit_bash_process_telemetry(user, system, time, command)
-        logger.debug(f"Generated bash command: {command} by {user.username} on {system.hostname}")
-        return time
+            return _background_linux_shell_command_if_needed(command)
+        return command
 
     def _emit_bash_command_event(
         self,

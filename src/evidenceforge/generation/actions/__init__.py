@@ -40,6 +40,10 @@ from evidenceforge.generation.actions.file_transfer import (
     StagedArchiveSmbReadRequest,
     file_transfer_hashes,
 )
+from evidenceforge.generation.actions.linux_shell_command import (
+    LinuxShellCommandActionBundle,
+    LinuxShellCommandRequest,
+)
 from evidenceforge.generation.actions.proxy_transaction import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
@@ -76,6 +80,8 @@ __all__ = [
     "StagedArchiveSmbReadActionBundle",
     "StagedArchiveSmbReadRequest",
     "file_transfer_hashes",
+    "LinuxShellCommandActionBundle",
+    "LinuxShellCommandRequest",
     "ProxyTransactionActionBundle",
     "ProxyTransactionRequest",
     "RdpSessionActionBundle",

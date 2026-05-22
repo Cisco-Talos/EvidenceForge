@@ -261,7 +261,7 @@ connection tuple.
 **File:** `<hostname.domain>/bash_history/<username>.bash_history`
 **Format:** Timestamped bash history (`#<epoch>\n<command>`)
 
-Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving.
+Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving. Bash-history timing and optional foreground process telemetry are coordinated by the internal Linux shell-command bundle so command text, source-visible timing, and endpoint process evidence stay aligned.
 
 **Known Limitations:**
 - No command typos, tab-completion artifacts, or repeated commands
