@@ -41,6 +41,12 @@ from evidenceforge.generation.actions.ssh_session import (
     SshSessionActionBundle,
     SshSessionRequest,
 )
+from evidenceforge.generation.actions.windows_remote_admin import (
+    ExplicitCredentialUseActionBundle,
+    ExplicitCredentialUseRequest,
+    WindowsServiceInstallActionBundle,
+    WindowsServiceInstallRequest,
+)
 
 __all__ = [
     "ActionAnchor",
@@ -55,4 +61,8 @@ __all__ = [
     "RdpSourceProcessFactory",
     "SshSessionActionBundle",
     "SshSessionRequest",
+    "ExplicitCredentialUseActionBundle",
+    "ExplicitCredentialUseRequest",
+    "WindowsServiceInstallActionBundle",
+    "WindowsServiceInstallRequest",
 ]

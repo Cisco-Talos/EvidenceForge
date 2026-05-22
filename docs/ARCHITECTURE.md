@@ -251,6 +251,16 @@ transport PID, network close time, and source-ready timing aligned so storyline,
 world-planner, and baseline RDP paths do not independently invent partial RDP
 evidence.
 
+Windows remote-admin callers supply explicit credential use or service-install
+intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
+subject-session selection, caller-process materialization or validation, source
+endpoint semantics, and source-visible ordering after the caller process.
+`WindowsServiceInstallActionBundle` owns service-control/service-install
+evidence: companion SMB/RPC transport, dropped service-binary file creation when
+applicable, and the target 4697/service context. Tool-specific storyline choices
+such as `runas`, `PsExec`, `wmic`, and `schtasks` remain intent inputs rather
+than separate evidence-generation paths.
+
 Explicit forward proxy callers likewise supply one logical client-to-origin HTTP
 or HTTPS request, and `ProxyTransactionActionBundle` expands it into the
 source-native evidence that real sensors would see: client-to-proxy connection

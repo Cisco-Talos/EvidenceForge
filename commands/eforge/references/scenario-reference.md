@@ -263,7 +263,10 @@ auth, session, process, bash-history, endpoint/EDR, and teardown evidence before
 the engine dispatches individual canonical `SecurityEvent`s. An RDP request is
 modeled as one remote interactive session action that coordinates source-side
 `mstsc.exe`, TCP/3389 transport, target Type 10 logon/session metadata, and
-source-visible ordering before dispatch.
+source-visible ordering before dispatch. Windows remote-admin events such as
+`explicit_credentials` and `service_installed` likewise use bundle-owned evidence
+paths for caller-process timing, source endpoint semantics, service-control
+transport, dropped service binaries, and target service records.
 
 Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
 

@@ -32,7 +32,14 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
-from evidenceforge.generation.actions import RdpSessionActionBundle, RdpSessionRequest
+from evidenceforge.generation.actions import (
+    ExplicitCredentialUseActionBundle,
+    ExplicitCredentialUseRequest,
+    RdpSessionActionBundle,
+    RdpSessionRequest,
+    WindowsServiceInstallActionBundle,
+    WindowsServiceInstallRequest,
+)
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
     EXTERNAL_IPS,
@@ -2630,6 +2637,29 @@ class TestActivityGenerator:
         )
         assert file_event.timestamp < service_event.timestamp
 
+    def test_windows_service_install_bundle_anchor_is_stable(self, test_user, test_system):
+        """Identical service-install bundle requests should have stable action anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = WindowsServiceInstallRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+        second = WindowsServiceInstallRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+
+        assert (
+            WindowsServiceInstallActionBundle(Mock(), first).anchor
+            == WindowsServiceInstallActionBundle(Mock(), second).anchor
+        )
+
     def test_remote_service_install_emits_smb_and_rpc_network_evidence(
         self, activity_gen, state_manager, mock_emitters
     ):
@@ -4369,6 +4399,37 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "explicit_credentials"
         assert event.auth.process_pid == 4242
+
+    def test_explicit_credential_bundle_anchor_is_stable(self, test_user, test_system):
+        """Identical explicit-credential bundle requests should have stable action anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = ExplicitCredentialUseRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.50",
+            source_port=50123,
+        )
+        second = ExplicitCredentialUseRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.50",
+            source_port=50123,
+        )
+
+        assert (
+            ExplicitCredentialUseActionBundle(Mock(), first).anchor
+            == ExplicitCredentialUseActionBundle(Mock(), second).anchor
+        )
 
     def test_generate_explicit_credentials_creates_named_caller_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

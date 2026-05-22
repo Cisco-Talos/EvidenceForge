@@ -271,6 +271,14 @@ source-visible transport evidence and target authentication evidence. Do not
 emit independent port 3389 connections or Type 10 logons for the same modeled RDP
 session outside the bundle.
 
+For Windows remote administration specifically, explicit credential use and
+remote service installation should route through the Windows remote-admin action
+bundles. The bundles own 4648 subject/caller-process alignment, source endpoint
+semantics, source-visible caller timing, service-control transport, dropped
+service-binary evidence, and target service-install records. Keep tool-specific
+authoring (`runas`, `PsExec`, `wmic`, `schtasks`) in scenario/storyline layers;
+the generated evidence semantics belong in the bundle path.
+
 For explicit forward proxy traffic, logical client-to-origin HTTP/HTTPS requests
 from hosts with explicit proxy routes should route through the proxy transaction
 action bundle. The bundle owns client-to-proxy evidence, proxy access semantics,

@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -111,6 +111,17 @@ timing, preallocated target session metadata, transport PID, source-ready time,
 and network-close time. Public scenario YAML, CLI behavior, output layout, and
 authoring skills remain unchanged for this slice.
 
+The Windows remote-admin action-bundle extraction moves explicit credential use
+and remote service-install expansion into internal action bundles.
+`ExplicitCredentialUseActionBundle` owns 4648 subject selection, visible
+caller-process materialization/validation, source endpoint semantics, and
+source-visible caller timing. `WindowsServiceInstallActionBundle` owns
+service-control/service-install evidence: SMB/RPC companion transport, dropped
+service-binary file creation when applicable, and target service-install records.
+`ActivityGenerator` keeps the existing compatibility entrypoints, and public
+scenario YAML, CLI behavior, output layout, and authoring skills remain
+unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -153,6 +164,10 @@ authoring skills remain unchanged for this slice.
   source-port reuse between TCP/3389 and Type 10 logon evidence, preallocated
   session metadata updates, source-host correction for impossible self-sourced
   RDP, and world-planner baseline/storyline behavior preservation.
+- Windows remote-admin probes cover stable explicit-credential and service-install
+  anchors, 4648 caller-process ownership, subject-logon bootstrap, local-vs-remote
+  endpoint semantics, dropped service payload ordering, and SMB/RPC companion
+  transport preservation.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:
