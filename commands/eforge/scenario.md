@@ -562,6 +562,7 @@ After the interview, generate both files:
    - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
    - **Engine-aware realism**:
      - Do NOT specify explicit `mac_address` in `dhcp_lease` events — the engine auto-generates diverse OUI prefixes from `network_params.yaml`
+     - DHCP lease acquisition/renewal is bundle-owned; do not duplicate Zeek DHCP/conn or `dhclient` syslog rows by hand for the same lease transaction
      - DHCP broadcast evidence is link-local. If the scenario expects `dhcp.log`, include a SPAN-style Zeek sensor on the client segment; TAP/firewall sensors on other segments will not see it.
      - Storyline `connection` events to raw C2 IPs will skip DNS emission (realistic for direct-IP beaconing, but means no DNS trail for hunters). If you want DNS evidence, use a domain name as the C2 destination and add it to the scenario narrative
      - Assign role-appropriate `services` to Linux servers (e.g., `mysql` on DB servers, `apache`/`nginx` on web servers) — this drives per-server bash history RBAC (sysadmins on all servers, DBAs only on DB servers, etc.)

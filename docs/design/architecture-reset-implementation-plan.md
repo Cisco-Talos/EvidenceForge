@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -169,6 +169,15 @@ handoff, Zeek UID/state identity, source endpoint process ownership, and Windows
 WFP companions. Public scenario YAML, CLI behavior, output layout, concrete
 format names, and authoring skills remain unchanged for this slice.
 
+The DHCP lease action-bundle extraction moves DHCP acquisition and renewal
+orchestration behind `DhcpLeaseActionBundle`. `ActivityGenerator` continues to
+expose `generate_dhcp_lease()` as the compatibility entrypoint, while the bundle
+owns the internal boundary for lease identity, MAC/IP/server/domain metadata,
+Zeek DHCP plus connection fan-out, link-local visibility semantics, and Linux
+`dhclient` syslog companion ordering. Public scenario YAML, CLI behavior, output
+layout, concrete format names, and authoring skills remain unchanged for this
+slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -234,6 +243,9 @@ format names, and authoring skills remain unchanged for this slice.
 - Network connection probes cover stable connection anchors, bundle-to-adapter
   delegation, command-owned HTTP/proxy metadata preservation, scanner transport
   evidence, and remote-logon transport semantics.
+- DHCP lease probes cover stable lease anchors, bundle-to-adapter delegation,
+  Zeek DHCP dispatch, default AD-domain metadata, Linux `dhclient` syslog
+  ordering, DHCP setup state, and link-local visibility behavior.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

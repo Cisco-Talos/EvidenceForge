@@ -296,6 +296,12 @@ Higher-level bundles may request connections through the public generator
 entrypoint, but they should not duplicate tuple allocation, hostname resolution,
 packet accounting, or endpoint-flow ownership locally.
 
+For DHCP leases, route acquisition and renewal transactions through the DHCP
+lease action bundle. The bundle owns lease identity, MAC/IP/server/domain
+metadata, Zeek DHCP plus connection fan-out, link-local visibility semantics,
+and Linux `dhclient` syslog companion ordering. Do not hand-roll separate DHCP
+syslog or Zeek rows for the same lease transaction outside the bundle.
+
 For browser-like HTTP/S sessions, page loads and their subresources should route
 through the browser-session action bundle. The bundle owns request grouping,
 transaction depth, referrer chains, page/subresource timing, static-asset cache

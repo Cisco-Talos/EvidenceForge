@@ -34,6 +34,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
+from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
@@ -928,6 +929,41 @@ class TestWeirdContext:
 
 class TestDhcpLease:
     """DHCP lease events dispatch through canonical path."""
+
+    def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
+        """DHCP lease requests should expose durable deterministic anchors."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        request = DhcpLeaseRequest(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
+            lease_time=7200.0,
+            uid="CTest123456789ab",
+            msg_types=["REQUEST", "ACK"],
+            domain="corp.local",
+        )
+
+        first = DhcpLeaseActionBundle(Mock(), request).anchor
+        second = DhcpLeaseActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "dhcp_lease"
+        assert first.stable_id.startswith("dhcp-lease-")
+
+    def test_dhcp_lease_bundle_delegates_to_adapter(self, timestamp):
+        """The bundle should preserve the current generator adapter contract."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        request = DhcpLeaseRequest(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+        )
+        executor = Mock()
+
+        DhcpLeaseActionBundle(executor, request).execute()
+
+        executor._execute_dhcp_lease_bundle.assert_called_once_with(request)
 
     def test_generate_dhcp_lease_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp

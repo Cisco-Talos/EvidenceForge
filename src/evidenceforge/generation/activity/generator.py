@@ -65,6 +65,8 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
+    DhcpLeaseActionBundle,
+    DhcpLeaseRequest,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -14697,6 +14699,29 @@ class ActivityGenerator:
         domain: str | None = None,
     ) -> None:
         """Generate a DHCP lease event via canonical SecurityEvent dispatch."""
+        request = DhcpLeaseRequest(
+            system=system,
+            time=time,
+            mac=mac,
+            server_addr=server_addr,
+            lease_time=lease_time,
+            uid=uid,
+            msg_types=msg_types,
+            domain=domain,
+        )
+        DhcpLeaseActionBundle(executor=self, request=request).execute()
+
+    def _execute_dhcp_lease_bundle(self, request: DhcpLeaseRequest) -> None:
+        """Expand one DHCP lease request into canonical evidence."""
+        system = request.system
+        time = request.time
+        mac = request.mac
+        server_addr = request.server_addr
+        lease_time = request.lease_time
+        uid = request.uid
+        msg_types = request.msg_types
+        domain = request.domain
+
         from evidenceforge.events.contexts import DhcpContext
 
         if msg_types is None:

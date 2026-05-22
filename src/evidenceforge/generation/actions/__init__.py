@@ -36,6 +36,10 @@ from evidenceforge.generation.actions.browser_session import (
     BrowserSessionRequest,
     BrowserSessionResult,
 )
+from evidenceforge.generation.actions.dhcp_lease import (
+    DhcpLeaseActionBundle,
+    DhcpLeaseRequest,
+)
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
@@ -88,6 +92,8 @@ __all__ = [
     "BrowserSessionActionBundle",
     "BrowserSessionRequest",
     "BrowserSessionResult",
+    "DhcpLeaseActionBundle",
+    "DhcpLeaseRequest",
     "FailedLogonActionBundle",
     "FailedLogonRequest",
     "HttpResponseFileTransferActionBundle",

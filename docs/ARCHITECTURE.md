@@ -280,6 +280,13 @@ and Windows WFP companions. Higher-level bundles still call the public
 through this shared bundle boundary before becoming one canonical
 `SecurityEvent` plus any source-native companion evidence.
 
+DHCP callers supply one acquisition or renewal transaction, and
+`DhcpLeaseActionBundle` owns lease identity, MAC/IP/server/domain metadata, Zeek
+DHCP plus connection fan-out, link-local visibility semantics, and Linux
+`dhclient` syslog companion ordering. Baseline warm-up leases, periodic renewal,
+and typed storyline `dhcp_lease` events share this path so setup state and
+visible lease evidence do not diverge.
+
 Browser-session callers supply one browser visit intent, and
 `BrowserSessionActionBundle` expands it into page-load and subresource requests
 with grouped TCP flow accounting, HTTP transaction depths, referrer chains,
