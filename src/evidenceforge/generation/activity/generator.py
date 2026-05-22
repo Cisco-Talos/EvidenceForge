@@ -3434,7 +3434,8 @@ class ActivityGenerator:
             if target:
                 command_line = command_line.replace("{ssh_target}", target)
         if "{internal_url}" in command_line:
-            while "{internal_url}" in command_line:
+            internal_url_count = command_line.count("{internal_url}")
+            for _ in range(internal_url_count):
                 command_line = command_line.replace(
                     "{internal_url}",
                     self._pick_internal_url_placeholder(rng),
@@ -3454,6 +3455,8 @@ class ActivityGenerator:
     def _pick_internal_url_placeholder(self, rng: random.Random) -> str:
         """Return an internal URL in the current scenario namespace."""
         domain = str(getattr(self, "_ad_domain", "") or "corp.local").strip(".").lower()
+        if not domain or "{" in domain or "}" in domain:
+            domain = "corp.local"
         options = [
             f"https://jira.{domain}/browse/PROJ-{rng.randint(1000, 9999)}",
             f"https://wiki.{domain}/display/ENG/Architecture",

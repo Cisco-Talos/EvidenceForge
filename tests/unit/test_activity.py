@@ -6549,6 +6549,30 @@ class TestActivityGenerator:
         assert "dc=corp,dc=local" not in command
         assert "{ldap_base_dn}" not in command
 
+    def test_parameterize_command_internal_url_placeholder_is_bounded(
+        self, activity_gen, test_user
+    ):
+        """Internal URL replacement should terminate even with placeholder-tainted domains."""
+        activity_gen._ad_domain = "{internal_url}"
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+        )
+
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            "curl {internal_url} && curl {internal_url}",
+            username=test_user.username,
+            system=linux,
+        )
+
+        assert "{internal_url}" not in command
+        assert command.count("https://") == 2
+        assert "corp.local" in command
+
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
