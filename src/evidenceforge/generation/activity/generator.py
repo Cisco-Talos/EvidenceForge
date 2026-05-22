@@ -2524,11 +2524,11 @@ def _proxy_action_for_context(
 ) -> str:
     """Return a source-native proxy policy/action hint for W3C logs."""
     normalized_cache = (cache_result or "").upper()
-    if normalized_cache == "DENIED" or status_code == 403:
+    if normalized_cache == "DENIED":
         return "deny"
-    if normalized_cache == "AUTH_REQUIRED" or status_code == 407:
+    if normalized_cache == "AUTH_REQUIRED":
         return "auth-required"
-    if normalized_cache == "GATEWAY_ERROR" or status_code in {502, 503, 504}:
+    if normalized_cache == "GATEWAY_ERROR":
         return "gateway-error"
     normalized_method = method.upper()
     normalized_url = url.lower()
