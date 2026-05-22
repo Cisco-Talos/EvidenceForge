@@ -295,6 +295,15 @@ canonical connection generation. Single tool requests, scanners, raw storyline
 HTTP events, and source-local web server noise may remain direct canonical
 events unless they model a browser session.
 
+For modeled file transfers, use the file-transfer action bundles for transfer
+identity, Zeek files.log metadata, receiver endpoint file evidence, and
+source-visible timing. HTTP response bodies, substantial SMB reads/writes,
+staged-archive SMB reads, and SCP receiver-side file creation should share the
+bundle helpers instead of independently inventing FUIDs, hashes, filenames,
+transfer direction, or target process ownership. SSH/RDP/proxy bundles still own
+their transport/session semantics; file-transfer bundles own the transfer/file
+evidence layered on top.
+
 When fixing realism defects:
 - Cross-event ordering, lifecycle, source timing, observation, and durable
   identities belong in bundle/lifecycle/timing/observation layers.

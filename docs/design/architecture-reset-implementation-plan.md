@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -122,6 +122,15 @@ service-binary file creation when applicable, and target service-install records
 scenario YAML, CLI behavior, output layout, and authoring skills remain
 unchanged for this slice.
 
+The file-transfer action-bundle extraction moves transfer-specific evidence
+ownership into internal bundle helpers. HTTP response file-analysis metadata and
+substantial SMB files.log metadata now share bundle-owned FUID/hash/MIME/filename
+construction. Storyline staged-archive exfil prep now emits its SMB archive read
+through `StagedArchiveSmbReadActionBundle`, and modeled SCP receiver-side file
+creation now routes through `ScpReceiverFileActionBundle` after the SSH bundle
+has owned transport/auth/session timing. Public scenario YAML, CLI behavior,
+output layout, and authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -168,6 +177,10 @@ unchanged for this slice.
   anchors, 4648 caller-process ownership, subject-logon bootstrap, local-vs-remote
   endpoint semantics, dropped service payload ordering, and SMB/RPC companion
   transport preservation.
+- File-transfer probes cover stable HTTP, SMB, staged-archive, and SCP receiver
+  anchors, HTTP response files.log metadata, SMB transfer direction/filename/hash
+  construction, staged-archive SMB read preservation, and SCP receiver file
+  ordering after source-visible process creation.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

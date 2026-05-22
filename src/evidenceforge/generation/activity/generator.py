@@ -67,15 +67,20 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
+    HttpResponseFileTransferActionBundle,
+    HttpResponseFileTransferRequest,
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
     RdpSessionActionBundle,
     RdpSessionRequest,
     RdpSourceProcessFactory,
+    SmbFileTransferMetadataActionBundle,
+    SmbFileTransferMetadataRequest,
     SshSessionActionBundle,
     SshSessionRequest,
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
+    file_transfer_hashes,
 )
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -2732,17 +2737,8 @@ def _ntp_stratum_and_ref_id(dst_ip: str) -> tuple[int, str]:
 
 def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
     """Return deterministic Zeek files.log hashes for requested analyzers."""
-    import hashlib
 
-    analyzer_names = {analyzer.upper() for analyzer in analyzers}
-    hashes: dict[str, str] = {}
-    if "MD5" in analyzer_names:
-        hashes["md5"] = hashlib.md5(seed_material.encode()).hexdigest()
-    if "SHA1" in analyzer_names:
-        hashes["sha1"] = hashlib.sha1(seed_material.encode()).hexdigest()
-    if "SHA256" in analyzer_names:
-        hashes["sha256"] = hashlib.sha256(seed_material.encode()).hexdigest()
-    return hashes
+    return file_transfer_hashes(seed_material, analyzers)
 
 
 def _enterprise_org_from_domain(ad_domain: str) -> str:
@@ -9797,59 +9793,21 @@ class ActivityGenerator:
                 and event.http.resp_mime_types
                 and rng.random() < 0.3
             ):
-                from evidenceforge.events.contexts import FileTransferContext
-                from evidenceforge.utils.ids import generate_zeek_uid
-
-                fuid = generate_zeek_uid("F")
-                file_mime_type = event.http.resp_mime_types[0]
-                file_hashes = _file_transfer_hashes(
-                    f"http:{host}:{uri}:{resp_body_len}:{fuid}",
-                    ["SHA1"]
-                    if file_mime_type in {"application/x-dosexec", "application/octet-stream"}
-                    else [],
-                )
-                event.file_transfer = FileTransferContext(
-                    fuid=fuid,
-                    source="HTTP",
-                    depth=0,
-                    analyzers=[],
-                    mime_type=file_mime_type,
-                    duration=rng.uniform(0.0, 0.01),
-                    local_orig=_is_private_ip(dst_ip),
-                    is_orig=False,
-                    seen_bytes=resp_body_len,
-                    total_bytes=resp_body_len,
-                    missing_bytes=0,
-                    overflow_bytes=0,
-                    timedout=False,
-                    **file_hashes,
-                )
-                event.http.resp_fuids = [fuid]
+                file_result = HttpResponseFileTransferActionBundle(
+                    HttpResponseFileTransferRequest(
+                        host=host,
+                        uri=uri,
+                        dst_ip=dst_ip,
+                        response_body_len=resp_body_len,
+                        response_mime_types=list(event.http.resp_mime_types),
+                        timestamp=event.timestamp,
+                    ),
+                    rng,
+                ).execute()
+                event.file_transfer = file_result.file_transfer
+                event.http.resp_fuids = [event.file_transfer.fuid]
                 event.http.resp_mime_types = [event.file_transfer.mime_type]
-
-                # PE analysis for Windows executables in file transfers
-                if (
-                    file_mime_type in ("application/x-dosexec", "application/octet-stream")
-                    and rng.random() < 0.1
-                ):
-                    from evidenceforge.events.contexts import PeContext
-
-                    is_64 = rng.random() < 0.7
-                    event.pe = PeContext(
-                        id=fuid,
-                        machine="AMD64" if is_64 else "I386",
-                        compile_ts=event.timestamp.timestamp()
-                        - rng.randint(86400, 86400 * 365 * 3),
-                        is_exe=True,
-                        is_64bit=is_64,
-                        uses_aslr=rng.random() < 0.8,
-                        uses_dep=rng.random() < 0.9,
-                        uses_code_integrity=rng.random() < 0.1,
-                        has_import_table=True,
-                        has_export_table=rng.random() < 0.2,
-                        has_cert_table=rng.random() < 0.3,
-                        has_debug_data=rng.random() < 0.4,
-                    )
+                event.pe = file_result.pe
 
         if (
             event.file_transfer is None
@@ -9858,84 +9816,25 @@ class ActivityGenerator:
             and dst_port == 445
             and event.network.conn_state == "SF"
         ):
-            from evidenceforge.events.contexts import FileTransferContext
-            from evidenceforge.generation.activity.smb_file_transfers import (
-                load_smb_file_transfers,
-                pick_smb_filename,
-            )
-            from evidenceforge.utils.ids import generate_zeek_uid
-
-            smb_config = load_smb_file_transfers()
-            min_transfer_bytes = int(smb_config.get("min_transfer_bytes", 32768))
             transfer_bytes = max(event.network.orig_bytes or 0, event.network.resp_bytes or 0)
-            if transfer_bytes >= min_transfer_bytes:
-                mime_entries = smb_config.get("mime_types", [])
-                analyzer_entries = smb_config.get("analyzer_sets", [])
-                mime_type = "application/octet-stream"
-                if mime_entries:
-                    mime_values = [
-                        str(entry.get("mime_type", "application/octet-stream"))
-                        for entry in mime_entries
-                    ]
-                    mime_weights = [int(entry.get("weight", 1)) for entry in mime_entries]
-                    mime_type = rng.choices(
-                        mime_values,
-                        weights=mime_weights,
-                        k=1,
-                    )[0]
-                analyzers: list[str] = []
-                if analyzer_entries:
-                    analyzer_values = [entry.get("analyzers", []) for entry in analyzer_entries]
-                    analyzer_weights = [int(entry.get("weight", 1)) for entry in analyzer_entries]
-                    analyzers = list(
-                        rng.choices(
-                            analyzer_values,
-                            weights=analyzer_weights,
-                            k=1,
-                        )[0]
-                    )
-                missing_probability = float(smb_config.get("missing_bytes_probability", 0.0))
-                timeout_probability = float(smb_config.get("timeout_probability", 0.0))
-                missing_bytes = (
-                    rng.randint(1, max(1, min(65536, transfer_bytes // 20)))
-                    if rng.random() < missing_probability
-                    else 0
-                )
-                fuid = generate_zeek_uid("F")
-                file_hashes = _file_transfer_hashes(
-                    f"smb:{event.network.src_ip}:{event.network.dst_ip}:{transfer_bytes}:{fuid}",
-                    analyzers,
-                )
-                smb_server = ""
-                if event.dst_host is not None:
-                    smb_server = event.dst_host.hostname or event.dst_host.fqdn
-                if not smb_server:
-                    smb_server = REVERSE_DNS.get(event.network.dst_ip, event.network.dst_ip)
-                smb_user = getattr(resolved_source_system, "assigned_user", "") or "Public"
-                filename = pick_smb_filename(
-                    rng,
-                    smb_config,
-                    mime_type=mime_type,
+            smb_server = ""
+            if event.dst_host is not None:
+                smb_server = event.dst_host.hostname or event.dst_host.fqdn
+            if not smb_server:
+                smb_server = REVERSE_DNS.get(event.network.dst_ip, event.network.dst_ip)
+            smb_user = getattr(resolved_source_system, "assigned_user", "") or "Public"
+            event.file_transfer = SmbFileTransferMetadataActionBundle(
+                SmbFileTransferMetadataRequest(
+                    src_ip=event.network.src_ip,
+                    dst_ip=event.network.dst_ip,
+                    transfer_bytes=transfer_bytes,
+                    duration=event.network.duration or 0.0,
                     server=smb_server,
                     user=smb_user,
-                )
-                event.file_transfer = FileTransferContext(
-                    fuid=fuid,
-                    source="SMB",
-                    depth=0,
-                    filename=filename,
-                    analyzers=analyzers,
-                    mime_type=mime_type,
-                    duration=max(0.0, (event.network.duration or 0.0) * rng.uniform(0.6, 0.98)),
-                    local_orig=_is_private_ip(event.network.src_ip),
                     is_orig=(event.network.orig_bytes or 0) >= (event.network.resp_bytes or 0),
-                    seen_bytes=max(0, transfer_bytes - missing_bytes),
-                    total_bytes=transfer_bytes,
-                    missing_bytes=missing_bytes,
-                    overflow_bytes=0,
-                    timedout=rng.random() < timeout_probability,
-                    **file_hashes,
-                )
+                ),
+                rng,
+            ).execute()
 
         # NTP context for Zeek ntp.log fan-out
         if not local_only and service == "ntp" and proto == "udp":

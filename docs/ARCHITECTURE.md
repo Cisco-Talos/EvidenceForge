@@ -281,6 +281,17 @@ routing. Tool-like HTTP requests, scanners, and raw storyline HTTP events remain
 single canonical events unless they are intentionally modeled as browser
 sessions.
 
+File-transfer callers supply transfer intent layered on top of a transport path.
+`HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
+build Zeek files.log metadata, FUIDs, analyzers, hashes, MIME types, filenames,
+byte counts, transfer direction, and optional PE analysis from one transfer
+description. `StagedArchiveSmbReadActionBundle` emits the SMB read that moves a
+staged archive before exfiltration, and `ScpReceiverFileActionBundle` emits only
+the receiver-side endpoint file evidence after the SSH bundle owns transport,
+auth, and session timing. This keeps transport/session ownership separate from
+file evidence while preventing each caller from inventing transfer metadata
+independently.
+
 Action bundles own cross-event concerns:
 
 - Deterministic action anchors for durable references.

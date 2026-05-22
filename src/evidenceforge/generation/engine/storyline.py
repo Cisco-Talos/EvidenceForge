@@ -44,6 +44,12 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
+from evidenceforge.generation.actions import (
+    ScpReceiverFileActionBundle,
+    ScpReceiverFileRequest,
+    StagedArchiveSmbReadActionBundle,
+    StagedArchiveSmbReadRequest,
+)
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
 from evidenceforge.generation.activity.helpers import _get_os_category
@@ -1409,76 +1415,25 @@ class StorylineMixin:
         if target_system is None:
             return
         source_system = self._system_for_ip(source_ip)
-        transfer_bytes = max(
-            32_768,
-            upload_bytes - rng.randint(4096, max(4096, min(upload_bytes // 180, 2_000_000))),
-        )
-        throughput = rng.uniform(18_000_000, 85_000_000)
-        duration = max(3.0, min(180.0, transfer_bytes / throughput + rng.uniform(0.5, 6.0)))
-        gap_seconds = rng.uniform(20.0, 180.0)
-        transfer_time = exfil_time - timedelta(seconds=duration + gap_seconds)
-        earliest = archive.staged_at + timedelta(seconds=rng.uniform(20.0, 180.0))
-        if transfer_time < earliest:
-            latest = exfil_time - timedelta(seconds=duration + 5.0)
-            if latest <= earliest:
-                return
-            span = (latest - earliest).total_seconds()
-            transfer_time = earliest + timedelta(seconds=rng.uniform(0.0, span))
-
-        from evidenceforge.events.contexts import FileTransferContext
-        from evidenceforge.generation.activity.generator import _file_transfer_hashes
-        from evidenceforge.utils.ids import generate_zeek_uid
-
-        analyzers = ["MD5", "SHA1"]
-        fuid = generate_zeek_uid("F")
-        hashes = _file_transfer_hashes(
-            f"smb:{archive.source_ip}:{archive.staging_ip}:{archive.archive_path}:{transfer_bytes}",
-            analyzers,
-        )
-        self.activity_generator.generate_connection(
-            src_ip=archive.source_ip,
-            dst_ip=archive.staging_ip,
-            time=transfer_time,
-            dst_port=445,
-            proto="tcp",
-            service="smb",
-            duration=duration,
-            orig_bytes=rng.randint(35_000, 180_000),
-            resp_bytes=transfer_bytes,
-            conn_state="SF",
-            emit_dns=False,
-            source_system=source_system,
-            file_transfer=FileTransferContext(
-                fuid=fuid,
-                source="SMB",
-                depth=0,
-                filename=archive.smb_filename,
-                analyzers=analyzers,
-                mime_type="application/zip",
-                duration=max(0.0, duration * rng.uniform(0.72, 0.98)),
-                local_orig=True,
-                is_orig=False,
-                seen_bytes=transfer_bytes,
-                total_bytes=transfer_bytes,
-                missing_bytes=0,
-                overflow_bytes=0,
-                timedout=False,
-                **hashes,
+        emitted = StagedArchiveSmbReadActionBundle(
+            self,
+            StagedArchiveSmbReadRequest(
+                actor=archive.actor,
+                source_ip=archive.source_ip,
+                staging_ip=archive.staging_ip,
+                archive_path=archive.archive_path,
+                smb_filename=archive.smb_filename,
+                staged_at=archive.staged_at,
+                exfil_time=exfil_time,
+                upload_bytes=upload_bytes,
+                source_system=source_system,
+                target_system=target_system,
             ),
-        )
-        if (
-            target_system.roles
-            and "file_server" in [role.lower() for role in target_system.roles]
-            and hasattr(self, "_emit_smb_logon_pair")
-        ):
-            self._emit_smb_logon_pair(
-                archive.actor,
-                target_system,
-                archive.source_ip,
-                transfer_time,
-                rng,
-            )
-        archive.consumed = True
+            rng,
+            emit_smb_logon_pair=getattr(self, "_emit_smb_logon_pair", None),
+        ).execute()
+        if emitted:
+            archive.consumed = True
 
     def _last_storyline_process_for_system(self, system: System | None) -> tuple[int, str | None]:
         """Return the last live storyline process for the same source host."""
@@ -4598,69 +4553,22 @@ class StorylineMixin:
         rng: random.Random,
     ) -> None:
         """Emit target-side file evidence after the SSH bundle models the transfer session."""
-        from evidenceforge.events.base import SecurityEvent
-        from evidenceforge.events.contexts import (
-            AuthContext,
-            EdrContext,
-            FileContext,
-            ProcessContext,
-        )
-
-        self.state_manager.set_current_time(transfer_time + timedelta(milliseconds=40))
-        ensure_responder = getattr(
-            self.activity_generator,
-            "ensure_linux_ssh_responder_process",
-            None,
-        )
-        if callable(ensure_responder):
-            sshd_pid = ensure_responder(
+        ScpReceiverFileActionBundle(
+            self,
+            ScpReceiverFileRequest(
+                source_system=source_system,
                 target_system=target_system,
-                time=transfer_time,
-                source_ip=source_system.ip,
+                actor=actor,
+                source_pid=source_pid,
+                source_process=source_process,
+                source_command=source_command,
+                target_user=target_user,
+                target_path=target_path,
+                transfer_time=transfer_time,
                 source_port=source_port,
-            )
-        else:
-            parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
-            sshd_pid = self.state_manager.create_process(
-                system=target_system.hostname,
-                parent_pid=parent_pid if parent_pid > 0 else 0,
-                image="/usr/sbin/sshd",
-                command_line=f"sshd: {target_user}@notty",
-                username=target_user,
-                integrity_level="High" if target_user == "root" else "Medium",
-            )
-        sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
-        parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
-        host_ctx = self.activity_generator._build_host_context(target_system)
-        target_proc = ProcessContext(
-            pid=sshd_pid,
-            parent_pid=parent_pid if parent_pid > 0 else 0,
-            image="/usr/sbin/sshd",
-            command_line=f"sshd: {target_user}@notty",
-            username=target_user,
-        )
-        file_time = transfer_time + timedelta(seconds=rng.uniform(1.2, 3.0))
-        source_time_getter = getattr(self.activity_generator, "process_source_create_time", None)
-        if callable(source_time_getter):
-            source_process_time = source_time_getter(source_system.hostname, source_pid)
-            if isinstance(source_process_time, datetime) and file_time <= source_process_time:
-                file_time = source_process_time + timedelta(milliseconds=rng.randint(250, 1400))
-
-        self.dispatcher.dispatch(
-            SecurityEvent(
-                timestamp=file_time,
-                event_type="file_create",
-                src_host=host_ctx,
-                auth=AuthContext(username=target_user),
-                process=target_proc,
-                file=FileContext(path=target_path, action="create", pid=sshd_pid),
-                edr=EdrContext(
-                    object_id=str(uuid.uuid4()),
-                    actor_id=sshd_actor_id,
-                ),
-                storyline_origin=True,
-            )
-        )
+            ),
+            rng,
+        ).execute()
 
     @staticmethod
     def _extract_http_url(command_line: str) -> str | None:

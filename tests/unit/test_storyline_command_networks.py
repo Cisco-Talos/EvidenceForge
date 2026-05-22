@@ -9,6 +9,16 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.contexts import FileTransferContext, HostContext
+from evidenceforge.generation.actions import (
+    HttpResponseFileTransferActionBundle,
+    HttpResponseFileTransferRequest,
+    ScpReceiverFileActionBundle,
+    ScpReceiverFileRequest,
+    SmbFileTransferMetadataActionBundle,
+    SmbFileTransferMetadataRequest,
+    StagedArchiveSmbReadActionBundle,
+    StagedArchiveSmbReadRequest,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
@@ -701,6 +711,141 @@ class _FakeStateManager:
 
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
+
+
+class TestFileTransferActionBundles:
+    def test_http_file_transfer_bundle_anchor_is_stable(self):
+        """Identical HTTP file-transfer requests should have stable action anchors."""
+        request = HttpResponseFileTransferRequest(
+            host="cdn.example.test",
+            uri="/payload.bin",
+            dst_ip="93.184.216.34",
+            response_body_len=4096,
+            response_mime_types=["application/octet-stream"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+        )
+
+        first = HttpResponseFileTransferActionBundle(request, random.Random(1)).anchor
+        second = HttpResponseFileTransferActionBundle(request, random.Random(99)).anchor
+
+        assert first == second
+
+    def test_http_file_transfer_bundle_builds_source_native_context(self):
+        """HTTP response file transfers should carry Zeek files.log metadata."""
+        request = HttpResponseFileTransferRequest(
+            host="cdn.example.test",
+            uri="/payload.bin",
+            dst_ip="93.184.216.34",
+            response_body_len=4096,
+            response_mime_types=["application/octet-stream"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+
+        assert result.file_transfer.source == "HTTP"
+        assert result.file_transfer.fuid.startswith("F")
+        assert result.file_transfer.total_bytes == 4096
+        assert result.file_transfer.sha1
+
+    def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
+        """SMB files.log metadata should preserve caller-owned transfer direction."""
+        request = SmbFileTransferMetadataRequest(
+            src_ip="10.10.1.35",
+            dst_ip="10.10.2.20",
+            transfer_bytes=65_536,
+            duration=4.2,
+            server="FILE-SRV-01",
+            user="aisha.johnson",
+            is_orig=True,
+        )
+        smb_config = {
+            "min_transfer_bytes": 1024,
+            "mime_types": [{"mime_type": "application/pdf", "weight": 1}],
+            "analyzer_sets": [{"analyzers": ["MD5"], "weight": 1}],
+            "filename_templates": [
+                {
+                    "mime_types": ["application/pdf"],
+                    "templates": [r"\\{server}\Projects\{basename}.pdf"],
+                    "weight": 1,
+                }
+            ],
+            "missing_bytes_probability": 0.0,
+            "timeout_probability": 0.0,
+        }
+
+        context = SmbFileTransferMetadataActionBundle(
+            request,
+            random.Random(8),
+            smb_config=smb_config,
+        ).execute()
+
+        assert context is not None
+        assert context.source == "SMB"
+        assert context.is_orig is True
+        assert context.total_bytes == 65_536
+        assert context.md5
+        assert context.filename.startswith(r"\\FILE-SRV-01\Projects")
+
+    def test_staged_archive_smb_read_bundle_anchor_is_stable(self):
+        """Identical staged-archive transfer requests should have stable anchors."""
+        source = System(hostname="SRC", ip="10.10.1.35", os="Windows 11", type="workstation")
+        target = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.2.20",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+        )
+        actor = User(username="aisha.johnson", full_name="Aisha", email="aisha@example.com")
+        request = StagedArchiveSmbReadRequest(
+            actor=actor,
+            source_ip=source.ip,
+            staging_ip=target.ip,
+            archive_path=r"C:\ProgramData\cache.zip",
+            smb_filename=r"\\FILE-SRV-01\C$\ProgramData\cache.zip",
+            staged_at=datetime(2026, 5, 18, 14, 1, tzinfo=UTC),
+            exfil_time=datetime(2026, 5, 18, 14, 25, tzinfo=UTC),
+            upload_bytes=4_000_000,
+            source_system=source,
+            target_system=target,
+        )
+
+        first = StagedArchiveSmbReadActionBundle(
+            SimpleNamespace(),
+            request,
+            random.Random(1),
+        ).anchor
+        second = StagedArchiveSmbReadActionBundle(
+            SimpleNamespace(),
+            request,
+            random.Random(99),
+        ).anchor
+
+        assert first == second
+
+    def test_scp_receiver_file_bundle_anchor_is_stable(self):
+        """Identical SCP receiver requests should have stable anchors."""
+        source = System(hostname="SRC", ip="10.10.0.10", os="Ubuntu 22.04", type="workstation")
+        target = System(hostname="DST", ip="10.10.0.20", os="Ubuntu 22.04", type="server")
+        actor = User(username="alice", full_name="Alice", email="alice@example.com")
+        request = ScpReceiverFileRequest(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command="scp /tmp/a root@DST:/var/tmp/a",
+            target_user="root",
+            target_path="/var/tmp/a",
+            transfer_time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            source_port=45678,
+        )
+
+        first = ScpReceiverFileActionBundle(SimpleNamespace(), request, random.Random(1)).anchor
+        second = ScpReceiverFileActionBundle(SimpleNamespace(), request, random.Random(99)).anchor
+
+        assert first == second
 
 
 class TestStorylineScpCorrelation:
