@@ -563,11 +563,29 @@ def _workflow_candidates(commands: dict[str, Any], pool_key: str) -> list[dict[s
     return [item for item in candidates if isinstance(item.get("steps"), list)]
 
 
+def _coerce_probability(value: Any, fallback: float) -> float:
+    """Convert a config value into a bounded probability with safe fallback."""
+    try:
+        probability = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(1.0, max(0.0, probability))
+
+
+def _coerce_positive_float(value: Any, fallback: float) -> float:
+    """Convert a config value into a positive float with safe fallback."""
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return numeric if numeric > 0 else fallback
+
+
 def _choose_workflow(rng: random.Random, workflows: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick one configured shell workflow by weight."""
     if not workflows:
         return None
-    weights = [max(0.0, float(workflow.get("weight", 1.0))) for workflow in workflows]
+    weights = [_coerce_positive_float(workflow.get("weight", 1.0), 1.0) for workflow in workflows]
     if not any(weights):
         return rng.choice(workflows)
     return rng.choices(workflows, weights=weights, k=1)[0]
@@ -638,10 +656,11 @@ def pick_bash_session_commands(
     selected: list[tuple[str, bool]] = []
 
     workflows = _workflow_candidates(commands, pool_key)
-    selection_probability = float(
+    selection_probability = _coerce_probability(
         commands.get("workflow_model", {}).get(
             "selection_probability", _WORKFLOW_SELECTION_PROBABILITY
-        )
+        ),
+        _WORKFLOW_SELECTION_PROBABILITY,
     )
     if command_count >= 2 and workflows and rng.random() < selection_probability:
         workflow = _choose_workflow(rng, workflows)
