@@ -22,6 +22,14 @@
 
 """Action-bundle interfaces for coordinated evidence generation."""
 
+from evidenceforge.generation.actions.auth_session import (
+    FailedLogonActionBundle,
+    FailedLogonRequest,
+    LogoffActionBundle,
+    LogoffRequest,
+    LogonActionBundle,
+    LogonRequest,
+)
 from evidenceforge.generation.actions.base import ActionAnchor, ActionBundle
 from evidenceforge.generation.actions.browser_session import (
     BrowserSessionActionBundle,
@@ -76,9 +84,15 @@ __all__ = [
     "BrowserSessionActionBundle",
     "BrowserSessionRequest",
     "BrowserSessionResult",
+    "FailedLogonActionBundle",
+    "FailedLogonRequest",
     "HttpResponseFileTransferActionBundle",
     "HttpResponseFileTransferRequest",
     "HttpResponseFileTransferResult",
+    "LogoffActionBundle",
+    "LogoffRequest",
+    "LogonActionBundle",
+    "LogonRequest",
     "ScpReceiverFileActionBundle",
     "ScpReceiverFileRequest",
     "SmbFileTransferMetadataActionBundle",

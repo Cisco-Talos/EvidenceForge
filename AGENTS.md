@@ -321,6 +321,14 @@ probabilistic file/module/registry endpoint side effects. Other bundles may call
 the public process entrypoints, but they should not duplicate process lifecycle
 or side-effect generation locally.
 
+For authentication and session lifecycle, route successful logons, failed
+logons, and logoffs through the auth/session action bundles. The bundles own the
+boundary for session allocation/reuse, logon IDs, source endpoint semantics,
+transport/syslog companions, DC-side validation evidence, failure-network
+companions, and session termination ordering. Other bundles may request logon or
+logoff evidence, but they should not locally invent duplicate session IDs,
+source ports, auth-package fields, or failure companion traffic.
+
 When fixing realism defects:
 - Cross-event ordering, lifecycle, source timing, observation, and durable
   identities belong in bundle/lifecycle/timing/observation layers.

@@ -389,11 +389,11 @@ When building storyline events, each entry needs an `events` list with typed dec
 
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `beacon`, `dns_query`, `web_scan`, `credential_spray`, `dga_queries`, `dns_tunnel`, `explicit_credentials`, `workstation_lock`, `workstation_unlock`, `raw`
 
-Correlated multi-event activities such as `ssh_session` and process-owned endpoint
-side effects are modeled internally as action bundles. Authors should still write
-the same typed event, not duplicate the Zeek connection, syslog auth rows,
-EDR/eCAR session/process rows, shell process setup, or process-owned
-file/module/registry evidence by hand.
+Correlated multi-event activities such as `ssh_session`, auth/session lifecycle,
+and process-owned endpoint side effects are modeled internally as action bundles.
+Authors should still write the same typed event, not duplicate the Zeek
+connection, syslog auth rows, DC validation rows, EDR/eCAR session/process rows,
+shell process setup, or process-owned file/module/registry evidence by hand.
 
 **Firewall/network event types:**
 - `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.

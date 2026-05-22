@@ -67,10 +67,16 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
+    FailedLogonActionBundle,
+    FailedLogonRequest,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    LogoffActionBundle,
+    LogoffRequest,
+    LogonActionBundle,
+    LogonRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -5788,6 +5794,31 @@ class ActivityGenerator:
         Returns:
             LogonID (hex string format, e.g., "0x3e7")
         """
+        request = LogonRequest(
+            user=user,
+            system=system,
+            time=time,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            source_port=source_port,
+            emit_transport_syslog=emit_transport_syslog,
+            emit_network_evidence=emit_network_evidence,
+            logon_id=logon_id,
+        )
+        return LogonActionBundle(self, request).execute()
+
+    def _execute_logon_bundle(self, request: LogonRequest) -> str:
+        """Expand a successful logon bundle through the compatibility adapter."""
+        user = request.user
+        system = request.system
+        time = request.time
+        logon_type = request.logon_type
+        source_ip = request.source_ip
+        source_port = request.source_port
+        emit_transport_syslog = request.emit_transport_syslog
+        emit_network_evidence = request.emit_network_evidence
+        logon_id = request.logon_id
+
         self.state_manager.set_current_time(time)
         os_cat = _get_os_category(system.os)
         if logon_type == 10 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
@@ -6212,6 +6243,27 @@ class ActivityGenerator:
             target_username: If set, the logon targets this user instead of the actor
             dc_system: Domain controller to also emit 4625/4776 on (optional)
         """
+        request = FailedLogonRequest(
+            user=user,
+            system=system,
+            time=time,
+            logon_type=logon_type,
+            source_ip=source_ip,
+            target_username=target_username,
+            dc_system=dc_system,
+        )
+        FailedLogonActionBundle(self, request).execute()
+
+    def _execute_failed_logon_bundle(self, request: FailedLogonRequest) -> None:
+        """Expand a failed-logon bundle through the compatibility adapter."""
+        user = request.user
+        system = request.system
+        time = request.time
+        logon_type = request.logon_type
+        source_ip = request.source_ip
+        target_username = request.target_username
+        dc_system = request.dc_system
+
         local_logon = logon_type in (2, 5, 7, 11)
         if source_ip == system.ip:
             source_ip = None
@@ -6597,6 +6649,25 @@ class ActivityGenerator:
             from_storyline: When True, skip min_logoff_time clamping so the
                 storyline-scheduled time is preserved exactly.
         """
+        request = LogoffRequest(
+            user=user,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+            logon_type=logon_type,
+            from_storyline=from_storyline,
+        )
+        LogoffActionBundle(self, request).execute()
+
+    def _execute_logoff_bundle(self, request: LogoffRequest) -> None:
+        """Expand a logoff bundle through the compatibility adapter."""
+        user = request.user
+        system = request.system
+        time = request.time
+        logon_id = request.logon_id
+        logon_type = request.logon_type
+        from_storyline = request.from_storyline
+
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
         if session:

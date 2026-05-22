@@ -35,8 +35,14 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
+    FailedLogonActionBundle,
+    FailedLogonRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    LogoffActionBundle,
+    LogoffRequest,
+    LogonActionBundle,
+    LogonRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -456,6 +462,76 @@ class TestActivityGenerator:
         assert event.auth.username == test_user.username
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
+
+    def test_auth_session_bundle_anchors_are_stable(self, test_user, test_system):
+        """Auth/session requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = LogonRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.0.44",
+            source_port=51234,
+        )
+        logoff_request = LogoffRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(minutes=5),
+            logon_id="0x12345",
+            logon_type=3,
+        )
+        failed_request = FailedLogonRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.0.44",
+        )
+
+        assert (
+            LogonActionBundle(Mock(), logon_request).anchor
+            == LogonActionBundle(
+                Mock(),
+                logon_request,
+            ).anchor
+        )
+        assert (
+            LogoffActionBundle(Mock(), logoff_request).anchor
+            == LogoffActionBundle(
+                Mock(),
+                logoff_request,
+            ).anchor
+        )
+        assert (
+            FailedLogonActionBundle(
+                Mock(),
+                failed_request,
+            ).anchor
+            == FailedLogonActionBundle(Mock(), failed_request).anchor
+        )
+
+    def test_auth_session_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Auth/session bundles should preserve the current generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = LogonRequest(user=test_user, system=test_system, time=timestamp)
+        logoff_request = LogoffRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(minutes=5),
+            logon_id="0x12345",
+        )
+        failed_request = FailedLogonRequest(user=test_user, system=test_system, time=timestamp)
+        executor = Mock()
+        executor._execute_logon_bundle.return_value = "0x12345"
+
+        assert LogonActionBundle(executor, logon_request).execute() == "0x12345"
+        LogoffActionBundle(executor, logoff_request).execute()
+        FailedLogonActionBundle(executor, failed_request).execute()
+
+        executor._execute_logon_bundle.assert_called_once_with(logon_request)
+        executor._execute_logoff_bundle.assert_called_once_with(logoff_request)
+        executor._execute_failed_logon_bundle.assert_called_once_with(failed_request)
 
     def test_generate_logon_reuses_active_workstation_session_over_long_window(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

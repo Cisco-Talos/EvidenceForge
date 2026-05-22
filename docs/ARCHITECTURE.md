@@ -311,6 +311,16 @@ identity repair and side-effect builders in the activity-generator adapter so
 existing callers, emitters, and public scenario behavior remain stable while
 other bundles gain one shared process lifecycle path.
 
+Auth/session callers supply successful logon, failed logon, or logoff intent.
+`LogonActionBundle`, `FailedLogonActionBundle`, and `LogoffActionBundle` own the
+internal boundary around session lifecycle evidence: session allocation and
+reuse, logon ID and source endpoint ownership, Linux SSH syslog companions,
+Windows DC validation evidence, failed-auth network companions, and session
+termination ordering after dependent activity. The current slice keeps the
+detailed source-native field selection in the activity-generator adapter so
+existing storyline, baseline, world-planner, and higher-level bundle callers
+share one stable auth/session path.
+
 Action bundles own cross-event concerns:
 
 - Deterministic action anchors for durable references.

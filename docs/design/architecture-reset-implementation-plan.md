@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -149,6 +149,16 @@ guaranteed process-image file evidence, and probabilistic file/module/registry
 endpoint side effects. Public scenario YAML, CLI behavior, output layout, and
 authoring skills remain unchanged for this slice.
 
+The auth/session lifecycle action-bundle extraction moves successful logon,
+failed-logon, and logoff orchestration behind `LogonActionBundle`,
+`FailedLogonActionBundle`, and `LogoffActionBundle`. Public generator
+entrypoints remain stable, while the bundles own the internal boundary for
+session allocation/reuse, logon IDs, source endpoint semantics,
+transport/syslog companions, DC-side validation evidence, failed-auth network
+companions, and session termination ordering after dependent activity. Public
+scenario YAML, CLI behavior, output layout, and authoring skills remain
+unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -207,6 +217,10 @@ authoring skills remain unchanged for this slice.
   bundle-to-adapter delegation, existing process-create behavior, process
   termination behavior, parent/session repair, command-owned network effects,
   and file/module/registry side-effect preservation.
+- Auth/session probes cover stable logon/logoff/failed-logon anchors,
+  bundle-to-adapter delegation, existing successful-logon session allocation and
+  reuse, failed-logon source endpoint/network companions, and logoff lifecycle
+  ordering after dependent activity.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:
