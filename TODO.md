@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Investigated and remediated audit follow-up ordering regression introduced by process-create visibility clamping for causal expansions (preserved post-clamp causal ordering for expanded after-events).
 - [x] Update the global `eforge-assess` Codex skill so iterative loops default to `scenarios/iteration-test`, prefer family-level realism improvements first, and treat automated eval as a regression guardrail rather than an optimization target. Added a progressive-disclosure family iteration reference, refreshed skill metadata, and verified with the lightweight skill validator only.
 - [x] Prepare the `dev` -> `main` PR for the loop-driven realism improvement batch — applied the required v0.9.0 minor version/changelog bump, refreshed `uv.lock`, and passed Ruff plus full normal `uv run pytest --no-cov` before opening the PR.
 - [x] Run a blind expert panel on the current loop-188 iteration-test output and summarize reviewer synthetic-confidence scores — panel average synthetic-confidence was 61.0 (Threat Hunter 68, Detection 68, Network 36, Host/EDR 72), with reports and `scores.json` saved under `scenarios/iteration-test/blind-test/loop-188/`.
