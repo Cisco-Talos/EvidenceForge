@@ -389,8 +389,9 @@ When building storyline events, each entry needs an `events` list with typed dec
 
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `beacon`, `dns_query`, `web_scan`, `credential_spray`, `dga_queries`, `dns_tunnel`, `explicit_credentials`, `workstation_lock`, `workstation_unlock`, `raw`
 
-Correlated multi-event activities such as `ssh_session`, auth/session lifecycle,
-DC-side Kerberos ticket evidence, canonical network connections,
+Correlated multi-event activities such as `ssh_session`, auth/session lifecycle
+(including workstation lock/unlock, service/machine/anonymous logons, and DC
+validation), DC-side Kerberos ticket evidence, canonical network connections,
 scanner/probe activity, Windows audit/account-management evidence, and
 process-owned endpoint side effects are modeled internally as action bundles. Authors should
 still write the same typed event, not duplicate Zeek connections,
@@ -422,7 +423,7 @@ The `raw` type targets a specific output format with arbitrary fields — use it
 - **Linux commands:** Use `type: process` with Linux binary paths (`/usr/bin/cat`, `/bin/bash`).
 - **Web attacks:** Use `connection` with `service: http`, not `raw` with `target_format: web_access` — the latter bypasses cross-source correlation.
 
-**Causal expansion — auto-generated prerequisite events:** The engine automatically emits DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass `create_remote_thread`, audit events from admin command patterns, and RSAT session evidence for DC admin activity. Automatic connection-prerequisite DNS, DC-side Kerberos ticket evidence, and Windows audit/process-access companions are bundle-owned, so do not duplicate those resolver, ticket, or audit rows unless DNS, Kerberos, or Windows audit manipulation itself is the attack narrative (DNS tunneling, golden ticket forging, explicit reconnaissance, deliberate log clearing). The validator warns on redundant manual specifications.
+**Causal expansion — auto-generated prerequisite events:** The engine automatically emits DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass `create_remote_thread`, audit events from admin command patterns, and RSAT session evidence for DC admin activity. Automatic connection-prerequisite DNS, DC-side Kerberos ticket evidence, auxiliary auth/session validation, and Windows audit/process-access companions are bundle-owned, so do not duplicate those resolver, ticket, validation, or audit rows unless DNS, Kerberos, or Windows audit manipulation itself is the attack narrative (DNS tunneling, golden ticket forging, explicit reconnaissance, deliberate log clearing). The validator warns on redundant manual specifications.
 
 For realism-bound scenarios, do not use RFC 5737 TEST-NET ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for public NATs, C2, scanners, or attacker infrastructure. Those ranges are safe for documentation snippets, but they are an obvious synthetic-data tell in generated logs. Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems, and use a scenario-owned lab public allocation or generated non-reserved public-looking addresses for external infrastructure.
 

@@ -71,6 +71,8 @@ from evidenceforge.generation.actions import (
     AccountCreatedRequest,
     AccountDeletedActionBundle,
     AccountDeletedRequest,
+    AnonymousLogonActionBundle,
+    AnonymousLogonRequest,
     CreateRemoteThreadActionBundle,
     CreateRemoteThreadRequest,
     DhcpLeaseActionBundle,
@@ -105,10 +107,14 @@ from evidenceforge.generation.actions import (
     LogoffRequest,
     LogonActionBundle,
     LogonRequest,
+    MachineAccountLogonActionBundle,
+    MachineAccountLogonRequest,
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
     NmapCommandProbeRequest,
+    NtlmValidationActionBundle,
+    NtlmValidationRequest,
     PasswordChangeActionBundle,
     PasswordChangeRequest,
     PasswordResetActionBundle,
@@ -126,12 +132,18 @@ from evidenceforge.generation.actions import (
     RdpSourceProcessFactory,
     ScheduledTaskActionBundle,
     ScheduledTaskRequest,
+    ServiceLogonActionBundle,
+    ServiceLogonRequest,
     SmbFileTransferMetadataActionBundle,
     SmbFileTransferMetadataRequest,
     SshSessionActionBundle,
     SshSessionRequest,
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
+    WorkstationLockActionBundle,
+    WorkstationLockRequest,
+    WorkstationUnlockActionBundle,
+    WorkstationUnlockRequest,
     file_transfer_hashes,
 )
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
@@ -12907,6 +12919,29 @@ class ActivityGenerator:
         GPO updates, Kerberos renewal, LDAP queries, etc. The event is logged
         on the DC, not on the source machine.
         """
+        request = MachineAccountLogonRequest(
+            hostname=hostname,
+            machine_username=machine_username,
+            dc_hostname=dc_hostname,
+            source_ip=source_ip,
+            dc_ip=dc_ip,
+            time=time,
+            domain=domain,
+        )
+        MachineAccountLogonActionBundle(self, request).execute()
+
+    def _execute_machine_account_logon_bundle(
+        self,
+        request: MachineAccountLogonRequest,
+    ) -> None:
+        """Generate machine account logon event (4624 type 3) on the DC."""
+        machine_username = request.machine_username
+        dc_hostname = request.dc_hostname
+        source_ip = request.source_ip
+        dc_ip = request.dc_ip
+        time = request.time
+        domain = request.domain
+
         domain = domain or getattr(self, "_netbios_domain", "CORP")
         rng = _get_rng()
         logon_id = self.state_manager.allocate_logon_id(dc_hostname, time)
@@ -13246,14 +13281,25 @@ class ActivityGenerator:
         status: str = "0x0",
     ) -> None:
         """Generate NTLM credential validation event (4776) on the DC."""
+        request = NtlmValidationRequest(
+            username=username,
+            workstation=workstation,
+            dc_hostname=dc_hostname,
+            time=time,
+            status=status,
+        )
+        NtlmValidationActionBundle(self, request).execute()
+
+    def _execute_ntlm_validation_bundle(self, request: NtlmValidationRequest) -> None:
+        """Generate NTLM credential validation event (4776) on the DC."""
         event = SecurityEvent(
-            timestamp=time,
+            timestamp=request.time,
             event_type="ntlm_validation",
-            dst_host=self._build_dc_host_context(dc_hostname),
+            dst_host=self._build_dc_host_context(request.dc_hostname),
             auth=AuthContext(
-                username=username,
-                source_ip=workstation,  # SourceWorkstation stored in source_ip
-                failure_status=status,
+                username=request.username,
+                source_ip=request.workstation,  # SourceWorkstation stored in source_ip
+                failure_status=request.status,
             ),
         )
 
@@ -13438,6 +13484,21 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Generate workstation lock event (4800)."""
+        request = WorkstationLockRequest(
+            user=user,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+        )
+        WorkstationLockActionBundle(self, request).execute()
+
+    def _execute_workstation_lock_bundle(self, request: WorkstationLockRequest) -> None:
+        """Generate workstation lock event (4800)."""
+        user = request.user
+        system = request.system
+        time = request.time
+        logon_id = request.logon_id
+
         session = self.state_manager.get_session(logon_id)
         if (
             session is None
@@ -13478,6 +13539,21 @@ class ActivityGenerator:
         logon_id: str,
     ) -> None:
         """Generate workstation unlock event (4801 + 4624 type 7)."""
+        request = WorkstationUnlockRequest(
+            user=user,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+        )
+        WorkstationUnlockActionBundle(self, request).execute()
+
+    def _execute_workstation_unlock_bundle(self, request: WorkstationUnlockRequest) -> None:
+        """Generate workstation unlock event (4801 + 4624 type 7)."""
+        user = request.user
+        system = request.system
+        time = request.time
+        logon_id = request.logon_id
+
         session = self.state_manager.get_session(logon_id)
         lock_times = getattr(self, "_last_workstation_lock_time", {})
         lock_key = (system.hostname, user.username, logon_id)
@@ -13694,6 +13770,19 @@ class ActivityGenerator:
         Emits 4624 (type 5) + 4672 (special privileges) via normal pipeline.
         Each call gets a unique LogonID (real Windows allocates new sessions for service restarts).
         """
+        request = ServiceLogonRequest(
+            system=system,
+            time=time,
+            service_account=service_account,
+        )
+        return ServiceLogonActionBundle(self, request).execute()
+
+    def _execute_service_logon_bundle(self, request: ServiceLogonRequest) -> str:
+        """Generate a service logon (type 5) for system accounts."""
+        system = request.system
+        time = request.time
+        service_account = request.service_account
+
         sid = _SYSTEM_ACCOUNT_SIDS.get(service_account, self._get_sid(service_account))
         logon_id = self.state_manager.create_session(
             username=service_account,
@@ -15219,6 +15308,14 @@ class ActivityGenerator:
 
         Used for Windows server/DC background SMB enumeration traffic.
         """
+        request = AnonymousLogonRequest(system=system, time=time)
+        AnonymousLogonActionBundle(self, request).execute()
+
+    def _execute_anonymous_logon_bundle(self, request: AnonymousLogonRequest) -> None:
+        """Generate an anonymous logon event (4624 type 3) without creating a session."""
+        system = request.system
+        time = request.time
+
         rng = _get_rng()
         source_ip = "-"
         workstation_name = "-"

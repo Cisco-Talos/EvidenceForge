@@ -113,6 +113,139 @@ class FailedLogonRequest:
         return f"failed-logon-{seed:016x}"
 
 
+@dataclass(frozen=True, slots=True)
+class ServiceLogonRequest:
+    """Intent for one Windows service logon."""
+
+    system: System
+    time: datetime
+    service_account: str = "SYSTEM"
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        seed = _stable_seed(
+            "action_bundle:service_logon:"
+            f"{self.system.hostname}:{self.time.isoformat()}:"
+            f"{self.service_account}:{self.source}"
+        )
+        return f"service-logon-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class MachineAccountLogonRequest:
+    """Intent for one machine-account DC logon lifecycle."""
+
+    hostname: str
+    machine_username: str
+    dc_hostname: str
+    source_ip: str
+    dc_ip: str
+    time: datetime
+    domain: str = ""
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        seed = _stable_seed(
+            "action_bundle:machine_account_logon:"
+            f"{self.hostname}:{self.machine_username}:{self.dc_hostname}:"
+            f"{self.source_ip}:{self.dc_ip}:{self.time.isoformat()}:"
+            f"{self.domain}:{self.source}"
+        )
+        return f"machine-account-logon-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class NtlmValidationRequest:
+    """Intent for one DC-side NTLM credential validation."""
+
+    username: str
+    workstation: str
+    dc_hostname: str
+    time: datetime
+    status: str = "0x0"
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        seed = _stable_seed(
+            "action_bundle:ntlm_validation:"
+            f"{self.username}:{self.workstation}:{self.dc_hostname}:"
+            f"{self.time.isoformat()}:{self.status}:{self.source}"
+        )
+        return f"ntlm-validation-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class AnonymousLogonRequest:
+    """Intent for one anonymous Windows network logon."""
+
+    system: System
+    time: datetime
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        seed = _stable_seed(
+            "action_bundle:anonymous_logon:"
+            f"{self.system.hostname}:{self.time.isoformat()}:{self.source}"
+        )
+        return f"anonymous-logon-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkstationLockRequest:
+    """Intent for one workstation lock event."""
+
+    user: User
+    system: System
+    time: datetime
+    logon_id: str
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        seed = _stable_seed(
+            "action_bundle:workstation_lock:"
+            f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
+            f"{self.logon_id}:{self.source}"
+        )
+        return f"workstation-lock-{seed:016x}"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkstationUnlockRequest:
+    """Intent for one workstation unlock event."""
+
+    user: User
+    system: System
+    time: datetime
+    logon_id: str
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        seed = _stable_seed(
+            "action_bundle:workstation_unlock:"
+            f"{self.user.username}:{self.system.hostname}:{self.time.isoformat()}:"
+            f"{self.logon_id}:{self.source}"
+        )
+        return f"workstation-unlock-{seed:016x}"
+
+
 class AuthSessionExecutor(Protocol):
     """Adapter protocol implemented by the current activity generator."""
 
@@ -126,6 +259,33 @@ class AuthSessionExecutor(Protocol):
 
     def _execute_failed_logon_bundle(self, request: FailedLogonRequest) -> None:
         """Expand one failed logon request into canonical evidence."""
+        ...
+
+    def _execute_service_logon_bundle(self, request: ServiceLogonRequest) -> str:
+        """Expand one service logon request into canonical evidence."""
+        ...
+
+    def _execute_machine_account_logon_bundle(
+        self,
+        request: MachineAccountLogonRequest,
+    ) -> None:
+        """Expand one machine account logon request into canonical evidence."""
+        ...
+
+    def _execute_ntlm_validation_bundle(self, request: NtlmValidationRequest) -> None:
+        """Expand one NTLM validation request into canonical evidence."""
+        ...
+
+    def _execute_anonymous_logon_bundle(self, request: AnonymousLogonRequest) -> None:
+        """Expand one anonymous logon request into canonical evidence."""
+        ...
+
+    def _execute_workstation_lock_bundle(self, request: WorkstationLockRequest) -> None:
+        """Expand one workstation lock request into canonical evidence."""
+        ...
+
+    def _execute_workstation_unlock_bundle(self, request: WorkstationUnlockRequest) -> None:
+        """Expand one workstation unlock request into canonical evidence."""
         ...
 
 
@@ -196,3 +356,145 @@ class FailedLogonActionBundle:
         """Emit failed logon evidence and companion validation/network evidence."""
 
         self._executor._execute_failed_logon_bundle(self._request)
+
+
+class ServiceLogonActionBundle:
+    """Expand one service-logon intent into service session evidence."""
+
+    def __init__(self, executor: AuthSessionExecutor, request: ServiceLogonRequest) -> None:
+        self._executor = executor
+        self._request = request
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="service_logon",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> str:
+        """Emit service logon evidence."""
+
+        return self._executor._execute_service_logon_bundle(self._request)
+
+
+class MachineAccountLogonActionBundle:
+    """Expand one machine-account logon intent into DC auth lifecycle evidence."""
+
+    def __init__(
+        self,
+        executor: AuthSessionExecutor,
+        request: MachineAccountLogonRequest,
+    ) -> None:
+        self._executor = executor
+        self._request = request
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="machine_account_logon",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> None:
+        """Emit machine-account DC auth lifecycle evidence."""
+
+        self._executor._execute_machine_account_logon_bundle(self._request)
+
+
+class NtlmValidationActionBundle:
+    """Expand one NTLM validation intent into DC validation evidence."""
+
+    def __init__(self, executor: AuthSessionExecutor, request: NtlmValidationRequest) -> None:
+        self._executor = executor
+        self._request = request
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="ntlm_validation",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> None:
+        """Emit NTLM validation evidence."""
+
+        self._executor._execute_ntlm_validation_bundle(self._request)
+
+
+class AnonymousLogonActionBundle:
+    """Expand one anonymous logon intent into Windows network-logon evidence."""
+
+    def __init__(self, executor: AuthSessionExecutor, request: AnonymousLogonRequest) -> None:
+        self._executor = executor
+        self._request = request
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="anonymous_logon",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> None:
+        """Emit anonymous logon evidence."""
+
+        self._executor._execute_anonymous_logon_bundle(self._request)
+
+
+class WorkstationLockActionBundle:
+    """Expand one workstation-lock intent into lock evidence."""
+
+    def __init__(self, executor: AuthSessionExecutor, request: WorkstationLockRequest) -> None:
+        self._executor = executor
+        self._request = request
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="workstation_lock",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> None:
+        """Emit workstation-lock evidence."""
+
+        self._executor._execute_workstation_lock_bundle(self._request)
+
+
+class WorkstationUnlockActionBundle:
+    """Expand one workstation-unlock intent into unlock and reauth evidence."""
+
+    def __init__(self, executor: AuthSessionExecutor, request: WorkstationUnlockRequest) -> None:
+        self._executor = executor
+        self._request = request
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="workstation_unlock",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> None:
+        """Emit workstation-unlock evidence."""
+
+        self._executor._execute_workstation_unlock_bundle(self._request)

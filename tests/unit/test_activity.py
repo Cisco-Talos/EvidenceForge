@@ -39,6 +39,8 @@ from evidenceforge.generation.actions import (
     AccountCreatedRequest,
     AccountDeletedActionBundle,
     AccountDeletedRequest,
+    AnonymousLogonActionBundle,
+    AnonymousLogonRequest,
     CreateRemoteThreadActionBundle,
     CreateRemoteThreadRequest,
     ExplicitCredentialUseActionBundle,
@@ -67,10 +69,14 @@ from evidenceforge.generation.actions import (
     LogoffRequest,
     LogonActionBundle,
     LogonRequest,
+    MachineAccountLogonActionBundle,
+    MachineAccountLogonRequest,
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
     NmapCommandProbeRequest,
+    NtlmValidationActionBundle,
+    NtlmValidationRequest,
     PasswordChangeActionBundle,
     PasswordChangeRequest,
     PasswordResetActionBundle,
@@ -85,8 +91,14 @@ from evidenceforge.generation.actions import (
     RdpSessionRequest,
     ScheduledTaskActionBundle,
     ScheduledTaskRequest,
+    ServiceLogonActionBundle,
+    ServiceLogonRequest,
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
+    WorkstationLockActionBundle,
+    WorkstationLockRequest,
+    WorkstationUnlockActionBundle,
+    WorkstationUnlockRequest,
 )
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
@@ -622,6 +634,113 @@ class TestActivityGenerator:
         executor._execute_logon_bundle.assert_called_once_with(logon_request)
         executor._execute_logoff_bundle.assert_called_once_with(logoff_request)
         executor._execute_failed_logon_bundle.assert_called_once_with(failed_request)
+
+    def test_auxiliary_auth_session_bundle_anchors_are_stable(self, test_user, test_system):
+        """Auxiliary auth/session requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        requests_and_bundles = [
+            (
+                ServiceLogonRequest(system=test_system, time=timestamp, service_account="SYSTEM"),
+                ServiceLogonActionBundle,
+            ),
+            (
+                MachineAccountLogonRequest(
+                    hostname=test_system.hostname,
+                    machine_username=f"{test_system.hostname}$",
+                    dc_hostname="DC-01",
+                    source_ip=test_system.ip,
+                    dc_ip="10.0.0.10",
+                    time=timestamp,
+                ),
+                MachineAccountLogonActionBundle,
+            ),
+            (
+                NtlmValidationRequest(
+                    username=test_user.username,
+                    workstation=test_system.hostname,
+                    dc_hostname="DC-01",
+                    time=timestamp,
+                ),
+                NtlmValidationActionBundle,
+            ),
+            (
+                AnonymousLogonRequest(system=test_system, time=timestamp),
+                AnonymousLogonActionBundle,
+            ),
+            (
+                WorkstationLockRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    logon_id="0x12345",
+                ),
+                WorkstationLockActionBundle,
+            ),
+            (
+                WorkstationUnlockRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    logon_id="0x12345",
+                ),
+                WorkstationUnlockActionBundle,
+            ),
+        ]
+
+        for request, bundle_cls in requests_and_bundles:
+            assert bundle_cls(Mock(), request).anchor == bundle_cls(Mock(), request).anchor
+
+    def test_auxiliary_auth_session_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Auxiliary auth/session bundles should preserve the generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        service_request = ServiceLogonRequest(
+            system=test_system,
+            time=timestamp,
+            service_account="SYSTEM",
+        )
+        machine_request = MachineAccountLogonRequest(
+            hostname=test_system.hostname,
+            machine_username=f"{test_system.hostname}$",
+            dc_hostname="DC-01",
+            source_ip=test_system.ip,
+            dc_ip="10.0.0.10",
+            time=timestamp,
+        )
+        ntlm_request = NtlmValidationRequest(
+            username=test_user.username,
+            workstation=test_system.hostname,
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        anonymous_request = AnonymousLogonRequest(system=test_system, time=timestamp)
+        lock_request = WorkstationLockRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+        )
+        unlock_request = WorkstationUnlockRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+        )
+        executor = Mock()
+        executor._execute_service_logon_bundle.return_value = "0x3e7"
+
+        assert ServiceLogonActionBundle(executor, service_request).execute() == "0x3e7"
+        MachineAccountLogonActionBundle(executor, machine_request).execute()
+        NtlmValidationActionBundle(executor, ntlm_request).execute()
+        AnonymousLogonActionBundle(executor, anonymous_request).execute()
+        WorkstationLockActionBundle(executor, lock_request).execute()
+        WorkstationUnlockActionBundle(executor, unlock_request).execute()
+
+        executor._execute_service_logon_bundle.assert_called_once_with(service_request)
+        executor._execute_machine_account_logon_bundle.assert_called_once_with(machine_request)
+        executor._execute_ntlm_validation_bundle.assert_called_once_with(ntlm_request)
+        executor._execute_anonymous_logon_bundle.assert_called_once_with(anonymous_request)
+        executor._execute_workstation_lock_bundle.assert_called_once_with(lock_request)
+        executor._execute_workstation_unlock_bundle.assert_called_once_with(unlock_request)
 
     def test_kerberos_dc_bundle_anchors_are_stable(self, test_user, test_system):
         """Kerberos/DC requests should expose durable deterministic anchors."""

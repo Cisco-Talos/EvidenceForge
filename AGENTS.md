@@ -361,12 +361,14 @@ the public process entrypoints, but they should not duplicate process lifecycle
 or side-effect generation locally.
 
 For authentication and session lifecycle, route successful logons, failed
-logons, and logoffs through the auth/session action bundles. The bundles own the
-boundary for session allocation/reuse, logon IDs, source endpoint semantics,
-transport/syslog companions, DC-side validation evidence, failure-network
-companions, and session termination ordering. Other bundles may request logon or
-logoff evidence, but they should not locally invent duplicate session IDs,
-source ports, auth-package fields, or failure companion traffic.
+logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM
+validation, and workstation lock/unlock evidence through the auth/session action
+bundles. The bundles own the boundary for session allocation/reuse, logon IDs,
+lock state, source endpoint semantics, transport/syslog companions, DC-side
+validation evidence, failure-network companions, and session termination
+ordering. Other bundles may request logon or logoff evidence, but they should
+not locally invent duplicate session IDs, source ports, auth-package fields,
+lock/unlock re-authentication, or validation companion traffic.
 
 For Kerberos/DC evidence, route domain-logon TGT/TGS companions, visible KDC-flow
 audit repair, TGT requests, TGT renewals, service-ticket requests, and

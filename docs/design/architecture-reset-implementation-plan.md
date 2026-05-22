@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit pending
 
 ## Summary
 
@@ -159,6 +159,16 @@ companions, and session termination ordering after dependent activity. Public
 scenario YAML, CLI behavior, output layout, and authoring skills remain
 unchanged for this slice.
 
+The auxiliary auth/session extraction moves the remaining session and DC
+validation helpers behind the same bundle boundary. Service logons,
+machine-account logons, anonymous logons, NTLM validation, and workstation
+lock/unlock evidence now route through stable auth/session bundle adapters. The
+bundles define the ownership boundary for service/machine session identity,
+anonymous network-logon shape, workstation lock state, unlock re-authentication,
+DC-side NTLM validation, and machine-account Kerberos/network companions. Public
+scenario YAML, CLI behavior, output layout, concrete format names, and
+authoring skills remain unchanged for this slice.
+
 The network-connection action-bundle extraction moves canonical connection
 orchestration behind `NetworkConnectionActionBundle`. `ActivityGenerator`
 continues to expose `generate_connection()` as the compatibility entrypoint,
@@ -295,6 +305,11 @@ names, and authoring skills remain unchanged for this slice.
   bundle-to-adapter delegation, existing successful-logon session allocation and
   reuse, failed-logon source endpoint/network companions, and logoff lifecycle
   ordering after dependent activity.
+- Auxiliary auth/session probes cover stable service-logon, machine-account
+  logon, NTLM validation, anonymous-logon, workstation-lock, and
+  workstation-unlock anchors; bundle-to-adapter delegation; existing machine
+  account Kerberos/DC evidence; NTLM status rendering; anonymous logon
+  no-session behavior; and lock/unlock session ownership.
 - Network connection probes cover stable connection anchors, bundle-to-adapter
   delegation, command-owned HTTP/proxy metadata preservation, scanner transport
   evidence, and remote-logon transport semantics.

@@ -90,7 +90,7 @@ For each pillar, explain what the score means in practical terms:
 - Benign Anomaly Rate: Is there a realistic 1–5% rate of anomalous-but-benign events? Zero anomalies is as implausible as 50%.
 
 **Pillar 3: Causality (weight 0.25)**
-- Causal Ordering: Are logon→process→logoff sequences correctly ordered? DNS before TCP? Kerberos/DC TGT/TGS before domain logons? Windows audit/process-access companions after their owning process evidence?
+- Causal Ordering: Are logon→process→logoff and lock→unlock→reauth sequences correctly ordered? DNS before TCP? Kerberos/DC TGT/TGS before domain logons? NTLM/DC validation and Windows audit/process-access companions after their owning evidence?
 - Storyline Event Presence: Are all expected-visible storyline events visible in at least one log source? For non-`complete` observation profiles with a manifest, source rows marked `dropped`, `filtered`, or `out_of_window` are excluded from this coverage denominator.
 - Indicator Accuracy: Do traces carry the correct IPs, usernames, hostnames from the scenario?
 - Pivot Linkability: Can a hunter pivot between consecutive expected-visible attack steps using shared field values?

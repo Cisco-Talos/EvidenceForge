@@ -353,15 +353,18 @@ identity repair and side-effect builders in the activity-generator adapter so
 existing callers, emitters, and public scenario behavior remain stable while
 other bundles gain one shared process lifecycle path.
 
-Auth/session callers supply successful logon, failed logon, or logoff intent.
-`LogonActionBundle`, `FailedLogonActionBundle`, and `LogoffActionBundle` own the
-internal boundary around session lifecycle evidence: session allocation and
-reuse, logon ID and source endpoint ownership, Linux SSH syslog companions,
-Windows DC validation evidence, failed-auth network companions, and session
-termination ordering after dependent activity. The current slice keeps the
-detailed source-native field selection in the activity-generator adapter so
-existing storyline, baseline, world-planner, and higher-level bundle callers
-share one stable auth/session path.
+Auth/session callers supply successful logon, failed logon, logoff, service
+logon, machine-account logon, anonymous logon, NTLM validation, or workstation
+lock/unlock intent. `LogonActionBundle`, `FailedLogonActionBundle`,
+`LogoffActionBundle`, and the auxiliary auth/session bundles own the internal
+boundary around session lifecycle evidence: session allocation and reuse, logon
+ID and source endpoint ownership, workstation lock state, Linux SSH syslog
+companions, Windows DC validation evidence, failed-auth network companions,
+machine-account Kerberos/network companions, and session termination ordering
+after dependent activity. The current slices keep detailed source-native field
+selection in activity-generator adapters so existing storyline, baseline,
+world-planner, and higher-level bundle callers share one stable auth/session
+path.
 
 Kerberos/DC callers supply domain-logon ticket companions, visible KDC-flow audit
 companions, or explicit DC ticket events. The Kerberos/DC action bundles own the
