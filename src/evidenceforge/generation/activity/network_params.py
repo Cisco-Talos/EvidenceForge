@@ -239,7 +239,22 @@ def external_scanner_port_profiles() -> list[dict[str, Any]]:
                 ports.append((port, weight))
         if ports:
             profiles.append({"name": name, "weight": profile_weight, "ports": ports})
-    return profiles or list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+    if not profiles:
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    total_profile_weight = sum(float(profile["weight"]) for profile in profiles)
+    if not math.isfinite(total_profile_weight):
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    cleaned_profiles: list[dict[str, Any]] = []
+    for profile in profiles:
+        ports = list(profile.get("ports", []))
+        total_port_weight = sum(float(weight) for _port, weight in ports)
+        if not math.isfinite(total_port_weight):
+            continue
+        cleaned_profiles.append(profile)
+
+    return cleaned_profiles or list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
 
 
 def external_scanner_port_profile_for_source(src_ip: str) -> dict[str, Any]:

@@ -990,6 +990,66 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_overflowing_external_scanner_profile_weights(
+        self, monkeypatch
+    ):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {"name": "a", "weight": 1e308, "ports": [{"port": 443, "weight": 1}]},
+                    {"name": "b", "weight": 1e308, "ports": [{"port": 8443, "weight": 1}]},
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "total external_scanner_port_profiles weight must be finite" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_external_scanner_port_weights(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {
+                        "name": "bad_ports",
+                        "weight": 1.0,
+                        "ports": [
+                            {"port": 443, "weight": 1e308},
+                            {"port": 8443, "weight": 1e308},
+                        ],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "entry 0 has non-finite cumulative port weight" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_auth_noise_ranges(self, monkeypatch):
         from evidenceforge.generation.activity import auth_noise
 
