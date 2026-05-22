@@ -4397,7 +4397,10 @@ class ActivityGenerator:
         """Return the navigation URI a browser process would show at launch."""
         path = uri or "/"
         if path.startswith(("http://", "https://")):
-            parsed = urlsplit(path)
+            try:
+                parsed = urlsplit(path)
+            except ValueError:
+                return uri or "/"
             path = parsed.path or "/"
         if not path.startswith("/"):
             path = f"/{path}"
