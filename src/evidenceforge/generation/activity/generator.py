@@ -1679,7 +1679,8 @@ def _tcp_payload_segment_count(
     """Return the minimum TCP payload segment count for Zeek packet accounting."""
     if payload_bytes is None or payload_bytes <= 0:
         return 0
-    return max(1, math.ceil(payload_bytes / max(1, mss_bytes)))
+    effective_mss = max(1, mss_bytes)
+    return max(1, (payload_bytes + effective_mss - 1) // effective_mss)
 
 
 def _tcp_payload_packet_count(payload_bytes: int | None, rng: random.Random) -> int:
@@ -1757,7 +1758,7 @@ def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) ->
     if segments == 0 or (peer_payload_bytes or 0) < _TCP_ACK_FLOOR_PAYLOAD_BYTES:
         return 0
     ack_every_segments = rng.choices((2, 3, 4), weights=(70, 20, 10), k=1)[0]
-    return max(16, math.ceil(segments / ack_every_segments))
+    return max(16, (segments + ack_every_segments - 1) // ack_every_segments)
 
 
 def _apply_tcp_ack_packet_floors(
