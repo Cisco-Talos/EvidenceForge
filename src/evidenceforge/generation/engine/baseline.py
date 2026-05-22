@@ -41,7 +41,12 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
-from evidenceforge.generation.actions import BrowserSessionActionBundle, BrowserSessionRequest
+from evidenceforge.generation.actions import (
+    BrowserSessionActionBundle,
+    BrowserSessionRequest,
+    ScheduledScanOverlapActionBundle,
+    ScheduledScanOverlapRequest,
+)
 from evidenceforge.generation.activity.auth_noise import scheduled_stale_credentials_config
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_noise_config,
@@ -2707,22 +2712,15 @@ class BaselineMixin:
             elif pattern_type == "scheduled_scan_overlap":
                 result = generate_scheduled_scan_overlap(rng, enabled_users, systems, current_hour)
                 if result:
-                    scanner = result["scanner"]
-                    scan_ports = [22, 80, 135, 443, 445, 3389, 8080, 8443]
-                    for target in result["targets"]:
-                        for port in rng.sample(scan_ports, rng.randint(2, 4)):
-                            scan_time = result["time"] + timedelta(seconds=rng.uniform(0, 30))
-                            self.state_manager.set_current_time(scan_time)
-                            self.activity_generator.generate_connection(
-                                src_ip=scanner.ip,
-                                dst_ip=target.ip,
-                                time=scan_time,
-                                dst_port=port,
-                                proto="tcp",
-                                duration=rng.uniform(0.01, 0.5),
-                                orig_bytes=rng.randint(50, 200),
-                                resp_bytes=rng.randint(50, 500),
-                            )
+                    ScheduledScanOverlapActionBundle(
+                        executor=self,
+                        request=ScheduledScanOverlapRequest(
+                            scanner=result["scanner"],
+                            targets=tuple(result["targets"]),
+                            time=result["time"],
+                            rng=rng,
+                        ),
+                    ).execute()
 
             elif pattern_type in ("temp_dir_execution", "unusual_powershell"):
                 gen_fn = (
@@ -2763,6 +2761,26 @@ class BaselineMixin:
                         logon_id=logon_id,
                         rng=rng,
                     )
+
+    def _execute_scheduled_scan_overlap_bundle(self, request: ScheduledScanOverlapRequest) -> None:
+        """Expand a suspicious-but-benign scheduled scanner overlap."""
+
+        scan_ports = [22, 80, 135, 443, 445, 3389, 8080, 8443]
+        rng = request.rng
+        for target in request.targets:
+            for port in rng.sample(scan_ports, rng.randint(2, 4)):
+                scan_time = request.time + timedelta(seconds=rng.uniform(0, 30))
+                self.state_manager.set_current_time(scan_time)
+                self.activity_generator.generate_connection(
+                    src_ip=request.scanner.ip,
+                    dst_ip=target.ip,
+                    time=scan_time,
+                    dst_port=port,
+                    proto="tcp",
+                    duration=rng.uniform(0.01, 0.5),
+                    orig_bytes=rng.randint(50, 200),
+                    resp_bytes=rng.randint(50, 500),
+                )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
         """Terminate processes that have exceeded their expected lifetime.

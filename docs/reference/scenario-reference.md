@@ -587,7 +587,7 @@ Both `mac_address` and `requested_ip` are optional — the engine auto-generates
 
 ### Port Scan Events
 
-Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-like propagation. Generates many firewall deny records (ASA 106023) from a single storyline step.
+Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-like propagation. It is modeled internally as a scanner/probe action bundle that expands one storyline step into many canonical connection attempts plus firewall deny/open-service evidence.
 
 ```yaml
 - time: "+1h"
@@ -675,7 +675,7 @@ Fields:
 
 ### Web Scan Events
 
-Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, SQLMap, Nmap HTTP). Generates high-volume HTTP requests with scanner-realistic patterns, user agents, and status code distributions. Each request produces correlated web_access + Zeek HTTP + Zeek conn records.
+Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, SQLMap, Nmap HTTP). It is modeled internally as a scanner/probe action bundle that expands one storyline step into scanner-realistic HTTP requests, user agents, status distributions, IDS alerts, and correlated web_access + Zeek HTTP + Zeek conn records.
 
 ```yaml
 - time: "+3h"

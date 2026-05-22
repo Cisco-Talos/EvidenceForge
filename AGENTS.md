@@ -314,9 +314,18 @@ For browser-like HTTP/S sessions, page loads and their subresources should route
 through the browser-session action bundle. The bundle owns request grouping,
 transaction depth, referrer chains, page/subresource timing, static-asset cache
 suppression, response metadata, and direct-vs-explicit-proxy handoff through
-canonical connection generation. Single tool requests, scanners, raw storyline
-HTTP events, and source-local web server noise may remain direct canonical
-events unless they model a browser session.
+canonical connection generation. Single tool requests, raw storyline HTTP
+events, and source-local web server noise may remain direct canonical events
+unless they model a browser session.
+
+For scanner/probe activity, typed `port_scan` and `web_scan` storyline events,
+scheduled scanner-overlap suspicious noise, and nmap process side effects should
+route through scanner/probe action bundles. The bundles own bulk target/request
+expansion, scanner timing, per-probe connection profiles, firewall/IDS/HTTP
+contexts, source process attribution when present, and ground-truth summaries.
+They may still request canonical network connections through the generator; do
+not duplicate scanner target fan-out, IDS scanner selection, or nmap transport
+side effects at individual call sites.
 
 For modeled file transfers, use the file-transfer action bundles for transfer
 identity, Zeek files.log metadata, receiver endpoint file evidence, and

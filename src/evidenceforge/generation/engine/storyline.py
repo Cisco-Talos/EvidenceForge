@@ -45,10 +45,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.generation.actions import (
+    PortScanActionBundle,
+    PortScanRequest,
     ScpReceiverFileActionBundle,
     ScpReceiverFileRequest,
     StagedArchiveSmbReadActionBundle,
     StagedArchiveSmbReadRequest,
+    WebScanActionBundle,
+    WebScanRequest,
 )
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
@@ -3061,150 +3065,17 @@ class StorylineMixin:
             malicious_event["mac_address"] = mac
 
         elif spec.type == "port_scan":
-            import ipaddress
-
-            # Use source_ip override if specified, otherwise use system IP
-            scan_src_ip = spec.source_ip or system.ip
-            is_external_scan = (
-                not _is_private_ip(scan_src_ip)
-                and hasattr(self, "dispatcher")
-                and self.dispatcher.visibility_engine
-            )
-
-            # Resolve target IPs
-            if spec.target_ips:
-                resolved_targets = []
-                for target_ip in spec.target_ips:
-                    if is_external_scan:
-                        public_target = (
-                            self.dispatcher.visibility_engine.get_public_inbound_address(target_ip)
-                        )
-                        if public_target is None:
-                            continue
-                        resolved_targets.append(public_target)
-                    else:
-                        resolved_targets.append(target_ip)
-            elif spec.target_segment and self.scenario.environment.network:
-                seg = next(
-                    (
-                        s
-                        for s in self.scenario.environment.network.segments
-                        if s.name == spec.target_segment
-                    ),
-                    None,
-                )
-                if seg:
-                    if is_external_scan:
-                        segment_hostnames = set(seg.systems or [])
-                        if segment_hostnames:
-                            segment_systems = [
-                                candidate
-                                for candidate in self.scenario.environment.systems
-                                if candidate.hostname in segment_hostnames
-                            ]
-                        else:
-                            net = ipaddress.ip_network(seg.cidr, strict=False)
-                            segment_systems = [
-                                candidate
-                                for candidate in self.scenario.environment.systems
-                                if ipaddress.ip_address(candidate.ip) in net
-                            ]
-                        all_hosts = []
-                        for candidate in segment_systems:
-                            public_target = (
-                                self.dispatcher.visibility_engine.get_public_inbound_address(
-                                    candidate.ip
-                                )
-                            )
-                            if public_target:
-                                all_hosts.append(public_target)
-                    else:
-                        net = ipaddress.ip_network(seg.cidr, strict=False)
-                        all_hosts = [str(h) for h in net.hosts()]
-                    count = min(spec.target_count, len(all_hosts))
-                    resolved_targets = rng.sample(all_hosts, count)
-                else:
-                    resolved_targets = []
-            else:
-                resolved_targets = []
-
-            # Determine conn_state from firewall drop_mode
-            conn_state = self._get_firewall_deny_conn_state()
-
-            # Resolve interfaces
-            src_iface = self._resolve_firewall_interface(scan_src_ip)
-            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
-            vip_to_real_ip = getattr(
-                getattr(getattr(self, "dispatcher", None), "visibility_engine", None),
-                "_vip_to_real_ip",
-                {},
-            )
-            scan_profile_rng = random.Random(
-                _stable_seed(
-                    "port_scan_profile:"
-                    f"{scan_src_ip}:{','.join(resolved_targets)}:{spec.ports}:{time.isoformat()}"
-                )
-            )
-
-            # Generate scan probes: open service hits plus rejected/filtered denies.
-            spacing = 1.0 / spec.scan_rate
-            total_count = 0
-            for target_ip, port in _iter_shuffled_port_scan_pairs(
-                resolved_targets,
-                spec.ports,
-                scan_profile_rng,
-            ):
-                real_target_ip = vip_to_real_ip.get(target_ip, target_ip)
-                target_system = ip_map.get(real_target_ip)
-                dst_iface = self._resolve_firewall_interface(target_ip)
-                jitter_offset = rng.uniform(-spacing * 0.45, spacing * 0.55)
-                scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
-                self.state_manager.set_current_time(scan_time)
-
-                from evidenceforge.events.contexts import FirewallContext
-
-                denied, scan_conn_state, service, duration, orig_bytes, resp_bytes = (
-                    _port_scan_connection_profile(
-                        scan_profile_rng,
-                        port=port,
-                        target_system=target_system,
-                        external=is_external_scan,
-                        default_deny_state=conn_state,
-                    )
-                )
-                firewall = (
-                    FirewallContext(
-                        action="deny",
-                        msg_id=106023,
-                        connection_id=0,
-                        src_interface=src_iface,
-                        dst_interface=dst_iface,
-                        access_group=f"{src_iface}_access_in",
-                    )
-                    if denied
-                    else None
-                )
-
-                self.activity_generator.generate_connection(
-                    src_ip=scan_src_ip,
-                    dst_ip=target_ip,
-                    time=scan_time,
-                    dst_port=port,
-                    proto=spec.protocol,
-                    service=service,
-                    duration=duration,
-                    orig_bytes=orig_bytes,
-                    resp_bytes=resp_bytes,
-                    conn_state=None if spec.protocol == "icmp" else scan_conn_state,
-                    firewall=firewall,
-                    emit_dns=False,
-                )
-                total_count += 1
-
-            malicious_event["target_count"] = len(resolved_targets)
-            malicious_event["ports"] = spec.ports
-            malicious_event["total_connections"] = total_count
-            malicious_event["protocol"] = spec.protocol
+            malicious_event = PortScanActionBundle(
+                executor=self,
+                request=PortScanRequest(
+                    spec=spec,
+                    actor=actor,
+                    system=system,
+                    time=time,
+                    rng=rng,
+                    malicious_event=malicious_event,
+                ),
+            ).execute()
 
         elif spec.type == "beacon":
             # Resolve timing parameters
@@ -3550,255 +3421,17 @@ class StorylineMixin:
             malicious_event["rcode"] = spec.rcode
 
         elif spec.type == "web_scan":
-            from evidenceforge.config.web_scan_presets import (
-                get_preset,
-                parse_positive_finite_rate,
-            )
-            from evidenceforge.events.contexts import HttpContext
-
-            # Load preset and merge with overrides
-            scan_paths = []
-            scan_ua = spec.user_agent or "Mozilla/5.0"
-            if spec.preset:
-                preset_data = get_preset(spec.preset)
-                if preset_data is None:
-                    logger.warning("Unknown web_scan preset: %s", spec.preset)
-                else:
-                    scan_paths = list(preset_data.get("paths", []))
-                    scan_ua = spec.user_agent or preset_data.get("user_agent", scan_ua)
-            if spec.paths:
-                scan_paths.extend(spec.paths)
-            if not scan_paths:
-                raise ValueError(
-                    f"web_scan resolved to zero paths (preset={spec.preset!r}). "
-                    "Check preset name or provide explicit paths."
-                )
-
-            # Timing: rate-based → convert to interval
-            start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
-            duration_sec = None
-            count = spec.count
-            if spec.duration is not None:
-                duration_sec = parse_duration(spec.duration).total_seconds()
-            elif spec.end_time is not None:
-                end_dt = self._parse_storyline_time(spec.end_time)
-                duration_sec = (end_dt - start).total_seconds()
-            scan_src_ip = spec.source_ip or system.ip
-            scan_host = spec.hostname or spec.dst_ip
-            service = "http" if spec.dst_port == 80 else "ssl"
-            scan_dst_ip = spec.dst_ip
-            if (
-                not _is_private_ip(scan_src_ip)
-                and hasattr(self, "dispatcher")
-                and self.dispatcher.visibility_engine
-            ):
-                scan_dst_ip = self.dispatcher.visibility_engine._real_ip_to_vip.get(
-                    spec.dst_ip, spec.dst_ip
-                )
-
-            # Resolve source system
-            src_sys = None
-            ip_map = getattr(self.activity_generator, "_ip_to_system", {})
-            if scan_src_ip in ip_map:
-                src_sys = ip_map[scan_src_ip]
-            elif scan_src_ip == system.ip:
-                src_sys = system
-            story_pid, _story_image = self._last_storyline_process_for_system(src_sys)
-
-            from evidenceforge.events.contexts import IdsContext
-            from evidenceforge.generation.activity.referrer import pick_scan_referrer
-            from evidenceforge.utils.ua_template import render_ua
-
-            is_tls = spec.dst_port == 443
-            ids_ua_def = preset_data.get("ids_ua") if preset_data else None
-            ids_rate_def = preset_data.get("ids_rate") if preset_data else None
-            rate_threshold = ids_rate_def.get("threshold", 20) if ids_rate_def else 20
-            effective_rate = spec.rate
-            if count is None and preset_data:
-                max_effective_rate = preset_data.get("max_effective_rate")
-                if max_effective_rate is not None:
-                    rate_cap = parse_positive_finite_rate(max_effective_rate)
-                    if rate_cap is None:
-                        logger.warning(
-                            "Ignoring invalid web_scan max_effective_rate for preset %s: %r",
-                            spec.preset,
-                            max_effective_rate,
-                        )
-                    else:
-                        effective_rate = min(effective_rate, rate_cap)
-            interval_sec = _effective_rate_interval(effective_rate, count, rng)
-            ua_fired = False
-            last_rate_alert_ts = None
-            next_rate_alert_delay = rng.uniform(45.0, 95.0)
-            _send_referrer_config = preset_data.get("send_referrer") if preset_data else None
-
-            request_count = 0
-            path_sequence: list[dict[str, Any]] = []
-
-            def _next_scan_path() -> dict[str, Any]:
-                nonlocal path_sequence
-                if not path_sequence:
-                    path_sequence = list(scan_paths)
-                    rng.shuffle(path_sequence)
-                    if len(path_sequence) > 8:
-                        skip_count = rng.randint(0, max(1, len(path_sequence) // 10))
-                        for _ in range(skip_count):
-                            if len(path_sequence) <= 4:
-                                break
-                            del path_sequence[rng.randrange(len(path_sequence))]
-                return path_sequence.pop()
-
-            pause_until: datetime | None = None
-            for tick_time in _iter_periodic_ticks(
-                start, interval_sec, duration_sec, count, spec.jitter, rng
-            ):
-                if pause_until is not None and tick_time < pause_until:
-                    continue
-                if request_count > 0 and rng.random() < 0.025:
-                    continue
-                if request_count > 0 and rng.random() < 0.008:
-                    pause_until = tick_time + timedelta(seconds=rng.uniform(3.0, 45.0))
-                    continue
-
-                self.state_manager.set_current_time(tick_time)
-                path_entry = _next_scan_path()
-
-                _method = path_entry.get("method", "GET")
-                _uri = _web_scan_uri_with_runtime_variation(
-                    str(path_entry.get("uri", "/")),
-                    request_count,
-                    random.Random(
-                        _stable_seed(
-                            "web_scan_uri_variation:"
-                            f"{scan_src_ip}:{scan_dst_ip}:{request_count}:"
-                            f"{tick_time.isoformat()}"
-                        )
-                    ),
-                )
-                _status = _observed_web_scan_status(
-                    path_entry,
-                    random.Random(
-                        _stable_seed(
-                            "web_scan_status:"
-                            f"{scan_src_ip}:{scan_dst_ip}:{_uri}:{request_count}:"
-                            f"{tick_time.isoformat()}"
-                        )
-                    ),
-                )
-
-                _mime_type = normalize_mime_type_for_path(_uri, "text/html")
-                _scan_referrer = (
-                    pick_scan_referrer(rng, scan_host, _send_referrer_config, port=spec.dst_port)
-                    if _web_scan_path_allows_referrer(path_entry)
-                    else ""
-                )
-
-                _response_body_len = (
-                    apply_transfer_size_variance(
-                        response_size_for_status(_status, scan_host, _uri),
-                        status_code=_status,
-                        host=scan_host,
-                        uri=_uri,
-                        content_type=_mime_type,
-                        variant_key=f"{scan_src_ip}:{scan_ua}",
-                    )
-                    if _status >= 400 or is_stable_resource_path(_uri)
-                    else response_size_for_mime(rng, _mime_type)
-                )
-                http_ctx = HttpContext(
-                    method=_method,
-                    host=scan_host,
-                    uri=_uri,
-                    version="1.1",
-                    user_agent=render_ua(scan_ua, rng),
-                    request_body_len=rng.randint(100, 500) if _method == "POST" else 0,
-                    response_body_len=_response_body_len,
-                    status_code=_status,
-                    status_msg={
-                        200: "OK",
-                        301: "Moved Permanently",
-                        302: "Found",
-                        403: "Forbidden",
-                        404: "Not Found",
-                        405: "Method Not Allowed",
-                        500: "Internal Server Error",
-                    }.get(_status, "OK"),
-                    referrer=_scan_referrer,
-                    resp_mime_types=[_mime_type] if _status == 200 else [],
-                    tags=[],
-                )
-
-                # 3-layer IDS alert selection
-                ids_ctx = None
-
-                # Layer 1: Scanner UA detection (non-TLS only, once per 60s)
-                if not is_tls and ids_ua_def and not ua_fired:
-                    ids_ctx = IdsContext(
-                        sid=ids_ua_def["sid"],
-                        rev=ids_ua_def.get("rev", 1),
-                        message=ids_ua_def["message"],
-                        classification=ids_ua_def.get("classification", "web-application-attack"),
-                        priority=ids_ua_def.get("priority", 2),
-                    )
-                    ua_fired = True
-
-                # Layer 2: Per-path content alerts (non-TLS only)
-                elif not is_tls and isinstance(path_entry.get("ids"), dict):
-                    path_ids = path_entry["ids"]
-                    ids_ctx = IdsContext(
-                        sid=path_ids["sid"],
-                        rev=path_ids.get("rev", 1),
-                        message=path_ids["message"],
-                        classification=path_ids.get("classification", "web-application-attack"),
-                        priority=path_ids.get("priority", 2),
-                    )
-
-                # Layer 3: Connection-rate threshold (both TLS and non-TLS)
-                if ids_ctx is None and ids_rate_def and request_count >= rate_threshold:
-                    fire_rate = False
-                    if last_rate_alert_ts is None:
-                        fire_rate = True
-                    elif (tick_time - last_rate_alert_ts).total_seconds() >= next_rate_alert_delay:
-                        fire_rate = True
-                    if fire_rate:
-                        ids_ctx = IdsContext(
-                            sid=ids_rate_def["sid"],
-                            rev=ids_rate_def.get("rev", 1),
-                            message=ids_rate_def["message"],
-                            classification=ids_rate_def.get("classification", "attempted-recon"),
-                            priority=ids_rate_def.get("priority", 2),
-                        )
-                        last_rate_alert_ts = tick_time
-                        next_rate_alert_delay = rng.uniform(45.0, 120.0)
-
-                conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(
-                    rng, is_tls=is_tls
-                )
-                http_for_conn = http_ctx if conn_state == "SF" else None
-
-                self.activity_generator.generate_connection(
-                    src_ip=scan_src_ip,
-                    dst_ip=scan_dst_ip,
-                    time=tick_time,
-                    dst_port=spec.dst_port,
-                    service=service,
-                    duration=duration,
-                    orig_bytes=orig_bytes,
-                    resp_bytes=resp_bytes,
-                    conn_state=conn_state,
-                    emit_dns=request_count == 0,
-                    source_system=src_sys,
-                    http=http_for_conn,
-                    hostname=scan_host if spec.hostname else None,
-                    pid=story_pid,
-                    ids=ids_ctx,
-                )
-                request_count += 1
-
-            malicious_event["dst_ip"] = spec.dst_ip
-            malicious_event["dst_port"] = spec.dst_port
-            malicious_event["preset"] = spec.preset
-            malicious_event["request_count"] = request_count
+            malicious_event = WebScanActionBundle(
+                executor=self,
+                request=WebScanRequest(
+                    spec=spec,
+                    actor=actor,
+                    system=system,
+                    time=time,
+                    rng=rng,
+                    malicious_event=malicious_event,
+                ),
+            ).execute()
 
         elif spec.type == "credential_spray":
             # Timing
@@ -4357,6 +3990,407 @@ class StorylineMixin:
             )
             malicious_event["target_format"] = spec.target_format
 
+        return malicious_event
+
+    def _execute_port_scan_bundle(self, request: PortScanRequest) -> dict[str, Any]:
+        """Expand a port-scan action bundle through the existing storyline adapter."""
+
+        import ipaddress
+
+        spec = request.spec
+        system = request.system
+        time = request.time
+        rng = request.rng
+        malicious_event = request.malicious_event
+
+        # Use source_ip override if specified, otherwise use system IP.
+        scan_src_ip = spec.source_ip or system.ip
+        is_external_scan = (
+            not _is_private_ip(scan_src_ip)
+            and hasattr(self, "dispatcher")
+            and self.dispatcher.visibility_engine
+        )
+
+        # Resolve target IPs.
+        if spec.target_ips:
+            resolved_targets = []
+            for target_ip in spec.target_ips:
+                if is_external_scan:
+                    public_target = self.dispatcher.visibility_engine.get_public_inbound_address(
+                        target_ip
+                    )
+                    if public_target is None:
+                        continue
+                    resolved_targets.append(public_target)
+                else:
+                    resolved_targets.append(target_ip)
+        elif spec.target_segment and self.scenario.environment.network:
+            seg = next(
+                (
+                    s
+                    for s in self.scenario.environment.network.segments
+                    if s.name == spec.target_segment
+                ),
+                None,
+            )
+            if seg:
+                if is_external_scan:
+                    segment_hostnames = set(seg.systems or [])
+                    if segment_hostnames:
+                        segment_systems = [
+                            candidate
+                            for candidate in self.scenario.environment.systems
+                            if candidate.hostname in segment_hostnames
+                        ]
+                    else:
+                        net = ipaddress.ip_network(seg.cidr, strict=False)
+                        segment_systems = [
+                            candidate
+                            for candidate in self.scenario.environment.systems
+                            if ipaddress.ip_address(candidate.ip) in net
+                        ]
+                    all_hosts = []
+                    for candidate in segment_systems:
+                        public_target = (
+                            self.dispatcher.visibility_engine.get_public_inbound_address(
+                                candidate.ip
+                            )
+                        )
+                        if public_target:
+                            all_hosts.append(public_target)
+                else:
+                    net = ipaddress.ip_network(seg.cidr, strict=False)
+                    all_hosts = [str(h) for h in net.hosts()]
+                count = min(spec.target_count, len(all_hosts))
+                resolved_targets = rng.sample(all_hosts, count)
+            else:
+                resolved_targets = []
+        else:
+            resolved_targets = []
+
+        conn_state = self._get_firewall_deny_conn_state()
+        src_iface = self._resolve_firewall_interface(scan_src_ip)
+        ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+        vip_to_real_ip = getattr(
+            getattr(getattr(self, "dispatcher", None), "visibility_engine", None),
+            "_vip_to_real_ip",
+            {},
+        )
+        scan_profile_rng = random.Random(
+            _stable_seed(
+                "port_scan_profile:"
+                f"{scan_src_ip}:{','.join(resolved_targets)}:{spec.ports}:{time.isoformat()}"
+            )
+        )
+
+        spacing = 1.0 / spec.scan_rate
+        total_count = 0
+        for target_ip, port in _iter_shuffled_port_scan_pairs(
+            resolved_targets,
+            spec.ports,
+            scan_profile_rng,
+        ):
+            real_target_ip = vip_to_real_ip.get(target_ip, target_ip)
+            target_system = ip_map.get(real_target_ip)
+            dst_iface = self._resolve_firewall_interface(target_ip)
+            jitter_offset = rng.uniform(-spacing * 0.45, spacing * 0.55)
+            scan_time = time + timedelta(seconds=total_count * spacing + jitter_offset)
+            self.state_manager.set_current_time(scan_time)
+
+            from evidenceforge.events.contexts import FirewallContext
+
+            denied, scan_conn_state, service, duration, orig_bytes, resp_bytes = (
+                _port_scan_connection_profile(
+                    scan_profile_rng,
+                    port=port,
+                    target_system=target_system,
+                    external=is_external_scan,
+                    default_deny_state=conn_state,
+                )
+            )
+            firewall = (
+                FirewallContext(
+                    action="deny",
+                    msg_id=106023,
+                    connection_id=0,
+                    src_interface=src_iface,
+                    dst_interface=dst_iface,
+                    access_group=f"{src_iface}_access_in",
+                )
+                if denied
+                else None
+            )
+
+            self.activity_generator.generate_connection(
+                src_ip=scan_src_ip,
+                dst_ip=target_ip,
+                time=scan_time,
+                dst_port=port,
+                proto=spec.protocol,
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                conn_state=None if spec.protocol == "icmp" else scan_conn_state,
+                firewall=firewall,
+                emit_dns=False,
+            )
+            total_count += 1
+
+        malicious_event["target_count"] = len(resolved_targets)
+        malicious_event["ports"] = spec.ports
+        malicious_event["total_connections"] = total_count
+        malicious_event["protocol"] = spec.protocol
+        return malicious_event
+
+    def _execute_web_scan_bundle(self, request: WebScanRequest) -> dict[str, Any]:
+        """Expand a web-scan action bundle through the existing storyline adapter."""
+
+        from evidenceforge.config.web_scan_presets import (
+            get_preset,
+            parse_positive_finite_rate,
+        )
+        from evidenceforge.events.contexts import HttpContext, IdsContext
+        from evidenceforge.generation.activity.referrer import pick_scan_referrer
+        from evidenceforge.utils.ua_template import render_ua
+
+        spec = request.spec
+        system = request.system
+        time = request.time
+        rng = request.rng
+        malicious_event = request.malicious_event
+
+        scan_paths = []
+        scan_ua = spec.user_agent or "Mozilla/5.0"
+        preset_data = None
+        if spec.preset:
+            preset_data = get_preset(spec.preset)
+            if preset_data is None:
+                logger.warning("Unknown web_scan preset: %s", spec.preset)
+            else:
+                scan_paths = list(preset_data.get("paths", []))
+                scan_ua = spec.user_agent or preset_data.get("user_agent", scan_ua)
+        if spec.paths:
+            scan_paths.extend(spec.paths)
+        if not scan_paths:
+            raise ValueError(
+                f"web_scan resolved to zero paths (preset={spec.preset!r}). "
+                "Check preset name or provide explicit paths."
+            )
+
+        start = self._parse_storyline_time(spec.start_time) if spec.start_time else time
+        duration_sec = None
+        count = spec.count
+        if spec.duration is not None:
+            duration_sec = parse_duration(spec.duration).total_seconds()
+        elif spec.end_time is not None:
+            end_dt = self._parse_storyline_time(spec.end_time)
+            duration_sec = (end_dt - start).total_seconds()
+        scan_src_ip = spec.source_ip or system.ip
+        scan_host = spec.hostname or spec.dst_ip
+        service = "http" if spec.dst_port == 80 else "ssl"
+        scan_dst_ip = spec.dst_ip
+        if (
+            not _is_private_ip(scan_src_ip)
+            and hasattr(self, "dispatcher")
+            and self.dispatcher.visibility_engine
+        ):
+            scan_dst_ip = self.dispatcher.visibility_engine._real_ip_to_vip.get(
+                spec.dst_ip, spec.dst_ip
+            )
+
+        src_sys = None
+        ip_map = getattr(self.activity_generator, "_ip_to_system", {})
+        if scan_src_ip in ip_map:
+            src_sys = ip_map[scan_src_ip]
+        elif scan_src_ip == system.ip:
+            src_sys = system
+        story_pid, _story_image = self._last_storyline_process_for_system(src_sys)
+
+        is_tls = spec.dst_port == 443
+        ids_ua_def = preset_data.get("ids_ua") if preset_data else None
+        ids_rate_def = preset_data.get("ids_rate") if preset_data else None
+        rate_threshold = ids_rate_def.get("threshold", 20) if ids_rate_def else 20
+        effective_rate = spec.rate
+        if count is None and preset_data:
+            max_effective_rate = preset_data.get("max_effective_rate")
+            if max_effective_rate is not None:
+                rate_cap = parse_positive_finite_rate(max_effective_rate)
+                if rate_cap is None:
+                    logger.warning(
+                        "Ignoring invalid web_scan max_effective_rate for preset %s: %r",
+                        spec.preset,
+                        max_effective_rate,
+                    )
+                else:
+                    effective_rate = min(effective_rate, rate_cap)
+        interval_sec = _effective_rate_interval(effective_rate, count, rng)
+        ua_fired = False
+        last_rate_alert_ts = None
+        next_rate_alert_delay = rng.uniform(45.0, 95.0)
+        send_referrer_config = preset_data.get("send_referrer") if preset_data else None
+
+        request_count = 0
+        path_sequence: list[dict[str, Any]] = []
+
+        def _next_scan_path() -> dict[str, Any]:
+            nonlocal path_sequence
+            if not path_sequence:
+                path_sequence = list(scan_paths)
+                rng.shuffle(path_sequence)
+                if len(path_sequence) > 8:
+                    skip_count = rng.randint(0, max(1, len(path_sequence) // 10))
+                    for _ in range(skip_count):
+                        if len(path_sequence) <= 4:
+                            break
+                        del path_sequence[rng.randrange(len(path_sequence))]
+            return path_sequence.pop()
+
+        pause_until: datetime | None = None
+        for tick_time in _iter_periodic_ticks(
+            start, interval_sec, duration_sec, count, spec.jitter, rng
+        ):
+            if pause_until is not None and tick_time < pause_until:
+                continue
+            if request_count > 0 and rng.random() < 0.025:
+                continue
+            if request_count > 0 and rng.random() < 0.008:
+                pause_until = tick_time + timedelta(seconds=rng.uniform(3.0, 45.0))
+                continue
+
+            self.state_manager.set_current_time(tick_time)
+            path_entry = _next_scan_path()
+
+            method = path_entry.get("method", "GET")
+            uri = _web_scan_uri_with_runtime_variation(
+                str(path_entry.get("uri", "/")),
+                request_count,
+                random.Random(
+                    _stable_seed(
+                        "web_scan_uri_variation:"
+                        f"{scan_src_ip}:{scan_dst_ip}:{request_count}:"
+                        f"{tick_time.isoformat()}"
+                    )
+                ),
+            )
+            status = _observed_web_scan_status(
+                path_entry,
+                random.Random(
+                    _stable_seed(
+                        "web_scan_status:"
+                        f"{scan_src_ip}:{scan_dst_ip}:{uri}:{request_count}:"
+                        f"{tick_time.isoformat()}"
+                    )
+                ),
+            )
+
+            mime_type = normalize_mime_type_for_path(uri, "text/html")
+            scan_referrer = (
+                pick_scan_referrer(rng, scan_host, send_referrer_config, port=spec.dst_port)
+                if _web_scan_path_allows_referrer(path_entry)
+                else ""
+            )
+
+            response_body_len = (
+                apply_transfer_size_variance(
+                    response_size_for_status(status, scan_host, uri),
+                    status_code=status,
+                    host=scan_host,
+                    uri=uri,
+                    content_type=mime_type,
+                    variant_key=f"{scan_src_ip}:{scan_ua}",
+                )
+                if status >= 400 or is_stable_resource_path(uri)
+                else response_size_for_mime(rng, mime_type)
+            )
+            http_ctx = HttpContext(
+                method=method,
+                host=scan_host,
+                uri=uri,
+                version="1.1",
+                user_agent=render_ua(scan_ua, rng),
+                request_body_len=rng.randint(100, 500) if method == "POST" else 0,
+                response_body_len=response_body_len,
+                status_code=status,
+                status_msg={
+                    200: "OK",
+                    301: "Moved Permanently",
+                    302: "Found",
+                    403: "Forbidden",
+                    404: "Not Found",
+                    405: "Method Not Allowed",
+                    500: "Internal Server Error",
+                }.get(status, "OK"),
+                referrer=scan_referrer,
+                resp_mime_types=[mime_type] if status == 200 else [],
+                tags=[],
+            )
+
+            ids_ctx = None
+            if not is_tls and ids_ua_def and not ua_fired:
+                ids_ctx = IdsContext(
+                    sid=ids_ua_def["sid"],
+                    rev=ids_ua_def.get("rev", 1),
+                    message=ids_ua_def["message"],
+                    classification=ids_ua_def.get("classification", "web-application-attack"),
+                    priority=ids_ua_def.get("priority", 2),
+                )
+                ua_fired = True
+            elif not is_tls and isinstance(path_entry.get("ids"), dict):
+                path_ids = path_entry["ids"]
+                ids_ctx = IdsContext(
+                    sid=path_ids["sid"],
+                    rev=path_ids.get("rev", 1),
+                    message=path_ids["message"],
+                    classification=path_ids.get("classification", "web-application-attack"),
+                    priority=path_ids.get("priority", 2),
+                )
+
+            if ids_ctx is None and ids_rate_def and request_count >= rate_threshold:
+                fire_rate = False
+                if last_rate_alert_ts is None:
+                    fire_rate = True
+                elif (tick_time - last_rate_alert_ts).total_seconds() >= next_rate_alert_delay:
+                    fire_rate = True
+                if fire_rate:
+                    ids_ctx = IdsContext(
+                        sid=ids_rate_def["sid"],
+                        rev=ids_rate_def.get("rev", 1),
+                        message=ids_rate_def["message"],
+                        classification=ids_rate_def.get("classification", "attempted-recon"),
+                        priority=ids_rate_def.get("priority", 2),
+                    )
+                    last_rate_alert_ts = tick_time
+                    next_rate_alert_delay = rng.uniform(45.0, 120.0)
+
+            conn_state, duration, orig_bytes, resp_bytes = _web_scan_connection_profile(
+                rng, is_tls=is_tls
+            )
+            http_for_conn = http_ctx if conn_state == "SF" else None
+
+            self.activity_generator.generate_connection(
+                src_ip=scan_src_ip,
+                dst_ip=scan_dst_ip,
+                time=tick_time,
+                dst_port=spec.dst_port,
+                service=service,
+                duration=duration,
+                orig_bytes=orig_bytes,
+                resp_bytes=resp_bytes,
+                conn_state=conn_state,
+                emit_dns=request_count == 0,
+                source_system=src_sys,
+                http=http_for_conn,
+                hostname=scan_host if spec.hostname else None,
+                pid=story_pid,
+                ids=ids_ctx,
+            )
+            request_count += 1
+
+        malicious_event["dst_ip"] = spec.dst_ip
+        malicious_event["dst_port"] = spec.dst_port
+        malicious_event["preset"] = spec.preset
+        malicious_event["request_count"] = request_count
         return malicious_event
 
     def _resolve_firewall_interface(self, ip: str) -> str:

@@ -83,6 +83,8 @@ from evidenceforge.generation.actions import (
     LogonRequest,
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
+    NmapCommandProbeActionBundle,
+    NmapCommandProbeRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -7867,7 +7869,26 @@ class ActivityGenerator:
         command_line: str,
     ) -> None:
         """Emit direct network effects for well-known network-scanning commands."""
-        del user  # Reserved for future command families that need user profile context.
+        NmapCommandProbeActionBundle(
+            executor=self,
+            request=NmapCommandProbeRequest(
+                user=user,
+                system=system,
+                time=time,
+                pid=pid,
+                process_name=process_name,
+                command_line=command_line,
+            ),
+        ).execute()
+
+    def _execute_nmap_command_probe_bundle(self, request: NmapCommandProbeRequest) -> None:
+        """Expand nmap-like process commands into scanner probe connections."""
+
+        system = request.system
+        time = request.time
+        pid = request.pid
+        process_name = request.process_name
+        command_line = request.command_line
         command_lower = command_line.lower()
         image_lower = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if image_lower != "nmap" and " nmap " not in f" {command_lower} ":

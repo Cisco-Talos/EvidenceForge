@@ -45,6 +45,8 @@ from evidenceforge.generation.actions import (
     LogonRequest,
     NetworkConnectionActionBundle,
     NetworkConnectionRequest,
+    NmapCommandProbeActionBundle,
+    NmapCommandProbeRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -1639,6 +1641,53 @@ class TestActivityGenerator:
             "smb",
             "mysql",
         }
+
+    def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
+        """Nmap command probe bundles should expose deterministic anchors."""
+        system = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 22,80 10.10.2.0/24",
+        )
+
+        first = NmapCommandProbeActionBundle(Mock(), request).anchor
+        second = NmapCommandProbeActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "nmap_command_probe"
+        assert first.stable_id.startswith("nmap-command-probe-")
+
+    def test_nmap_command_probe_bundle_delegates_to_adapter(self, test_user):
+        """Nmap command probe bundles should delegate expansion to the adapter."""
+        system = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 22,80 10.10.2.0/24",
+        )
+
+        executor = Mock()
+
+        NmapCommandProbeActionBundle(executor, request).execute()
+
+        executor._execute_nmap_command_probe_bundle.assert_called_once_with(request)
 
     def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
         """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""

@@ -390,16 +390,17 @@ When building storyline events, each entry needs an `events` list with typed dec
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `beacon`, `dns_query`, `web_scan`, `credential_spray`, `dga_queries`, `dns_tunnel`, `explicit_credentials`, `workstation_lock`, `workstation_unlock`, `raw`
 
 Correlated multi-event activities such as `ssh_session`, auth/session lifecycle,
-canonical network connections, and process-owned endpoint side effects are
-modeled internally as action bundles. Authors should still write the same typed
-event, not duplicate Zeek connections, DNS/TLS/HTTP/proxy/firewall rows, syslog
-auth rows, DC validation rows, EDR/eCAR session/process/FLOW rows, shell process
-setup, or process-owned file/module/registry evidence by hand.
+canonical network connections, scanner/probe activity, and process-owned
+endpoint side effects are modeled internally as action bundles. Authors should
+still write the same typed event, not duplicate Zeek connections,
+DNS/TLS/HTTP/proxy/firewall rows, scanner IDS rows, syslog auth rows, DC
+validation rows, EDR/eCAR session/process/FLOW rows, shell process setup, or
+process-owned file/module/registry evidence by hand.
 
 **Firewall/network event types:**
-- `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
+- `port_scan` — Bulk recon/scanning modeled as a scanner/probe action bundle. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies/open-service connections + correlated Zeek conn entries.
 - `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter` (default: 0.15), `referrer` (optional HTTP Referer, auto-generated if omitted), plus all `connection` fields. In explicit proxy mode, HTTP/S beacons from proxied hosts traverse the proxy; use `action: deny` for proxy- or firewall-blocked beaconing.
-- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate` (average requests/second; exact only when `count` is set), `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
+- `web_scan` — Bulk HTTP scanning from presets modeled as a scanner/probe action bundle. Fields: `dst_ip`, `rate` (average requests/second; exact only when `count` is set), `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
 - `credential_spray` — Bulk auth attacks. Fields: `target_accounts`, `interval`, `pattern` (spray/brute_force/stuffing), `success` ({account, after}), `jitter` (default: 0.5). OS-aware: Windows 4625/4776 or Linux syslog.
 - `dns_query` — Standalone DNS query. Fields: `query`, `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR).
 - `dga_queries` — Bulk DGA domain lookups. Fields: `interval`, `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`.

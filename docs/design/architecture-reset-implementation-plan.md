@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -97,8 +97,8 @@ persona browsing and inbound human web-server visitor sessions now share the sam
 bundle for request grouping, transaction depth, page/subresource timing,
 referrer chains, static-asset cache suppression, response MIME/status metadata,
 and direct-vs-explicit-proxy handoff through canonical connection generation.
-Single tool requests, scanners, raw storyline HTTP events, and source-local web
-server noise remain direct canonical events unless they model a browser session.
+Single tool requests, raw storyline HTTP events, and source-local web server
+noise remain direct canonical events unless they model a browser session.
 Public scenario YAML, CLI behavior, output layout, and authoring skills remain
 unchanged for this slice.
 
@@ -188,6 +188,20 @@ companions, and low-volume resolver companion questions. Public scenario YAML,
 CLI behavior, output layout, concrete format names, and authoring skills remain
 unchanged for this slice.
 
+The scanner/probe action-bundle extraction moves explicit storyline
+`port_scan` and `web_scan` expansion, scheduled scanner-overlap suspicious
+noise, and nmap process side effects behind scanner action bundles.
+`PortScanActionBundle` owns port-scan target fan-out, scan timing,
+open/closed-service profiles, firewall deny contexts, and ground-truth
+summaries. `WebScanActionBundle` owns web-scanner path selection, request
+timing, scanner user-agent rendering, referrer rules, HTTP metadata, IDS alert
+selection, and canonical HTTP/network correlation.
+`ScheduledScanOverlapActionBundle` keeps benign vulnerability-scan noise on the
+same bundle path, and `NmapCommandProbeActionBundle` owns process-caused probe
+expansion after process creation. Public scenario YAML, CLI behavior, output
+layout, concrete format names, and authoring skills remain unchanged for this
+slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -260,6 +274,10 @@ unchanged for this slice.
   Zeek DNS/conn UID correlation, source-time ordering before connections,
   qtype-specific answer semantics, public DNS profile rendering, and
   multi-sensor DNS packet-accounting preservation.
+- Scanner/probe probes cover stable port-scan, web-scan, scheduled-overlap, and
+  nmap command-probe anchors; bundle-to-adapter delegation; external DMZ target
+  resolution; nmap process transport evidence; web-scan IDS/referrer behavior;
+  and existing scanner source/destination semantics.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

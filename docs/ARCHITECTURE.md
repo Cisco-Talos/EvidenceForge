@@ -302,9 +302,19 @@ static-asset cache suppression, response MIME/status metadata, and per-request
 timing. The bundle emits each request through canonical connection generation, so
 the same browser-session path works for direct network evidence and for hosts
 whose traffic is handed to `ProxyTransactionActionBundle` by explicit proxy
-routing. Tool-like HTTP requests, scanners, and raw storyline HTTP events remain
-single canonical events unless they are intentionally modeled as browser
-sessions.
+routing. Tool-like HTTP requests and raw storyline HTTP events remain single
+canonical events unless they are intentionally modeled as browser sessions.
+
+Scanner/probe callers supply one scan/probe intent, and scanner action bundles
+expand it into the relevant probe requests while preserving the canonical
+network-connection boundary. `PortScanActionBundle` owns typed storyline
+port-scan target fan-out, scan timing, open/closed service profiles, firewall
+denial contexts, and ground-truth summaries. `WebScanActionBundle` owns typed
+storyline web-scanner path selection, request timing, scanner user-agent
+rendering, referrer rules, HTTP status/body metadata, IDS alert selection, and
+Zeek/web-access correlation. `ScheduledScanOverlapActionBundle` covers
+suspicious-but-benign scanner noise, and `NmapCommandProbeActionBundle` covers
+network probes caused by modeled nmap processes.
 
 File-transfer callers supply transfer intent layered on top of a transport path.
 `HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
