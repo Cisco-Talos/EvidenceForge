@@ -6549,6 +6549,23 @@ class TestActivityGenerator:
         assert "dc=corp,dc=local" not in command
         assert "{ldap_base_dn}" not in command
 
+    def test_parameterize_command_internal_url_replacement_is_bounded(self, activity_gen) -> None:
+        """Internal URL replacement should terminate even with placeholder-like domains."""
+        activity_gen._ad_domain = "{internal_url}"
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            "curl {internal_url}",
+            username="analyst",
+            system=System(
+                hostname="WKSTN-01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                type="workstation",
+            ),
+        )
+        assert command.startswith("curl https://")
+        assert command.count("{internal_url}") >= 1
+
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

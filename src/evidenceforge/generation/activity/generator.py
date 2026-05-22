@@ -3433,13 +3433,13 @@ class ActivityGenerator:
             target = self._pick_command_target_placeholder(rng, command_line, system)
             if target:
                 command_line = command_line.replace("{ssh_target}", target)
-        if "{internal_url}" in command_line:
-            while "{internal_url}" in command_line:
-                command_line = command_line.replace(
-                    "{internal_url}",
-                    self._pick_internal_url_placeholder(rng),
-                    1,
-                )
+        internal_url_count = command_line.count("{internal_url}")
+        for _ in range(internal_url_count):
+            command_line = command_line.replace(
+                "{internal_url}",
+                self._pick_internal_url_placeholder(rng),
+                1,
+            )
         if "{ldap_base_dn}" in command_line:
             command_line = command_line.replace(
                 "{ldap_base_dn}",
