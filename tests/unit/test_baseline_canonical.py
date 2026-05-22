@@ -1115,16 +1115,18 @@ class TestBaselineSshTiming:
     """Regression tests for baseline SSH connection/syslog correlation."""
 
     def test_disconnect_uses_same_duration_as_generated_connection(self):
-        """Baseline SSH disconnect timing should share the conn.log duration."""
+        """Baseline SSH disconnect timing should share the bundle transport duration."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
         assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
+        assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
-        assert 'conn_state="SF"' in source
         assert "max(1.0, ssh_duration)" in source
+        assert "emit_session_close=(" in source
+        assert 'source="baseline_ssh_noise"' in source
 
     def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
         """Generic syslog SSH churn should not blanket every Linux host."""

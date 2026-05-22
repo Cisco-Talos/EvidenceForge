@@ -64,10 +64,15 @@ from evidenceforge.events.contexts import (
     RemoteThreadContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions import (
+    ProxyTransactionActionBundle,
+    ProxyTransactionRequest,
+    SshSessionActionBundle,
+    SshSessionRequest,
+)
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
-from evidenceforge.generation.activity.network_params import proxy_connect_status_message
 from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 from evidenceforge.generation.activity.proxy_user_agents import (
     normalize_proxy_user_agent_for_os,
@@ -8531,426 +8536,38 @@ class ActivityGenerator:
             and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
         )
         if explicit_proxy:
-            proxy_sys = proxy_chain[0]
-            listener_port = int(getattr(self, "_proxy_listener_port", 8080))
-            proxy_context = proxy or self._build_proxy_context(
+            proxy_request = ProxyTransactionRequest(
                 src_ip=src_ip,
                 dst_ip=dst_ip,
-                dst_port=dst_port,
-                service=service,
-                duration=duration,
-                orig_bytes=orig_bytes,
-                resp_bytes=resp_bytes,
-                hostname=hostname,
-                source_system=source_system,
-                proxy_sys=proxy_sys,
-                http=http,
-                explicit_mode=True,
-            )
-            tunnel_key = (
-                src_ip,
-                proxy_sys.ip,
-                proxy_context.host,
-                dst_ip,
-                dst_port,
-            )
-            reuse_safe = (
-                dst_port == 443
-                and http is not None
-                and dns is None
-                and ids is None
-                and firewall is None
-                and proxy is None
-                and proxy_context.status_code < 400
-            )
-            if reuse_safe:
-                active_tunnel = self._explicit_proxy_tunnels.get(tunnel_key)
-                if active_tunnel is not None:
-                    last_activity, cached_uid = active_tunnel
-                    elapsed = (time - last_activity).total_seconds()
-                    if 0 <= elapsed < _EXPLICIT_PROXY_TUNNEL_TIMEOUT_S:
-                        self._explicit_proxy_tunnels[tunnel_key] = (time, cached_uid)
-                        return cached_uid
-
-            client_http: HttpContext | None = None
-            if dst_port == 443:
-                tunnel_status_code = proxy_context.tunnel_status_code
-                if tunnel_status_code is None:
-                    tunnel_status_code = proxy_context.status_code
-                client_http = HttpContext(
-                    method="CONNECT",
-                    host=proxy_context.host,
-                    uri=f"{proxy_context.host}:443",
-                    version="1.1",
-                    user_agent=proxy_context.user_agent,
-                    request_body_len=0,
-                    response_body_len=0,
-                    status_code=tunnel_status_code,
-                    status_msg=proxy_connect_status_message(
-                        tunnel_status_code,
-                        proxy_context.host,
-                        proxy_context.user_agent,
-                        time,
-                    ),
-                    tags=[],
-                )
-            elif http is not None:
-                status_messages = {
-                    200: "OK",
-                    301: "Moved Permanently",
-                    302: "Found",
-                    304: "Not Modified",
-                    403: "Forbidden",
-                    407: "Proxy Authentication Required",
-                    500: "Internal Server Error",
-                    502: "Bad Gateway",
-                    503: "Service Unavailable",
-                    504: "Gateway Timeout",
-                }
-                client_http = HttpContext(
-                    method=http.method,
-                    host=proxy_context.host,
-                    uri=proxy_context.url,
-                    version=http.version,
-                    user_agent=http.user_agent,
-                    request_body_len=http.request_body_len,
-                    response_body_len=_proxy_http_response_body_len(
-                        proxy_context,
-                        resp_bytes=resp_bytes,
-                        http=http,
-                    ),
-                    flow_request_body_len=http.flow_request_body_len,
-                    flow_response_body_len=http.flow_response_body_len,
-                    flow_transaction_count=http.flow_transaction_count,
-                    status_code=proxy_context.status_code,
-                    status_msg=status_messages.get(proxy_context.status_code, http.status_msg),
-                    referrer=http.referrer,
-                    trans_depth=http.trans_depth,
-                    tags=list(http.tags),
-                    resp_mime_types=[proxy_context.content_type]
-                    if proxy_context.content_type
-                    else list(http.resp_mime_types),
-                )
-            else:
-                request_body_len = 0
-                if proxy_context.method not in ("GET", "HEAD", "CONNECT", "OPTIONS"):
-                    request_body_len = proxy_context.cs_bytes
-                client_http = HttpContext(
-                    method=proxy_context.method,
-                    host=proxy_context.host,
-                    uri=proxy_context.url,
-                    version="1.1",
-                    user_agent=proxy_context.user_agent,
-                    request_body_len=request_body_len,
-                    response_body_len=_proxy_http_response_body_len(
-                        proxy_context,
-                        resp_bytes=resp_bytes,
-                    ),
-                    status_code=proxy_context.status_code,
-                    status_msg="OK" if proxy_context.status_code == 200 else "Forbidden",
-                    referrer=proxy_context.referrer,
-                    tags=[],
-                    resp_mime_types=[proxy_context.content_type]
-                    if proxy_context.content_type
-                    else [],
-                )
-
-            if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
-                rng = _get_rng()
-                host_len = len(proxy_context.host or "")
-                proxy_context.cs_bytes = rng.randint(180 + host_len, 520 + host_len)
-                proxy_context.sc_bytes = rng.randint(250, 2000)
-                proxy_context.time_taken = rng.randint(20, 1500)
-                proxy_context.tunnel_status_code = proxy_context.status_code
-                client_http.status_code = proxy_context.status_code
-                client_http.status_msg = proxy_connect_status_message(
-                    proxy_context.status_code,
-                    proxy_context.host,
-                    proxy_context.user_agent,
-                    time,
-                )
-                client_http.response_body_len = _proxy_http_response_body_len(
-                    proxy_context,
-                    resp_bytes=resp_bytes,
-                )
-                client_http.resp_mime_types = (
-                    [proxy_context.content_type] if proxy_context.content_type else []
-                )
-
-            if (
-                proxy_context.host
-                and "." in proxy_context.host
-                and not _is_ip_literal(proxy_context.host)
-                and not proxy_context.host.endswith(f".{ad_domain}")
-                and not proxy_context.host.endswith(".local")
-                and not preserve_explicit_proxy_dst_ip
-            ):
-                from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
-
-                dst_ip = resolve_domain_ip(proxy_context.host, src_host=proxy_sys.hostname)
-
-            client_orig_bytes = max(1, proxy_context.cs_bytes or orig_bytes or 1)
-            client_resp_bytes = max(0, proxy_context.sc_bytes or 0)
-            will_emit_egress = (
-                proxy_context.status_code < 400 and proxy_context.cache_result != "HIT"
-            )
-            egress_delay = timedelta(0)
-            if will_emit_egress:
-                proxy_delay_window = get_timing_window(
-                    "network.proxy_upstream_after_client",
-                    default_min_ms=950,
-                    default_max_ms=1800,
-                    default_position="after",
-                    default_class="causal_prerequisite",
-                )
-                egress_delay = timedelta(
-                    milliseconds=random.Random(
-                        _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
-                    ).randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
-                )
-            client_pid = pid
-            client_process_image = process_image
-            caller_process_image = self._caller_explicit_proxy_process_image(
-                source_system=source_system,
-                pid=pid,
-                process_image=process_image,
                 time=time,
-                proxy_context=proxy_context,
-                proxy_sys=proxy_sys,
-                dst_port=dst_port,
-            )
-            if caller_process_image is not None:
-                client_process_image = caller_process_image
-                if source_system is not None:
-                    self.state_manager.update_process_activity_time(
-                        source_system.hostname,
-                        pid,
-                        time,
-                    )
-            else:
-                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
-                    source_system=source_system,
-                    time=time,
-                    proxy_context=proxy_context,
-                    proxy_sys=proxy_sys,
-                    dst_port=dst_port,
-                )
-                if owned_client_pid > 0:
-                    client_pid = owned_client_pid
-                    client_process_image = owned_process_image
-
-            if src_port is None:
-                src_port = self._allocate_ephemeral_port(
-                    src_ip,
-                    proxy_sys.ip,
-                    listener_port,
-                    "tcp",
-                    time,
-                    self._os_for_ip(src_ip),
-                )
-
-            client_time = time
-            if client_pid > 0 and source_system is not None:
-                client_time = self._clamp_after_visible_process_create(
-                    source_system,
-                    client_pid,
-                    client_time,
-                    "source.windows_wfp_connection",
-                )
-
-            client_observed_time = _zeek_conn_observation_time(
-                client_time,
-                src_ip,
-                src_port,
-                proxy_sys.ip,
-                listener_port,
-                "tcp",
-                "http",
-            )
-            connect_window = get_timing_window(
-                "source.zeek_http_request",
-                default_min_ms=1,
-                default_max_ms=450,
-                default_position="after",
-                default_class="same_observation",
-            )
-            client_connect_visible_by = client_observed_time + timedelta(
-                milliseconds=connect_window.max_ms + 1
-            )
-            egress_time = time + egress_delay
-            if will_emit_egress:
-                egress_time = max(egress_time, client_connect_visible_by + egress_delay)
-
-            proxy_client_cap = random.Random(
-                _stable_seed(
-                    "proxy_client_duration_cap:"
-                    f"{src_ip}:{proxy_sys.ip}:{dst_ip}:{dst_port}:{time.timestamp()}"
-                )
-            ).uniform(1.72, 2.36)
-            client_duration = min(duration if duration is not None else 0.2, proxy_client_cap)
-            if duration is None:
-                client_duration = _jitter_default_connection_duration(
-                    client_duration,
-                    caller_provided_duration=False,
-                    seed_parts=(src_ip, proxy_sys.ip, dst_ip, dst_port, time, "proxy_client"),
-                )
-            if dst_port == 443 and proxy_context.status_code < 400:
-                client_duration = duration or _get_rng().uniform(0.5, 10.0)
-                if proxy_context.method == "CONNECT":
-                    rng = _get_rng()
-                    client_orig_bytes += max(orig_bytes or 0, rng.randint(180, 900))
-                    client_resp_bytes += max(resp_bytes or 0, rng.randint(900, 4500))
-                else:
-                    framing_rng = random.Random(
-                        _stable_seed(
-                            "proxy_client_tls_framing:"
-                            f"{src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
-                            f"{time.timestamp()}:{proxy_context.method}"
-                        )
-                    )
-                    client_orig_bytes += framing_rng.randint(160, 900)
-                    client_resp_bytes += framing_rng.randint(180, 2400)
-            if will_emit_egress:
-                egress_duration = duration or _jitter_default_connection_duration(
-                    0.1,
-                    caller_provided_duration=False,
-                    seed_parts=(proxy_sys.ip, dst_ip, dst_port, time, "proxy_egress"),
-                )
-                response_flush = random.Random(
-                    _stable_seed(f"proxy_response_flush:{src_ip}:{dst_ip}:{time.timestamp()}")
-                ).uniform(0.02, 0.25)
-                egress_start_after_client = max(0.0, (egress_time - client_time).total_seconds())
-                client_duration = max(
-                    client_duration,
-                    egress_start_after_client + egress_duration + response_flush,
-                )
-                proxy_context.time_taken = max(
-                    proxy_context.time_taken,
-                    _proxy_time_taken_ms(
-                        client_duration,
-                        random.Random(
-                            _stable_seed(
-                                "proxy_context_total_time:"
-                                f"{src_ip}:{proxy_sys.ip}:{proxy_context.host}:"
-                                f"{dst_port}:{time.timestamp()}"
-                            )
-                        ),
-                        method=proxy_context.method,
-                        status_code=proxy_context.status_code,
-                        cache_result=proxy_context.cache_result,
-                    ),
-                )
-
-            client_uid = self.generate_connection(
-                src_ip=src_ip,
-                dst_ip=proxy_sys.ip,
-                time=client_time,
-                dst_port=listener_port,
-                proto="tcp",
-                service="http",
-                duration=client_duration,
-                orig_bytes=client_orig_bytes,
-                resp_bytes=client_resp_bytes,
-                src_port=src_port,
-                emit_dns=False,
-                pid=client_pid,
-                source_system=source_system,
-                conn_state=conn_state or "SF",
-                http=client_http,
-                proxy=proxy_context,
-                hostname=self._proxy_fqdn(proxy_sys),
-                proxy_bypass=True,
-                process_image=client_process_image,
-            )
-
-            proxy_terminal_failures = {"DENIED", "AUTH_REQUIRED", "GATEWAY_ERROR"}
-            if proxy_context.cache_result in proxy_terminal_failures:
-                return client_uid
-            if proxy_context.cache_result == "HIT":
-                return client_uid
-
-            egress_http = (
-                http if http is not None and proxy_context.cache_result == "MISS" else None
-            )
-            if egress_http is None and dst_port == 80 and proxy_context.cache_result == "MISS":
-                status_messages = {
-                    200: "OK",
-                    301: "Moved Permanently",
-                    302: "Found",
-                    304: "Not Modified",
-                    403: "Forbidden",
-                    407: "Proxy Authentication Required",
-                    500: "Internal Server Error",
-                    502: "Bad Gateway",
-                    503: "Service Unavailable",
-                    504: "Gateway Timeout",
-                }
-                response_body_len = _proxy_http_response_body_len(
-                    proxy_context,
-                    resp_bytes=resp_bytes,
-                )
-                request_body_len = 0
-                if proxy_context.method not in {"GET", "HEAD", "CONNECT", "OPTIONS"}:
-                    request_body_len = max(orig_bytes or 0, proxy_context.cs_bytes)
-                egress_http = HttpContext(
-                    method=proxy_context.method,
-                    host=proxy_context.host,
-                    uri=_origin_form_uri_from_proxy_url(proxy_context.url),
-                    version="1.1",
-                    user_agent=proxy_context.user_agent,
-                    request_body_len=request_body_len,
-                    response_body_len=response_body_len,
-                    status_code=proxy_context.status_code,
-                    status_msg=status_messages.get(proxy_context.status_code, "OK"),
-                    referrer=proxy_context.referrer,
-                    trans_depth=client_http.trans_depth if client_http is not None else 1,
-                    tags=[],
-                    resp_mime_types=[proxy_context.content_type]
-                    if proxy_context.content_type and proxy_context.status_code == 200
-                    else [],
-                )
-            egress_resp_bytes = resp_bytes
-            if egress_http is not None:
-                egress_resp_bytes = max(resp_bytes or 0, egress_http.response_body_len)
-            if dst_port == 443 and http is not None and proxy_context.cache_result == "MISS":
-                egress_resp_bytes = max(resp_bytes or 0, http.response_body_len)
-            if proxy_context.host:
-                self._emit_dns_lookup(
-                    proxy_sys.ip,
-                    dst_ip,
-                    egress_time,
-                    hostname=proxy_context.host,
-                    force_address=True,
-                )
-            egress_conn_state = conn_state
-            if not caller_provided_conn_state and proxy_context.status_code < 400:
-                egress_conn_state = "SF"
-            self.generate_connection(
-                src_ip=proxy_sys.ip,
-                dst_ip=dst_ip,
-                time=egress_time,
                 dst_port=dst_port,
                 proto=proto,
                 service=service,
                 duration=duration,
                 orig_bytes=orig_bytes,
-                resp_bytes=egress_resp_bytes,
-                emit_dns=False,
-                pid=-1,
-                source_system=proxy_sys,
-                conn_state=egress_conn_state,
+                resp_bytes=resp_bytes,
+                src_port=src_port,
+                pid=pid,
+                source_system=source_system,
+                conn_state=conn_state,
                 dns=dns,
                 ids=ids,
-                http=egress_http,
+                http=http,
                 file_transfer=file_transfer,
                 ocsp=ocsp,
+                proxy=proxy,
                 firewall=firewall,
-                hostname=proxy_context.host,
-                proxy_bypass=True,
+                hostname=hostname,
+                process_image=process_image,
+                proxy_chain=list(proxy_chain),
+                preserve_explicit_proxy_dst_ip=preserve_explicit_proxy_dst_ip,
+                caller_provided_conn_state=caller_provided_conn_state,
+                ad_domain=ad_domain,
             )
-            if dst_port == 443:
-                self._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)
-            return client_uid
+            return ProxyTransactionActionBundle(
+                request=proxy_request,
+                executor=self,
+            ).execute()
 
         # Emit DNS lookup before connection via causal expansion.
         # The DnsBeforeConnection rule handles caching, SERVFAIL, multi-answer, etc.
@@ -10568,14 +10185,16 @@ class ActivityGenerator:
         logon_id: str = "",
         session_obj_id: str = "",
         min_duration: float | None = None,
+        duration: float | None = None,
+        orig_bytes: int | None = None,
+        resp_bytes: int | None = None,
+        auth_method: str = "password",
+        public_key_type: str = "",
+        public_key_hash: str = "",
+        emit_session_close: bool = False,
+        source: str = "activity_generator",
     ) -> str:
-        """Generate an SSH session as a compound event (Zeek conn + syslog auth + eCAR).
-
-        Builds a single SecurityEvent with Auth+Host+Network contexts and dispatches
-        to all matching emitters. Each emitter renders its format-specific view:
-        - SyslogEmitter: "Accepted password for user from ip port N ssh2"
-        - ZeekEmitter: conn.log record with service=ssh, port 22
-        - EcarEmitter: USER_SESSION/LOGIN event
+        """Generate an SSH session through the SSH action-bundle adapter.
 
         Args:
             user: User initiating the SSH connection
@@ -10586,322 +10205,53 @@ class ActivityGenerator:
         Returns:
             Zeek UID for the connection
         """
-        from evidenceforge.events.contexts import NetworkContext, ProcessContext
-
-        rng = _get_rng()
-        _src_os = "windows"
-        if source_system is not None:
-            _src_os = _get_os_category(source_system.os)
-        elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
-            _src_os = _get_os_category(self._ip_to_system[source_ip].os)
-        src_port = self.reserve_ssh_source_port(
-            source_ip,
-            target_system.ip,
-            source_port,
-            rng,
-            _src_os,
+        request = SshSessionRequest(
+            user=user,
+            target_system=target_system,
             time=time,
+            source_ip=source_ip,
+            source_system=source_system,
+            source_port=source_port,
+            source_pid=source_pid,
+            source_process_image=source_process_image,
+            sshd_pid=sshd_pid,
+            logon_id=logon_id,
+            session_obj_id=session_obj_id,
+            min_duration=min_duration,
+            duration=duration,
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
+            auth_method=auth_method,
+            public_key_type=public_key_type,
+            public_key_hash=public_key_hash,
+            emit_session_close=emit_session_close,
+            source=source,
         )
-        duration = rng.uniform(30.0, 3600.0)
-        if min_duration is not None:
-            duration = max(duration, min_duration)
-        close_time = time + timedelta(seconds=duration)
-        orig_bytes = rng.randint(2000, 50000)
-        resp_bytes = rng.randint(5000, 200000)
-        visibility = self._network_visibility or (
-            self.dispatcher.visibility_engine if self.dispatcher else None
-        )
-        network_visible = (
-            True
-            if visibility is None
-            else visibility.is_connection_visible(source_ip, target_system.ip)
-        )
+        return SshSessionActionBundle(request=request, executor=self).execute()
 
-        src_host_ctx = None
-        if source_system is not None:
-            src_host_ctx = self._build_host_context(source_system)
-        elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
-            src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
+    @staticmethod
+    def _ssh_tcp_success_history(rng: random.Random) -> str:
+        """Choose a plausible Zeek TCP history string for SSH bundle expansion."""
+        return _tcp_success_history(rng)
 
-        if logon_id:
-            self.state_manager.update_session_metadata(
-                logon_id,
-                source_port=src_port,
-                session_kind="ssh",
-                transport_pid=sshd_pid,
-                network_close_time=close_time,
-            )
-            if not session_obj_id:
-                session_obj_id = self.state_manager.get_session_object_id(logon_id)
+    @staticmethod
+    def _ssh_tcp_packet_counts_from_payload_and_history(
+        orig_bytes: int | None,
+        resp_bytes: int | None,
+        history: str | None,
+        rng: random.Random,
+    ) -> tuple[int, int]:
+        """Return TCP packet counts for SSH bundle expansion."""
+        return _tcp_packet_counts_from_payload_and_history(orig_bytes, resp_bytes, history, rng)
 
-        # Allocate connection in StateManager
-        conn_id = self.state_manager.open_connection(
-            src_ip=source_ip,
-            src_port=src_port,
-            dst_ip=target_system.ip,
-            dst_port=22,
-            protocol="tcp",
-            source_system=src_host_ctx.hostname if src_host_ctx else "",
-            source_hostname=src_host_ctx.fqdn if src_host_ctx else "",
-            hostname=self._build_host_context(target_system).fqdn,
-            initiating_pid=source_pid,
-            close_time=close_time,
-        )
-        uid = self.state_manager.get_zeek_uid(conn_id)
-        self.state_manager.update_connection_bytes(conn_id, orig_bytes, resp_bytes)
-
-        # Emit DNS for SSH target — only when source is internal (external
-        # attacker IPs don't query the victim's internal resolver).
-        if _is_private_ip(source_ip):
-            self._emit_dns_lookup(source_ip, target_system.ip, time, force_address=True)
-
-        source_process = None
-        if source_system is not None and source_pid > 0:
-            running = self.state_manager.get_process(source_system.hostname, source_pid)
-            if running is not None:
-                source_process = ProcessContext(
-                    pid=source_pid,
-                    parent_pid=running.parent_pid,
-                    image=running.image,
-                    command_line=running.command_line,
-                    username=running.username,
-                    logon_id=running.logon_id,
-                    start_time=running.start_time,
-                )
-            elif source_process_image:
-                source_process = ProcessContext(
-                    pid=source_pid,
-                    parent_pid=0,
-                    image=source_process_image,
-                    command_line="",
-                    username="",
-                )
-
-        ssh_history = _tcp_success_history(rng)
-        ssh_orig_pkts, ssh_resp_pkts = _tcp_packet_counts_from_payload_and_history(
-            orig_bytes,
-            resp_bytes,
-            ssh_history,
-            rng,
-        )
-        ssh_orig_ip_bytes = _tcp_ip_byte_count(orig_bytes, ssh_orig_pkts, rng)
-        ssh_resp_ip_bytes = _tcp_ip_byte_count(resp_bytes, ssh_resp_pkts, rng)
-
-        # Build compound SSH session event
-        event = SecurityEvent(
-            timestamp=time,
-            event_type="ssh_session",
-            src_host=src_host_ctx,
-            dst_host=self._build_host_context(target_system),
-            auth=AuthContext(
-                username=user.username,
-                source_ip=source_ip,
-                source_port=src_port,
-                logon_id=logon_id,
-                logon_type=10,
-            ),
-            network=NetworkContext(
-                src_ip=source_ip,
-                src_port=src_port,
-                dst_ip=target_system.ip,
-                dst_port=22,
-                protocol="tcp",
-                service="ssh",
-                zeek_uid=uid,
-                conn_id=conn_id,
-                duration=duration,
-                orig_bytes=orig_bytes,
-                resp_bytes=resp_bytes,
-                conn_state="SF",
-                history=ssh_history,
-                orig_pkts=ssh_orig_pkts,
-                resp_pkts=ssh_resp_pkts,
-                orig_ip_bytes=ssh_orig_ip_bytes,
-                resp_ip_bytes=ssh_resp_ip_bytes,
-                local_orig=_is_private_ip(source_ip),
-                local_resp=_is_private_ip(target_system.ip),
-                ip_proto=6,
-                initiating_pid=source_pid,
-            ),
-            process=source_process,
-            edr=EdrContext(object_id=session_obj_id),
-        )
-
-        accepted_time: datetime | None = None
-        pam_time: datetime | None = None
-        logind_time: datetime | None = None
-        # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
-        if event.dst_host and event.dst_host.os_category == "linux":
-            from evidenceforge.events.contexts import SyslogContext
-
-            conn_delay_ms = rng.randint(35, 160)
-            accepted_delay_ms = conn_delay_ms + rng.randint(450, 3500)
-            pam_delay_ms = accepted_delay_ms + rng.randint(45, 180)
-            logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
-            remembered_sshd_pid = self.ssh_responder_pid_for_tuple(
-                source_ip,
-                src_port,
-                target_system.ip,
-            )
-            if sshd_pid is None and remembered_sshd_pid is not None:
-                sshd_pid = remembered_sshd_pid
-            if (
-                sshd_pid is None
-                or self.state_manager.get_process(target_system.hostname, sshd_pid) is None
-            ):
-                sshd_pid = self.ensure_linux_ssh_responder_process(
-                    target_system=target_system,
-                    time=time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
-                    source_ip=source_ip,
-                    source_port=src_port,
-                )
-            else:
-                self._remember_ssh_responder_pid(source_ip, src_port, target_system.ip, sshd_pid)
-            event.network.responding_pid = sshd_pid
-            if logon_id:
-                self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
-            ssh_syslog_seed = (
-                target_system.hostname,
-                source_ip,
-                src_port,
-                sshd_pid,
-                time.isoformat(),
-            )
-            accepted_time = _ssh_syslog_time(
-                time,
-                "accepted",
-                accepted_delay_ms,
-                *ssh_syslog_seed,
-            )
-            pam_time = _ssh_syslog_time(time, "pam", pam_delay_ms, *ssh_syslog_seed)
-            logind_time = _ssh_syslog_time(time, "logind", logind_delay_ms, *ssh_syslog_seed)
-
-            # sshd connection message (precedes auth in real SSH lifecycle)
-            conn_msg_event = SecurityEvent(
-                timestamp=_ssh_syslog_time(
-                    time,
-                    "connection",
-                    conn_delay_ms,
-                    *ssh_syslog_seed,
-                ),
-                event_type="syslog",
-                src_host=event.dst_host,
-                syslog=SyslogContext(
-                    app_name="sshd",
-                    pid=sshd_pid,
-                    facility=10,
-                    severity=6,
-                    message=(
-                        f"Connection from {source_ip} port {src_port} on {target_system.ip} port 22"
-                    ),
-                ),
-            )
-            self.dispatcher.dispatch(conn_msg_event)
-
-            ecar_after_accept_gap = sample_timing_delta(
-                "source.ecar_ssh_session_after_accept",
-                seed_parts=ssh_syslog_seed,
-            )
-            ecar_login_time = self._source_timing_planner.source_time(
-                event,
-                "source.ecar_session",
-                seed_parts=(
-                    "login",
-                    event.dst_host.hostname,
-                    user.username,
-                    source_ip,
-                    src_port,
-                    logon_id,
-                    10,
-                    session_obj_id,
-                    event.timestamp,
-                ),
-                not_before=pam_time + ecar_after_accept_gap,
-            )
-            if logon_id:
-                ready_seed = _stable_seed(
-                    "ssh_session_source_ready:"
-                    f"{target_system.hostname}:{user.username}:{source_ip}:"
-                    f"{src_port}:{logon_id}:{time.isoformat()}"
-                )
-                self.state_manager.update_session_metadata(
-                    logon_id,
-                    source_ready_time=ecar_login_time
-                    + timedelta(milliseconds=80 + (ready_seed % 160)),
-                )
-
-        self.dispatcher.dispatch(event)
-
-        # Emit follow-up syslog entries (pam_unix + systemd-logind)
-        if event.dst_host and event.dst_host.os_category == "linux":
-            from evidenceforge.events.contexts import SyslogContext
-
-            assert accepted_time is not None
-            assert pam_time is not None
-            assert logind_time is not None
-            accepted_event = SecurityEvent(
-                timestamp=accepted_time,
-                event_type="syslog",
-                src_host=event.dst_host,
-                syslog=SyslogContext(
-                    app_name="sshd",
-                    pid=sshd_pid,
-                    facility=10,
-                    severity=6,
-                    message=(
-                        f"Accepted password for {user.username} "
-                        f"from {source_ip} port {src_port} ssh2"
-                    ),
-                ),
-            )
-            self.dispatcher.dispatch(accepted_event)
-
-            # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
-            hostname = target_system.hostname
-            pam_event = SecurityEvent(
-                timestamp=pam_time,
-                event_type="syslog",
-                src_host=event.dst_host,
-                syslog=SyslogContext(
-                    app_name="sshd",
-                    pid=sshd_pid,
-                    facility=10,
-                    severity=6,
-                    message=(
-                        f"pam_unix(sshd:session): session opened for user "
-                        f"{user.username}(uid={_linux_uid_for_user(user.username)}) by (uid=0)"
-                    ),
-                ),
-            )
-            self.dispatcher.dispatch(pam_event)
-
-            # systemd-logind new session (syslog-only)
-            # Session ID: monotonic + unique per host. StateManager owns this
-            # sequence because baseline syslog noise and explicit SSH sessions
-            # both produce systemd-logind messages for the same host.
-            session_id = self.state_manager.next_linux_logind_session_id(
-                hostname,
-                rng,
-                logind_time,
-            )
-            logind_event = SecurityEvent(
-                timestamp=logind_time,
-                event_type="syslog",
-                src_host=event.dst_host,
-                syslog=SyslogContext(
-                    app_name="systemd-logind",
-                    pid=self._get_system_pid(hostname, "logind", 456),
-                    facility=10,
-                    severity=6,
-                    message=f"New session {session_id} of user {user.username}.",
-                ),
-            )
-            self.dispatcher.dispatch(logind_event)
-
-        logger.debug(
-            f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})"
-        )
-        return uid if network_visible else ""
+    @staticmethod
+    def _ssh_tcp_ip_byte_count(
+        payload_bytes: int | None,
+        packet_count: int,
+        rng: random.Random,
+    ) -> int:
+        """Return TCP IP byte accounting for SSH bundle expansion."""
+        return _tcp_ip_byte_count(payload_bytes, packet_count, rng)
 
     def ensure_linux_ssh_session_shell(
         self,

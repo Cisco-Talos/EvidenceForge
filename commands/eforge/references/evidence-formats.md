@@ -36,7 +36,7 @@ scenarios/<slug>/
       ssl.json                             # Zeek ssl.log
       files.json                           # Zeek files.log
       ...                                  # Other Zeek logs
-    ecar.json                              # eCAR EDR/XDR telemetry (NDJSON)
+    ecar.json                              # Simulated EDR telemetry in eCAR format (NDJSON)
     snort_alert.log                        # Snort/Suricata IDS alerts
     <fw-hostname>/                         # Per-firewall directories
       cisco_asa.log                        # Cisco ASA firewall syslog (default target)
@@ -185,12 +185,12 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 ---
 
-## eCAR Format (EDR/XDR Telemetry)
+## eCAR Format (Simulated EDR Telemetry)
 
 **File:** `ecar.json`
 **Format:** NDJSON
 
-EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
+Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
 
 **Record structure:** Every eCAR record contains `pid` and `tid` as always-present top-level integers (`-1` = unavailable). `ppid` appears on PROCESS events only. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
 
@@ -229,10 +229,12 @@ partitions files by event year so SOF-ELK can recover the timestamp year from
 the archive path. `eforge eval` accepts both current target variants plus older
 legacy RFC5424 and flat BSD/RFC3164 files. All generated syslog entries are
 rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive
-messages from other contexts. This enables correlated dispatch: a logon event
-carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd
-accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows
-reuse the same source port as the companion Zeek SSH connection tuple.
+messages from other contexts. Multi-phase activities such as SSH sessions are
+coordinated by action-bundle semantics above individual `SecurityEvent`s: the
+bundle owns lifecycle, ordering, source timing, and shared identities, while each
+syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
+failed-password rows reuse the same source port as the companion Zeek SSH
+connection tuple.
 
 | Program | Description | Notes |
 |---------|-------------|-------|

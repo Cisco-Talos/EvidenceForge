@@ -177,7 +177,7 @@ After reviewing output, you can suggest:
 |--------|-------------|---------------|
 | windows | Windows Event Logs — default target XML, SOF-ELK target Snare syslog. Security (30 event IDs) + Sysmon (Events 1, 3, 5, 7, 8, 10, 11, 12, 13, 22) | Windows systems |
 | zeek | Zeek logs (NDJSON) — conn/dns/http/ssl/files/ntp per sensor | Network connections via sensors |
-| ecar | EDR/XDR telemetry in eCAR format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
+| ecar | Simulated EDR telemetry using the eCAR record format (NDJSON) — PROCESS, FILE, FLOW, REGISTRY, MODULE, USER_SESSION | Any OS (optional EDR layer) |
 | syslog | Linux syslog — default target RFC5424 flat per-host, SOF-ELK target RFC3164/BSD per-host/year | Linux systems |
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |

@@ -46,10 +46,6 @@ from typing import Any
 
 from evidenceforge.generation.activity.application_catalog import resolve_image_path
 from evidenceforge.generation.activity.dns_txt import choose_background_dns_txt_record
-from evidenceforge.generation.activity.generator import (
-    _ssh_syslog_time,
-    _zeek_conn_observation_time,
-)
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
@@ -2364,29 +2360,31 @@ class StorylineMixin:
                         _get_os_category(system.os),
                         time=transfer_time,
                     )
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=dst_ip,
-                        time=transfer_time,
-                        dst_port=22,
-                        proto="tcp",
-                        service="ssh",
-                        duration=rng.uniform(2.0, 30.0),
-                        orig_bytes=rng.randint(20_000, 250_000),
-                        resp_bytes=rng.randint(4_000, 40_000),
-                        conn_state="SF",
-                        emit_dns=not _is_private_ip(dst_ip),
-                        source_system=system,
-                        pid=pid,
-                        process_image=process_name,
-                        src_port=source_port,
-                    )
+                    transfer_duration = rng.uniform(2.0, 30.0)
+                    orig_bytes = rng.randint(20_000, 250_000)
+                    resp_bytes = rng.randint(4_000, 40_000)
                     target_system = self._system_for_ip(dst_ip)
                     if (
                         target_system is not None
                         and _get_os_category(target_system.os) == "linux"
                         and scp_destination is not None
                     ):
+                        target_user = scp_destination[2] or process_actor.username
+                        self.activity_generator.generate_ssh_session(
+                            user=self.activity_generator._user_model_for_username(target_user),
+                            target_system=target_system,
+                            time=transfer_time,
+                            source_ip=system.ip,
+                            source_system=system,
+                            source_port=source_port,
+                            source_pid=pid,
+                            source_process_image=process_name,
+                            duration=transfer_duration,
+                            orig_bytes=orig_bytes,
+                            resp_bytes=resp_bytes,
+                            auth_method="publickey",
+                            source="storyline_scp",
+                        )
                         self._emit_scp_receiver_artifacts(
                             source_system=system,
                             target_system=target_system,
@@ -2394,11 +2392,29 @@ class StorylineMixin:
                             source_pid=pid,
                             source_process=process_name,
                             source_command=command_line,
-                            target_user=scp_destination[2] or process_actor.username,
+                            target_user=target_user,
                             target_path=scp_destination[1],
                             transfer_time=transfer_time,
                             source_port=source_port,
                             rng=rng,
+                        )
+                    else:
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=dst_ip,
+                            time=transfer_time,
+                            dst_port=22,
+                            proto="tcp",
+                            service="ssh",
+                            duration=transfer_duration,
+                            orig_bytes=orig_bytes,
+                            resp_bytes=resp_bytes,
+                            conn_state="SF",
+                            emit_dns=not _is_private_ip(dst_ip),
+                            source_system=system,
+                            pid=pid,
+                            process_image=process_name,
+                            src_port=source_port,
                         )
 
             _EXPLICIT_CRED_TOOLS = {"psexec", "wmic", "runas", "schtasks"}
@@ -4581,7 +4597,7 @@ class StorylineMixin:
         source_port: int,
         rng: random.Random,
     ) -> None:
-        """Emit target-side SSH and file evidence for a storyline scp transfer."""
+        """Emit target-side file evidence after the SSH bundle models the transfer session."""
         from evidenceforge.events.base import SecurityEvent
         from evidenceforge.events.contexts import (
             AuthContext,
@@ -4615,53 +4631,6 @@ class StorylineMixin:
             )
         sshd_actor_id = self.state_manager.get_process_object_id(target_system.hostname, sshd_pid)
         parent_pid = self.activity_generator._get_system_pid(target_system.hostname, "sshd", 0)
-        ssh_syslog_seed = (
-            target_system.hostname,
-            source_system.ip,
-            source_port,
-            sshd_pid,
-            transfer_time.isoformat(),
-        )
-        observed_transfer_time = _zeek_conn_observation_time(
-            transfer_time,
-            source_system.ip,
-            source_port,
-            target_system.ip,
-            22,
-            "tcp",
-            "ssh",
-        )
-        self.activity_generator.generate_syslog_event(
-            system=target_system,
-            time=_ssh_syslog_time(observed_transfer_time, "connection", 80, *ssh_syslog_seed),
-            app_name="sshd",
-            message=(
-                f"Connection from {source_system.ip} port {source_port} "
-                f"on {target_system.ip} port 22"
-            ),
-            pid=sshd_pid,
-            facility=10,
-        )
-        self.activity_generator.generate_syslog_event(
-            system=target_system,
-            time=_ssh_syslog_time(observed_transfer_time, "accepted", 350, *ssh_syslog_seed),
-            app_name="sshd",
-            message=f"Accepted publickey for {target_user} from {source_system.ip} port {source_port} ssh2",
-            pid=sshd_pid,
-            facility=10,
-        )
-        self.activity_generator.generate_syslog_event(
-            system=target_system,
-            time=_ssh_syslog_time(observed_transfer_time, "pam", 900, *ssh_syslog_seed),
-            app_name="sshd",
-            message=(
-                f"pam_unix(sshd:session): session opened for user "
-                f"{target_user}(uid={0 if target_user == 'root' else 1000}) by (uid=0)"
-            ),
-            pid=sshd_pid,
-            facility=10,
-        )
-
         host_ctx = self.activity_generator._build_host_context(target_system)
         target_proc = ProcessContext(
             pid=sshd_pid,

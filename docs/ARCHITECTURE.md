@@ -64,6 +64,13 @@ This separation means scenario creation benefits from LLM reasoning about attack
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
+          │     Action Bundles          │
+          │  Real activities produce    │
+          │  coordinated evidence       │
+          │  (SSH, proxy, RDP, scans)   │
+          └────────────┬────────────────┘
+                       │
+          ┌────────────▼────────────────┐
           │    ActivityGenerator         │
           │  Emits evidence against     │
           │  planner-owned state and    │
@@ -95,12 +102,44 @@ This separation means scenario creation benefits from LLM reasoning about attack
 
 The core architectural principle is that **two emitters cannot disagree about shared fields because there is only one source of truth.**
 
-A single `SecurityEvent` object carries all the data for one logical security event. When a user logs into a Linux system, ActivityGenerator creates one SecurityEvent with AuthContext + SyslogContext, and the EventDispatcher routes it to every relevant emitter. The syslog emitter renders from SyslogContext ("Accepted password for alice from ..."), and the eCAR emitter renders from AuthContext as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
+A `SecurityEvent` object carries all the data for one logical evidence-producing
+occurrence. Multiple contexts on that event describe facets of the same occurrence
+when those facts must agree across sources. For example, a process-created
+occurrence can carry `AuthContext`, `ProcessContext`, and `EdrContext` so Windows,
+Sysmon, and endpoint telemetry render the same PID, LogonID, parent, image, and
+actor identity.
 
-`SecurityEvent.timestamp` is canonical world time. Source-native timestamps are planned separately by `SourceTimingPlanner` (`src/evidenceforge/generation/source_timing.py`) and stored on `SecurityEvent.source_timing` during dispatch. Migrated emitters ask the planner for a source time with explicit bounds instead of adding independent jitter locally. Causally related rows are constrained (`A < B` within one source stream), equal canonical timestamps are ordered only when a relationship requires it, and independent events may still share source timestamps. Across different source families there is no global total order; each source is responsible for preserving its own causal order with stable, explainable offsets.
+Multi-phase activities are modeled one level higher, as action bundles. An action
+bundle represents a real-world activity that can produce several coordinated
+`SecurityEvent`s. For example, an SSH session may produce transport connection
+evidence, SSH auth syslog messages, endpoint `USER_SESSION` login/logout rows,
+sshd/bash process evidence, bash history commands, and close/teardown evidence.
+The bundle owns lifecycle, timing constraints, observation intent, and durable
+anchors across those events; each `SecurityEvent` remains the canonical evidence
+unit dispatched to state and emitters.
+
+`SecurityEvent.timestamp` is canonical world time. Source-native timestamps are
+planned separately by `SourceTimingPlanner`
+(`src/evidenceforge/generation/source_timing.py`) and stored on
+`SecurityEvent.source_timing` during dispatch. Migrated emitters ask the planner
+for a source time with explicit bounds instead of adding independent jitter
+locally. Causally related rows are constrained (`A < B` within one source
+stream), equal canonical timestamps are ordered only when a relationship requires
+it, and independent events may still share source timestamps. Across different
+source families there is no global total order; each source is responsible for
+preserving its own causal order with stable, explainable offsets.
+
+The temporal constraint graph
+(`src/evidenceforge/generation/timing/constraint_graph.py`) is the internal
+foundation for multi-event timing. It resolves preferred timestamps, hard
+not-before/not-after bounds, lifecycle windows, and directed "after this evidence
+by at least this gap" relationships deterministically. `SourceTimingPlanner`
+already uses this graph for paired source rows and "source after source" timing;
+future action bundles should use it when one activity produces dependent
+`SecurityEvent`s whose source-native observations must not invert.
 
 ```
-            ActivityGenerator
+            ActionBundle / ActivityGenerator
                    │
                    ▼
         ┌─── SecurityEvent ───┐
@@ -170,9 +209,71 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
 **Key design decisions:**
 - Host context uses a dual `src_host`/`dst_host` model — `src_host` is the system that originates or performs the action; `dst_host` is the target or receiver. For single-host events only one is set; for network events both may be set when both endpoints are known
 - Contexts are composable — a logon event has Host + Auth + Syslog contexts; a process event has Host + Process + Syslog contexts
+- Contexts describe facets of one occurrence. They must not be used to pack a
+  whole multi-phase activity into one event. If connection, auth, session open,
+  process creation, command execution, and session close are distinct occurrences,
+  coordinate them with an action bundle and emit distinct `SecurityEvent`s.
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
 - `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
+
+### Action Bundles
+
+Action bundles sit between world/storyline/baseline intent and canonical
+`SecurityEvent` dispatch:
+
+```
+intent -> action bundle -> lifecycle/timing/observation -> SecurityEvents -> dispatcher/state/emitters
+```
+
+The source of intent can be a storyline event, background/persona scheduler,
+red-herring generator, or scanner/noise generator. The evidence construction path
+should still be shared. A storyline SSH session, baseline SSH admin session, and
+suspicious-but-benign SSH red herring should use the same SSH action-bundle
+semantics instead of hand-rolling separate timing, session, syslog, endpoint, and
+Zeek behavior.
+
+SSH bundle callers may supply different intent sources, such as typed storyline
+events, baseline remote-admin noise, or storyline `scp` transfers to modeled
+Linux receivers. The bundle keeps an intent anchor for durable narrative
+references and a resolved execution anchor after source-port reservation, so two
+otherwise identical SSH sessions do not collapse when the network tuple differs.
+Transfer-specific receiver artifacts, such as the target-side file create for
+`scp`, are emitted after the bundle-owned SSH lifecycle rather than duplicating
+SSH auth or transport timing locally.
+
+Explicit forward proxy callers likewise supply one logical client-to-origin HTTP
+or HTTPS request, and `ProxyTransactionActionBundle` expands it into the
+source-native evidence that real sensors would see: client-to-proxy connection
+and proxy access rows, optional CONNECT tunnel setup/reuse, terminal deny or
+cache-hit behavior, proxy-origin DNS, and proxy-to-origin egress. The bundle owns
+the timing constraint that origin-side activity cannot become visible before the
+client-side proxy request would be source-visible. Proxy route selection and
+format-specific rendering stay outside the bundle.
+
+Browser-session callers supply one browser visit intent, and
+`BrowserSessionActionBundle` expands it into page-load and subresource requests
+with grouped TCP flow accounting, HTTP transaction depths, referrer chains,
+static-asset cache suppression, response MIME/status metadata, and per-request
+timing. The bundle emits each request through canonical connection generation, so
+the same browser-session path works for direct network evidence and for hosts
+whose traffic is handed to `ProxyTransactionActionBundle` by explicit proxy
+routing. Tool-like HTTP requests, scanners, and raw storyline HTTP events remain
+single canonical events unless they are intentionally modeled as browser
+sessions.
+
+Action bundles own cross-event concerns:
+
+- Deterministic action anchors for durable references.
+- Lifecycle intervals and state ownership for sessions, processes, connections,
+  leases, file transfers, and proxy transactions.
+- Temporal constraints across dependent evidence.
+- Observation intent and source-family eligibility.
+- Expansion into one or more canonical `SecurityEvent`s.
+
+`SecurityEvent` remains the shared truth unit underneath the bundle. Emitters still
+receive only canonical events and source-local render rules; they do not inspect or
+execute action bundles directly.
 
 ### WorldModel and WorldPlanner
 
@@ -270,7 +371,7 @@ legacy/default during evaluation.
 
 **Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/cisco_asa.log` for the default target or `<sensor_hostname>/<year>/cisco_asa.log` for the SOF-ELK target. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
 
-**Proxy path modeling:** `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions. Proxy access rows include an `x-proxy-action` cue such as `tunnel-setup`, `ssl-inspect`, `forward`, or `deny` so decrypted HTTPS rows are distinguishable from raw CONNECT tunnel rows.
+**Browser and proxy path modeling:** `BrowserSessionActionBundle` owns browser-like page sessions for outbound persona traffic and inbound human visitor traffic: request grouping, transaction depth, subresource timing, referrers, static-asset cache suppression, response MIME/status metadata, and generated HTTP contexts. Each planned request still enters `ActivityGenerator.generate_connection()`, preserving the same canonical connection, DNS, TLS, Zeek HTTP/files, web-access, and proxy behavior as a direct single request. `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode routes each logical client→origin request through `ProxyTransactionActionBundle`, which dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions. Cache hits likewise stop at client/proxy evidence. Allowed cache misses plan the client proxy-request visibility window and proxy→origin egress through the temporal constraint graph so origin-side evidence cannot appear before the client-side proxy request would be source-visible. Proxy access rows include an `x-proxy-action` cue such as `tunnel-setup`, `ssl-inspect`, `forward`, or `deny` so decrypted HTTPS rows are distinguishable from raw CONNECT tunnel rows.
 
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 

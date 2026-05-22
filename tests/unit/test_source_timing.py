@@ -18,6 +18,7 @@ from evidenceforge.events.contexts import (
     ProcessContext,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -128,6 +129,39 @@ def test_equal_canonical_timestamps_can_be_ordered_by_causal_edge() -> None:
     )
 
     assert before_ts < after_ts
+
+
+def test_source_time_after_source_uses_temporal_constraint_graph() -> None:
+    """Cross-source dependencies should resolve through a shared graph path."""
+    planner = SourceTimingPlanner()
+    event = SecurityEvent(
+        timestamp=_base_time(),
+        event_type="process",
+        src_host=_host_context(),
+        process=_process_context(_base_time()),
+    )
+    anchor_seed = ("sysmon", event.timestamp)
+    dependent_seed = ("ecar", event.timestamp)
+
+    dependent_time = planner.source_time_after_source(
+        event,
+        "source.ecar_process_create",
+        after_source_key="source.windows_security_process_create",
+        gap_key="source.ecar_after_sysmon_process_create_gap",
+        seed_parts=dependent_seed,
+        after_seed_parts=anchor_seed,
+    )
+    anchor_time = planner.source_time(
+        event,
+        "source.windows_security_process_create",
+        seed_parts=anchor_seed,
+    )
+    expected_gap = sample_timing_delta(
+        "source.ecar_after_sysmon_process_create_gap",
+        seed_parts=dependent_seed,
+    )
+
+    assert dependent_time >= anchor_time + expected_gap
 
 
 def test_independent_equal_canonical_timestamps_may_share_source_time() -> None:

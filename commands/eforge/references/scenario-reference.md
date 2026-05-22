@@ -257,6 +257,11 @@ The engine manages user sessions with exact transport-type matching. When a stor
 1. Checks for an existing session with the **exact** `session_kind` (interactive, network, ssh, rdp)
 2. If no match, creates a new session with the appropriate transport evidence (SSH syslog, RDP 4624 type 10, etc.)
 
+Multi-phase remote activities use action-bundle semantics internally. For example,
+an SSH request is modeled as one SSH session action that coordinates transport,
+auth, session, process, bash-history, endpoint/EDR, and teardown evidence before
+the engine dispatches individual canonical `SecurityEvent`s.
+
 Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
 
 Sessions marked as `storyline_protected` (by storyline events that depend on them) are immune to baseline logoff, even if logoff was already planned for the same hour.
@@ -441,7 +446,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
-| `ssh_session` | Zeek conn + syslog sshd + eCAR | | `source_ip` |
+| `ssh_session` | Zeek conn + syslog sshd + EDR/eCAR | | `source_ip` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
@@ -528,7 +533,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
 
-**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned.
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 
@@ -956,7 +961,7 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
 Use `scenarios/<slug>/` as the standard scenario bundle root. `scenario.yaml` and
 `ENVIRONMENT.md` live directly in that directory, optional authored collateral such as

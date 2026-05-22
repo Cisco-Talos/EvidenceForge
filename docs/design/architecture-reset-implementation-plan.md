@@ -1,0 +1,148 @@
+# Architecture Reset Implementation Plan
+
+Status: accepted implementation direction, SSH/proxy/browser-session action-bundle slices complete; later slices pending
+
+## Summary
+
+EvidenceForge will use Option B from `architecture-reset-recommendation.md`: an
+evolutionary architecture reset with partial rewrites behind stable interfaces.
+
+The first implementation slice is SSH sessions. The slice preserves public scenario
+schema, CLI behavior, generated bundle layout, concrete format names, and existing
+emitters while introducing an internal action-bundle layer above canonical
+`SecurityEvent`s.
+
+## Phase 0 Guardrails
+
+- `ActionBundle` sits above `SecurityEvent`.
+- One `SecurityEvent` represents one logical evidence-producing occurrence.
+- Multiple contexts on a `SecurityEvent` describe facets of the same occurrence.
+- Multi-phase activities produce multiple coordinated `SecurityEvent`s.
+- Cross-event lifecycle, timing, observation, and durable identity ownership belong
+  in bundle/lifecycle/timing/observation layers.
+- Emitters render source-native views of canonical facts and do not repair upstream
+  lifecycle contradictions.
+
+## First Slice: SSH Sessions
+
+The SSH slice introduces an internal action-bundle adapter for SSH session
+generation. Current callers keep using the existing `generate_ssh_session()`
+entrypoint, so storyline events, baseline/world-planner bootstrap, red herrings,
+and scanner/noise paths retain their public behavior while routing through the new
+bundle contract.
+
+The initial implementation is intentionally compatibility-first. It establishes
+the action-bundle ownership boundary and tests that callers route through it.
+
+The next extraction slice moves SSH session expansion itself into
+`SshSessionActionBundle.execute()`. `ActivityGenerator.generate_ssh_session()` now
+builds a `SshSessionRequest` and supplies runtime hooks for shared state,
+dispatch, host-context construction, TCP accounting, source timing, and existing
+SSH process helpers. Public scenario YAML, CLI behavior, output layout, and
+concrete format names stay unchanged.
+
+The hardening follow-up splits `SshSessionActionBundle.execute()` into explicit
+transport planning/open, session event construction, Linux auth planning, EDR
+readiness, and source-native syslog dispatch phases. SSH syslog timestamping and
+Linux UID rendering are now bundle-local helpers rather than generator runtime
+hooks. Regression probes cover identical-input evidence signatures, auth/syslog
+ordering, destination-side sshd ownership, EDR login readiness, and network-close
+ordering.
+
+The ownership follow-up migrates remaining modeled SSH-session paths that were
+still hand-rolling lifecycle evidence. Baseline remote-admin SSH noise now calls
+the SSH bundle for transport, syslog auth/PAM/logind, endpoint session evidence,
+and optional close semantics. Storyline `scp` activity calls the SSH bundle when
+the receiver is a modeled Linux host, then emits only the receiver-side file
+creation as transfer-specific evidence. Generic SSH connections to external or
+unmodeled targets remain ordinary connection evidence until a later file-transfer
+or external-service bundle is introduced. SSH action identity now distinguishes
+intent anchors from execution anchors that include the resolved source port.
+
+The temporal constraint graph slice adds the first shared timing foundation
+without broad emitter or bundle rewrites. `TemporalConstraintGraph` resolves
+preferred timestamps, hard bounds, lifecycle windows, and directed causal edges
+deterministically. `SourceTimingPlanner` now routes paired source rows and
+"source after source" dependencies through that graph, preserving current public
+behavior while creating the API action bundles can use for multi-event lifecycle
+timing.
+
+The SSH temporal-graph migration moves bundle-owned SSH auth/syslog lifecycle and
+EDR login-readiness timing onto graph-owned constraints. The bundle still
+preserves existing scenario schema, CLI behavior, and output layout, but SSH
+connection, accepted-auth, PAM, logind, and endpoint login observations now share
+one causal timing model instead of separate local clamps.
+
+The proxy temporal-graph migration starts with explicit forward-proxy request
+handoff. Client-to-proxy request visibility and proxy-to-origin egress are now
+resolved with graph constraints so origin egress waits for the source-observable
+client proxy request window, even when per-source observation jitter would
+otherwise make a local timestamp clamp too weak. Denied and cache-hit proxy
+requests still stop at client/proxy evidence and do not emit downstream origin
+transactions.
+
+The proxy action-bundle extraction moves explicit forward-proxy transaction
+expansion into `ProxyTransactionActionBundle.execute()`. `ActivityGenerator`
+continues to provide the compatibility entrypoint, proxy route selection, and
+shared runtime hooks, while the bundle owns client-to-proxy evidence, proxy
+access shaping, CONNECT tunnel reuse, deny/cache terminal behavior, proxy-origin
+DNS, proxy-to-origin egress, and temporal graph constraints. Public scenario YAML,
+CLI behavior, output layout, concrete proxy/eCAR format names, and authoring
+skills remain unchanged for this slice because the generated evidence semantics
+are preserved.
+
+The browser-session action-bundle extraction moves browser-like page-session
+expansion into `BrowserSessionActionBundle.execute_with_result()`. Outbound
+persona browsing and inbound human web-server visitor sessions now share the same
+bundle for request grouping, transaction depth, page/subresource timing,
+referrer chains, static-asset cache suppression, response MIME/status metadata,
+and direct-vs-explicit-proxy handoff through canonical connection generation.
+Single tool requests, scanners, raw storyline HTTP events, and source-local web
+server noise remain direct canonical events unless they model a browser session.
+Public scenario YAML, CLI behavior, output layout, and authoring skills remain
+unchanged for this slice.
+
+## Migration Gates
+
+- No public YAML or CLI changes in the first slice.
+- Existing typed `ssh_session` events continue to generate Zeek, syslog, EDR/eCAR,
+  and bash-history evidence through the current output files.
+- Existing tests remain migration assets. Replace brittle implementation tests only
+  when the new bundle contract supersedes their assumptions.
+- Generated output should be preserved unless current behavior contradicts
+  lifecycle, ordering, observation, or source-native realism requirements.
+- Skills, skill references, source-format docs, and tests must be updated whenever
+  user-facing authoring guidance or generated evidence semantics change.
+
+## Verification
+
+- Focused unit tests cover action-bundle request identity, deterministic anchors,
+  SSH entrypoint delegation, direct bundle expansion, lifecycle ordering, and
+  context-vs-bundle responsibility rules.
+- SSH hardening probes cover deterministic identical-input regeneration at the
+  bundle evidence-signature level plus session-owned source-readiness and
+  transport-close invariants.
+- SSH ownership follow-up probes cover resolved source-port execution anchors,
+  public-key auth rendering, optional close dispatch, baseline bundle routing,
+  and storyline `scp` routing for modeled Linux receivers.
+- Temporal graph probes cover unconstrained resolution, causal chains,
+  conflict handling where causality wins over upper bounds, deterministic
+  insertion-order behavior, missing-node failures, cycle failures, and
+  `SourceTimingPlanner` integration for source-after-source dependencies.
+- SSH/proxy migration probes cover collapsed SSH auth preferences, EDR
+  login-readiness ordering, explicit proxy client-request-to-origin-egress
+  ordering, and preservation of existing explicit proxy origin request semantics.
+- Proxy bundle probes cover deterministic transaction anchors, explicit-proxy
+  `generate_connection()` delegation, tunnel reuse/terminal behavior, source
+  visibility, User-Agent/domain preservation, and existing storyline proxy
+  behavior.
+- Browser-session probes cover deterministic session anchors, bundle expansion
+  into grouped HTTP flows, referrer/transaction-depth preservation, static cache
+  suppression, cache/partial-status preservation, and existing inbound/outbound
+  browser-session behavior.
+- Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
+  ground-truth tests remain the regression suite for behavior preservation.
+- Normal validation before committing remains:
+  - `uv run pytest --no-cov`
+  - `uv run ruff check .`
+  - `uv run ruff format --check .`

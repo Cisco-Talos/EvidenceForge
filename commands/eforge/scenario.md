@@ -77,7 +77,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call. Every user must have a `primary_system` assigned — ensure there are enough workstations for all users (users can share systems, but each user needs a designated primary).
 
-**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
+**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
 **System roles** — Assign `roles` to systems in the environment to drive both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives). Roles like `web_server`, `database`, `mail_server`, `file_server`, `domain_controller` each have specific traffic profiles. For example, a `web_server` generates outbound database queries AND receives inbound HTTPS from external clients and internal users. A `database` generates outbound replication AND receives inbound SQL queries from web/app servers.
 
@@ -388,6 +388,11 @@ These are just examples — invent additional realistic variations appropriate t
 When building storyline events, each entry needs an `events` list with typed declarations. Be technically specific — the engine uses these fields directly.
 
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `beacon`, `dns_query`, `web_scan`, `credential_spray`, `dga_queries`, `dns_tunnel`, `explicit_credentials`, `workstation_lock`, `workstation_unlock`, `raw`
+
+Correlated multi-event activities such as `ssh_session` are modeled internally as
+action bundles. Authors should still write the same typed event, not duplicate the
+Zeek connection, syslog auth rows, EDR/eCAR session rows, or shell process setup by
+hand.
 
 **Firewall/network event types:**
 - `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.

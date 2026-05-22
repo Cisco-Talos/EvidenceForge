@@ -237,6 +237,60 @@ Use `_stable_seed(f"context_{scope_key}")` for all deterministic derivation. **N
 - `WorldPlanner` owns session bootstrap semantics (interactive, network, SSH, RDP) and may allocate session state in `StateManager` before `ActivityGenerator` emits the correlated host/network evidence
 - Baseline and storyline code should call this layer for persona placement, remote admin source selection, and shared session bootstrap instead of re-implementing heuristics locally
 
+### Action Bundles, SecurityEvents, and Contexts
+
+Action bundles represent real-world activities that can produce multiple pieces of
+evidence. They sit above `SecurityEvent` and are the preferred home for
+cross-event lifecycle, timing, observation, and durable identity ownership.
+
+A `SecurityEvent` represents one logical evidence-producing occurrence. It may
+carry multiple contexts when those contexts describe facets of that same
+occurrence and need to share truth. Contexts are not mini-event queues. Do not
+cram a multi-phase activity into one `SecurityEvent` just because a context exists.
+If an activity has distinct lifecycle phases (connection, auth accepted, session
+opened, process created, command executed, session closed), model those as
+distinct `SecurityEvent`s coordinated by an action bundle.
+
+Use action bundles for correlated behavior families across storyline, baseline,
+red herrings, and scanners. The source of intent may differ, but evidence
+construction should share the same bundle/lifecycle/timing path.
+
+For SSH specifically, modeled sessions from typed storyline events, baseline
+remote-admin noise, and `scp` transfers to modeled Linux receivers should route
+through the SSH action bundle. Keep transfer-specific receiver artifacts (for
+example, target-side file creation) separate from the bundle only after the
+bundle has owned SSH transport/auth/session timing. When source ports are
+allocated during execution, use the resolved execution anchor rather than the
+pre-reservation intent anchor for tuple-specific identity.
+
+For explicit forward proxy traffic, logical client-to-origin HTTP/HTTPS requests
+from hosts with explicit proxy routes should route through the proxy transaction
+action bundle. The bundle owns client-to-proxy evidence, proxy access semantics,
+tunnel reuse, cache/deny terminal behavior, proxy-origin DNS, proxy-to-origin
+egress, and the timing relationship between source-visible proxy requests and
+origin-side activity. Keep proxy format rendering in emitters and proxy route
+selection in planning/config layers.
+
+For browser-like HTTP/S sessions, page loads and their subresources should route
+through the browser-session action bundle. The bundle owns request grouping,
+transaction depth, referrer chains, page/subresource timing, static-asset cache
+suppression, response metadata, and direct-vs-explicit-proxy handoff through
+canonical connection generation. Single tool requests, scanners, raw storyline
+HTTP events, and source-local web server noise may remain direct canonical
+events unless they model a browser session.
+
+When fixing realism defects:
+- Cross-event ordering, lifecycle, source timing, observation, and durable
+  identities belong in bundle/lifecycle/timing/observation layers.
+- Use the temporal constraint graph for relationships that span multiple
+  evidence timestamps or source observations. Local timestamp clamps are still
+  acceptable at narrow boundaries, but new family-level timing ownership should
+  express preferred times, hard bounds, lifecycle windows, and causal edges in
+  the graph so dependent evidence cannot invert.
+- Shared facts for one occurrence belong on `SecurityEvent` contexts.
+- Emitters render source-native views; they do not invent shared facts or repair
+  upstream lifecycle contradictions.
+
 ### Canonical Event Model
 
 The generation engine uses a canonical event model — an intermediate representation between activity generation and log rendering. ActivityGenerator builds `SecurityEvent` objects carrying composable context dataclasses (`HostContext`, `AuthContext`, `ProcessContext`, `NetworkContext`, `DnsContext`, `FileContext`, `RegistryContext`, `IdsContext`, `SyslogContext`). An `EventDispatcher` routes each event to `StateManager.apply()` and to matching emitters based on `can_handle()` and network visibility.

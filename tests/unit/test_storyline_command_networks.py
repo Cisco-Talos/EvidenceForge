@@ -10,7 +10,6 @@ from typing import Any
 
 from evidenceforge.events.contexts import FileTransferContext, HostContext
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.generator import _zeek_conn_observation_time
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
     _linux_shell_process_command_line,
@@ -494,6 +493,7 @@ class _FakeActivityGenerator:
     def __init__(self) -> None:
         self.reserved_ports: list[int] = []
         self.connections: list[dict] = []
+        self.ssh_sessions: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
         self.process_terminations: list[dict] = []
@@ -613,6 +613,17 @@ class _FakeActivityGenerator:
     def generate_connection(self, **kwargs: Any) -> str:
         self.connections.append(kwargs)
         return "Cscptransfer00001"
+
+    def generate_ssh_session(self, **kwargs: Any) -> str:
+        self.ssh_sessions.append(kwargs)
+        return "Cscptransfer00001"
+
+    def _user_model_for_username(self, username: str) -> User:
+        return User(
+            username=username,
+            full_name=username,
+            email=f"{username}@example.local",
+        )
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_times.get((hostname, pid))
@@ -788,7 +799,9 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.reserved_ports == [45678]
-        assert engine.activity_generator.connections[0]["src_port"] == 45678
+        assert engine.activity_generator.connections == []
+        assert engine.activity_generator.ssh_sessions[0]["source_port"] == 45678
+        assert engine.activity_generator.ssh_sessions[0]["source"] == "storyline_scp"
         assert receiver_ports == [45678]
 
     def test_scp_network_and_receiver_artifacts_wait_for_visible_source_process_create(self):
@@ -842,9 +855,9 @@ class TestStorylineScpCorrelation:
             explicit_types={"process"},
         )
 
-        conn = engine.activity_generator.connections[0]
-        assert conn["time"] > visible_process_time
-        assert receiver_transfer_times == [conn["time"]]
+        ssh_session = engine.activity_generator.ssh_sessions[0]
+        assert ssh_session["time"] > visible_process_time
+        assert receiver_transfer_times == [ssh_session["time"]]
 
     def test_sqlcmd_remote_private_ip_generates_failed_tcp_attempt(self):
         source = System(
@@ -1137,7 +1150,7 @@ class TestStorylineCommandSideEffects:
             {"actor": actor.username, "dst": file_server.hostname, "src_ip": source.ip}
         ]
 
-    def test_scp_receiver_ssh_syslog_uses_distinct_submillisecond_suffixes(self):
+    def test_scp_receiver_file_artifacts_leave_ssh_syslog_to_bundle(self):
         source = System(
             hostname="SRC",
             ip="10.10.4.10",
@@ -1158,7 +1171,12 @@ class TestStorylineCommandSideEffects:
         engine = object.__new__(StorylineMixin)
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
-        engine.dispatcher = SimpleNamespace(dispatch=lambda event: None)
+        file_events: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            dispatch=lambda event: (
+                file_events.append(event) if event.event_type == "file_create" else None
+            )
+        )
         transfer_time = datetime(2024, 3, 18, 17, 15, 2, 638000, tzinfo=UTC)
 
         engine._emit_scp_receiver_artifacts(
@@ -1175,34 +1193,9 @@ class TestStorylineCommandSideEffects:
             rng=random.Random(7),
         )
 
-        syslog_times = [event["time"] for event in engine.activity_generator.syslog_events]
-        observed_transfer_time = _zeek_conn_observation_time(
-            transfer_time,
-            source.ip,
-            40117,
-            target.ip,
-            22,
-            "tcp",
-            "ssh",
-        )
-        assert len(syslog_times) == 3
-        assert syslog_times[0] < syslog_times[1] < syslog_times[2]
-        assert (
-            timedelta(milliseconds=80)
-            < syslog_times[0] - observed_transfer_time
-            < timedelta(milliseconds=81)
-        )
-        assert (
-            timedelta(milliseconds=350)
-            < syslog_times[1] - observed_transfer_time
-            < timedelta(milliseconds=351)
-        )
-        assert (
-            timedelta(milliseconds=900)
-            < syslog_times[2] - observed_transfer_time
-            < timedelta(milliseconds=901)
-        )
-        assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
+        assert engine.activity_generator.syslog_events == []
+        assert file_events
+        assert file_events[0].event_type == "file_create"
 
     def test_scp_receiver_file_waits_for_visible_source_process_create(self):
         source = System(
@@ -1368,8 +1361,8 @@ class TestStorylineCommandSideEffects:
         assert termination_times[0] < process_times[1]
         assert termination_times[1] < process_times[2]
         assert source_termination_times[(source.hostname, 4243)] < process_times[2]
-        assert engine.activity_generator.connections
-        assert engine.activity_generator.connections[0]["time"] > process_times[2]
+        assert engine.activity_generator.ssh_sessions
+        assert engine.activity_generator.ssh_sessions[0]["time"] > process_times[2]
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(
