@@ -111,6 +111,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ### Security Fixes
 
+- [x] Aardvark vulnerability triage: verified HEAD still crashed on oversized decimal raw Security 4688 `NewProcessId` values during lifecycle flush normalization; hardened `_windows_pid_hex()` with bounded decimal parsing + `ValueError` guard and added unit regression coverage.
 - [x] Integrate final approved PR review outcomes into `dev` — accepted and adapted the remaining real fixes (#170, #171, #172, #188, #189, #191, #192, #194, #195, #196, #197, #212), then closed duplicate, superseded, or already-addressed PRs (#167, #168, #174, #190, #193, #213) with rationale.
 - [x] Reworked remaining real-but-not-ready PR fixes #165, #169, #204, and #207 against current `dev` — landed sidecar symlink-safe writes, bounded bash template expansion, raw Zeek OCSP optional-field defaults, and generation-safe extra syslog weights with focused coverage.
 - [x] Fix unbounded session offset allocation caches for far-future scenario times — replaced minute/four-hour catch-up caches with direct deterministic offsets and covered far-future allocation cases.

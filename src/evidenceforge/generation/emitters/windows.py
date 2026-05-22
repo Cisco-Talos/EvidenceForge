@@ -121,6 +121,7 @@ def _windows_path_basename(path: str) -> str:
 
 def _windows_pid_hex(value: Any) -> str:
     """Return a normalized lowercase hex PID key from Security event fields."""
+    max_decimal_pid_digits = 19
     if isinstance(value, int):
         return f"0x{value:x}"
     text = str(value or "").strip().lower()
@@ -129,7 +130,12 @@ def _windows_pid_hex(value: Any) -> str:
     if text.startswith("0x"):
         return text
     if text.isdecimal():
-        return f"0x{int(text):x}"
+        if len(text) > max_decimal_pid_digits:
+            return text
+        try:
+            return f"0x{int(text):x}"
+        except ValueError:
+            return text
     return text
 
 
