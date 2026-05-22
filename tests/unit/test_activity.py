@@ -43,6 +43,8 @@ from evidenceforge.generation.actions import (
     LogoffRequest,
     LogonActionBundle,
     LogonRequest,
+    NetworkConnectionActionBundle,
+    NetworkConnectionRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -352,6 +354,60 @@ class TestProcessHttpCommandCorrelation:
         assert isinstance(http, HttpContext)
         assert http.user_agent == "curl/7.88.1"
         assert http.uri == "/methods/api.test"
+
+
+class TestNetworkConnectionActionBundle:
+    """Tests for the internal network connection bundle boundary."""
+
+    def test_network_connection_bundle_anchor_is_stable(self):
+        """Network connection requests should expose durable deterministic anchors."""
+        source_system = System(
+            hostname="APP-01",
+            ip="10.0.0.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        request = NetworkConnectionRequest(
+            src_ip=source_system.ip,
+            dst_ip="203.0.113.10",
+            time=datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.25,
+            orig_bytes=512,
+            resp_bytes=4096,
+            src_port=49152,
+            emit_dns=True,
+            pid=1234,
+            source_system=source_system,
+            hostname="api.example.com",
+        )
+
+        first = NetworkConnectionActionBundle(Mock(), request).anchor
+        second = NetworkConnectionActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "network_connection"
+        assert first.stable_id.startswith("network-connection-")
+
+    def test_network_connection_bundle_delegates_to_adapter(self):
+        """The bundle should preserve the current generator adapter contract."""
+        request = NetworkConnectionRequest(
+            src_ip="10.0.0.10",
+            dst_ip="203.0.113.10",
+            time=datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+        )
+        executor = Mock()
+        executor._execute_network_connection_bundle.return_value = "Cabc123"
+
+        uid = NetworkConnectionActionBundle(executor, request).execute()
+
+        assert uid == "Cabc123"
+        executor._execute_network_connection_bundle.assert_called_once_with(request)
 
 
 class TestNetworkValidation:

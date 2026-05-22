@@ -77,6 +77,8 @@ from evidenceforge.generation.actions import (
     LogoffRequest,
     LogonActionBundle,
     LogonRequest,
+    NetworkConnectionActionBundle,
+    NetworkConnectionRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -8452,6 +8454,70 @@ class ActivityGenerator:
         Returns:
             Zeek UID (18-character string)
         """
+        request = NetworkConnectionRequest(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            time=time,
+            dst_port=dst_port,
+            proto=proto,
+            service=service,
+            duration=duration,
+            orig_bytes=orig_bytes,
+            resp_bytes=resp_bytes,
+            src_port=src_port,
+            emit_dns=emit_dns,
+            pid=pid,
+            source_system=source_system,
+            conn_state=conn_state,
+            dns=dns,
+            ids=ids,
+            http=http,
+            file_transfer=file_transfer,
+            ocsp=ocsp,
+            proxy=proxy,
+            firewall=firewall,
+            hostname=hostname,
+            proxy_bypass=proxy_bypass,
+            process_image=process_image,
+            preserve_dst_ip=preserve_dst_ip,
+            packet_overhead_bytes=packet_overhead_bytes,
+            responding_pid=responding_pid,
+        )
+        return NetworkConnectionActionBundle(
+            executor=self,
+            request=request,
+        ).execute()
+
+    def _execute_network_connection_bundle(self, request: NetworkConnectionRequest) -> str:
+        """Expand one network connection request into canonical evidence."""
+        src_ip = request.src_ip
+        dst_ip = request.dst_ip
+        time = request.time
+        dst_port = request.dst_port
+        proto = request.proto
+        service = request.service
+        duration = request.duration
+        orig_bytes = request.orig_bytes
+        resp_bytes = request.resp_bytes
+        src_port = request.src_port
+        emit_dns = request.emit_dns
+        pid = request.pid
+        source_system = request.source_system
+        conn_state = request.conn_state
+        dns = request.dns
+        ids = request.ids
+        http = request.http
+        file_transfer = request.file_transfer
+        ocsp = request.ocsp
+        proxy = request.proxy
+        firewall = request.firewall
+        hostname = request.hostname
+        proxy_bypass = request.proxy_bypass
+        process_image = request.process_image
+        preserve_dst_ip = request.preserve_dst_ip
+        packet_overhead_bytes = request.packet_overhead_bytes
+        responding_pid = request.responding_pid
+
         from evidenceforge.events.contexts import NetworkContext
 
         if http is not None:

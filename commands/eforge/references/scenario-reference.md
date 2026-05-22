@@ -267,6 +267,10 @@ source-visible ordering before dispatch. Windows remote-admin events such as
 `explicit_credentials` and `service_installed` likewise use bundle-owned evidence
 paths for caller-process timing, source endpoint semantics, service-control
 transport, dropped service binaries, and target service records.
+Canonical `connection` and `beacon` evidence routes through the network-connection
+bundle so tuple identity, source ports, DNS/TLS/HTTP/file metadata, proxy and
+firewall visibility, IDS/EDR FLOW correlation, and Windows WFP companions stay
+consistent across output formats.
 
 Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
 
@@ -539,7 +543,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
 
-**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, and logoffs also use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, source endpoints, validation evidence, and termination ordering.
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, and logoffs use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, source endpoints, validation evidence, and termination ordering. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 

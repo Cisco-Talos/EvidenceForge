@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -159,6 +159,16 @@ companions, and session termination ordering after dependent activity. Public
 scenario YAML, CLI behavior, output layout, and authoring skills remain
 unchanged for this slice.
 
+The network-connection action-bundle extraction moves canonical connection
+orchestration behind `NetworkConnectionActionBundle`. `ActivityGenerator`
+continues to expose `generate_connection()` as the compatibility entrypoint,
+while the bundle owns the internal boundary for tuple identity, source and
+destination semantics, source-port allocation, hostname/DNS/TLS/HTTP/file
+metadata, proxy/firewall/IDS/EDR flow correlation, packet accounting, visibility
+handoff, Zeek UID/state identity, source endpoint process ownership, and Windows
+WFP companions. Public scenario YAML, CLI behavior, output layout, concrete
+format names, and authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -221,6 +231,9 @@ unchanged for this slice.
   bundle-to-adapter delegation, existing successful-logon session allocation and
   reuse, failed-logon source endpoint/network companions, and logoff lifecycle
   ordering after dependent activity.
+- Network connection probes cover stable connection anchors, bundle-to-adapter
+  delegation, command-owned HTTP/proxy metadata preservation, scanner transport
+  evidence, and remote-logon transport semantics.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

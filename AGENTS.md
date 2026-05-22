@@ -287,6 +287,15 @@ egress, and the timing relationship between source-visible proxy requests and
 origin-side activity. Keep proxy format rendering in emitters and proxy route
 selection in planning/config layers.
 
+For canonical network connections, route connection orchestration through the
+network-connection action bundle. The bundle owns the boundary for source and
+destination semantics, source-port allocation, DNS/TLS/HTTP/file/proxy/firewall
+metadata, IDS/EDR flow correlation, source endpoint process ownership, Zeek UID
+and connection state identity, visibility handoff, and source-native timing.
+Higher-level bundles may request connections through the public generator
+entrypoint, but they should not duplicate tuple allocation, hostname resolution,
+packet accounting, or endpoint-flow ownership locally.
+
 For browser-like HTTP/S sessions, page loads and their subresources should route
 through the browser-session action bundle. The bundle owns request grouping,
 transaction depth, referrer chains, page/subresource timing, static-asset cache

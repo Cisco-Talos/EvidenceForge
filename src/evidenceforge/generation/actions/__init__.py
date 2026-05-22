@@ -52,6 +52,10 @@ from evidenceforge.generation.actions.linux_shell_command import (
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
 )
+from evidenceforge.generation.actions.network_connection import (
+    NetworkConnectionActionBundle,
+    NetworkConnectionRequest,
+)
 from evidenceforge.generation.actions.process_execution import (
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
@@ -102,6 +106,8 @@ __all__ = [
     "file_transfer_hashes",
     "LinuxShellCommandActionBundle",
     "LinuxShellCommandRequest",
+    "NetworkConnectionActionBundle",
+    "NetworkConnectionRequest",
     "ProcessExecutionActionBundle",
     "ProcessExecutionRequest",
     "ProcessTerminationActionBundle",

@@ -270,6 +270,16 @@ the timing constraint that origin-side activity cannot become visible before the
 client-side proxy request would be source-visible. Proxy route selection and
 format-specific rendering stay outside the bundle.
 
+Network-connection callers supply one logical connection occurrence, and
+`NetworkConnectionActionBundle` owns the internal boundary around tuple identity,
+source/destination host semantics, source-port allocation, hostname/DNS/TLS/HTTP
+and file metadata, proxy/firewall/IDS/EDR flow correlation, packet accounting,
+visibility handoff, Zeek UID/state identity, source endpoint process ownership,
+and Windows WFP companions. Higher-level bundles still call the public
+`generate_connection()` compatibility entrypoint, but connection truth is routed
+through this shared bundle boundary before becoming one canonical
+`SecurityEvent` plus any source-native companion evidence.
+
 Browser-session callers supply one browser visit intent, and
 `BrowserSessionActionBundle` expands it into page-load and subresource requests
 with grouped TCP flow accounting, HTTP transaction depths, referrer chains,
