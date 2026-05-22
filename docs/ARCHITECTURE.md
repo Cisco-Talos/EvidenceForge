@@ -287,6 +287,14 @@ DHCP plus connection fan-out, link-local visibility semantics, and Linux
 and typed storyline `dhcp_lease` events share this path so setup state and
 visible lease evidence do not diverge.
 
+DNS prerequisite callers supply one resolver lookup intent, and
+`DnsLookupActionBundle` owns resolver selection, DNS cache behavior,
+query/answer semantics, TTL observations, Zeek DNS plus UDP/53 connection
+fan-out, Sysmon DNS visibility, AD SRV discovery companions, and low-volume
+resolver companion questions. Storyline DNS-family events remain narrative
+events, while connection prerequisites use this shared lookup path so DNS
+answers, connection destinations, TLS SNI, and proxy hostnames stay aligned.
+
 Browser-session callers supply one browser visit intent, and
 `BrowserSessionActionBundle` expands it into page-load and subresource requests
 with grouped TCP flow accounting, HTTP transaction depths, referrer chains,

@@ -302,6 +302,14 @@ metadata, Zeek DHCP plus connection fan-out, link-local visibility semantics,
 and Linux `dhclient` syslog companion ordering. Do not hand-roll separate DHCP
 syslog or Zeek rows for the same lease transaction outside the bundle.
 
+For automatic DNS lookups, route prerequisite resolver evidence through the DNS
+lookup action bundle. The bundle owns resolver selection, cache behavior,
+query/answer semantics, TTL observations, Zeek DNS plus UDP/53 connection
+fan-out, Sysmon DNS visibility, AD SRV discovery companions, and low-volume
+resolver companion questions. Storyline `dns_query`, `dga_queries`, and
+`dns_tunnel` events may still model DNS as the attack narrative, but connection
+prerequisite DNS should not be duplicated at call sites.
+
 For browser-like HTTP/S sessions, page loads and their subresources should route
 through the browser-session action bundle. The bundle owns request grouping,
 transaction depth, referrer chains, page/subresource timing, static-asset cache

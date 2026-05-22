@@ -40,6 +40,10 @@ from evidenceforge.generation.actions.dhcp_lease import (
     DhcpLeaseActionBundle,
     DhcpLeaseRequest,
 )
+from evidenceforge.generation.actions.dns_lookup import (
+    DnsLookupActionBundle,
+    DnsLookupRequest,
+)
 from evidenceforge.generation.actions.file_transfer import (
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
@@ -94,6 +98,8 @@ __all__ = [
     "BrowserSessionResult",
     "DhcpLeaseActionBundle",
     "DhcpLeaseRequest",
+    "DnsLookupActionBundle",
+    "DnsLookupRequest",
     "FailedLogonActionBundle",
     "FailedLogonRequest",
     "HttpResponseFileTransferActionBundle",

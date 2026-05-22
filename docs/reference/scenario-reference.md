@@ -520,7 +520,7 @@ The generation engine automatically emits prerequisite events for certain event 
 
 | Trigger Event | Auto-Generated Prerequisites | Timing |
 |---|---|---|
-| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | `network.dns_before_tcp` profile before |
+| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname through the DNS lookup bundle; may include source-native resolver companion questions | `network.dns_before_tcp` profile before |
 | `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | `auth.kerberos_before_logon` profile before. Elevated-session 4672 is emitted with the target-host 4624. |
 | `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, target logon after source-visible transport evidence |
 | `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
@@ -649,7 +649,7 @@ Timing fields: `start_time` (optional, defaults to parent event time), `interval
 
 ### DNS Query Events
 
-Use `dns_query` for standalone DNS lookups with full control over query parameters. Unlike the automatic DNS expansion on `connection` events, this type lets you specify exact query type, response code, TTL, and answer. Useful for DNS-based reconnaissance, cache poisoning indicators, or any scenario where the DNS query itself is the story.
+Use `dns_query` for standalone DNS lookups with full control over query parameters. Unlike the automatic DNS lookup bundle used for `connection` prerequisites, this type lets you specify exact query type, response code, TTL, and answer. Useful for DNS-based reconnaissance, cache poisoning indicators, or any scenario where the DNS query itself is the story.
 
 ```yaml
 - time: "+1h"

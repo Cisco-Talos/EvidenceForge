@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -178,6 +178,16 @@ Zeek DHCP plus connection fan-out, link-local visibility semantics, and Linux
 layout, concrete format names, and authoring skills remain unchanged for this
 slice.
 
+The DNS lookup action-bundle extraction moves automatic connection-prerequisite
+DNS lookup orchestration behind `DnsLookupActionBundle`. `ActivityGenerator`
+continues to expose `_emit_dns_lookup()` as the compatibility adapter used by
+causal expansion, while the bundle owns the internal boundary for resolver
+selection, DNS cache behavior, query/answer semantics, TTL observations, Zeek
+DNS plus UDP/53 connection fan-out, Sysmon DNS visibility, AD SRV discovery
+companions, and low-volume resolver companion questions. Public scenario YAML,
+CLI behavior, output layout, concrete format names, and authoring skills remain
+unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -246,6 +256,10 @@ slice.
 - DHCP lease probes cover stable lease anchors, bundle-to-adapter delegation,
   Zeek DHCP dispatch, default AD-domain metadata, Linux `dhclient` syslog
   ordering, DHCP setup state, and link-local visibility behavior.
+- DNS lookup probes cover stable lookup anchors, bundle-to-adapter delegation,
+  Zeek DNS/conn UID correlation, source-time ordering before connections,
+  qtype-specific answer semantics, public DNS profile rendering, and
+  multi-sensor DNS packet-accounting preservation.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

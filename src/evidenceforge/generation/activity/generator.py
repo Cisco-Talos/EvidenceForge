@@ -67,6 +67,8 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     DhcpLeaseActionBundle,
     DhcpLeaseRequest,
+    DnsLookupActionBundle,
+    DnsLookupRequest,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
@@ -11460,6 +11462,23 @@ class ActivityGenerator:
             hostname: Explicit domain name to use (bypasses REVERSE_DNS lookup)
             force_address: Force an A/AAAA lookup for connection prerequisites.
         """
+        request = DnsLookupRequest(
+            src_ip=src_ip,
+            dst_ip=dst_ip,
+            time=time,
+            hostname=hostname,
+            force_address=force_address,
+        )
+        DnsLookupActionBundle(executor=self, request=request).execute()
+
+    def _execute_dns_lookup_bundle(self, request: DnsLookupRequest) -> None:
+        """Expand one DNS lookup request into canonical evidence."""
+        src_ip = request.src_ip
+        dst_ip = request.dst_ip
+        time = request.time
+        hostname = request.hostname
+        force_address = request.force_address
+
         rng = _get_rng()
 
         # Use explicit hostname if provided (domain-first selection),
