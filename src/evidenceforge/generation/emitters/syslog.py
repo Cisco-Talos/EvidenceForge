@@ -90,6 +90,7 @@ _SSHD_PID_RFC5424_RE = re.compile(
     r"(?P<suffix>\s+-\s+-\s+)"
 )
 _MAX_LOGIND_SESSION_ID_DIGITS = 18
+_MAX_SSHD_PID_DIGITS = 18
 _PAM_OPEN_VISIBLE_WINDOW = timedelta(seconds=20)
 
 
@@ -117,6 +118,16 @@ def _fallback_linux_uid(user: str) -> int:
 def _parse_logind_session_id(value: str) -> int | None:
     """Parse bounded systemd-logind session IDs without triggering huge-int failures."""
     if len(value) > _MAX_LOGIND_SESSION_ID_DIGITS:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _parse_sshd_pid(value: str) -> int | None:
+    """Parse bounded sshd PID strings without triggering huge-int failures."""
+    if len(value) > _MAX_SSHD_PID_DIGITS:
         return None
     try:
         return int(value)
@@ -483,7 +494,10 @@ class SyslogEmitter(HostMultiplexEmitter):
             old_pid = match.group("pid")
             new_pid = pid_map.get(old_pid)
             if new_pid is None:
-                parsed_old_pid = int(old_pid)
+                parsed_old_pid = _parse_sshd_pid(old_pid)
+                if parsed_old_pid is None:
+                    normalized.append(line)
+                    continue
                 opens_visible_session = (
                     "Connection from " in line
                     or "Accepted " in line

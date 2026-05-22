@@ -154,3 +154,16 @@ def test_backfill_missing_logind_pam_openers_preserves_existing_opener() -> None
     )
 
     assert normalized == lines
+
+
+def test_normalize_sshd_child_pids_skips_oversized_pid_without_crashing() -> None:
+    huge_pid = "9" * 5000
+    lines = [
+        f"<86>1 2024-03-18T12:37:10.283139Z app sshd {huge_pid} - - Connection from 10.0.1.10 port 50000 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T12:37:11.001000Z app sshd 100 - - Accepted password for admin from 10.0.1.10 port 50000 ssh2",
+    ]
+
+    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
+
+    assert normalized[0] == lines[0]
+    assert " sshd 100 " in normalized[1]
