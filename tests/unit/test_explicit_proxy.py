@@ -715,6 +715,38 @@ class TestExplicitProxyVisibility:
         assert command_line.endswith("https://r.bing.com/")
         assert ":8080/" not in command_line
 
+    def test_connect_target_browser_hint_ignores_oversized_port_literal(self):
+        generator = ActivityGenerator(StateManager(), {})
+
+        image, command_line = generator._browser_http_client_process_hint(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+            ),
+            hostname="r.bing.com",
+            uri=f"r.bing.com:{'9' * 5000}",
+            dst_port=8080,
+        )
+
+        assert image.endswith(r"\Microsoft\Edge\Application\msedge.exe")
+        assert command_line.endswith("https://r.bing.com:8080/")
+
+    def test_connect_target_browser_hint_ignores_out_of_range_port(self):
+        generator = ActivityGenerator(StateManager(), {})
+
+        image, command_line = generator._browser_http_client_process_hint(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+            ),
+            hostname="r.bing.com",
+            uri="r.bing.com:99999",
+            dst_port=8080,
+        )
+
+        assert image.endswith(r"\Microsoft\Edge\Application\msedge.exe")
+        assert command_line.endswith("https://r.bing.com:8080/")
+
     def test_browser_proxy_user_agent_replaces_mismatched_browser_pid(self):
         generator, emitters = _generator(
             [

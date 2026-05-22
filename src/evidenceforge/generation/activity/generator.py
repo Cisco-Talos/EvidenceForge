@@ -4448,12 +4448,17 @@ class ActivityGenerator:
         dst_port: int,
     ) -> tuple[str, int]:
         """Normalize proxy CONNECT targets into a browser-visible navigation target."""
+        max_port_digits = 5
         raw_uri = (uri or "").strip()
         host = (hostname or "").strip().lower().rstrip(".")
         if raw_uri and not raw_uri.startswith(("/", "http://", "https://")):
             target, separator, port = raw_uri.rpartition(":")
             if separator and port.isdigit() and target.strip().lower().rstrip(".") == host:
-                return "/", int(port)
+                if len(port) > max_port_digits:
+                    return uri, dst_port
+                parsed_port = int(port)
+                if 1 <= parsed_port <= 65535:
+                    return "/", parsed_port
         return uri, dst_port
 
     @staticmethod
