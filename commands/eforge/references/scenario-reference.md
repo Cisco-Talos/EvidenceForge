@@ -260,7 +260,10 @@ The engine manages user sessions with exact transport-type matching. When a stor
 Multi-phase remote activities use action-bundle semantics internally. For example,
 an SSH request is modeled as one SSH session action that coordinates transport,
 auth, session, process, bash-history, endpoint/EDR, and teardown evidence before
-the engine dispatches individual canonical `SecurityEvent`s.
+the engine dispatches individual canonical `SecurityEvent`s. An RDP request is
+modeled as one remote interactive session action that coordinates source-side
+`mstsc.exe`, TCP/3389 transport, target Type 10 logon/session metadata, and
+source-visible ordering before dispatch.
 
 Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
 
@@ -512,7 +515,7 @@ The generation engine automatically emits prerequisite events for certain event 
 |---|---|---|
 | `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | `network.dns_before_tcp` profile before |
 | `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | `auth.kerberos_before_logon` profile before. Elevated-session 4672 is emitted with the target-host 4624. |
-| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
+| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, target logon after source-visible transport evidence |
 | `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
 | `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | `windows.audit_from_admin_command` profile after |
 | `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | `process.remote_thread_lsass_access` profile after |

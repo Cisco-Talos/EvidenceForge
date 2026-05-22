@@ -263,6 +263,14 @@ bundle has owned SSH transport/auth/session timing. When source ports are
 allocated during execution, use the resolved execution anchor rather than the
 pre-reservation intent anchor for tuple-specific identity.
 
+For RDP specifically, modeled remote interactive Windows sessions should route
+through the RDP action bundle. The bundle owns the source-side RDP client process
+when a modeled source host is available, the TCP/3389 transport, target Type 10
+logon/session metadata, source-port reuse, and temporal ordering between
+source-visible transport evidence and target authentication evidence. Do not
+emit independent port 3389 connections or Type 10 logons for the same modeled RDP
+session outside the bundle.
+
 For explicit forward proxy traffic, logical client-to-origin HTTP/HTTPS requests
 from hosts with explicit proxy routes should route through the proxy transaction
 action bundle. The bundle owns client-to-proxy evidence, proxy access semantics,

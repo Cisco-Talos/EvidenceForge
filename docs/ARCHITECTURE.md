@@ -242,6 +242,15 @@ Transfer-specific receiver artifacts, such as the target-side file create for
 `scp`, are emitted after the bundle-owned SSH lifecycle rather than duplicating
 SSH auth or transport timing locally.
 
+RDP bundle callers supply one remote interactive Windows session intent. The
+`RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
+source host is available, emits the TCP/3389 transport through canonical
+connection generation, and emits the target Type 10 logon after source-visible
+transport evidence. The bundle keeps source port, target session metadata,
+transport PID, network close time, and source-ready timing aligned so storyline,
+world-planner, and baseline RDP paths do not independently invent partial RDP
+evidence.
+
 Explicit forward proxy callers likewise supply one logical client-to-origin HTTP
 or HTTPS request, and `ProxyTransactionActionBundle` expands it into the
 source-native evidence that real sensors would see: client-to-proxy connection

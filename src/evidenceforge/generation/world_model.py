@@ -11,6 +11,7 @@ exists. This module adds the missing "why would this happen here?" layer:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -1129,6 +1130,7 @@ class WorldPlanner:
     ) -> SessionBootstrapResult:
         source_pid = -1
         source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
+        source_process_factory = None
         if plan.source_system is not None:
             aligned_source_time = self._align_rdp_source_after_future_workstation_session(
                 username=user.username,
@@ -1141,13 +1143,7 @@ class WorldPlanner:
                 source_process_time = aligned_source_time
                 logon_time += shift
                 activity_time += shift
-            source_pid = self._ensure_rdp_client_process(
-                user=user,
-                source_system=plan.source_system,
-                target_system=plan.target_system,
-                time=source_process_time,
-                rng=rng,
-            )
+            source_process_factory = self._rdp_source_process_factory(rng)
         logon_id = self.state_manager.create_session(
             username=user.username,
             system=plan.target_system.hostname,
@@ -1163,6 +1159,8 @@ class WorldPlanner:
             source_system=plan.source_system,
             source_pid=source_pid,
             logon_id=logon_id,
+            source_process_time=source_process_time if plan.source_system is not None else None,
+            source_process_factory=source_process_factory,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -1171,6 +1169,26 @@ class WorldPlanner:
             )
         session.last_activity_time = activity_time
         return SessionBootstrapResult(session=session, network_uid=uid)
+
+    def _rdp_source_process_factory(self, rng: random.Random) -> Callable[..., int]:
+        """Return a callback that materializes source-side mstsc.exe inside the bundle."""
+
+        def materialize(
+            *,
+            user: User,
+            source_system: System,
+            target_system: System,
+            time: datetime,
+        ) -> int:
+            return self._ensure_rdp_client_process(
+                user=user,
+                source_system=source_system,
+                target_system=target_system,
+                time=time,
+                rng=rng,
+            )
+
+        return materialize
 
     def _align_rdp_source_after_future_workstation_session(
         self,

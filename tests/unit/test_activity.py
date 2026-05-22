@@ -32,6 +32,7 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions import RdpSessionActionBundle, RdpSessionRequest
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
     EXTERNAL_IPS,
@@ -1135,6 +1136,107 @@ class TestActivityGenerator:
         )
         assert network_event.network.dst_port == 3389
         assert network_event.network.src_port > 0
+        assert logon_event.auth.source_port == network_event.network.src_port
+        assert logon_event.timestamp > network_event.timestamp
+
+    def test_rdp_session_bundle_anchor_is_stable(self, test_user, test_system):
+        """Identical RDP bundle requests should have stable action anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = RdpSessionRequest(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+        )
+        second = RdpSessionRequest(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+        )
+
+        assert (
+            RdpSessionActionBundle(Mock(), first).anchor
+            == RdpSessionActionBundle(Mock(), second).anchor
+        )
+
+    def test_rdp_session_bundle_materializes_source_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP bundle should own source mstsc materialization before target logon."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_process_time = timestamp - timedelta(seconds=3)
+        source_system = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(timestamp)
+        calls = []
+
+        def source_process_factory(
+            *,
+            user: User,
+            source_system: System,
+            target_system: System,
+            time: datetime,
+        ) -> int:
+            calls.append((user, source_system, target_system, time))
+            state_manager.set_current_time(time - timedelta(seconds=10))
+            logon_id = state_manager.create_session(
+                username=user.username,
+                system=source_system.hostname,
+                logon_type=2,
+                source_ip="-",
+                start_time=time - timedelta(seconds=10),
+                session_kind="interactive",
+            )
+            return activity_gen.generate_process(
+                user=user,
+                system=source_system,
+                time=time,
+                logon_id=logon_id,
+                process_name=r"C:\Windows\System32\mstsc.exe",
+                command_line=f"mstsc.exe /v:{target_system.hostname}",
+                parent_pid=4,
+            )
+
+        bundle = RdpSessionActionBundle(
+            activity_gen,
+            RdpSessionRequest(
+                user=test_user,
+                target_system=test_system,
+                time=timestamp,
+                source_ip=source_system.ip,
+                source_system=source_system,
+                source_process_time=source_process_time,
+            ),
+            source_process_factory=source_process_factory,
+        )
+
+        bundle.execute()
+
+        assert calls == [(test_user, source_system, test_system, source_process_time)]
+        network_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        source_process = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("mstsc.exe")
+        )
+        assert network_event.network.initiating_pid == source_process.process.pid
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
 

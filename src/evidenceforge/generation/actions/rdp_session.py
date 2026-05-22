@@ -1,0 +1,343 @@
+# Copyright (c) 2026 Cisco Systems, Inc. and its affiliates
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+# SPDX-License-Identifier: MIT
+
+"""RDP session action bundle.
+
+The RDP bundle models a remote interactive Windows session above individual
+SecurityEvents. It owns the source client, transport connection, target logon,
+and source-visible ordering for a single RDP activity while using the current
+activity generator as the runtime adapter for shared state and dispatch.
+"""
+
+from __future__ import annotations
+
+import random
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Protocol
+
+from evidenceforge.generation.actions.base import ActionAnchor
+from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TemporalConstraintGraph
+from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.rng import _stable_seed
+
+
+@dataclass(frozen=True, slots=True)
+class RdpSessionRequest:
+    """Intent for one modeled RDP session action."""
+
+    user: User
+    target_system: System
+    time: datetime
+    source_ip: str
+    source_system: System | None = None
+    source_pid: int = -1
+    source_process_time: datetime | None = None
+    logon_id: str = ""
+    source: str = "activity_generator"
+
+    @property
+    def stable_id(self) -> str:
+        """Return a deterministic intent identifier for durable references."""
+
+        source_host = self.source_system.hostname if self.source_system is not None else ""
+        seed = _stable_seed(
+            "action_bundle:rdp_session:"
+            f"{self.user.username}:{source_host}:{self.source_ip}:{self.source_pid}:"
+            f"{self.source_process_time.isoformat() if self.source_process_time else ''}:"
+            f"{self.target_system.hostname}:{self.target_system.ip}:"
+            f"{self.logon_id}:{self.source}:{self.time.isoformat()}"
+        )
+        return f"rdp-session-{seed:016x}"
+
+
+class RdpSourceProcessFactory(Protocol):
+    """Callable that materializes the source-side RDP client process."""
+
+    def __call__(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        target_system: System,
+        time: datetime,
+    ) -> int:
+        """Return the source-side mstsc.exe PID."""
+        ...
+
+
+class RdpSessionExecutor(Protocol):
+    """Adapter protocol implemented by the current activity generator."""
+
+    state_manager: StateManager
+    _ip_to_system: dict[str, System]
+
+    def _coerce_windows_rdp_user_from_existing_session(
+        self,
+        user: User,
+        target_system: System,
+        source_ip: str,
+    ) -> User:
+        """Return the Windows account that should own the RDP session."""
+        ...
+
+    def _allocate_ephemeral_port(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str,
+        time: datetime,
+        os_category: str,
+    ) -> int:
+        """Reserve a source port for the RDP transport."""
+        ...
+
+    def _os_for_ip(self, ip: str) -> str:
+        """Return the OS category for a source IP."""
+        ...
+
+    def generate_connection(
+        self,
+        src_ip: str,
+        dst_ip: str,
+        time: datetime,
+        **kwargs: Any,
+    ) -> str:
+        """Generate canonical network evidence."""
+        ...
+
+    def generate_logon(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        **kwargs: Any,
+    ) -> str:
+        """Generate canonical Windows logon evidence."""
+        ...
+
+
+class RdpSessionActionBundle:
+    """Expand one RDP session intent into coordinated canonical evidence."""
+
+    def __init__(
+        self,
+        executor: RdpSessionExecutor,
+        request: RdpSessionRequest,
+        *,
+        source_process_factory: RdpSourceProcessFactory | None = None,
+    ) -> None:
+        self._executor = executor
+        self._request = request
+        self._source_process_factory = source_process_factory
+
+    @property
+    def anchor(self) -> ActionAnchor:
+        """Return the stable action anchor."""
+
+        return ActionAnchor(
+            family="rdp_session",
+            stable_id=self._request.stable_id,
+            source=self._request.source,
+        )
+
+    def execute(self) -> str:
+        """Expand and dispatch RDP transport and target-logon evidence."""
+
+        rng = _get_rng()
+        user = self._executor._coerce_windows_rdp_user_from_existing_session(
+            self._request.user,
+            self._request.target_system,
+            self._request.source_ip,
+        )
+        source_ip, source_system, source_pid = self._resolve_source(rng, user)
+        source_pid = self._materialize_source_process(
+            user=user,
+            source_system=source_system,
+            source_pid=source_pid,
+        )
+        src_port = self._executor._allocate_ephemeral_port(
+            source_ip,
+            self._request.target_system.ip,
+            3389,
+            "tcp",
+            self._request.time,
+            self._executor._os_for_ip(source_ip),
+        )
+
+        duration = rng.uniform(60.0, 3600.0)
+        uid = self._executor.generate_connection(
+            src_ip=source_ip,
+            dst_ip=self._request.target_system.ip,
+            time=self._request.time,
+            dst_port=3389,
+            proto="tcp",
+            service="rdp",
+            duration=duration,
+            orig_bytes=rng.randint(50000, 500000),
+            resp_bytes=rng.randint(100000, 2000000),
+            src_port=src_port,
+            emit_dns=True,
+            source_system=source_system,
+            pid=source_pid,
+        )
+
+        logon_time = self._target_logon_time(
+            rng=rng,
+            source_ip=source_ip,
+            src_port=src_port,
+        )
+        logon_id = self._request.logon_id
+        if logon_id:
+            reassigned_logon_id = self._executor.state_manager.reassign_session_logon_id(
+                logon_id,
+                logon_time,
+            )
+            if reassigned_logon_id is not None:
+                logon_id = reassigned_logon_id
+            self._executor.state_manager.update_session_metadata(
+                logon_id,
+                username=user.username,
+                start_time=logon_time,
+                source_ip=source_ip,
+                source_port=src_port,
+                session_kind="rdp",
+                transport_pid=source_pid if source_pid > 0 else None,
+                network_close_time=self._request.time + timedelta(seconds=duration),
+                source_ready_time=logon_time,
+            )
+        rendered_logon_id = self._executor.generate_logon(
+            user=user,
+            system=self._request.target_system,
+            time=logon_time,
+            logon_type=10,
+            source_ip=source_ip,
+            source_port=src_port,
+            emit_network_evidence=False,
+            logon_id=logon_id or None,
+        )
+        self._executor.state_manager.update_session_metadata(
+            rendered_logon_id,
+            username=user.username,
+            start_time=logon_time,
+            source_ip=source_ip,
+            source_port=src_port,
+            session_kind="rdp",
+            transport_pid=source_pid if source_pid > 0 else None,
+            network_close_time=self._request.time + timedelta(seconds=duration),
+            source_ready_time=logon_time,
+        )
+
+        return uid
+
+    def _resolve_source(self, rng: random.Random, user: User) -> tuple[str, System | None, int]:
+        """Resolve the remote source host, avoiding impossible self-sourced RDP."""
+
+        source_ip = self._request.source_ip
+        source_system = self._request.source_system
+        source_pid = self._request.source_pid
+        if source_ip != self._request.target_system.ip:
+            return source_ip, source_system, source_pid
+
+        candidates = sorted(
+            {
+                candidate.hostname: candidate
+                for candidate in getattr(self._executor, "_ip_to_system", {}).values()
+                if candidate.ip != self._request.target_system.ip
+                and _get_os_category(candidate.os) == "windows"
+                and (candidate.type or "workstation").lower() == "workstation"
+            }.values(),
+            key=lambda candidate: candidate.hostname,
+        )
+        preferred = [
+            candidate for candidate in candidates if candidate.assigned_user == user.username
+        ]
+        if preferred or candidates:
+            source_system = rng.choice(preferred or candidates)
+            source_ip = source_system.ip
+            source_pid = -1
+        return source_ip, source_system, source_pid
+
+    def _materialize_source_process(
+        self,
+        *,
+        user: User,
+        source_system: System | None,
+        source_pid: int,
+    ) -> int:
+        """Ensure source-side mstsc.exe exists when the caller provides a factory."""
+
+        if (
+            source_pid > 0
+            or source_system is None
+            or self._request.source_process_time is None
+            or self._source_process_factory is None
+        ):
+            return source_pid
+        return self._source_process_factory(
+            user=user,
+            source_system=source_system,
+            target_system=self._request.target_system,
+            time=self._request.source_process_time,
+        )
+
+    def _target_logon_time(
+        self,
+        *,
+        rng: random.Random,
+        source_ip: str,
+        src_port: int,
+    ) -> datetime:
+        """Resolve target 4624 timing after source-visible network evidence."""
+
+        observed_connection_time = self._request.time + sample_timing_delta(
+            "network.connection_start_jitter",
+            seed_parts=(
+                source_ip,
+                src_port,
+                self._request.target_system.ip,
+                3389,
+                "tcp",
+                "rdp",
+                self._request.time,
+            ),
+        )
+        graph = TemporalConstraintGraph()
+        graph.add_node(
+            "transport_observed",
+            observed_connection_time,
+            not_before=self._request.time,
+        )
+        graph.add_node(
+            "target_logon",
+            observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600)),
+        )
+        graph.constrain_after(
+            "target_logon",
+            "transport_observed",
+            min_gap=timedelta(milliseconds=900),
+        )
+        return graph.resolved_time("target_logon")

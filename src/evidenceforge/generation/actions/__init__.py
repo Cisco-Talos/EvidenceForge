@@ -32,6 +32,11 @@ from evidenceforge.generation.actions.proxy_transaction import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
 )
+from evidenceforge.generation.actions.rdp_session import (
+    RdpSessionActionBundle,
+    RdpSessionRequest,
+    RdpSourceProcessFactory,
+)
 from evidenceforge.generation.actions.ssh_session import (
     SshSessionActionBundle,
     SshSessionRequest,
@@ -45,6 +50,9 @@ __all__ = [
     "BrowserSessionResult",
     "ProxyTransactionActionBundle",
     "ProxyTransactionRequest",
+    "RdpSessionActionBundle",
+    "RdpSessionRequest",
+    "RdpSourceProcessFactory",
     "SshSessionActionBundle",
     "SshSessionRequest",
 ]

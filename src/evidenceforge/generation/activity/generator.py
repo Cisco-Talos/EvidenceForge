@@ -67,6 +67,9 @@ from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
+    RdpSessionActionBundle,
+    RdpSessionRequest,
+    RdpSourceProcessFactory,
     SshSessionActionBundle,
     SshSessionRequest,
 )
@@ -13375,104 +13378,29 @@ class ActivityGenerator:
         source_system: Optional["System"] = None,
         source_pid: int = -1,
         logon_id: str | None = None,
+        source_process_time: datetime | None = None,
+        source_process_factory: RdpSourceProcessFactory | None = None,
     ) -> str:
         """Generate RDP session: Zeek conn + 4624 type 10 + eCAR on target.
 
         Compound event ensuring network and host evidence are always paired.
         Returns Zeek UID.
         """
-        rng = _get_rng()
-        user = self._coerce_windows_rdp_user_from_existing_session(user, target_system, source_ip)
-        if source_ip == target_system.ip:
-            ip_to_system = getattr(self, "_ip_to_system", {})
-            candidates = sorted(
-                {
-                    candidate.hostname: candidate
-                    for candidate in ip_to_system.values()
-                    if candidate.ip != target_system.ip
-                    and _get_os_category(candidate.os) == "windows"
-                    and (candidate.type or "workstation").lower() == "workstation"
-                }.values(),
-                key=lambda candidate: candidate.hostname,
-            )
-            preferred = [
-                candidate for candidate in candidates if candidate.assigned_user == user.username
-            ]
-            if preferred or candidates:
-                source_system = rng.choice(preferred or candidates)
-                source_ip = source_system.ip
-                source_pid = -1
-        src_port = self._allocate_ephemeral_port(
-            source_ip,
-            target_system.ip,
-            3389,
-            "tcp",
-            time,
-            self._os_for_ip(source_ip),
-        )
-
-        # 1. Network connection (Zeek conn.log port 3389)
-        # emit_dns=True so the causal engine generates DNS evidence for the
-        # RDP destination, matching real-world behavior where the client
-        # resolves the target hostname before connecting.
-        uid = self.generate_connection(
-            src_ip=source_ip,
-            dst_ip=target_system.ip,
-            time=time,
-            dst_port=3389,
-            proto="tcp",
-            service="rdp",
-            duration=rng.uniform(60.0, 3600.0),
-            orig_bytes=rng.randint(50000, 500000),
-            resp_bytes=rng.randint(100000, 2000000),
-            src_port=src_port,
-            emit_dns=True,
-            source_system=source_system,
-            pid=source_pid,
-        )
-
-        observed_connection_time = time + sample_timing_delta(
-            "network.connection_start_jitter",
-            seed_parts=(
-                source_ip,
-                src_port,
-                target_system.ip,
-                3389,
-                "tcp",
-                "rdp",
-                time,
-            ),
-        )
-
-        # 2. Host logon on target (4624 type 10 + 4672 if elevated).
-        # RDP target logons are a result of the source-side client and TCP
-        # connection, so leave enough collection margin for source Sysmon/WFP
-        # and Zeek evidence to appear first in a bounded time slice.
-        logon_time = observed_connection_time + timedelta(milliseconds=rng.randint(900, 1600))
-        if logon_id is not None:
-            reassigned_logon_id = self.state_manager.reassign_session_logon_id(logon_id, logon_time)
-            if reassigned_logon_id is not None:
-                logon_id = reassigned_logon_id
-            self.state_manager.update_session_metadata(
-                logon_id,
-                username=user.username,
-                start_time=logon_time,
+        bundle = RdpSessionActionBundle(
+            executor=self,
+            request=RdpSessionRequest(
+                user=user,
+                target_system=target_system,
+                time=time,
                 source_ip=source_ip,
-                source_port=src_port,
-                session_kind="rdp",
-            )
-        self.generate_logon(
-            user=user,
-            system=target_system,
-            time=logon_time,
-            logon_type=10,
-            source_ip=source_ip,
-            source_port=src_port,
-            emit_network_evidence=False,
-            logon_id=logon_id,
+                source_system=source_system,
+                source_pid=source_pid,
+                source_process_time=source_process_time,
+                logon_id=logon_id or "",
+            ),
+            source_process_factory=source_process_factory,
         )
-
-        return uid
+        return bundle.execute()
 
     def _coerce_windows_rdp_user_from_existing_session(
         self,

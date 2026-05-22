@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -102,6 +102,15 @@ server noise remain direct canonical events unless they model a browser session.
 Public scenario YAML, CLI behavior, output layout, and authoring skills remain
 unchanged for this slice.
 
+The RDP/remote interactive session action-bundle extraction moves RDP session
+expansion into `RdpSessionActionBundle.execute()`. `ActivityGenerator` keeps the
+existing compatibility entrypoint, while `WorldPlanner` now lets the bundle own
+source-side `mstsc.exe` materialization when a modeled source host exists. The
+bundle owns TCP/3389 transport emission, source-port reuse, target Type 10 logon
+timing, preallocated target session metadata, transport PID, source-ready time,
+and network-close time. Public scenario YAML, CLI behavior, output layout, and
+authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -140,6 +149,10 @@ unchanged for this slice.
   into grouped HTTP flows, referrer/transaction-depth preservation, static cache
   suppression, cache/partial-status preservation, and existing inbound/outbound
   browser-session behavior.
+- RDP probes cover stable bundle anchors, source-side `mstsc.exe` materialization,
+  source-port reuse between TCP/3389 and Type 10 logon evidence, preallocated
+  session metadata updates, source-host correction for impossible self-sourced
+  RDP, and world-planner baseline/storyline behavior preservation.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:
