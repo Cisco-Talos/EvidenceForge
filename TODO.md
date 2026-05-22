@@ -951,6 +951,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 
 ### Tier 4: Eval Fixes
 
+- [x] Harden OCSP request-path runtime bounds parsing to handle non-finite overlay numerics without crashing generation
 - [x] Harden temporal causal-account exclusion against non-string SubjectUserName/principal values to prevent evaluator exceptions on malformed logs
 - [x] Signal integrity misses web_scan traces in host-scoped web logs and responder-side Zeek HTTP records — generated evidence exists, but evaluator indexing could not find `web_access.log` records by host directory or inbound Zeek HTTP by destination IP. Parser records now carry source-host metadata, and signal-integrity indexing includes responder IPs. Event Presence improved from 1/9 to 9/9 on the HTTP/proxy eval sample.
 - [x] Causal Ordering hard failure on generated audit sample — root cause was future same-hour session reuse during non-chronological baseline generation. Session lookup now only reuses sessions whose start time is at or before the activity timestamp. Fresh HTTP/proxy sample eval improved Causal Ordering from 95.53% to 99.94%, and all hard acceptance criteria pass.
