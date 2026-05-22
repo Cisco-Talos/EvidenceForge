@@ -1203,12 +1203,14 @@ class WorldPlanner:
             return source_process_time
 
         next_session = min(future_sessions, key=self._session_start_sort_key)
-        aligned = self._session_start_sort_key(next_session) + timedelta(
+        aligned_utc = self._session_start_sort_key(next_session) + timedelta(
             seconds=rng.uniform(20.0, 90.0)
         )
-        if aligned >= hour_end:
+        if aligned_utc >= hour_end:
             return source_process_time
-        return aligned
+        if source_process_time.tzinfo is None:
+            return aligned_utc.replace(tzinfo=None)
+        return aligned_utc.astimezone(source_process_time.tzinfo)
 
     def _ensure_rdp_client_process(
         self,
