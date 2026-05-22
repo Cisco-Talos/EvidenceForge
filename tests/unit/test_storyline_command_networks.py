@@ -198,6 +198,15 @@ class TestStorylineCommandNetworks:
                 SimpleNamespace(type="connection", source_ip=""),
             ],
         )
+        assert StorylineMixin._process_has_following_same_host_connection(
+            web_system,
+            iter(
+                [
+                    SimpleNamespace(type="raw"),
+                    SimpleNamespace(type="connection", source_ip=""),
+                ],
+            ),
+        )
 
     def test_apache_raw_syslog_uses_canonical_vip_tuple_and_listener_pid(self):
         ts = datetime(2024, 3, 18, 13, 20, 1, tzinfo=UTC)
