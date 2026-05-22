@@ -33,10 +33,20 @@ from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
+    AccountChangedActionBundle,
+    AccountChangedRequest,
+    AccountCreatedActionBundle,
+    AccountCreatedRequest,
+    AccountDeletedActionBundle,
+    AccountDeletedRequest,
+    CreateRemoteThreadActionBundle,
+    CreateRemoteThreadRequest,
     ExplicitCredentialUseActionBundle,
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
     FailedLogonRequest,
+    GroupMembershipChangeActionBundle,
+    GroupMembershipChangeRequest,
     KerberosConnectionAuditActionBundle,
     KerberosConnectionAuditRequest,
     KerberosLogonTicketsActionBundle,
@@ -51,6 +61,8 @@ from evidenceforge.generation.actions import (
     KerberosTgtRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    LogClearedActionBundle,
+    LogClearedRequest,
     LogoffActionBundle,
     LogoffRequest,
     LogonActionBundle,
@@ -59,12 +71,20 @@ from evidenceforge.generation.actions import (
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
     NmapCommandProbeRequest,
+    PasswordChangeActionBundle,
+    PasswordChangeRequest,
+    PasswordResetActionBundle,
+    PasswordResetRequest,
+    ProcessAccessActionBundle,
+    ProcessAccessRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
     ProcessTerminationRequest,
     RdpSessionActionBundle,
     RdpSessionRequest,
+    ScheduledTaskActionBundle,
+    ScheduledTaskRequest,
     WindowsServiceInstallActionBundle,
     WindowsServiceInstallRequest,
 )
@@ -737,6 +757,211 @@ class TestActivityGenerator:
         executor._execute_kerberos_tgt_renewal_bundle.assert_called_once_with(renewal_request)
         executor._execute_kerberos_service_ticket_bundle.assert_called_once_with(service_request)
         executor._execute_kerberos_preauth_failure_bundle.assert_called_once_with(failure_request)
+
+    def test_windows_audit_bundle_anchors_are_stable(self, test_user, test_system):
+        """Windows audit requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        requests_and_bundles = [
+            (
+                LogClearedRequest(user=test_user, system=test_system, time=timestamp),
+                LogClearedActionBundle,
+            ),
+            (
+                ScheduledTaskRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    task_name="Updater",
+                    source_command_line="schtasks /create /tn Updater /tr calc.exe",
+                ),
+                ScheduledTaskActionBundle,
+            ),
+            (
+                GroupMembershipChangeRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    action="add",
+                    scope="global",
+                    group_name="Domain Admins",
+                    group_sid="S-1-5-21-1-2-3-512",
+                    member_username="svc_sqlreader",
+                    member_sid="S-1-5-21-1-2-3-1105",
+                ),
+                GroupMembershipChangeActionBundle,
+            ),
+            (
+                AccountCreatedRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                ),
+                AccountCreatedActionBundle,
+            ),
+            (
+                AccountDeletedRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                ),
+                AccountDeletedActionBundle,
+            ),
+            (
+                PasswordResetRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                ),
+                PasswordResetActionBundle,
+            ),
+            (
+                PasswordChangeRequest(user=test_user, system=test_system, time=timestamp),
+                PasswordChangeActionBundle,
+            ),
+            (
+                AccountChangedRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                    password_last_set_to_event_time=True,
+                ),
+                AccountChangedActionBundle,
+            ),
+            (
+                CreateRemoteThreadRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    source_pid=4242,
+                    source_image=r"C:\Windows\System32\rundll32.exe",
+                    target_pid=636,
+                    target_image=r"C:\Windows\System32\lsass.exe",
+                ),
+                CreateRemoteThreadActionBundle,
+            ),
+            (
+                ProcessAccessRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    source_pid=4242,
+                    source_image=r"C:\Windows\System32\rundll32.exe",
+                    target_pid=636,
+                    target_image=r"C:\Windows\System32\lsass.exe",
+                    granted_access="0x1FFFFF",
+                ),
+                ProcessAccessActionBundle,
+            ),
+        ]
+
+        for request, bundle_cls in requests_and_bundles:
+            assert bundle_cls(Mock(), request).anchor == bundle_cls(Mock(), request).anchor
+
+    def test_windows_audit_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Windows audit bundles should preserve the current generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        log_cleared = LogClearedRequest(user=test_user, system=test_system, time=timestamp)
+        scheduled_task = ScheduledTaskRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            task_name="Updater",
+        )
+        group_change = GroupMembershipChangeRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            action="add",
+            scope="global",
+            group_name="Domain Admins",
+            group_sid="S-1-5-21-1-2-3-512",
+            member_username="svc_sqlreader",
+            member_sid="S-1-5-21-1-2-3-1105",
+        )
+        account_created = AccountCreatedRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        account_deleted = AccountDeletedRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        password_reset = PasswordResetRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        password_change = PasswordChangeRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+        )
+        account_changed = AccountChangedRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        remote_thread = CreateRemoteThreadRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            source_pid=4242,
+            source_image=r"C:\Windows\System32\rundll32.exe",
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+        process_access = ProcessAccessRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            source_pid=4242,
+            source_image=r"C:\Windows\System32\rundll32.exe",
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+        executor = Mock()
+        executor._execute_create_remote_thread_bundle.return_value = True
+        executor._execute_process_access_bundle.return_value = True
+
+        LogClearedActionBundle(executor, log_cleared).execute()
+        ScheduledTaskActionBundle(executor, scheduled_task).execute()
+        GroupMembershipChangeActionBundle(executor, group_change).execute()
+        AccountCreatedActionBundle(executor, account_created).execute()
+        AccountDeletedActionBundle(executor, account_deleted).execute()
+        PasswordResetActionBundle(executor, password_reset).execute()
+        PasswordChangeActionBundle(executor, password_change).execute()
+        AccountChangedActionBundle(executor, account_changed).execute()
+        assert CreateRemoteThreadActionBundle(executor, remote_thread).execute() is True
+        assert ProcessAccessActionBundle(executor, process_access).execute() is True
+
+        executor._execute_log_cleared_bundle.assert_called_once_with(log_cleared)
+        executor._execute_scheduled_task_bundle.assert_called_once_with(scheduled_task)
+        executor._execute_group_membership_change_bundle.assert_called_once_with(group_change)
+        executor._execute_account_created_bundle.assert_called_once_with(account_created)
+        executor._execute_account_deleted_bundle.assert_called_once_with(account_deleted)
+        executor._execute_password_reset_bundle.assert_called_once_with(password_reset)
+        executor._execute_password_change_bundle.assert_called_once_with(password_change)
+        executor._execute_account_changed_bundle.assert_called_once_with(account_changed)
+        executor._execute_create_remote_thread_bundle.assert_called_once_with(remote_thread)
+        executor._execute_process_access_bundle.assert_called_once_with(process_access)
 
     def test_generate_logon_reuses_active_workstation_session_over_long_window(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

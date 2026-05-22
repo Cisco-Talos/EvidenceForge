@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -223,6 +223,16 @@ companion KDC network evidence. Public scenario YAML, CLI behavior, output
 layout, concrete format names, and authoring skills remain unchanged for this
 slice.
 
+The Windows audit/account-management action-bundle extraction moves Windows
+Security audit and endpoint audit evidence behind internal Windows audit
+bundles. Log-cleared, scheduled-task, account-created/deleted/changed, password
+reset/change, group-membership, create-remote-thread, and process-access
+entrypoints now route through stable adapters. The bundles define the ownership
+boundary for subject/session ownership, target account/group identity,
+source-ready timing, process/thread lifecycle validation, and shared Sysmon/eCAR
+context. Public scenario YAML, CLI behavior, output layout, concrete format
+names, and authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -307,6 +317,11 @@ slice.
   service-ticket, and preauth-failure anchors; bundle-to-adapter delegation;
   existing DC Kerberos logon expansion; KDC audit packet accounting; source-port
   reuse/avoidance semantics; and existing Kerberos ordering behavior.
+- Windows audit/account-management probes cover stable log-cleared,
+  scheduled-task, account/group management, password reset/change,
+  create-remote-thread, and process-access anchors; bundle-to-adapter
+  delegation; subject LogonID preservation; target identity rendering; shared
+  remote-thread context; and target process ownership preservation.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

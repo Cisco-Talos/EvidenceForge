@@ -376,6 +376,15 @@ cache behavior, service-principal identity, source-native ticket timing, and
 optional companion KDC network evidence. Do not independently emit 4768, 4769,
 4770, or 4771 rows at call sites or patch Kerberos source ports in emitters.
 
+For Windows audit/account-management evidence, route log-cleared,
+scheduled-task, account-created/deleted/changed, password reset/change,
+group-membership, create-remote-thread, and process-access evidence through the
+Windows audit action bundles. The bundles own subject/session ownership, target
+identity, source timing, process/thread lifecycle validation, and shared
+Sysmon/eCAR context. Do not duplicate 1102, 4698, 472x/4738/475x, Sysmon Event
+8, or Sysmon Event 10 construction at storyline/causal call sites or patch
+these fields in emitters.
+
 When fixing realism defects:
 - Cross-event ordering, lifecycle, source timing, observation, and durable
   identities belong in bundle/lifecycle/timing/observation layers.

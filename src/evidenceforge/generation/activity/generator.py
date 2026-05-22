@@ -65,6 +65,14 @@ from evidenceforge.events.contexts import (
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions import (
+    AccountChangedActionBundle,
+    AccountChangedRequest,
+    AccountCreatedActionBundle,
+    AccountCreatedRequest,
+    AccountDeletedActionBundle,
+    AccountDeletedRequest,
+    CreateRemoteThreadActionBundle,
+    CreateRemoteThreadRequest,
     DhcpLeaseActionBundle,
     DhcpLeaseRequest,
     DnsLookupActionBundle,
@@ -73,6 +81,8 @@ from evidenceforge.generation.actions import (
     ExplicitCredentialUseRequest,
     FailedLogonActionBundle,
     FailedLogonRequest,
+    GroupMembershipChangeActionBundle,
+    GroupMembershipChangeRequest,
     HttpResponseFileTransferActionBundle,
     HttpResponseFileTransferRequest,
     KerberosConnectionAuditActionBundle,
@@ -89,6 +99,8 @@ from evidenceforge.generation.actions import (
     KerberosTgtRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    LogClearedActionBundle,
+    LogClearedRequest,
     LogoffActionBundle,
     LogoffRequest,
     LogonActionBundle,
@@ -97,6 +109,12 @@ from evidenceforge.generation.actions import (
     NetworkConnectionRequest,
     NmapCommandProbeActionBundle,
     NmapCommandProbeRequest,
+    PasswordChangeActionBundle,
+    PasswordChangeRequest,
+    PasswordResetActionBundle,
+    PasswordResetRequest,
+    ProcessAccessActionBundle,
+    ProcessAccessRequest,
     ProcessExecutionActionBundle,
     ProcessExecutionRequest,
     ProcessTerminationActionBundle,
@@ -106,6 +124,8 @@ from evidenceforge.generation.actions import (
     RdpSessionActionBundle,
     RdpSessionRequest,
     RdpSourceProcessFactory,
+    ScheduledTaskActionBundle,
+    ScheduledTaskRequest,
     SmbFileTransferMetadataActionBundle,
     SmbFileTransferMetadataRequest,
     SshSessionActionBundle,
@@ -13894,6 +13914,23 @@ class ActivityGenerator:
         subject_logon_id: str | None = None,
     ) -> None:
         """Generate security log cleared event (1102) on target system."""
+        request = LogClearedRequest(
+            user=user,
+            system=system,
+            time=time,
+            from_storyline=from_storyline,
+            subject_logon_id=subject_logon_id,
+        )
+        LogClearedActionBundle(self, request).execute()
+
+    def _execute_log_cleared_bundle(self, request: LogClearedRequest) -> None:
+        """Generate security log cleared event (1102) on target system."""
+        user = request.user
+        system = request.system
+        time = request.time
+        from_storyline = request.from_storyline
+        subject_logon_id = request.subject_logon_id
+
         if user.username in _SYSTEM_ACCOUNT_LOGON_IDS:
             subject_logon_id = _SYSTEM_ACCOUNT_LOGON_IDS[user.username]
         subject_logon_id = subject_logon_id or self._get_subject_logon_id(
@@ -14008,7 +14045,28 @@ class ActivityGenerator:
         source_command_line: str = "",
     ) -> None:
         """Generate scheduled task event (4698/4699/4700/4701) on target system."""
+        request = ScheduledTaskRequest(
+            user=user,
+            system=system,
+            time=time,
+            task_name=task_name,
+            action=action,
+            task_content=task_content,
+            source_command_line=source_command_line,
+        )
+        ScheduledTaskActionBundle(self, request).execute()
+
+    def _execute_scheduled_task_bundle(self, request: ScheduledTaskRequest) -> None:
+        """Generate scheduled task event (4698/4699/4700/4701) on target system."""
         from evidenceforge.events.contexts import ScheduledTaskContext
+
+        user = request.user
+        system = request.system
+        time = request.time
+        task_name = request.task_name
+        action = request.action
+        task_content = request.task_content
+        source_command_line = request.source_command_line
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         host = self._build_host_context(system)
@@ -14330,6 +14388,24 @@ class ActivityGenerator:
         member_username: str,
         member_sid: str,
     ) -> None:
+        """Generate group membership change event on DC."""
+        request = GroupMembershipChangeRequest(
+            actor=actor,
+            system=system,
+            time=time,
+            action=action,
+            scope=scope,
+            group_name=group_name,
+            group_sid=group_sid,
+            member_username=member_username,
+            member_sid=member_sid,
+        )
+        GroupMembershipChangeActionBundle(self, request).execute()
+
+    def _execute_group_membership_change_bundle(
+        self,
+        request: GroupMembershipChangeRequest,
+    ) -> None:
         """Generate group membership change event on DC.
 
         Args:
@@ -14337,6 +14413,16 @@ class ActivityGenerator:
             scope: "global", "local", or "universal"
         """
         from evidenceforge.events.contexts import GroupMembershipContext
+
+        actor = request.actor
+        system = request.system
+        time = request.time
+        action = request.action
+        scope = request.scope
+        group_name = request.group_name
+        group_sid = request.group_sid
+        member_username = request.member_username
+        member_sid = request.member_sid
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
@@ -14393,7 +14479,24 @@ class ActivityGenerator:
         target_sid: str,
     ) -> None:
         """Generate user account created event (4720) on DC."""
+        request = AccountCreatedRequest(
+            actor=actor,
+            system=system,
+            time=time,
+            target_username=target_username,
+            target_sid=target_sid,
+        )
+        AccountCreatedActionBundle(self, request).execute()
+
+    def _execute_account_created_bundle(self, request: AccountCreatedRequest) -> None:
+        """Generate user account created event (4720) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
+
+        actor = request.actor
+        system = request.system
+        time = request.time
+        target_username = request.target_username
+        target_sid = request.target_sid
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
@@ -14432,7 +14535,26 @@ class ActivityGenerator:
         from_storyline: bool = False,
     ) -> None:
         """Generate user account deleted event (4726) on DC."""
+        request = AccountDeletedRequest(
+            actor=actor,
+            system=system,
+            time=time,
+            target_username=target_username,
+            target_sid=target_sid,
+            from_storyline=from_storyline,
+        )
+        AccountDeletedActionBundle(self, request).execute()
+
+    def _execute_account_deleted_bundle(self, request: AccountDeletedRequest) -> None:
+        """Generate user account deleted event (4726) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
+
+        actor = request.actor
+        system = request.system
+        time = request.time
+        target_username = request.target_username
+        target_sid = request.target_sid
+        from_storyline = request.from_storyline
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
@@ -14467,7 +14589,24 @@ class ActivityGenerator:
         target_sid: str,
     ) -> None:
         """Generate password reset event (4724) on DC."""
+        request = PasswordResetRequest(
+            actor=actor,
+            system=system,
+            time=time,
+            target_username=target_username,
+            target_sid=target_sid,
+        )
+        PasswordResetActionBundle(self, request).execute()
+
+    def _execute_password_reset_bundle(self, request: PasswordResetRequest) -> None:
+        """Generate password reset event (4724) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
+
+        actor = request.actor
+        system = request.system
+        time = request.time
+        target_username = request.target_username
+        target_sid = request.target_sid
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)
@@ -14499,7 +14638,16 @@ class ActivityGenerator:
         time: datetime,
     ) -> None:
         """Generate password change event (4723) on DC."""
+        request = PasswordChangeRequest(user=user, system=system, time=time)
+        PasswordChangeActionBundle(self, request).execute()
+
+    def _execute_password_change_bundle(self, request: PasswordChangeRequest) -> None:
+        """Generate password change event (4723) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
+
+        user = request.user
+        system = request.system
+        time = request.time
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         host = self._build_host_context(system)
@@ -14533,11 +14681,35 @@ class ActivityGenerator:
         target_pid: int,
         target_image: str,
     ) -> bool:
+        """Generate Sysmon Event 8 (CreateRemoteThread) for process injection."""
+        request = CreateRemoteThreadRequest(
+            user=user,
+            system=system,
+            time=time,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
+            target_image=target_image,
+        )
+        return CreateRemoteThreadActionBundle(self, request).execute()
+
+    def _execute_create_remote_thread_bundle(
+        self,
+        request: CreateRemoteThreadRequest,
+    ) -> bool:
         """Generate Sysmon Event 8 (CreateRemoteThread) for process injection.
 
         Returns:
             True when evidence was emitted, False when lifecycle validation skipped it.
         """
+        user = request.user
+        system = request.system
+        time = request.time
+        source_pid = request.source_pid
+        source_image = request.source_image
+        target_pid = request.target_pid
+        target_image = request.target_image
+
         # Entity lifecycle: validate target PID exists
         if not self.state_manager.validate_target_pid(system.hostname, target_pid):
             logger.debug(
@@ -14647,6 +14819,20 @@ class ActivityGenerator:
         target_image: str = r"C:\Windows\System32\lsass.exe",
         granted_access: str = "0x1010",
     ) -> bool:
+        """Generate Sysmon Event 10 (ProcessAccess) for credential dumping detection."""
+        request = ProcessAccessRequest(
+            user=user,
+            system=system,
+            time=time,
+            source_pid=source_pid,
+            source_image=source_image,
+            target_pid=target_pid,
+            target_image=target_image,
+            granted_access=granted_access,
+        )
+        return ProcessAccessActionBundle(self, request).execute()
+
+    def _execute_process_access_bundle(self, request: ProcessAccessRequest) -> bool:
         """Generate Sysmon Event 10 (ProcessAccess) for credential dumping detection.
 
         Emits when a process accesses another process's memory (e.g., mimikatz
@@ -14665,6 +14851,15 @@ class ActivityGenerator:
         Returns:
             True when evidence was emitted, False when lifecycle validation skipped it.
         """
+        user = request.user
+        system = request.system
+        time = request.time
+        source_pid = request.source_pid
+        source_image = request.source_image
+        target_pid = request.target_pid
+        target_image = request.target_image
+        granted_access = request.granted_access
+
         # Entity lifecycle: validate target PID exists
         if not self.state_manager.validate_target_pid(system.hostname, target_pid):
             logger.debug(
@@ -14840,7 +15035,34 @@ class ActivityGenerator:
         primary_group_id: str | None = None,
     ) -> None:
         """Generate user account changed event (4738) on DC."""
+        request = AccountChangedRequest(
+            actor=actor,
+            system=system,
+            time=time,
+            target_username=target_username,
+            target_sid=target_sid,
+            password_last_set_to_event_time=password_last_set_to_event_time,
+            old_uac_value=old_uac_value,
+            new_uac_value=new_uac_value,
+            user_account_control=user_account_control,
+            primary_group_id=primary_group_id,
+        )
+        AccountChangedActionBundle(self, request).execute()
+
+    def _execute_account_changed_bundle(self, request: AccountChangedRequest) -> None:
+        """Generate user account changed event (4738) on DC."""
         from evidenceforge.events.contexts import AccountManagementContext
+
+        actor = request.actor
+        system = request.system
+        time = request.time
+        target_username = request.target_username
+        target_sid = request.target_sid
+        password_last_set_to_event_time = request.password_last_set_to_event_time
+        old_uac_value = request.old_uac_value
+        new_uac_value = request.new_uac_value
+        user_account_control = request.user_account_control
+        primary_group_id = request.primary_group_id
 
         reporting_pid = self._get_system_pid(system.hostname, "lsass", 0x2E0)
         subject_logon_id = self._ensure_account_management_subject_logon(actor, system, time)

@@ -373,6 +373,17 @@ domain-logon expansion, baseline KDC traffic, and standalone preauth failure
 paths now share the same bundle adapters instead of independently inventing
 ticket source ports or service-ticket context.
 
+Windows audit/account-management callers supply one audit intent, and Windows
+audit action bundles coordinate the source-native evidence around that
+occurrence. `LogClearedActionBundle`, `ScheduledTaskActionBundle`, account and
+group management bundles, `CreateRemoteThreadActionBundle`, and
+`ProcessAccessActionBundle` own subject/session ownership, target identity,
+source-ready timing, process/thread lifecycle validation, and shared Sysmon/eCAR
+context. Generator adapters still perform the existing source-native field
+construction, but storyline and causal call sites no longer independently build
+the same 1102, 4698, 472x/4738/475x, Sysmon Event 8, or Sysmon Event 10
+evidence.
+
 Action bundles own cross-event concerns:
 
 - Deterministic action anchors for durable references.
