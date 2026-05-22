@@ -498,6 +498,8 @@ class _FakeActivityGenerator:
         self.processes: list[dict] = []
         self.process_terminations: list[dict] = []
         self.process_source_times: dict[tuple[str, int], datetime] = {}
+        self.process_source_termination_times: dict[tuple[str, int], datetime] = {}
+        self.process_source_termination_offset: timedelta | None = None
         self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
         self.syslog_events: list[dict] = []
@@ -585,6 +587,18 @@ class _FakeActivityGenerator:
 
     def generate_process_termination(self, *args: Any, **kwargs: Any) -> None:
         self.process_terminations.append(kwargs)
+        system = kwargs.get("system")
+        pid = kwargs.get("pid")
+        termination_time = kwargs.get("time")
+        if (
+            system is not None
+            and isinstance(pid, int)
+            and isinstance(termination_time, datetime)
+            and self.process_source_termination_offset is not None
+        ):
+            self.process_source_termination_times[(system.hostname, pid)] = (
+                termination_time + self.process_source_termination_offset
+            )
 
     def generate_logon(self, *args: Any, **kwargs: Any) -> str:
         return "0xabc"
@@ -602,6 +616,9 @@ class _FakeActivityGenerator:
 
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_times.get((hostname, pid))
+
+    def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
+        return self.process_source_termination_times.get((hostname, pid))
 
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
@@ -774,6 +791,61 @@ class TestStorylineScpCorrelation:
         assert engine.activity_generator.connections[0]["src_port"] == 45678
         assert receiver_ports == [45678]
 
+    def test_scp_network_and_receiver_artifacts_wait_for_visible_source_process_create(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.0.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="DST",
+            ip="10.10.0.20",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source, target], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        receiver_transfer_times: list[datetime] = []
+
+        def capture_receiver_artifacts(**kwargs) -> None:
+            receiver_transfer_times.append(kwargs["transfer_time"])
+
+        engine._emit_scp_receiver_artifacts = capture_receiver_artifacts
+        spec = SimpleNamespace(
+            type="process",
+            process_name="/usr/bin/scp",
+            command_line="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+        )
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        visible_process_time = event_time + timedelta(seconds=4)
+        engine.activity_generator.process_source_times[(source.hostname, 4242)] = (
+            visible_process_time
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=event_time,
+            activity="copy archive to staging host",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[0]
+        assert conn["time"] > visible_process_time
+        assert receiver_transfer_times == [conn["time"]]
+
     def test_sqlcmd_remote_private_ip_generates_failed_tcp_attempt(self):
         source = System(
             hostname="SRC",
@@ -801,12 +873,17 @@ class TestStorylineScpCorrelation:
                 '"SELECT name, recovery_model_desc FROM sys.databases"'
             ),
         )
+        event_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        visible_process_time = event_time + timedelta(seconds=3)
+        engine.activity_generator.process_source_times[(source.hostname, 4242)] = (
+            visible_process_time
+        )
 
         engine._execute_typed_event(
             spec=spec,
             actor=actor,
             system=source,
-            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            time=event_time,
             activity="check sql server",
             explicit_types={"process"},
         )
@@ -820,6 +897,7 @@ class TestStorylineScpCorrelation:
         assert conn["conn_state"] == "S0"
         assert conn["firewall"].action == "deny"
         assert conn["service"] is None
+        assert conn["time"] > visible_process_time
 
     def test_sqlcmd_unresolved_host_generates_unrouted_failed_tcp_attempt(self):
         source = System(
@@ -1240,6 +1318,7 @@ class TestStorylineCommandSideEffects:
         )
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
+        engine.activity_generator.process_source_termination_offset = timedelta(seconds=20)
         engine.dispatcher = SimpleNamespace(visibility_engine=None, dispatch=lambda event: None)
         engine.malicious_events = []
         start_time = datetime(2026, 5, 11, 17, 15, tzinfo=UTC)
@@ -1285,8 +1364,10 @@ class TestStorylineCommandSideEffects:
         termination_times = [
             item["time"] for item in engine.activity_generator.process_terminations
         ]
+        source_termination_times = engine.activity_generator.process_source_termination_times
         assert termination_times[0] < process_times[1]
         assert termination_times[1] < process_times[2]
+        assert source_termination_times[(source.hostname, 4243)] < process_times[2]
         assert engine.activity_generator.connections
         assert engine.activity_generator.connections[0]["time"] > process_times[2]
 

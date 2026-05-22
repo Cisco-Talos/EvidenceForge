@@ -1935,6 +1935,49 @@ class TestActivityGenerator:
         assert process_event.timestamp == scheduled_time
         assert bash_event.timestamp == scheduled_time
 
+    def test_linux_process_activity_skips_when_shell_schedule_exits_window(
+        self, activity_gen, state_manager, mock_emitters, monkeypatch
+    ):
+        """Serialized Linux shell activity should not emit process rows after collection end."""
+        from evidenceforge.generation.activity import application_catalog
+
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        activity_gen._scenario_end_time = timestamp + timedelta(minutes=5)
+        activity_gen._bash_history_next_time[(linux.hostname, user.username)] = (
+            timestamp + timedelta(days=1)
+        )
+        mock_emitters["bash_history"] = Mock()
+        for emitter in mock_emitters.values():
+            emitter.can_handle.return_value = True
+        activity_gen.dispatcher.emitters = mock_emitters
+        monkeypatch.setattr(
+            application_catalog,
+            "pick_app_and_command",
+            lambda *args, **kwargs: ("/usr/bin/git", "git pull origin fix/memory-leak"),
+        )
+        monkeypatch.setattr(activity_gen, "_emit_process_network_correlation", lambda *args: None)
+
+        activity_gen.execute_baseline_activity(user, linux, timestamp, "process_code")
+
+        emitted = [
+            call.args[0]
+            for emitter in mock_emitters.values()
+            for call in emitter.emit.call_args_list
+            if call.args and isinstance(call.args[0], SecurityEvent)
+        ]
+        matching = [
+            event
+            for event in emitted
+            if (
+                (event.process and event.process.command_line == "git pull origin fix/memory-leak")
+                or (event.shell and event.shell.command == "git pull origin fix/memory-leak")
+            )
+        ]
+        assert matching == []
+
     def test_linux_process_activity_suppresses_service_user_bash_history(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
     ):
@@ -3231,6 +3274,88 @@ class TestActivityGenerator:
             for call in mock_emitters["windows_event_security"].emit.call_args_list
         )
 
+    def test_workstation_lock_unlock_reject_rdp_session_luid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A local workstation lock/unlock should never reuse a Type 10 RDP LUID."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        rdp_logon_id = "0xabc124"
+        state_manager.register_session(
+            logon_id=rdp_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.55",
+            start_time=timestamp - timedelta(minutes=5),
+            session_kind="rdp",
+            session_id=6,
+        )
+
+        activity_gen.generate_workstation_lock(
+            test_user,
+            test_system,
+            timestamp,
+            rdp_logon_id,
+        )
+        activity_gen.generate_workstation_unlock(
+            test_user,
+            test_system,
+            timestamp + timedelta(minutes=5),
+            rdp_logon_id,
+        )
+
+        emitted_types = [
+            call[0][0].event_type
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        assert "workstation_locked" not in emitted_types
+        assert "workstation_unlocked" not in emitted_types
+        assert not any(
+            call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 7
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+        )
+
+    def test_local_interactive_logon_does_not_reuse_rdp_session_luid(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A fresh local Type 2 logon should not inherit an active RDP session LUID."""
+        rdp_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        local_time = rdp_time + timedelta(minutes=30)
+        rdp_logon_id = "0xabc125"
+        state_manager.register_session(
+            logon_id=rdp_logon_id,
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=10,
+            source_ip="10.0.0.55",
+            start_time=rdp_time,
+            session_kind="rdp",
+            session_id=6,
+        )
+
+        local_logon_id = activity_gen.generate_logon(
+            test_user,
+            test_system,
+            local_time,
+            logon_type=2,
+            source_ip="-",
+        )
+
+        assert local_logon_id != rdp_logon_id
+        local_session = state_manager.get_session(local_logon_id)
+        assert local_session is not None
+        assert local_session.logon_type == 2
+        assert local_session.session_kind == "interactive"
+        logon_events = [
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        ]
+        assert any(
+            event.auth.logon_type == 2 and event.auth.logon_id == local_logon_id
+            for event in logon_events
+        )
+
     def test_credential_dump_command_uses_high_integrity_token(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -4277,6 +4402,33 @@ class TestActivityGenerator:
         assert explicit.auth.source_ip == test_system.ip
         assert 49152 <= explicit.auth.source_port <= 65535
 
+    def test_generate_explicit_credentials_ignores_unrelated_source_ip_override(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A 4648 on a workstation should not borrow another host's source address."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.99",
+            source_port=50001,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == test_system.ip
+        assert explicit.auth.source_port != 50001
+        assert 49152 <= explicit.auth.source_port <= 65535
+
     def test_generate_explicit_credentials_local_target_keeps_blank_network_endpoint(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -4300,6 +4452,42 @@ class TestActivityGenerator:
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
         assert explicit.auth.source_ip == "-"
         assert explicit.auth.source_port == 0
+
+    def test_generate_explicit_credentials_clamps_after_visible_process_create(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """4648 should not render before the visible create for its caller process."""
+        process_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        explicit_time = process_time + timedelta(milliseconds=100)
+        state_manager.set_current_time(process_time)
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Windows\System32\runas.exe",
+            command_line="runas.exe /user:admin01 cmd.exe",
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id="0x12345",
+        )
+        visible_create_time = explicit_time + timedelta(seconds=1)
+        activity_gen._process_source_create_times[(test_system.hostname, pid)] = visible_create_time
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=explicit_time,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=pid,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.process_pid == pid
+        assert explicit.timestamp > visible_create_time
 
     def test_generate_explicit_credentials_skips_linux_local_target_on_windows(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

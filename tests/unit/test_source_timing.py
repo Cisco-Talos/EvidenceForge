@@ -247,6 +247,50 @@ def test_ecar_process_create_normalization_preserves_canonical_order() -> None:
     assert "_canonical_ms" not in rows[1]
 
 
+def test_ecar_process_create_normalization_does_not_batch_linux_rows() -> None:
+    """Linux process-create rows keep their source-native timestamp texture."""
+    first = {
+        "timestamp_ms": 1_710_783_755_003,
+        "_canonical_ms": 1_710_777_592_000,
+        "id": "event-sshd-a",
+        "hostname": "WEB-EXT-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "proc-sshd-a",
+        "actorID": "init-process",
+        "pid": 779693,
+        "ppid": 500,
+        "properties": {"image_path": "/usr/sbin/sshd"},
+    }
+    second = {
+        "timestamp_ms": 1_710_777_613_250,
+        "_canonical_ms": 1_710_777_613_000,
+        "id": "event-sshd-b",
+        "hostname": "WEB-EXT-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "proc-sshd-b",
+        "actorID": "init-process",
+        "pid": 779701,
+        "ppid": 500,
+        "properties": {"image_path": "/usr/sbin/sshd"},
+    }
+
+    normalized = EcarEmitter._normalize_process_create_canonical_order(
+        [
+            json.dumps(first, separators=(",", ":")),
+            json.dumps(second, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[0]["timestamp_ms"] == first["timestamp_ms"]
+    assert rows[1]["timestamp_ms"] == second["timestamp_ms"]
+    assert rows[1]["timestamp_ms"] < rows[0]["timestamp_ms"]
+    assert "_canonical_ms" not in rows[0]
+    assert "_canonical_ms" not in rows[1]
+
+
 def test_ecar_linux_shell_foreground_order_serializes_visible_commands() -> None:
     """eCAR should not show one shell foreground command starting before the prior exits."""
     editor_create = {

@@ -82,6 +82,7 @@ programs:
   - app: sudo
     transient: true
     weight: 1
+    max_per_host_window: 18
     params:
       sudo_user:
         - admin
@@ -116,11 +117,57 @@ programs:
         - postgresql
         - rsyslog
         - systemd-resolved
+      journal_lines:
+        - "40"
+        - "50"
+        - "80"
+        - "120"
+      journal_window:
+        - 15 min ago
+        - 30 min ago
+        - 45 min ago
+        - 1 hour ago
+      tail_lines:
+        - "40"
+        - "60"
+        - "80"
+        - "120"
+      log_path:
+        - /var/log/auth.log
+        - /var/log/syslog
+        - /var/log/kern.log
+        - /var/log/dpkg.log
+      grep_term:
+        - error
+        - failed
+        - oom
+        - timeout
+        - denied
+      cleanup_path:
+        - /var/tmp
+        - /tmp
+        - /srv/tmp
+      mtime_days:
+        - "1"
+        - "2"
+        - "7"
+      mount_path:
+        - /var
+        - /var/log
+        - /srv
+        - /tmp
+      du_path:
+        - /var/log
+        - /var/cache/apt
+        - /srv/app
+        - /tmp
       sudo_command:
         - /bin/systemctl status {service}
+        - /bin/systemctl status {service} --no-pager
+        - /bin/systemctl is-active {service}
         - /bin/systemctl restart {service}
-        - /usr/bin/journalctl -u {service} -n 50
-        - /usr/bin/journalctl -u {service} --since "30 min ago"
+        - /usr/bin/journalctl -u {service} -n {journal_lines}
+        - /usr/bin/journalctl -u {service} --since "{journal_window}"
         - /usr/bin/systemctl list-timers --all --no-pager
         - /usr/bin/systemctl list-units --state=failed --no-pager
         - /usr/bin/systemd-analyze blame
@@ -128,23 +175,20 @@ programs:
         - /usr/bin/apt-cache policy openssl
         - /usr/bin/apt-get -s upgrade
         - /usr/bin/needrestart -b
-        - /usr/bin/tail -n 100 /var/log/auth.log
-        - /usr/bin/tail -n 80 /var/log/syslog
-        - /usr/bin/grep -i error /var/log/syslog
-        - /usr/bin/grep -i failed /var/log/auth.log
-        - /usr/bin/grep -i oom /var/log/kern.log
+        - /usr/bin/tail -n {tail_lines} {log_path}
+        - /usr/bin/grep -i {grep_term} {log_path}
         - /usr/bin/find /etc/systemd/system -maxdepth 2 -type l
-        - /usr/bin/find /var/tmp -maxdepth 1 -mtime +7 -type f
+        - /usr/bin/find {cleanup_path} -maxdepth 1 -mtime +{mtime_days} -type f
         - /usr/bin/ss -ltnp
         - /usr/sbin/ss -s
         - /usr/bin/lsof -i -P -n
         - /usr/sbin/iptables -L -n -v
         - /usr/bin/lsblk
-        - /usr/bin/df -h /var
+        - /usr/bin/df -h {mount_path}
         - /usr/bin/free -m
         - /usr/bin/vmstat 1 5
         - /usr/bin/iostat -xz 1 3
-        - /usr/bin/du -sh /var/log
+        - /usr/bin/du -sh {du_path}
         - /usr/bin/find /var/log -type f -mtime -1
         - /usr/sbin/service {service} status
     messages:

@@ -775,6 +775,20 @@ class WorldPlanner:
                 transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
+                if existing.session_kind == "ssh":
+                    ensure_shell = getattr(
+                        self.activity_generator,
+                        "ensure_linux_ssh_session_shell",
+                        None,
+                    )
+                    if ensure_shell is not None:
+                        ensure_shell(
+                            user=user,
+                            target_system=target_system,
+                            logon_id=existing.logon_id,
+                            logon_time=self._session_start_sort_key(existing),
+                            activity_time=time,
+                        )
                 if storyline_protected:
                     existing.storyline_protected = True
                 return SessionBootstrapResult(session=existing, network_uid=None)
@@ -787,7 +801,13 @@ class WorldPlanner:
             source_system=source_system,
             source_ip_override=source_ip_override,
         )
-        logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
+        if plan.session_kind == "ssh":
+            # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
+            # process evidence. Give that source-native sequence room before
+            # the first user-visible command tied to the session.
+            logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+        else:
+            logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
@@ -1058,11 +1078,6 @@ class WorldPlanner:
             source_port=source_port,
             session_kind="ssh",
         )
-        sshd_pid = self.state_manager.allocate_transient_linux_pid(
-            plan.target_system.hostname,
-            logon_time,
-        )
-        self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
         min_duration = max(
             30.0,
@@ -1075,7 +1090,6 @@ class WorldPlanner:
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_port=source_port,
-            sshd_pid=sshd_pid,
             logon_id=logon_id,
             session_obj_id=session_obj_id,
             min_duration=min_duration,
@@ -1089,36 +1103,19 @@ class WorldPlanner:
             if marker is not None
         )
 
-        # Create per-session sshd child + bash login shell for realistic
-        # Linux process trees.  Each SSH session gets its own sshd fork
-        # (privilege separation) and bash PID so user commands have
-        # distinct parent PIDs per session.
-        sys_pids = getattr(self.activity_generator, "_system_pids", {}).get(
-            plan.target_system.hostname, {}
-        )
-        global_sshd = sys_pids.get("sshd")
-        if global_sshd and self.state_manager.get_process(plan.target_system.hostname, global_sshd):
-            # Per-session sshd child (privilege separation fork)
-            session_sshd_pid = self.state_manager.create_process(
-                plan.target_system.hostname,
-                global_sshd,
-                "/usr/sbin/sshd",
-                f"sshd: {user.username} [priv]",
-                "root",
-                "System",
+        # Create visible per-session sshd child + bash login shell for realistic
+        # Linux process trees. Each SSH session gets its own sshd fork
+        # (privilege separation) and bash PID so user commands have distinct
+        # parent PIDs and eCAR can observe the parent lifecycle.
+        ensure_shell = getattr(self.activity_generator, "ensure_linux_ssh_session_shell", None)
+        if ensure_shell is not None:
+            ensure_shell(
+                user=user,
+                target_system=plan.target_system,
                 logon_id=logon_id,
+                logon_time=logon_time,
+                activity_time=activity_time,
             )
-            # Per-session bash login shell
-            bash_pid = self.state_manager.create_process(
-                plan.target_system.hostname,
-                session_sshd_pid,
-                "/bin/bash",
-                "-bash",
-                user.username,
-                "Medium",
-                logon_id=logon_id,
-            )
-            session.session_shell_pid = bash_pid
 
         return SessionBootstrapResult(session=session, network_uid=uid)
 

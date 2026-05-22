@@ -35,6 +35,7 @@ import logging
 import math
 import random
 import shlex
+import string
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -120,19 +121,84 @@ def _linux_baseline_session_initiator(
     user: str,
     *,
     rng: random.Random,
+    system_type: str = "server",
 ) -> tuple[str, str, str]:
     """Return a plausible PAM initiator for ambient logind session noise."""
-    if user == "root":
-        service = rng.choices(("cron", "sudo", "su"), weights=(72, 18, 10), k=1)[0]
+    if system_type == "server":
+        if user == "root":
+            service = rng.choices(("login", "sudo", "su"), weights=(18, 58, 24), k=1)[0]
+        else:
+            service = rng.choices(("login", "sudo"), weights=(34, 66), k=1)[0]
+    elif user == "root":
+        service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
     else:
-        service = rng.choices(("login", "sudo", "cron"), weights=(55, 28, 17), k=1)[0]
-    app_name = "CRON" if service == "cron" else service
+        service = rng.choices(("login", "sudo"), weights=(76, 24), k=1)[0]
+    app_name = service
     opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"
     message = (
         f"pam_unix({service}:session): session opened for user "
         f"{user}(uid={_linux_uid_for_user(user)}) by {opener}"
     )
     return app_name, service, message
+
+
+def _linux_ambient_logind_probability(system_type: str) -> float:
+    """Return thinning probability for generic ambient logind session noise."""
+    if system_type == "server":
+        return 0.12
+    return 0.42
+
+
+def _extra_syslog_service_values(
+    system_services: list[str] | None, fallback: list[str]
+) -> list[str]:
+    """Return safe service placeholder values for extra syslog sudo commands."""
+    contextual: list[str] = []
+    for service in system_services or []:
+        normalized = service.strip().lower()
+        if not normalized or normalized in {"dns-client", "systemd"} or "{" in normalized:
+            continue
+        if normalized == "ssh":
+            normalized = "sshd"
+        contextual.append(normalized)
+    return contextual or fallback
+
+
+def _render_extra_sudo_command_template(
+    template: str,
+    rng: random.Random,
+    *,
+    system_services: list[str] | None,
+    fallback_services: list[str],
+    params: dict[str, Any] | None = None,
+) -> str:
+    """Resolve a sudo command template with host-aware service names."""
+    if "{" not in template:
+        return template
+    resolved_params = params or {}
+    render_values: dict[str, str] = {}
+    for _literal, field_name, _format_spec, _conversion in string.Formatter().parse(template):
+        if not field_name:
+            continue
+        field = field_name.split(".", 1)[0].split("[", 1)[0]
+        if field in render_values:
+            continue
+        if field == "service":
+            pool = _extra_syslog_service_values(system_services, fallback_services)
+        else:
+            values = resolved_params.get(field, [])
+            if isinstance(values, list):
+                pool = [str(value) for value in values if str(value).strip()]
+            elif isinstance(values, str) and values.strip():
+                pool = [values]
+            else:
+                pool = []
+        if pool:
+            render_values[field] = rng.choice(pool)
+    try:
+        return template.format(**render_values)
+    except (KeyError, IndexError, ValueError):
+        return template
 
 
 def _linux_baseline_pam_open_lead(rng: random.Random) -> timedelta:
@@ -1023,6 +1089,65 @@ class BaselineMixin:
         bus_state[hostname] = current
         return current
 
+    def _choose_extra_syslog_sudo_command(
+        self,
+        entry: dict[str, Any],
+        rng: random.Random,
+        system: System,
+    ) -> str | None:
+        """Choose sudo COMMAND= text while avoiding cross-host command-pool fingerprints."""
+        params = entry.get("params") or {}
+        templates = [
+            str(command)
+            for command in params.get("sudo_command", [])
+            if isinstance(command, str) and command.strip()
+        ]
+        if not templates:
+            return None
+
+        global_counts = getattr(self, "_extra_syslog_sudo_command_counts", None)
+        if global_counts is None:
+            global_counts = {}
+            self._extra_syslog_sudo_command_counts = global_counts
+        host_counts = getattr(self, "_extra_syslog_sudo_command_host_counts", None)
+        if host_counts is None:
+            host_counts = {}
+            self._extra_syslog_sudo_command_host_counts = host_counts
+
+        fallback_services = [
+            str(service)
+            for service in params.get("service", [])
+            if isinstance(service, str) and service.strip()
+        ]
+        candidates: list[str] = []
+        for _ in range(72):
+            command = _render_extra_sudo_command_template(
+                rng.choice(templates),
+                rng,
+                system_services=system.services,
+                fallback_services=fallback_services,
+                params=params,
+            )
+            candidates.append(command)
+            if (
+                host_counts.get((system.hostname, command), 0) < 1
+                and global_counts.get(command, 0) < 4
+            ):
+                break
+        else:
+            command = min(
+                candidates,
+                key=lambda candidate: (
+                    global_counts.get(candidate, 0),
+                    host_counts.get((system.hostname, candidate), 0),
+                    candidate,
+                ),
+            )
+
+        global_counts[command] = global_counts.get(command, 0) + 1
+        host_counts[(system.hostname, command)] = host_counts.get((system.hostname, command), 0) + 1
+        return command
+
     def _polkit_session_pool(self, hostname: str, rng: random.Random) -> list[int]:
         """Return low, source-native session IDs that can represent pre-existing logind sessions."""
         pool_state = getattr(self, "_linux_polkit_session_pools", None)
@@ -1407,6 +1532,7 @@ class BaselineMixin:
                 continue
 
             service = sched["service"]
+            sched_type = sched.get("type", "systemd_timer")
             frequency = sched.get("frequency", "daily")
             typical_hour = sched.get("typical_hour", 6)
             jitter_minutes = sched.get("jitter_minutes", 30)
@@ -1452,13 +1578,21 @@ class BaselineMixin:
                         slot_key, 1.0 - float(skip_probability)
                     ):
                         continue
-                    jitter_seconds = max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                    jitter_seconds = (
+                        0.0
+                        if sched_type == "cron"
+                        else max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                    )
                     ts = current_hour + timedelta(
-                        minutes=fm, seconds=rng.uniform(0, jitter_seconds)
+                        minutes=fm,
+                        seconds=0.0 if jitter_seconds == 0.0 else rng.uniform(0, jitter_seconds),
                     )
                     self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
             else:
-                ts = current_hour + timedelta(minutes=fire_minute, seconds=rng.uniform(0, 59))
+                ts = current_hour + timedelta(
+                    minutes=fire_minute,
+                    seconds=0.0 if sched_type == "cron" else rng.uniform(0, 59),
+                )
                 self._emit_scheduled_event(sched, system, ts, rng, sys_pids, is_rhel_like)
 
     def _emit_scheduled_event(
@@ -1808,6 +1942,14 @@ class BaselineMixin:
 
             logger.info(f"Warm-up complete: processed {warmup_count} hours")
             self._report_progress("phase_end", {"phase": "warmup"})
+            from evidenceforge.generation.activity.bash_commands import reset_bash_command_memory
+
+            # Warm-up pre-populates durable state but does not emit visible shell/syslog rows.
+            # Reset visible-output texture memory so non-emitted warm-up commands do not
+            # exhaust exact-repeat budgets for the actual collection window.
+            reset_bash_command_memory()
+            self._extra_syslog_sudo_command_counts = {}
+            self._extra_syslog_sudo_command_host_counts = {}
 
         # --- Real baseline: emit sensor startup and begin output ---
         self._emit_sensor_startup()
@@ -4688,6 +4830,7 @@ class BaselineMixin:
             source_os=os_cat,
             browsing_intensity=intensity,
             port=conn.get("port", 443),
+            transfer_variant_key=f"{system.ip}:{hostname}:{os_cat}",
         )
 
         if not session_requests:
@@ -6076,6 +6219,8 @@ class BaselineMixin:
                                 severity=5,
                             )
                 elif source_roll < 0.32:
+                    if rng.random() >= _linux_ambient_logind_probability(sys_type):
+                        continue
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
@@ -6086,6 +6231,7 @@ class BaselineMixin:
                     pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
                         user,
                         rng=rng,
+                        system_type=sys_type,
                     )
                     pam_open_time = ts - _linux_baseline_pam_open_lead(rng)
                     pam_pid = _linux_transient_syslog_pid(
@@ -6147,8 +6293,28 @@ class BaselineMixin:
                         _ephemeral_port(rng, _src_os),
                         rng,
                         _src_os,
+                        time=ts,
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
+                    sshd_parent_pid = sys_pids.get("sshd", 0)
+                    if (
+                        sshd_parent_pid
+                        and self.state_manager.get_process(system.hostname, sshd_parent_pid) is None
+                    ):
+                        sshd_parent_pid = 0
+                    sshd_seed = _stable_seed(
+                        "baseline_ssh_responding_pid:"
+                        f"{system.hostname}:{ip}:{port}:{ts.isoformat()}"
+                    )
+                    sshd_pid = self.activity_generator.generate_system_process(
+                        system=system,
+                        time=ts + timedelta(milliseconds=8 + (sshd_seed % 72)),
+                        process_name="/usr/sbin/sshd",
+                        command_line="sshd: [accepted]",
+                        parent_pid=sshd_parent_pid,
+                        username="root",
+                        emit_linux_syslog=False,
+                    )
                     self.activity_generator.generate_connection(
                         src_ip=ip,
                         dst_ip=system.ip,
@@ -6160,9 +6326,9 @@ class BaselineMixin:
                         orig_bytes=rng.randint(2000, 50000),
                         resp_bytes=rng.randint(5000, 200000),
                         src_port=port,
-                        pid=sys_pids.get("sshd", -1),
                         source_system=src_sys_obj,
                         conn_state="SF",
+                        responding_pid=sshd_pid,
                     )
                     observed_ssh_time = _zeek_conn_observation_time(
                         ts,
@@ -6172,10 +6338,6 @@ class BaselineMixin:
                         22,
                         "tcp",
                         "ssh",
-                    )
-                    sshd_pid = self.state_manager.allocate_transient_linux_pid(
-                        system.hostname,
-                        observed_ssh_time,
                     )
                     ssh_roster = self._get_server_ssh_users(system)
                     ssh_usernames = [user.username for user in ssh_roster]
@@ -6469,6 +6631,18 @@ class BaselineMixin:
                             positional_value=rng.randint(1000, 99999),
                             system_services=system.services,
                             values={"fd": self._next_rsyslog_fd(system.hostname, rng)},
+                        )
+                    elif app == "sudo":
+                        values = {"interface": primary_interface}
+                        sudo_command = self._choose_extra_syslog_sudo_command(entry, rng, system)
+                        if sudo_command is not None:
+                            values["sudo_command"] = sudo_command
+                        msg = render_extra_syslog_message(
+                            entry,
+                            rng,
+                            positional_value=rng.randint(100000, 999999),
+                            system_services=system.services,
+                            values=values,
                         )
                     elif app == "dbus-daemon":
                         msg = render_extra_syslog_message(
@@ -6772,6 +6946,7 @@ class BaselineMixin:
         from evidenceforge.events.contexts import HttpContext
         from evidenceforge.generation.activity.browsing_session import generate_browsing_session
         from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
             is_stable_resource_path,
             normalize_mime_type_for_path,
             response_mime_types_for_status,
@@ -6942,6 +7117,7 @@ class BaselineMixin:
                     browsing_intensity=str(profile.get("browsing_intensity", "normal")),
                     port=dst_port,
                     require_browser_like_domain=False,
+                    transfer_variant_key=f"{client_ip}:{chosen_ua}",
                 )
                 current_page_allowed = False
                 visible_requests = []
@@ -7042,7 +7218,14 @@ class BaselineMixin:
                 status = int(request.get("status", 200))
                 mime = normalize_mime_type_for_path(path, str(request.get("type", "text/html")))
                 resp_bytes = (
-                    response_size_for_status(status, http_host, path)
+                    apply_transfer_size_variance(
+                        response_size_for_status(status, http_host, path),
+                        status_code=status,
+                        host=http_host,
+                        uri=path,
+                        content_type=mime,
+                        variant_key=f"{client_ip}:{chosen_ua}",
+                    )
                     if status != 200 or is_stable_resource_path(path)
                     else response_size_for_mime(rng, mime)
                 )

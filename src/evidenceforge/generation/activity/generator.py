@@ -930,6 +930,8 @@ _WINDOWS_ELECTRON_CHILD_MARKERS = (
     "--utility-sub-type=",
 )
 _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = frozenset({2, 10, 11})
+_WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = frozenset({2, 11})
+_WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
 _SSH_SYSLOG_MICRO_JITTER_BANDS = {
     "connection": 101,
     "accepted": 301,
@@ -937,6 +939,14 @@ _SSH_SYSLOG_MICRO_JITTER_BANDS = {
     "logind": 701,
     "closed": 901,
 }
+
+
+def _is_windows_workstation_session(session: ActiveSession) -> bool:
+    """Return true when a session can own local workstation lock/unlock evidence."""
+    return (
+        session.logon_type in _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES
+        and session.session_kind not in _WINDOWS_REMOTE_SESSION_KINDS
+    )
 
 
 def _ssh_syslog_time(
@@ -1005,6 +1015,12 @@ def _session_active_for_activity(
         network_close_time = network_close_time.astimezone(UTC)
     activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
     return activity_time < network_close_time - timedelta(seconds=margin_seconds)
+
+
+def _session_source_ready_time(session: Any) -> datetime | None:
+    """Return when source-visible child activity may begin for this session."""
+    ready_time = getattr(session, "source_ready_time", None)
+    return ensure_utc(ready_time) if ready_time is not None else None
 
 
 def _extract_image_from_command(command_line: str) -> str:
@@ -1646,14 +1662,93 @@ _UDP_OVERHEAD_WEIGHTS = (93, 5, 1, 0.5, 0.5)
 _TCP_OVERHEAD_VALUES = (40, 52, 60, 64)
 _TCP_OVERHEAD_WEIGHTS = (10, 75, 10, 5)
 _TCP_MSS_BYTES = 1460
+_TCP_MSS_VALUES = (1200, 1320, 1360, 1448, 1460)
+_TCP_MSS_WEIGHTS = (2, 4, 10, 22, 62)
 _TCP_ACK_FLOOR_PAYLOAD_BYTES = 64 * 1024
 
 
-def _tcp_payload_segment_count(payload_bytes: int | None) -> int:
+def _tcp_effective_mss_bytes(rng: random.Random) -> int:
+    """Return a plausible effective TCP MSS for source packet accounting."""
+    return rng.choices(_TCP_MSS_VALUES, weights=_TCP_MSS_WEIGHTS, k=1)[0]
+
+
+def _tcp_payload_segment_count(
+    payload_bytes: int | None,
+    mss_bytes: int = _TCP_MSS_BYTES,
+) -> int:
     """Return the minimum TCP payload segment count for Zeek packet accounting."""
     if payload_bytes is None or payload_bytes <= 0:
         return 0
-    return max(1, math.ceil(payload_bytes / _TCP_MSS_BYTES))
+    return max(1, math.ceil(payload_bytes / max(1, mss_bytes)))
+
+
+def _tcp_payload_packet_count(payload_bytes: int | None, rng: random.Random) -> int:
+    """Return source-visible TCP data packets with MSS and segmentation texture."""
+    segments = _tcp_payload_segment_count(payload_bytes, _tcp_effective_mss_bytes(rng))
+    if segments <= 0:
+        return 0
+    if segments >= 8:
+        extra_fraction = rng.choices(
+            (0.0, 0.001, 0.0025, 0.005, 0.01),
+            weights=(35, 20, 20, 15, 10),
+            k=1,
+        )[0]
+        if extra_fraction > 0:
+            segments += max(1, int(round(segments * extra_fraction)))
+        elif rng.random() < 0.35:
+            segments += 1
+    return segments
+
+
+def _tcp_history_packet_counts(history: str | None) -> tuple[int, int, int, int]:
+    """Return total and non-data packet markers by Zeek history side."""
+    text = history or ""
+    orig_total = sum(1 for char in text if char.isupper())
+    resp_total = sum(1 for char in text if char.islower())
+    orig_control = sum(1 for char in text if char.isupper() and char != "D")
+    resp_control = sum(1 for char in text if char.islower() and char != "d")
+    return orig_total, resp_total, orig_control, resp_control
+
+
+def _tcp_packet_counts_from_payload_and_history(
+    orig_bytes: int | None,
+    resp_bytes: int | None,
+    history: str | None,
+    rng: random.Random,
+) -> tuple[int, int]:
+    """Return TCP packet counts including payload segments and visible control packets."""
+    orig_total, resp_total, orig_control, resp_control = _tcp_history_packet_counts(history)
+    orig_data = _tcp_payload_packet_count(orig_bytes, rng)
+    resp_data = _tcp_payload_packet_count(resp_bytes, rng)
+
+    orig_pkts = max(orig_total, orig_data + orig_control) if orig_data else orig_total
+    resp_pkts = max(resp_total, resp_data + resp_control) if resp_data else resp_total
+    return _apply_tcp_ack_packet_floors(orig_pkts, resp_pkts, orig_bytes, resp_bytes, rng)
+
+
+def _tcp_ip_byte_count(
+    payload_bytes: int | None,
+    packet_count: int,
+    rng: random.Random,
+    *,
+    overhead_override: int | None = None,
+) -> int:
+    """Return TCP IP-byte accounting with header and control-packet texture."""
+    if packet_count <= 0:
+        return 0
+    if overhead_override is not None:
+        return (payload_bytes or 0) + packet_count * overhead_override
+    overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
+    option_extra = 0
+    if packet_count > 1:
+        textured_packets = min(
+            packet_count,
+            8192,
+            max(1, int(round(packet_count * rng.uniform(0.001, 0.018)))),
+        )
+        max_option_extra = packet_count * (max(_TCP_OVERHEAD_VALUES) - overhead)
+        option_extra = min(max_option_extra, textured_packets * rng.choice((4, 8, 12)))
+    return (payload_bytes or 0) + packet_count * overhead + option_extra
 
 
 def _tcp_ack_packet_floor(peer_payload_bytes: int | None, rng: random.Random) -> int:
@@ -1946,6 +2041,19 @@ def _public_dns_mx_answers(domain: str) -> list[str]:
     return answers or [f"10 mail.{domain}"]
 
 
+def _dns_soa_answer(domain: str, mname: str, rname: str, seed_context: str = "") -> str:
+    """Return source-native SOA RDATA with serial and timer fields."""
+    owner = domain.lower().rstrip(".")
+    seed = _stable_seed(f"dns_soa:{owner}:{mname}:{rname}:{seed_context}")
+    rng = random.Random(seed)
+    serial = 2024000000 + rng.randint(10100, 123199)
+    refresh = rng.choice((1800, 3600, 7200, 10800, 14400))
+    retry = rng.choice((300, 600, 900, 1200, 1800))
+    expire = rng.choice((604800, 1209600, 2419200))
+    minimum = rng.choice((60, 300, 600, 900, 1800, 3600))
+    return f"{mname} {rname} {serial} {refresh} {retry} {expire} {minimum}"
+
+
 def _public_dns_soa_answers(domain: str) -> list[str]:
     """Return a realistic public SOA answer for a domain."""
     profile = _public_dns_profile("nameserver_profiles", domain)
@@ -1956,7 +2064,7 @@ def _public_dns_soa_answers(domain: str) -> list[str]:
         rname = _render_public_dns_answer(str(rng.choice(rnames)), domain)
     else:
         rname = f"dns-admin.{domain}"
-    return [f"{nameservers[0]} {rname}"]
+    return [_dns_soa_answer(domain, nameservers[0], rname, str(profile.get("name", "")))]
 
 
 def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, str, int]:
@@ -2786,6 +2894,7 @@ class ActivityGenerator:
         self._preferred_browser_by_session: dict[tuple[str, str, str], str] = {}
         self._last_browser_launch_by_session: dict[tuple[str, str, str], datetime] = {}
         self._process_source_create_times: dict[tuple[str, int], datetime] = {}
+        self._process_source_terminate_times: dict[tuple[str, int], datetime] = {}
         self._source_timing_planner = SourceTimingPlanner()
 
         # Causal expansion engine (auto-created if not provided) and recursion guard
@@ -2886,15 +2995,23 @@ class ActivityGenerator:
             logon_id=logon_id,
             termination_time=termination_time,
         )
-        self.generate_process_termination(
-            user=user,
-            system=system,
-            time=termination_time,
-            pid=pid,
-            process_name=process_name,
-            logon_id=logon_id,
-        )
+        if self._is_within_scenario_window(termination_time):
+            self.generate_process_termination(
+                user=user,
+                system=system,
+                time=termination_time,
+                pid=pid,
+                process_name=process_name,
+                logon_id=logon_id,
+            )
         return termination_time
+
+    def _is_within_scenario_window(self, event_time: datetime) -> bool:
+        """Return whether source-visible generated telemetry belongs inside the scenario."""
+        scenario_end = getattr(self, "_scenario_end_time", None)
+        if scenario_end is None:
+            return True
+        return ensure_utc(event_time) < ensure_utc(scenario_end)
 
     def _foreground_shell_key(
         self,
@@ -3402,6 +3519,29 @@ class ActivityGenerator:
             return None
         return max(candidates, key=lambda session: session.start_time)
 
+    def _active_user_workstation_windows_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest local workstation session for this user/host."""
+        if _get_os_category(system.os) != "windows":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if (
+                session.system == system.hostname
+                and _is_windows_workstation_session(session)
+                and _session_started_by(session, time)
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: session.start_time)
+
     def _session_id_for_logon(self, logon_id: str) -> int:
         """Return the canonical source-native session ID for a LogonID."""
         if not logon_id:
@@ -3431,7 +3571,7 @@ class ActivityGenerator:
                 session is not None
                 and session.system == system.hostname
                 and session.start_time <= time
-                and session.logon_type in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+                and _is_windows_workstation_session(session)
             ):
                 candidates.append((lock_timestamp, session))
 
@@ -5640,7 +5780,7 @@ class ActivityGenerator:
             logon_type = 2
             source_ip = None
         if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
-            existing_interactive = self._active_user_interactive_windows_session(
+            existing_interactive = self._active_user_workstation_windows_session(
                 user,
                 system,
                 time,
@@ -7068,6 +7208,13 @@ class ActivityGenerator:
             parent_pid=parent_pid,
             process_username=process_username,
         )
+        parent_pid = self._materialize_visible_linux_shell_parent_for_child(
+            system=system,
+            time=time,
+            logon_id=process_logon_id,
+            parent_pid=parent_pid,
+            process_username=process_username,
+        )
         self.state_manager.update_process_activity_time(system.hostname, parent_pid, time)
 
         # Phase 1: Allocate IDs from StateManager
@@ -7464,6 +7611,10 @@ class ActivityGenerator:
         """Return the latest rendered source-create timestamp for a process."""
         return self._process_source_create_times.get((hostname, pid))
 
+    def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
+        """Return the rendered source-terminate timestamp for a process."""
+        return self._process_source_terminate_times.get((hostname, pid))
+
     def _clamp_after_visible_process_create(
         self,
         system: System,
@@ -7532,6 +7683,55 @@ class ActivityGenerator:
             "source.ecar_process_create",
             seed_parts=(host.hostname, proc.pid, process_start_time),
             not_before=ecar_not_before,
+        )
+
+    def _record_process_source_terminate_time(
+        self,
+        hostname: str,
+        pid: int,
+        event: SecurityEvent,
+    ) -> None:
+        """Remember the rendered eCAR source timestamp for process termination."""
+        self._plan_process_source_terminate_times(event)
+        source_timing = event.source_timing
+        if source_timing is None:
+            return
+        source_terminate_times = [
+            timestamp
+            for key, timestamp in source_timing.source_times.items()
+            if key.startswith("source.ecar_process_terminate|")
+        ]
+        if source_terminate_times:
+            self._process_source_terminate_times[(hostname, pid)] = max(source_terminate_times)
+
+    def _plan_process_source_terminate_times(self, event: SecurityEvent) -> None:
+        """Precompute eCAR terminate timestamps for source-visible shell ordering."""
+        host = event.src_host
+        proc = event.process
+        if host is None or proc is None or proc.start_time is None:
+            return
+        self._plan_process_source_create_times(event)
+        source_timing = event.source_timing
+        process_create_ts = proc.start_time
+        if source_timing is not None:
+            ecar_create_times = [
+                timestamp
+                for key, timestamp in source_timing.source_times.items()
+                if key.startswith("source.ecar_process_create|")
+            ]
+            if ecar_create_times:
+                process_create_ts = max(ecar_create_times)
+        canonical_lifetime = max(timedelta(milliseconds=100), event.timestamp - proc.start_time)
+        self._source_timing_planner.source_time(
+            event,
+            "source.ecar_process_terminate",
+            seed_parts=(
+                host.hostname,
+                proc.pid,
+                proc.start_time,
+                event.timestamp,
+            ),
+            not_before=max(event.timestamp, process_create_ts + canonical_lifetime),
         )
 
     def _emit_process_command_network_effects(
@@ -7626,6 +7826,133 @@ class ActivityGenerator:
             return process.start_time + timedelta(milliseconds=offset_ms)
         return time
 
+    @staticmethod
+    def _ssh_responder_tuple_key(source_ip: str, source_port: int, target_ip: str) -> str:
+        return f"{source_ip}:{source_port}->{target_ip}:22/tcp"
+
+    def _remember_ssh_responder_pid(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+        pid: int,
+    ) -> None:
+        if pid <= 0:
+            return
+        if not hasattr(self, "_ssh_responder_pids"):
+            self._ssh_responder_pids: dict[str, int] = {}
+        self._ssh_responder_pids[
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        ] = pid
+
+    def _remember_ssh_pid_alias(self, hostname: str, observed_pid: int | None, pid: int) -> None:
+        if observed_pid is None or observed_pid <= 0 or pid <= 0 or observed_pid == pid:
+            return
+        if not hasattr(self, "_ssh_pid_aliases"):
+            self._ssh_pid_aliases: dict[tuple[str, int], int] = {}
+        self._ssh_pid_aliases[(hostname, observed_pid)] = pid
+
+    def _ssh_pid_alias(self, hostname: str, pid: int | None) -> int | None:
+        if pid is None or pid <= 0 or not hasattr(self, "_ssh_pid_aliases"):
+            return None
+        return self._ssh_pid_aliases.get((hostname, pid))
+
+    def ssh_responder_pid_for_tuple(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> int | None:
+        if not hasattr(self, "_ssh_responder_pids"):
+            return None
+        return self._ssh_responder_pids.get(
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        )
+
+    def ensure_linux_ssh_responder_process(
+        self,
+        *,
+        target_system: System,
+        time: datetime,
+        source_ip: str,
+        source_port: int,
+    ) -> int:
+        """Return the destination-side sshd process that owns one SSH 5-tuple."""
+        remembered = self.ssh_responder_pid_for_tuple(source_ip, source_port, target_system.ip)
+        if remembered is not None:
+            running = self.state_manager.get_process(target_system.hostname, remembered)
+            if running is not None:
+                return remembered
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        global_sshd = sys_pids.get("sshd")
+        parent_pid = (
+            global_sshd
+            if global_sshd
+            and self.state_manager.get_process(target_system.hostname, global_sshd) is not None
+            else 0
+        )
+        sshd_seed = _stable_seed(
+            "ssh_responder_pid:"
+            f"{target_system.hostname}:{source_ip}:{source_port}:"
+            f"{target_system.ip}:{time.isoformat()}"
+        )
+        sshd_pid = self.generate_system_process(
+            system=target_system,
+            time=time + timedelta(milliseconds=8 + (sshd_seed % 72)),
+            process_name="/usr/sbin/sshd",
+            command_line="sshd: [accepted]",
+            parent_pid=parent_pid,
+            username="root",
+            emit_linux_syslog=False,
+        )
+        self._remember_ssh_responder_pid(source_ip, source_port, target_system.ip, sshd_pid)
+        return sshd_pid
+
+    def _normalize_sshd_syslog_pid(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        message: str,
+        pid: int | None,
+    ) -> int | None:
+        alias = self._ssh_pid_alias(system.hostname, pid)
+        if alias is not None:
+            return alias
+
+        source_ip = ""
+        source_port = 0
+        conn_match = re.match(
+            r"^Connection from (?P<src_ip>\S+) port (?P<src_port>\d+) "
+            r"on (?P<dst_ip>\S+) port 22$",
+            message,
+        )
+        if conn_match:
+            source_ip = conn_match.group("src_ip")
+            source_port = int(conn_match.group("src_port"))
+        else:
+            accepted_match = re.match(
+                r"^Accepted \S+ for (?:invalid user )?\S+ "
+                r"from (?P<src_ip>\S+) port (?P<src_port>\d+) ",
+                message,
+            )
+            if accepted_match:
+                source_ip = accepted_match.group("src_ip")
+                source_port = int(accepted_match.group("src_port"))
+
+        if not source_ip or source_port <= 0:
+            return pid
+
+        responder_pid = self.ensure_linux_ssh_responder_process(
+            target_system=system,
+            time=time,
+            source_ip=source_ip,
+            source_port=source_port,
+        )
+        self._remember_ssh_pid_alias(system.hostname, pid, responder_pid)
+        return responder_pid
+
     def reserve_ssh_source_port(
         self,
         source_ip: str,
@@ -7633,16 +7960,30 @@ class ActivityGenerator:
         source_port: int | None,
         rng: random.Random,
         source_os: str,
+        time: datetime | None = None,
     ) -> int:
         """Reserve a per-source/destination SSH source port for unambiguous correlation."""
         candidate = source_port or _ephemeral_port(rng, source_os)
         for _ in range(100):
             key = (source_ip, target_ip, candidate)
-            if key not in self._ssh_source_ports:
+            recent_key = (source_ip, candidate, target_ip, 22, "tcp")
+            recent_seen = self._recent_connection_tuples.get(recent_key)
+            recent_is_active = (
+                time is not None
+                and recent_seen is not None
+                and time.timestamp() - recent_seen <= 86_400.0
+            )
+            if key not in self._ssh_source_ports and not recent_is_active:
                 self._ssh_source_ports.add(key)
+                if time is not None:
+                    self._remember_connection_tuple(
+                        source_ip, candidate, target_ip, 22, "tcp", time
+                    )
                 return candidate
             candidate = _ephemeral_port(rng, source_os)
         self._ssh_source_ports.add((source_ip, target_ip, candidate))
+        if time is not None:
+            self._remember_connection_tuple(source_ip, candidate, target_ip, 22, "tcp", time)
         return candidate
 
     def generate_process_termination(
@@ -7753,6 +8094,7 @@ class ActivityGenerator:
             storyline_origin=from_storyline,
         )
 
+        self._record_process_source_terminate_time(system.hostname, pid, event)
         self.dispatcher.dispatch(event)
         termination_start_time = event.process.start_time if event.process is not None else None
         self._terminated_process_keys.add((system.hostname, pid, termination_start_time))
@@ -7938,6 +8280,7 @@ class ActivityGenerator:
         process_image: str | None = None,
         preserve_dst_ip: bool = False,
         packet_overhead_bytes: int | None = None,
+        responding_pid: int = -1,
     ) -> str:
         """Generate network connection across all applicable log formats.
 
@@ -8365,6 +8708,79 @@ class ActivityGenerator:
                         _stable_seed(f"proxy_egress_delay:{src_ip}:{dst_ip}:{time.timestamp()}")
                     ).randint(proxy_delay_window.min_ms, proxy_delay_window.max_ms)
                 )
+            client_pid = pid
+            client_process_image = process_image
+            caller_process_image = self._caller_explicit_proxy_process_image(
+                source_system=source_system,
+                pid=pid,
+                process_image=process_image,
+                time=time,
+                proxy_context=proxy_context,
+                proxy_sys=proxy_sys,
+                dst_port=dst_port,
+            )
+            if caller_process_image is not None:
+                client_process_image = caller_process_image
+                if source_system is not None:
+                    self.state_manager.update_process_activity_time(
+                        source_system.hostname,
+                        pid,
+                        time,
+                    )
+            else:
+                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
+                    source_system=source_system,
+                    time=time,
+                    proxy_context=proxy_context,
+                    proxy_sys=proxy_sys,
+                    dst_port=dst_port,
+                )
+                if owned_client_pid > 0:
+                    client_pid = owned_client_pid
+                    client_process_image = owned_process_image
+
+            if src_port is None:
+                src_port = self._allocate_ephemeral_port(
+                    src_ip,
+                    proxy_sys.ip,
+                    listener_port,
+                    "tcp",
+                    time,
+                    self._os_for_ip(src_ip),
+                )
+
+            client_time = time
+            if client_pid > 0 and source_system is not None:
+                client_time = self._clamp_after_visible_process_create(
+                    source_system,
+                    client_pid,
+                    client_time,
+                    "source.windows_wfp_connection",
+                )
+
+            client_observed_time = _zeek_conn_observation_time(
+                client_time,
+                src_ip,
+                src_port,
+                proxy_sys.ip,
+                listener_port,
+                "tcp",
+                "http",
+            )
+            connect_window = get_timing_window(
+                "source.zeek_http_request",
+                default_min_ms=1,
+                default_max_ms=450,
+                default_position="after",
+                default_class="same_observation",
+            )
+            client_connect_visible_by = client_observed_time + timedelta(
+                milliseconds=connect_window.max_ms + 1
+            )
+            egress_time = time + egress_delay
+            if will_emit_egress:
+                egress_time = max(egress_time, client_connect_visible_by + egress_delay)
+
             proxy_client_cap = random.Random(
                 _stable_seed(
                     "proxy_client_duration_cap:"
@@ -8403,9 +8819,10 @@ class ActivityGenerator:
                 response_flush = random.Random(
                     _stable_seed(f"proxy_response_flush:{src_ip}:{dst_ip}:{time.timestamp()}")
                 ).uniform(0.02, 0.25)
+                egress_start_after_client = max(0.0, (egress_time - client_time).total_seconds())
                 client_duration = max(
                     client_duration,
-                    egress_delay.total_seconds() + egress_duration + response_flush,
+                    egress_start_after_client + egress_duration + response_flush,
                 )
                 proxy_context.time_taken = max(
                     proxy_context.time_taken,
@@ -8424,41 +8841,10 @@ class ActivityGenerator:
                     ),
                 )
 
-            client_pid = pid
-            client_process_image = process_image
-            caller_process_image = self._caller_explicit_proxy_process_image(
-                source_system=source_system,
-                pid=pid,
-                process_image=process_image,
-                time=time,
-                proxy_context=proxy_context,
-                proxy_sys=proxy_sys,
-                dst_port=dst_port,
-            )
-            if caller_process_image is not None:
-                client_process_image = caller_process_image
-                if source_system is not None:
-                    self.state_manager.update_process_activity_time(
-                        source_system.hostname,
-                        pid,
-                        time,
-                    )
-            else:
-                owned_client_pid, owned_process_image = self._ensure_explicit_proxy_client_process(
-                    source_system=source_system,
-                    time=time,
-                    proxy_context=proxy_context,
-                    proxy_sys=proxy_sys,
-                    dst_port=dst_port,
-                )
-                if owned_client_pid > 0:
-                    client_pid = owned_client_pid
-                    client_process_image = owned_process_image
-
             client_uid = self.generate_connection(
                 src_ip=src_ip,
                 dst_ip=proxy_sys.ip,
-                time=time,
+                time=client_time,
                 dst_port=listener_port,
                 proto="tcp",
                 service="http",
@@ -8532,7 +8918,7 @@ class ActivityGenerator:
                 self._emit_dns_lookup(
                     proxy_sys.ip,
                     dst_ip,
-                    time + egress_delay,
+                    egress_time,
                     hostname=proxy_context.host,
                     force_address=True,
                 )
@@ -8542,7 +8928,7 @@ class ActivityGenerator:
             self.generate_connection(
                 src_ip=proxy_sys.ip,
                 dst_ip=dst_ip,
-                time=time + egress_delay,
+                time=egress_time,
                 dst_port=dst_port,
                 proto=proto,
                 service=service,
@@ -8563,7 +8949,7 @@ class ActivityGenerator:
                 proxy_bypass=True,
             )
             if dst_port == 443:
-                self._explicit_proxy_tunnels[tunnel_key] = (time, client_uid)
+                self._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)
             return client_uid
 
         # Emit DNS lookup before connection via causal expansion.
@@ -9111,22 +9497,15 @@ class ActivityGenerator:
             elif resp_pkts == 0:
                 resp_bytes = 0
         elif proto == "tcp" and history and history != "-":
-            hist_orig = sum(1 for c in history if c.isupper())
-            hist_resp = sum(1 for c in history if c.islower())
-            byte_orig = max(1, _tcp_payload_segment_count(orig_bytes)) if orig_bytes else 1
-            byte_resp = max(1, _tcp_payload_segment_count(resp_bytes)) if resp_bytes else 0
-            orig_pkts = max(hist_orig, byte_orig)
-            resp_pkts = max(hist_resp, byte_resp) if resp_bytes else hist_resp
+            orig_pkts, resp_pkts = _tcp_packet_counts_from_payload_and_history(
+                orig_bytes,
+                resp_bytes,
+                history,
+                rng,
+            )
             if dst_port == 443 and conn_state == "SF":
                 orig_pkts += rng.choices([0, 1, 2, 3, 5], weights=[45, 25, 15, 10, 5], k=1)[0]
                 resp_pkts += rng.choices([0, 1, 2, 4, 8], weights=[35, 25, 20, 15, 5], k=1)[0]
-            orig_pkts, resp_pkts = _apply_tcp_ack_packet_floors(
-                orig_pkts,
-                resp_pkts,
-                orig_bytes,
-                resp_bytes,
-                rng,
-            )
         elif proto == "icmp":
             orig_pkts = 1
             resp_pkts = 1 if resp_bytes and resp_bytes > 0 else 0
@@ -9145,10 +9524,25 @@ class ActivityGenerator:
             overhead = 28
         else:
             overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-        # IP bytes = payload + (packets * header overhead). Zeek emits count
-        # fields as zero when a side has no packets; it does not drop the field.
-        orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
-        resp_ip_bytes = (resp_bytes or 0) + resp_pkts * overhead
+        # Zeek count fields are source-observed IP payload totals. TCP gets
+        # per-side header/control texture; UDP/ICMP keeps protocol-specific
+        # fixed accounting for source-native packet sizes.
+        if proto == "tcp":
+            orig_ip_bytes = _tcp_ip_byte_count(
+                orig_bytes,
+                orig_pkts,
+                rng,
+                overhead_override=packet_overhead_bytes,
+            )
+            resp_ip_bytes = _tcp_ip_byte_count(
+                resp_bytes,
+                resp_pkts,
+                rng,
+                overhead_override=packet_overhead_bytes,
+            )
+        else:
+            orig_ip_bytes = (orig_bytes or 0) + orig_pkts * overhead
+            resp_ip_bytes = (resp_bytes or 0) + resp_pkts * overhead
 
         ip_proto = 6 if proto == "tcp" else 17 if proto == "udp" else 1
 
@@ -9277,6 +9671,31 @@ class ActivityGenerator:
                     username="",
                 )
 
+        target_system = None
+        if dst_host_ctx is not None and hasattr(self, "_ip_to_system"):
+            target_system = self._ip_to_system.get(dst_host_ctx.ip)
+        target_has_ssh = target_system is not None and "ssh" in {
+            str(service_name).lower() for service_name in (target_system.services or [])
+        }
+        if (
+            dst_host_ctx is not None
+            and dst_host_ctx.os_category == "linux"
+            and target_system is not None
+            and proto == "tcp"
+            and dst_port == 22
+            and conn_state == "SF"
+            and (service in {"", "ssh"} or target_has_ssh)
+        ):
+            if responding_pid <= 0:
+                responding_pid = self.ensure_linux_ssh_responder_process(
+                    target_system=target_system,
+                    time=time,
+                    source_ip=src_ip,
+                    source_port=src_port,
+                )
+            else:
+                self._remember_ssh_responder_pid(src_ip, src_port, target_system.ip, responding_pid)
+
         event = SecurityEvent(
             timestamp=time,
             event_type="connection",
@@ -9307,6 +9726,7 @@ class ActivityGenerator:
                 ip_proto=ip_proto,
                 missed_bytes=missed_bytes,
                 initiating_pid=pid,
+                responding_pid=responding_pid,
                 application_layer_only=http_application_layer_only,
             ),
             edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=conn_actor_id),
@@ -9699,6 +10119,7 @@ class ActivityGenerator:
                 ua = http_ua_override
             status_code, status_msg = _get_http_status(dst_ip, uri)
             from evidenceforge.generation.activity.http_content import (
+                apply_transfer_size_variance,
                 is_stable_resource_path,
                 response_mime_types_for_status,
                 response_size_for_mime,
@@ -9709,7 +10130,14 @@ class ActivityGenerator:
                 resp_body_len = 0
             else:
                 if status_code >= 300 or is_stable_resource_path(uri):
-                    resp_body_len = response_size_for_status(status_code, host, uri)
+                    resp_body_len = apply_transfer_size_variance(
+                        response_size_for_status(status_code, host, uri),
+                        status_code=status_code,
+                        host=host,
+                        uri=uri,
+                        content_type=mime_type,
+                        variant_key=f"{src_ip}:{ua}",
+                    )
                 else:
                     resp_body_len = resp_bytes or response_size_for_mime(rng, mime_type)
             from evidenceforge.generation.activity.referrer import pick_referrer
@@ -9971,13 +10399,13 @@ class ActivityGenerator:
                 event.network.resp_bytes = max(
                     event.network.resp_bytes or 0, rng.randint(900, 4500)
                 )
-            hist_orig = sum(1 for c in (event.network.history or "") if c.isupper())
-            hist_resp = sum(1 for c in (event.network.history or "") if c.islower())
-            event.network.orig_pkts = max(
-                hist_orig, max(1, ((event.network.orig_bytes or 0) // 1460) + 1)
-            )
-            event.network.resp_pkts = max(
-                hist_resp, max(1, ((event.network.resp_bytes or 0) // 1460) + 1)
+            event.network.orig_pkts, event.network.resp_pkts = (
+                _tcp_packet_counts_from_payload_and_history(
+                    event.network.orig_bytes,
+                    event.network.resp_bytes,
+                    event.network.history,
+                    rng,
+                )
             )
             if event.network.service == "ssl":
                 event.network.orig_pkts += rng.choices(
@@ -9990,21 +10418,15 @@ class ActivityGenerator:
                     weights=[35, 25, 20, 15, 5],
                     k=1,
                 )[0]
-            event.network.orig_pkts, event.network.resp_pkts = _apply_tcp_ack_packet_floors(
-                event.network.orig_pkts,
-                event.network.resp_pkts,
+            event.network.orig_ip_bytes = _tcp_ip_byte_count(
                 event.network.orig_bytes,
-                event.network.resp_bytes,
+                event.network.orig_pkts,
                 rng,
             )
-            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-            orig_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
-            resp_extra = rng.choices((0, 20, 40, 52, 104), weights=(70, 8, 8, 10, 4), k=1)[0]
-            event.network.orig_ip_bytes = (
-                (event.network.orig_bytes or 0) + event.network.orig_pkts * overhead + orig_extra
-            )
-            event.network.resp_ip_bytes = (
-                (event.network.resp_bytes or 0) + event.network.resp_pkts * overhead + resp_extra
+            event.network.resp_ip_bytes = _tcp_ip_byte_count(
+                event.network.resp_bytes,
+                event.network.resp_pkts,
+                rng,
             )
 
         if (
@@ -10178,6 +10600,7 @@ class ActivityGenerator:
             source_port,
             rng,
             _src_os,
+            time=time,
         )
         duration = rng.uniform(30.0, 3600.0)
         if min_duration is not None:
@@ -10200,11 +10623,6 @@ class ActivityGenerator:
         elif hasattr(self, "_ip_to_system") and source_ip in self._ip_to_system:
             src_host_ctx = self._build_host_context(self._ip_to_system[source_ip])
 
-        if sshd_pid is None:
-            sshd_pid = self.state_manager.allocate_transient_linux_pid(
-                target_system.hostname,
-                time,
-            )
         if logon_id:
             self.state_manager.update_session_metadata(
                 logon_id,
@@ -10259,6 +10677,16 @@ class ActivityGenerator:
                     username="",
                 )
 
+        ssh_history = _tcp_success_history(rng)
+        ssh_orig_pkts, ssh_resp_pkts = _tcp_packet_counts_from_payload_and_history(
+            orig_bytes,
+            resp_bytes,
+            ssh_history,
+            rng,
+        )
+        ssh_orig_ip_bytes = _tcp_ip_byte_count(orig_bytes, ssh_orig_pkts, rng)
+        ssh_resp_ip_bytes = _tcp_ip_byte_count(resp_bytes, ssh_resp_pkts, rng)
+
         # Build compound SSH session event
         event = SecurityEvent(
             timestamp=time,
@@ -10285,11 +10713,11 @@ class ActivityGenerator:
                 orig_bytes=orig_bytes,
                 resp_bytes=resp_bytes,
                 conn_state="SF",
-                history=_tcp_success_history(_get_rng()),
-                orig_pkts=max(4, orig_bytes // 1460 + 1),
-                resp_pkts=max(4, resp_bytes // 1460 + 1),
-                orig_ip_bytes=orig_bytes + max(4, orig_bytes // 1460 + 1) * 40,
-                resp_ip_bytes=resp_bytes + max(4, resp_bytes // 1460 + 1) * 40,
+                history=ssh_history,
+                orig_pkts=ssh_orig_pkts,
+                resp_pkts=ssh_resp_pkts,
+                orig_ip_bytes=ssh_orig_ip_bytes,
+                resp_ip_bytes=ssh_resp_ip_bytes,
                 local_orig=_is_private_ip(source_ip),
                 local_resp=_is_private_ip(target_system.ip),
                 ip_proto=6,
@@ -10300,6 +10728,8 @@ class ActivityGenerator:
         )
 
         accepted_time: datetime | None = None
+        pam_time: datetime | None = None
+        logind_time: datetime | None = None
         # Attach SyslogContext for Linux hosts: 3 syslog entries for SSH session
         if event.dst_host and event.dst_host.os_category == "linux":
             from evidenceforge.events.contexts import SyslogContext
@@ -10308,6 +10738,28 @@ class ActivityGenerator:
             accepted_delay_ms = conn_delay_ms + rng.randint(450, 3500)
             pam_delay_ms = accepted_delay_ms + rng.randint(45, 180)
             logind_delay_ms = pam_delay_ms + rng.randint(420, 760)
+            remembered_sshd_pid = self.ssh_responder_pid_for_tuple(
+                source_ip,
+                src_port,
+                target_system.ip,
+            )
+            if sshd_pid is None and remembered_sshd_pid is not None:
+                sshd_pid = remembered_sshd_pid
+            if (
+                sshd_pid is None
+                or self.state_manager.get_process(target_system.hostname, sshd_pid) is None
+            ):
+                sshd_pid = self.ensure_linux_ssh_responder_process(
+                    target_system=target_system,
+                    time=time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
+                    source_ip=source_ip,
+                    source_port=src_port,
+                )
+            else:
+                self._remember_ssh_responder_pid(source_ip, src_port, target_system.ip, sshd_pid)
+            event.network.responding_pid = sshd_pid
+            if logon_id:
+                self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
             ssh_syslog_seed = (
                 target_system.hostname,
                 source_ip,
@@ -10321,6 +10773,8 @@ class ActivityGenerator:
                 accepted_delay_ms,
                 *ssh_syslog_seed,
             )
+            pam_time = _ssh_syslog_time(time, "pam", pam_delay_ms, *ssh_syslog_seed)
+            logind_time = _ssh_syslog_time(time, "logind", logind_delay_ms, *ssh_syslog_seed)
 
             # sshd connection message (precedes auth in real SSH lifecycle)
             conn_msg_event = SecurityEvent(
@@ -10348,7 +10802,7 @@ class ActivityGenerator:
                 "source.ecar_ssh_session_after_accept",
                 seed_parts=ssh_syslog_seed,
             )
-            self._source_timing_planner.source_time(
+            ecar_login_time = self._source_timing_planner.source_time(
                 event,
                 "source.ecar_session",
                 seed_parts=(
@@ -10362,8 +10816,19 @@ class ActivityGenerator:
                     session_obj_id,
                     event.timestamp,
                 ),
-                not_before=accepted_time + ecar_after_accept_gap,
+                not_before=pam_time + ecar_after_accept_gap,
             )
+            if logon_id:
+                ready_seed = _stable_seed(
+                    "ssh_session_source_ready:"
+                    f"{target_system.hostname}:{user.username}:{source_ip}:"
+                    f"{src_port}:{logon_id}:{time.isoformat()}"
+                )
+                self.state_manager.update_session_metadata(
+                    logon_id,
+                    source_ready_time=ecar_login_time
+                    + timedelta(milliseconds=80 + (ready_seed % 160)),
+                )
 
         self.dispatcher.dispatch(event)
 
@@ -10372,6 +10837,8 @@ class ActivityGenerator:
             from evidenceforge.events.contexts import SyslogContext
 
             assert accepted_time is not None
+            assert pam_time is not None
+            assert logind_time is not None
             accepted_event = SecurityEvent(
                 timestamp=accepted_time,
                 event_type="syslog",
@@ -10392,7 +10859,7 @@ class ActivityGenerator:
             # pam_unix session opened (syslog-only, no eCAR/Zeek correlation)
             hostname = target_system.hostname
             pam_event = SecurityEvent(
-                timestamp=_ssh_syslog_time(time, "pam", pam_delay_ms, *ssh_syslog_seed),
+                timestamp=pam_time,
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -10409,7 +10876,6 @@ class ActivityGenerator:
             self.dispatcher.dispatch(pam_event)
 
             # systemd-logind new session (syslog-only)
-            logind_time = _ssh_syslog_time(time, "logind", logind_delay_ms, *ssh_syslog_seed)
             # Session ID: monotonic + unique per host. StateManager owns this
             # sequence because baseline syslog noise and explicit SSH sessions
             # both produce systemd-logind messages for the same host.
@@ -10436,6 +10902,283 @@ class ActivityGenerator:
             f"Generated SSH session: {user.username} → {target_system.hostname} (UID: {uid})"
         )
         return uid if network_visible else ""
+
+    def ensure_linux_ssh_session_shell(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        logon_time: datetime,
+        activity_time: datetime,
+    ) -> int | None:
+        """Create visible per-session sshd and login shell process state for SSH."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != target_system.hostname:
+            return None
+        logon_time = ensure_utc(logon_time)
+        activity_time = ensure_utc(activity_time)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        if session.session_shell_pid is not None:
+            shell_proc = self.state_manager.get_process(
+                target_system.hostname,
+                session.session_shell_pid,
+            )
+            if shell_proc is not None and self._is_pid_active_at(
+                target_system,
+                session.session_shell_pid,
+                activity_time,
+            ):
+                shell_start = ensure_utc(shell_proc.start_time)
+                source_ready_time = _session_source_ready_time(session)
+                if (
+                    scenario_start is None
+                    or activity_time < scenario_start
+                    or shell_start >= scenario_start
+                ) and (source_ready_time is None or shell_start >= source_ready_time):
+                    return session.session_shell_pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        global_sshd = sys_pids.get("sshd")
+        if (
+            not global_sshd
+            or self.state_manager.get_process(target_system.hostname, global_sshd) is None
+        ):
+            return None
+
+        shell_seed = _stable_seed(
+            "linux_ssh_session_shell:"
+            f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
+        )
+        source_ready_time = _session_source_ready_time(session)
+        source_floor = logon_time + timedelta(milliseconds=150)
+        if source_ready_time is not None:
+            source_floor = max(source_floor, source_ready_time + timedelta(milliseconds=50))
+        sshd_delay_ms = 900 + (shell_seed % 1400)
+        sshd_time = max(logon_time + timedelta(milliseconds=sshd_delay_ms), source_floor)
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and sshd_time < scenario_start
+        ):
+            pre_command_gap = timedelta(seconds=5 + (shell_seed % 95))
+            scenario_floor = scenario_start + timedelta(milliseconds=500 + (shell_seed % 3000))
+            sshd_time = max(scenario_floor, activity_time - pre_command_gap)
+        effective_activity_time = max(activity_time, sshd_time + timedelta(milliseconds=700))
+        latest_parent_time = effective_activity_time - timedelta(milliseconds=500)
+        if sshd_time > latest_parent_time and latest_parent_time >= source_floor:
+            sshd_time = max(logon_time + timedelta(milliseconds=150), latest_parent_time)
+
+        session_sshd_pid = self.generate_system_process(
+            system=target_system,
+            time=sshd_time,
+            process_name="/usr/sbin/sshd",
+            command_line=f"sshd: {user.username} [priv]",
+            parent_pid=global_sshd,
+            username="root",
+            emit_linux_syslog=False,
+        )
+
+        bash_time = sshd_time + timedelta(milliseconds=120 + (shell_seed % 180))
+        effective_activity_time = max(activity_time, bash_time + timedelta(milliseconds=260))
+        latest_bash_time = effective_activity_time - timedelta(milliseconds=120)
+        if bash_time > latest_bash_time and latest_bash_time >= sshd_time + timedelta(
+            milliseconds=20
+        ):
+            bash_time = max(sshd_time + timedelta(milliseconds=20), latest_bash_time)
+
+        bash_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=bash_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=session_sshd_pid,
+            suppress_command_file_effect=True,
+        )
+        session.session_shell_pid = bash_pid
+        session.process_tree_root = session_sshd_pid
+        return bash_pid
+
+    def ensure_linux_session_shell(
+        self,
+        user: User,
+        target_system: System,
+        logon_id: str,
+        logon_time: datetime,
+        activity_time: datetime,
+    ) -> int | None:
+        """Create or return a visible Linux shell that owns session child processes."""
+        session = self.state_manager.get_session(logon_id)
+        if session is None or session.system != target_system.hostname:
+            return None
+        if session.session_kind == "ssh":
+            return self.ensure_linux_ssh_session_shell(
+                user=user,
+                target_system=target_system,
+                logon_id=logon_id,
+                logon_time=logon_time,
+                activity_time=activity_time,
+            )
+
+        logon_time = ensure_utc(logon_time)
+        activity_time = ensure_utc(activity_time)
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        if session.session_shell_pid is not None:
+            shell_proc = self.state_manager.get_process(
+                target_system.hostname,
+                session.session_shell_pid,
+            )
+            if shell_proc is not None and self._is_pid_active_at(
+                target_system,
+                session.session_shell_pid,
+                activity_time,
+            ):
+                shell_start = ensure_utc(shell_proc.start_time)
+                if (
+                    scenario_start is None
+                    or activity_time < scenario_start
+                    or shell_start >= scenario_start
+                ):
+                    return session.session_shell_pid
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        parent_pid = sys_pids.get("systemd") or sys_pids.get("init")
+        if (
+            not parent_pid
+            or self.state_manager.get_process(target_system.hostname, parent_pid) is None
+        ):
+            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+
+        shell_seed = _stable_seed(
+            "linux_session_shell:"
+            f"{target_system.hostname}:{user.username}:{logon_id}:{logon_time.isoformat()}"
+        )
+        bash_time = logon_time + timedelta(milliseconds=180 + (shell_seed % 1200))
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and bash_time < scenario_start
+        ):
+            scenario_floor = scenario_start + timedelta(milliseconds=400 + (shell_seed % 2500))
+            pre_command_gap = timedelta(seconds=4 + (shell_seed % 75))
+            bash_time = max(scenario_floor, activity_time - pre_command_gap)
+        latest_bash_time = activity_time - timedelta(milliseconds=120)
+        if bash_time > latest_bash_time:
+            bash_time = latest_bash_time
+
+        bash_pid = self.generate_process(
+            user=user,
+            system=target_system,
+            time=bash_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
+        session.session_shell_pid = bash_pid
+        session.process_tree_root = parent_pid
+        return bash_pid
+
+    def _active_visible_linux_shell_pid(
+        self,
+        system: System,
+        username: str,
+        time: datetime,
+        logon_id: str = "",
+    ) -> int | None:
+        """Return a visible user shell that can own Linux child process telemetry."""
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        activity_time = ensure_utc(time)
+        candidates = []
+        for proc in self.state_manager.get_processes_on_system(system.hostname):
+            proc_exe = proc.image.rsplit("/", 1)[-1].lower()
+            if proc_exe not in {"bash", "sh", "zsh"}:
+                continue
+            if proc.username != username:
+                continue
+            if logon_id and proc.logon_id and proc.logon_id != logon_id:
+                continue
+            if not self._is_pid_active_at(system, proc.pid, activity_time):
+                continue
+            shell_start = ensure_utc(proc.start_time)
+            if (
+                scenario_start is not None
+                and activity_time >= scenario_start
+                and shell_start < scenario_start
+            ):
+                continue
+            candidates.append(proc)
+        if not candidates:
+            return None
+        candidates.sort(key=lambda proc: ensure_utc(proc.start_time), reverse=True)
+        return candidates[0].pid
+
+    def ensure_linux_visible_shell_parent(
+        self,
+        user: User,
+        target_system: System,
+        activity_time: datetime,
+        logon_id: str = "",
+        logon_time: datetime | None = None,
+    ) -> int | None:
+        """Create or return a source-visible Linux shell parent for loose user work."""
+        activity_time = ensure_utc(activity_time)
+        existing = self._active_visible_linux_shell_pid(
+            target_system,
+            user.username,
+            activity_time,
+            logon_id,
+        )
+        if existing is not None:
+            return existing
+
+        sys_pids = getattr(self, "_system_pids", {}).get(target_system.hostname, {})
+        parent_pid = sys_pids.get("systemd") or sys_pids.get("init")
+        if (
+            not parent_pid
+            or self.state_manager.get_process(target_system.hostname, parent_pid) is None
+        ):
+            parent_pid = self._linux_anchor_pid(target_system, activity_time)
+
+        base_time = ensure_utc(logon_time) if logon_time is not None else activity_time
+        shell_seed = _stable_seed(
+            "linux_visible_shell_parent:"
+            f"{target_system.hostname}:{user.username}:{logon_id}:{activity_time.isoformat()}"
+        )
+        shell_time = base_time + timedelta(milliseconds=160 + (shell_seed % 1100))
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is not None:
+            scenario_start = ensure_utc(scenario_start)
+        if (
+            scenario_start is not None
+            and activity_time >= scenario_start
+            and shell_time < scenario_start
+        ):
+            scenario_floor = scenario_start + timedelta(milliseconds=350 + (shell_seed % 2200))
+            pre_command_gap = timedelta(seconds=3 + (shell_seed % 60))
+            shell_time = max(scenario_floor, activity_time - pre_command_gap)
+        latest_shell_time = activity_time - timedelta(milliseconds=120)
+        if shell_time > latest_shell_time:
+            shell_time = latest_shell_time
+
+        return self.generate_process(
+            user=user,
+            system=target_system,
+            time=shell_time,
+            logon_id=logon_id,
+            process_name="/bin/bash",
+            command_line="-bash",
+            parent_pid=parent_pid,
+            suppress_command_file_effect=True,
+        )
 
     def generate_bash_command(
         self,
@@ -10593,6 +11336,8 @@ class ActivityGenerator:
         if _get_os_category(system.os) == "linux":
             command = _background_linux_shell_command_if_needed(command)
         time = self._schedule_bash_history_time(user, system, time, command)
+        if not self._is_within_scenario_window(time):
+            return None
         self._emit_bash_command_event(user, system, time, command)
         if emit_process_telemetry:
             self._maybe_emit_bash_process_telemetry(user, system, time, command)
@@ -10696,6 +11441,8 @@ class ActivityGenerator:
                     seed_text=command,
                 )
             process_time = base_process_time + timedelta(milliseconds=index * 35)
+            if not self._is_within_scenario_window(process_time):
+                continue
             network_close_time = getattr(session, "network_close_time", None)
             if network_close_time is not None:
                 if network_close_time.tzinfo is None:
@@ -10714,13 +11461,17 @@ class ActivityGenerator:
                 parent_pid=parent_pid,
                 suppress_command_file_effect=True,
             )
+            running_proc = self.state_manager.get_process(system.hostname, pid)
+            actual_process_start = (
+                running_proc.start_time if running_proc is not None else process_time
+            )
             self._record_user_process(system, user, pid, image)
             lifetime = _linux_foreground_lifetime(image, process_command_line)
             if lifetime is not None:
                 termination_time = self._generate_bounded_foreground_process_termination(
                     user=user,
                     system=system,
-                    start_time=process_time,
+                    start_time=actual_process_start,
                     pid=pid,
                     process_name=image,
                     logon_id=session.logon_id,
@@ -10746,6 +11497,12 @@ class ActivityGenerator:
         command: str,
     ) -> datetime:
         """Preserve foreground command dwell time for one user's shell history."""
+        requested_time = self._align_linux_bash_after_session_ready(
+            user,
+            system,
+            requested_time,
+            command,
+        )
         key = (system.hostname, user.username)
         scheduled_time = max(requested_time, self._bash_history_next_time.get(key, requested_time))
         scheduled_time = self._reserve_bash_history_second(user, system, scheduled_time, command)
@@ -10781,6 +11538,36 @@ class ActivityGenerator:
         self._bash_history_command_counts[key] = self._bash_history_command_counts.get(key, 0) + 1
         self._bash_history_next_time[key] = scheduled_time + timedelta(seconds=dwell_seconds)
         return scheduled_time
+
+    def _align_linux_bash_after_session_ready(
+        self,
+        user: User,
+        system: System,
+        requested_time: datetime,
+        command: str,
+    ) -> datetime:
+        """Shift visible Linux shell commands after SSH auth/PAM/eCAR session readiness."""
+        if _get_os_category(system.os) != "linux":
+            return requested_time
+        activity_time = ensure_utc(requested_time)
+        sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(user.username)
+            if session.system == system.hostname
+            and session.session_kind == "ssh"
+            and _session_active_for_activity(session, activity_time)
+        ]
+        if not sessions:
+            return requested_time
+        session = max(sessions, key=lambda candidate: ensure_utc(candidate.start_time))
+        ready_time = _session_source_ready_time(session)
+        if ready_time is None or activity_time >= ready_time:
+            return requested_time
+        ready_seed = _stable_seed(
+            "linux_bash_after_ssh_ready:"
+            f"{system.hostname}:{user.username}:{session.logon_id}:{command}:{activity_time}"
+        )
+        return ready_time + timedelta(milliseconds=180 + (ready_seed % 420))
 
     def _reserve_bash_history_second(
         self,
@@ -11515,7 +12302,14 @@ class ActivityGenerator:
                 companion_qtype = 6
                 companion_query = _dns_registrable_domain(hostname)
                 if _dns_is_internal_name(companion_query, ad_domain):
-                    companion_answers = [f"ns1.{companion_query} hostmaster.{companion_query}"]
+                    companion_answers = [
+                        _dns_soa_answer(
+                            companion_query,
+                            f"ns1.{companion_query}",
+                            f"hostmaster.{companion_query}",
+                            "internal",
+                        )
+                    ]
                 else:
                     companion_answers = _public_dns_soa_answers(companion_query)
             companion_is_internal = _dns_is_internal_name(companion_query, ad_domain) or (
@@ -11971,8 +12765,12 @@ class ActivityGenerator:
                 logon_type = rng.choices([3, 2, 7, 11, 10], weights=[55, 20, 10, 10, 5], k=1)[0]
 
             active_interactive = None
-            if not is_service_account and sys_type not in ("server", "domain_controller"):
-                active_interactive = self._active_user_interactive_windows_session(
+            if (
+                logon_type in (2, 7, 11)
+                and not is_service_account
+                and sys_type not in ("server", "domain_controller")
+            ):
+                active_interactive = self._active_user_workstation_windows_session(
                     user,
                     system,
                     time,
@@ -12178,6 +12976,8 @@ class ActivityGenerator:
                         process_time = self._schedule_bash_history_time(
                             user, system, time, command_line
                         )
+                        if not self._is_within_scenario_window(process_time):
+                            return
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -12190,6 +12990,8 @@ class ActivityGenerator:
                             requested_time=process_time,
                             seed_text=command_line,
                         )
+                        if not self._is_within_scenario_window(process_time):
+                            return
                     pid = self.generate_process(
                         user,
                         system,
@@ -12288,11 +13090,17 @@ class ActivityGenerator:
                             effect_command_line,
                         )
                         if lifetime is not None:
+                            running_proc = self.state_manager.get_process(system.hostname, pid)
+                            actual_process_start = (
+                                running_proc.start_time
+                                if running_proc is not None
+                                else process_time
+                            )
                             termination_time = (
                                 self._generate_bounded_foreground_process_termination(
                                     user=user,
                                     system=system,
-                                    start_time=process_time,
+                                    start_time=actual_process_start,
                                     pid=pid,
                                     process_name=effect_process_name,
                                     logon_id=logon_id,
@@ -12357,6 +13165,8 @@ class ActivityGenerator:
                     process_time = self._schedule_bash_history_time(
                         user, system, time, command_line
                     )
+                    if not self._is_within_scenario_window(process_time):
+                        return
                     parent_pid = self._resolve_parent(
                         system, user, process_time, logon_id, process_name
                     )
@@ -12368,6 +13178,8 @@ class ActivityGenerator:
                         requested_time=process_time,
                         seed_text=command_line,
                     )
+                    if not self._is_within_scenario_window(process_time):
+                        return
                     pid = self.generate_process(
                         user,
                         system,
@@ -12383,10 +13195,14 @@ class ActivityGenerator:
                     self._emit_bash_command_event(user, system, process_time, command_line)
                     lifetime = _linux_foreground_lifetime(process_name, command_line)
                     if lifetime is not None:
+                        running_proc = self.state_manager.get_process(system.hostname, pid)
+                        actual_process_start = (
+                            running_proc.start_time if running_proc is not None else process_time
+                        )
                         termination_time = self._generate_bounded_foreground_process_termination(
                             user=user,
                             system=system,
-                            start_time=process_time,
+                            start_time=actual_process_start,
                             pid=pid,
                             process_name=process_name,
                             logon_id=logon_id,
@@ -12850,8 +13666,21 @@ class ActivityGenerator:
                 process_name,
                 ntpath.basename(process_name),
             )
-        network_source_ip = source_ip or self._explicit_credentials_source_ip(system, target_server)
-        network_source_port = source_port
+        if process_pid > 0:
+            time = self._clamp_after_visible_process_create(
+                system,
+                process_pid,
+                time,
+                "source.windows_explicit_credentials_after_process_create",
+            )
+        network_source_ip = self._explicit_credentials_source_ip(
+            system,
+            target_server,
+            source_ip,
+        )
+        network_source_port = (
+            source_port if not source_ip or source_ip.strip() == network_source_ip else 0
+        )
         if network_source_ip not in {"", "-"} and network_source_port <= 0:
             network_source_port = _ephemeral_port(_get_rng(), _get_os_category(system.os))
         event = SecurityEvent(
@@ -12920,10 +13749,33 @@ class ActivityGenerator:
             email=f"administrator@{self._valid_fallback_email_domain()}",
         )
 
-    def _explicit_credentials_source_ip(self, system: System, target_server: str) -> str:
+    def _explicit_credentials_source_ip(
+        self,
+        system: System,
+        target_server: str,
+        source_ip: str = "",
+    ) -> str:
         """Return source network metadata for remote explicit-credential use."""
         target = target_server.strip().lower()
         if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
+            default_source_ip = "-"
+        else:
+            system_domain = getattr(system, "domain", "")
+            local_names = {
+                system.hostname.lower(),
+                f"{system.hostname}.{system_domain}".lower() if system_domain else "",
+                system.ip,
+            }
+            target_host = target.split(".", 1)[0]
+            default_source_ip = (
+                "-"
+                if target in local_names or target_host == system.hostname.lower()
+                else system.ip
+            )
+        explicit_source_ip = source_ip.strip()
+        if explicit_source_ip in {"", "-"}:
+            return default_source_ip
+        if default_source_ip == "-":
             return "-"
         system_domain = getattr(system, "domain", "")
         local_names = {
@@ -12931,10 +13783,9 @@ class ActivityGenerator:
             f"{system.hostname}.{system_domain}".lower() if system_domain else "",
             system.ip,
         }
-        target_host = target.split(".", 1)[0]
-        if target in local_names or target_host == system.hostname.lower():
-            return "-"
-        return system.ip
+        if explicit_source_ip.lower() in local_names:
+            return system.ip
+        return default_source_ip
 
     def _ensure_explicit_credentials_subject_logon(
         self,
@@ -13008,7 +13859,7 @@ class ActivityGenerator:
             session is None
             or session.system != system.hostname
             or session.start_time > time
-            or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            or not _is_windows_workstation_session(session)
         ):
             return
         if not hasattr(self, "_last_workstation_lock_time"):
@@ -13057,7 +13908,7 @@ class ActivityGenerator:
             session is None
             or session.system != system.hostname
             or session.start_time > time
-            or session.logon_type not in _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES
+            or not _is_windows_workstation_session(session)
         ):
             return
         if lock_time is not None:
@@ -14711,6 +15562,14 @@ class ActivityGenerator:
         """
         from evidenceforge.events.contexts import SyslogContext
 
+        if app_name == "sshd" and _get_os_category(system.os) == "linux":
+            pid = self._normalize_sshd_syslog_pid(
+                system=system,
+                time=time,
+                message=message,
+                pid=pid,
+            )
+
         event = SecurityEvent(
             timestamp=time,
             event_type="syslog",
@@ -15820,6 +16679,29 @@ class ActivityGenerator:
             )
             if service_parent is not None:
                 return service_parent
+            shell_parent_allowed = not possible_parents or any(
+                parent in {"bash", "sh", "zsh"} for parent in possible_parents
+            )
+            if shell_parent_allowed:
+                if active_session is not None:
+                    session_shell_pid = self.ensure_linux_session_shell(
+                        user=user,
+                        target_system=system,
+                        logon_id=active_session.logon_id,
+                        logon_time=active_session.start_time,
+                        activity_time=time,
+                    )
+                    if session_shell_pid is not None:
+                        return session_shell_pid
+                visible_shell_pid = self.ensure_linux_visible_shell_parent(
+                    user=user,
+                    target_system=system,
+                    activity_time=time,
+                    logon_id=logon_id,
+                    logon_time=active_session.start_time if active_session is not None else None,
+                )
+                if visible_shell_pid is not None:
+                    return visible_shell_pid
             session_shell_pid = self._active_session_shell_pid(system, user, time, logon_id)
             if session_shell_pid is not None and any(
                 parent in {"bash", "sh", "zsh"} for parent in possible_parents
@@ -15985,6 +16867,28 @@ class ActivityGenerator:
             ):
                 return parent_pid
         elif parent_proc is not None and self._is_pid_active_at(system, parent_pid, time):
+            parent_exe = parent_image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+            if parent_exe in {"bash", "sh", "zsh"}:
+                session = self.state_manager.get_session(logon_id)
+                if session is not None:
+                    session_shell_pid = self.ensure_linux_session_shell(
+                        user=self._user_model_for_username(process_username),
+                        target_system=system,
+                        logon_id=logon_id,
+                        logon_time=session.start_time,
+                        activity_time=time,
+                    )
+                    if session_shell_pid is not None:
+                        return session_shell_pid
+                visible_shell_pid = self.ensure_linux_visible_shell_parent(
+                    user=self._user_model_for_username(process_username),
+                    target_system=system,
+                    activity_time=time,
+                    logon_id=logon_id,
+                    logon_time=session.start_time if session is not None else None,
+                )
+                if visible_shell_pid is not None:
+                    return visible_shell_pid
             return parent_pid
 
         resolved = self._resolve_parent(system, user, time, logon_id, process_name)
@@ -16030,6 +16934,58 @@ class ActivityGenerator:
             ):
                 return candidate
         return parent_pid
+
+    def _materialize_visible_linux_shell_parent_for_child(
+        self,
+        *,
+        system: System,
+        time: datetime,
+        logon_id: str,
+        parent_pid: int,
+        process_username: str,
+    ) -> int:
+        """Ensure post-window Linux shell parents are source-visible."""
+        if _get_os_category(system.os) != "linux":
+            return parent_pid
+        parent_proc = self.state_manager.get_process(system.hostname, parent_pid)
+        if parent_proc is None or not self._is_pid_active_at(system, parent_pid, time):
+            return parent_pid
+
+        parent_exe = parent_proc.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+        if parent_exe not in {"bash", "sh", "zsh"}:
+            return parent_pid
+
+        scenario_start = getattr(self, "_scenario_start_time", None)
+        if scenario_start is None:
+            return parent_pid
+        scenario_start = ensure_utc(scenario_start)
+        activity_time = ensure_utc(time)
+        if activity_time < scenario_start:
+            return parent_pid
+        if ensure_utc(parent_proc.start_time) >= scenario_start:
+            return parent_pid
+
+        user = self._user_model_for_username(process_username)
+        session = self.state_manager.get_session(logon_id)
+        if session is not None:
+            session_shell_pid = self.ensure_linux_session_shell(
+                user=user,
+                target_system=system,
+                logon_id=logon_id,
+                logon_time=session.start_time,
+                activity_time=activity_time,
+            )
+            if session_shell_pid is not None:
+                return session_shell_pid
+
+        visible_shell_pid = self.ensure_linux_visible_shell_parent(
+            user=user,
+            target_system=system,
+            activity_time=activity_time,
+            logon_id=logon_id,
+            logon_time=session.start_time if session is not None else None,
+        )
+        return visible_shell_pid if visible_shell_pid is not None else parent_pid
 
     def _is_windows_same_exe_gui_child(self, process_name: str, command_line: str) -> bool:
         """Return whether a Windows GUI command should be parented by its own executable."""

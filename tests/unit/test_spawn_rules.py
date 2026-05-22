@@ -7,7 +7,7 @@ Process trees should use spawn rules to determine valid parent-child
 relationships instead of defaulting everything to explorer.exe.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -1040,7 +1040,148 @@ class TestLinuxParentSelection:
         proc = state_manager.get_process(linux_system.hostname, pid)
         assert proc is not None
         assert proc.parent_pid != 4
-        assert proc.parent_pid == pids["bash"]
+        assert proc.parent_pid != pids["bash"]
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert proc.parent_pid == session.session_shell_pid
+        parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+
+    def test_linux_generate_process_replaces_hidden_boot_shell_parent(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Visible Linux process telemetry should materialize the owning shell parent."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(minutes=12)
+        state_manager.set_current_time(scenario_start - timedelta(minutes=30))
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=linux_system.hostname,
+            logon_type=5,
+            source_ip="-",
+            session_kind="service",
+            start_time=scenario_start + timedelta(minutes=10),
+        )
+
+        pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id=logon_id,
+            process_name="/usr/bin/last",
+            command_line="last -n 50",
+            parent_pid=pids["bash"],
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        session = state_manager.get_session(logon_id)
+        assert proc is not None
+        assert session is not None
+        assert proc.parent_pid != pids["bash"]
+        assert proc.parent_pid == session.session_shell_pid
+        parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.start_time >= scenario_start
+
+    def test_linux_generate_process_replaces_hidden_boot_shell_without_session(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """No-session Linux work should still avoid hidden boot bash parents."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(minutes=20)
+
+        first_pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id="",
+            process_name="/usr/bin/grep",
+            command_line="grep -i error /var/log/syslog",
+            parent_pid=pids["bash"],
+        )
+        second_pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time + timedelta(seconds=5),
+            logon_id="",
+            process_name="/usr/bin/tail",
+            command_line="tail -20 /var/log/syslog",
+            parent_pid=pids["bash"],
+        )
+
+        first = state_manager.get_process(linux_system.hostname, first_pid)
+        second = state_manager.get_process(linux_system.hostname, second_pid)
+        assert first is not None
+        assert second is not None
+        assert first.parent_pid != pids["bash"]
+        assert second.parent_pid == first.parent_pid
+        parent = state_manager.get_process(linux_system.hostname, first.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.start_time >= scenario_start
+
+    def test_linux_process_creation_guard_materializes_hidden_shell_parent(
+        self, state_manager, mock_emitters, linux_system, user, monkeypatch
+    ):
+        """The process boundary should repair hidden shell parents from any caller."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(minutes=20)
+
+        monkeypatch.setattr(
+            ag,
+            "_sanitize_user_parent_pid",
+            lambda **kwargs: kwargs["parent_pid"],
+        )
+
+        pid = ag.generate_process(
+            user=user,
+            system=linux_system,
+            time=event_time,
+            logon_id="",
+            process_name="/usr/bin/grep",
+            command_line="grep -i error /var/log/syslog",
+            parent_pid=pids["bash"],
+        )
+
+        proc = state_manager.get_process(linux_system.hostname, pid)
+        assert proc is not None
+        assert proc.parent_pid != pids["bash"]
+        parent = state_manager.get_process(linux_system.hostname, proc.parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.start_time >= scenario_start
+
+    def test_linux_resolve_parent_materializes_visible_shell_without_session(
+        self, state_manager, mock_emitters, linux_system, user
+    ):
+        """Linux parent resolution should return the visible shell it materializes."""
+        ag, pids = _setup_activity_gen(state_manager, mock_emitters, linux_system)
+        scenario_start = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        ag._scenario_start_time = scenario_start
+        event_time = scenario_start + timedelta(hours=1, minutes=18)
+
+        parent_pid = ag._resolve_parent(
+            linux_system,
+            user,
+            event_time,
+            "",
+            "/usr/bin/grep",
+        )
+
+        assert parent_pid != pids["bash"]
+        parent = state_manager.get_process(linux_system.hostname, parent_pid)
+        assert parent is not None
+        assert parent.image == "/bin/bash"
+        assert parent.username == user.username
+        assert parent.start_time >= scenario_start
 
     def test_web_service_account_process_uses_web_daemon_parent(self, state_manager, mock_emitters):
         web_system = System(

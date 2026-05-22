@@ -53,6 +53,7 @@ class ActiveSession:
         process_tree_root: Root PID for this session's process tree
         last_activity_time: Last baseline activity timestamp (for login cooldown)
         network_close_time: Close time for a transport connection backing the session
+        source_ready_time: Earliest source-visible time for session-owned child activity
     """
 
     logon_id: str
@@ -68,6 +69,7 @@ class ActiveSession:
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
     network_close_time: datetime | None = None
+    source_ready_time: datetime | None = None
     source_port: int = 0
     session_kind: str = "logon"
     transport_pid: int | None = None

@@ -108,7 +108,12 @@ def _resolve_template(
     return result
 
 
-def _get_role_pool(persona: str, server_role: str) -> str:
+def _get_role_pool(
+    persona: str,
+    server_role: str,
+    *,
+    workstation_like: bool = False,
+) -> str:
     """Map persona + server role to the command pool key in the YAML.
 
     Built-in alias mappings (developer→dba on DB servers, etc.) are checked
@@ -119,10 +124,13 @@ def _get_role_pool(persona: str, server_role: str) -> str:
     data = load_bash_commands()
     persona_lower = persona.lower() if persona else ""
 
-    # These stock personas now have their own workstation-normal pools.
-    # Keep developer and broad analyst aliases below because their server-role
-    # context still intentionally switches to dba/webadmin pools.
-    if persona_lower in {"help_desk", "data_analyst"} and persona_lower in data:
+    # These stock personas have workstation-normal pools, but those pools should
+    # not leak desktop diagnostics across Linux servers.
+    if (
+        persona_lower in {"help_desk", "data_analyst"}
+        and workstation_like
+        and persona_lower in data
+    ):
         return persona_lower
 
     # Built-in alias mappings that depend on server_role context
@@ -255,7 +263,7 @@ def _typo_allowed(
 
 _USER_TOOL_AFFINITY: dict[tuple[str, tuple[str, ...]], list[str]] = {}
 _COMMAND_RECENCY_LIMIT = 24
-_COMMAND_CANDIDATE_ATTEMPTS = 32
+_COMMAND_CANDIDATE_ATTEMPTS = 96
 _COMMAND_RECENCY: dict[tuple[str, str], deque[str]] = {}
 _COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
@@ -445,7 +453,7 @@ def _global_repeat_limit(command: str, pool_size: int) -> int:
     """Return the generation-wide soft repeat limit for an exact command."""
     if _low_repeat_group(command):
         return 2
-    return max(2, min(4, max(1, pool_size // 8)))
+    return max(2, min(3, max(1, pool_size // 14)))
 
 
 def _below_global_repeat_limit(command: str, pool_size: int, *, slack: int = 0) -> bool:
@@ -485,14 +493,14 @@ def _choose_template_with_memory(
             return command
 
     for command in candidates:
-        if command not in recent and _below_global_repeat_limit(command, len(pool), slack=1):
+        if command not in recent and _below_global_repeat_limit(command, len(pool)):
             _remember_command(system_hostname, username, command)
             return command
 
     command = min(
         candidates,
         key=lambda candidate: (
-            not _below_global_repeat_limit(candidate, len(pool), slack=1),
+            not _below_global_repeat_limit(candidate, len(pool)),
             _low_repeat_group(candidate) is not None,
             _COMMAND_GLOBAL_LOW_REPEAT_COUNTS[_low_repeat_group(candidate)]
             if _low_repeat_group(candidate)
@@ -533,7 +541,7 @@ def _try_choose_fresh_workflow_template(
     fresh_candidates = [
         command
         for command in candidates
-        if command not in recent and _below_global_repeat_limit(command, len(pool), slack=1)
+        if command not in recent and _below_global_repeat_limit(command, len(pool))
     ]
     if not fresh_candidates:
         return None
@@ -625,7 +633,8 @@ def pick_bash_session_commands(
     commands = load_bash_commands()
     params = commands.get("params", {})
     server_role = _resolve_server_role(system_hostname, system_services)
-    pool_key = _get_role_pool(persona, server_role)
+    workstation_like = _is_workstation_like_system(system_hostname, system_services)
+    pool_key = _get_role_pool(persona, server_role, workstation_like=workstation_like)
     selected: list[tuple[str, bool]] = []
 
     workflows = _workflow_candidates(commands, pool_key)
@@ -722,7 +731,8 @@ def pick_bash_command_entry(
     _remaining = 1.0 - _user_typo_rate
     if roll < _user_typo_rate + _remaining * 0.52:
         # Role-specific command with per-user tool affinity
-        pool_key = _get_role_pool(persona, server_role)
+        workstation_like = _is_workstation_like_system(system_hostname, system_services)
+        pool_key = _get_role_pool(persona, server_role, workstation_like=workstation_like)
         pool = commands.get(pool_key, commands.get("common", ["ls"]))
         if username and rng.random() < 0.80:
             pool = _get_user_pool(username, pool)

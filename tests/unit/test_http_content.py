@@ -6,6 +6,7 @@
 import random
 
 from evidenceforge.generation.activity.http_content import (
+    apply_transfer_size_variance,
     infer_mime_type_from_path,
     is_health_endpoint_path,
     is_stable_resource_path,
@@ -88,6 +89,49 @@ def test_success_response_size_is_stable_for_same_resource():
 
     assert first == second
     assert first != sibling
+
+
+def test_transfer_variant_changes_static_resource_bytes_by_client_profile():
+    base = response_size_for_status(200, "portal.example.com", "/assets/main.css")
+    client_a = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="portal.example.com",
+        uri="/assets/main.css",
+        content_type="text/css",
+        variant_key="10.10.1.10:chrome",
+    )
+    client_a_repeat = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="portal.example.com",
+        uri="/assets/main.css",
+        content_type="text/css",
+        variant_key="10.10.1.10:chrome",
+    )
+    client_b = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="portal.example.com",
+        uri="/assets/main.css",
+        content_type="text/css",
+        variant_key="10.10.1.11:firefox",
+    )
+
+    assert client_a == client_a_repeat
+    assert client_a != client_b
+    assert 1 <= client_a < base
+    assert (
+        apply_transfer_size_variance(
+            0,
+            status_code=304,
+            host="portal.example.com",
+            uri="/assets/main.css",
+            content_type="text/css",
+            variant_key="10.10.1.10:chrome",
+        )
+        == 0
+    )
 
 
 def test_health_endpoint_response_sizes_are_small_and_stable():

@@ -30,7 +30,7 @@ Verifies that the EcarEmitter produces records matching the eCAR spec:
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -564,6 +564,37 @@ class TestChronologicalOutput:
         ]
         assert len(rows) == 1
 
+    def test_close_drops_rows_shifted_after_output_window(self, tmp_path, ts):
+        """Final eCAR source ordering should not leak records after scenario end."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        emitter._output_end_time = ts + timedelta(seconds=10)
+
+        for offset in (5, 10, 11):
+            emitter.emit_event(
+                {
+                    "timestamp": ts + timedelta(seconds=offset),
+                    "hostname": "ws01",
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "pid": 100 + offset,
+                    "_host_fqdn": "ws01.example.org",
+                }
+            )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert len(rows) == 1
+        assert rows[0]["pid"] == 105
+
     def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
         """eCAR output should not terminate a process before later same-process telemetry."""
         fmt = Mock()
@@ -622,8 +653,8 @@ class TestChronologicalOutput:
         )
         assert terminate_ts > module_ts
 
-    def test_close_rewrites_linux_pids_after_canonical_create_ordering(self, tmp_path, ts):
-        """Linux PID morphology should follow final rendered process-create order."""
+    def test_close_rewrites_linux_pids_by_source_timestamp_not_canonical_order(self, tmp_path, ts):
+        """Linux PID morphology should follow rendered source time, not canonical time."""
         fmt = Mock()
         fmt.output.template = "{}"
         fmt.output.header_template = None
@@ -669,7 +700,10 @@ class TestChronologicalOutput:
             key=lambda row: row["timestamp_ms"],
         )
         assert [row["pid"] for row in creates] == sorted(row["pid"] for row in creates)
-        assert creates[1]["pid"] > 5000
+        assert creates[0]["pid"] == 1000
+        assert creates[1]["pid"] == 5000
+        assert "_canonical_ms" not in creates[0]
+        assert "_canonical_ms" not in creates[1]
 
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
@@ -876,6 +910,50 @@ class TestChronologicalOutput:
 
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
+
+    def test_inbound_flow_prefers_canonical_destination_pid(self, emitter, monkeypatch, ts):
+        """Session-owned inbound flows should not fall back to the generic listener PID."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts)
+        ssh_child_pid = state.create_process(
+            "APP-INT-01",
+            0,
+            "/usr/sbin/sshd",
+            "sshd: [accepted]",
+            "root",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"APP-INT-01": {"sshd": 36148}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="APP-INT-01",
+                ip="10.10.2.30",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="app-int-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.10.1.31",
+                src_port=50049,
+                dst_ip="10.10.2.30",
+                dst_port=22,
+                protocol="tcp",
+                responding_pid=ssh_child_pid,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == ssh_child_pid
+        assert emitted[0]["pid"] != 36148
 
     def test_inbound_listener_flow_can_render_principal(self, emitter, monkeypatch, ts):
         """Observed listener-side FLOW rows can carry local service principal context."""

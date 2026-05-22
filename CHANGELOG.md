@@ -4,6 +4,49 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v0.9.1 (2026-05-21)
+
+This patch release packages the loop 189-199 realism follow-up work after v0.9.0.
+The branch contains only `fix:`, `docs:`, and `chore:` commits since v0.9.0, so the
+version moves from `0.9.0` to `0.9.1` under the pre-1.0 semver policy.
+
+**Linux source timing and session lineage**
+
+- Aligned Linux cron, shell, eCAR source timing, Zeek TCP packet accounting, and Windows/Linux
+  session-lineage behavior across the loop 189-191 fixes (`b25412a3`, `b1fa742e`, `8477f079`,
+  `ace69242`, `6e4136c5`).
+- Materialized and guarded Linux shell parents for reused, local, loose, and visible session paths
+  so endpoint process trees preserve source-native lineage (`b1c4ebe0`, `02b7ac1b`, `174a86fb`,
+  `9c6c849e`, `21451a66`, `005766b1`).
+
+**DNS, SSH, and explicit-credential realism**
+
+- Rendered full Zeek SOA RDATA and carried SSH source-readiness, inbound-flow attribution,
+  responder PID assignment, tuple-scoped PID reuse, syslog PID normalization, and source-tuple
+  reservation through the Linux SSH family (`c6952e7e`, `2535ad69`, `252bac12`, `9b2a354c`,
+  `1a5f31a5`, `473b7fba`, `3ae36035`).
+- Ordered Windows explicit-credential audit events after their visible caller process evidence
+  (`a1fdb87f`).
+
+**Web, proxy, command, and eCAR timing texture**
+
+- Varied web and auto-HTTP transfer bytes by client/profile, ordered explicit proxy tunnel legs,
+  diversified Linux command/session texture, preserved Linux eCAR occurrence timing, aligned
+  foreground source-visible termination timing, and preserved canonical sshd PIDs for visible
+  syslog sessions (`a6a25651`, `559e7b69`, `3e208048`, `dcf26461`, `815f3827`, `226f1480`,
+  `7568ba52`).
+
+**Assessment records**
+
+- Recorded loop 191-194 and loop 199 assessment summaries for the follow-up realism batch
+  (`34f84a52`, `d96f238b`, `03e5fb7b`, `d132f43f`, `fe2bbf06`).
+
+**Validation**
+
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` passed.
+- `uv run pytest --no-cov` passed with `3592 passed`, `15 skipped`.
+
 ## v0.9.0 (2026-05-21)
 
 This minor release packages the source-aware timing planner, expanded workstation-normal activity
