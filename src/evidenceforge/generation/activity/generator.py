@@ -5929,7 +5929,9 @@ class ActivityGenerator:
             sshd_pid = (
                 session.transport_pid
                 if session and session.transport_pid is not None
-                else self.state_manager.allocate_transient_linux_pid(system.hostname, time)
+                else self.state_manager.allocate_transient_linux_pid(
+                    system.hostname, time, os_category=system.os_category
+                )
             )
             self.state_manager.update_session_metadata(
                 logon_id,
@@ -6284,7 +6286,9 @@ class ActivityGenerator:
                 ssh_source_port = linux_ssh_source_port or _ephemeral_port(_get_rng(), "linux")
                 event.syslog = SyslogContext(
                     app_name="sshd",
-                    pid=self.state_manager.allocate_transient_linux_pid(system.hostname, time),
+                    pid=self.state_manager.allocate_transient_linux_pid(
+                        system.hostname, time, os_category=system.os_category
+                    ),
                     facility=10,
                     severity=4,
                     message=(
@@ -6295,7 +6299,9 @@ class ActivityGenerator:
             else:
                 event.syslog = SyslogContext(
                     app_name="login",
-                    pid=self.state_manager.allocate_transient_linux_pid(system.hostname, time),
+                    pid=self.state_manager.allocate_transient_linux_pid(
+                        system.hostname, time, os_category=system.os_category
+                    ),
                     facility=10,
                     severity=4,
                     message=(
@@ -6656,7 +6662,9 @@ class ActivityGenerator:
             sshd_pid = (
                 session.transport_pid
                 if session and session.transport_pid is not None
-                else self.state_manager.allocate_transient_linux_pid(system.hostname, time)
+                else self.state_manager.allocate_transient_linux_pid(
+                    system.hostname, time, os_category=system.os_category
+                )
             )
             source_port = session.source_port if session else 0
             if not source_port or not session or session.source_ip == system.ip:

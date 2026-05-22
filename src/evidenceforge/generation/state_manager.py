@@ -868,18 +868,36 @@ class StateManager:
         allocations.append((current_time, pid))
         return pid
 
-    def allocate_transient_linux_pid(self, system: str, event_time: datetime) -> int:
-        """Allocate a Linux PID for syslog-only transient process observations.
+    def allocate_transient_linux_pid(
+        self,
+        system: str,
+        event_time: datetime,
+        os_category: str = "linux",
+    ) -> int:
+        """Allocate a transient PID for syslog-only process observations.
 
         Syslog records such as ``sudo[pid]`` and per-session ``sshd[pid]`` can
         describe short-lived processes that are not emitted as canonical eCAR
         process-create events. They still belong to the same host PID namespace
-        as canonical process evidence, so this method shares the Linux allocator
+        as canonical process evidence, so this method shares the per-host allocator
         and used-ID ledger without registering a durable RunningProcess.
         """
         with self._lock:
-            self._initialize_pid_allocator(system, "linux")
+            allocator_os = "windows" if os_category == "windows" else "linux"
+            self._initialize_pid_allocator(system, allocator_os)
             pid_rng = self._pid_rngs[system]
+            if self._pid_os.get(system) == "windows":
+                pid = self._pid_counters[system]
+                gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
+                self._pid_counters[system] += 4 * gap
+                if self._pid_counters[system] > 65536:
+                    self._pid_counters[system] = 4000
+                    running = {
+                        p.pid for (s, _), p in self.state.running_processes.items() if s == system
+                    }
+                    while self._pid_counters[system] in running:
+                        self._pid_counters[system] += 4
+                return pid
             return self._allocate_linux_pid(system, pid_rng, event_time)
 
     def create_process(

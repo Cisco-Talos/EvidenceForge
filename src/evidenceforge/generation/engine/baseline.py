@@ -1254,7 +1254,9 @@ class BaselineMixin:
             if template.startswith("Registered"):
                 host_agents.append(agent)
 
-        process_id = self.state_manager.allocate_transient_linux_pid(hostname, timestamp)
+        process_id = self.state_manager.allocate_transient_linux_pid(
+            hostname, timestamp, os_category=system.os_category
+        )
         action_id, action_process_path = self._polkit_action_profile(entry, rng)
         values = {
             "action_id": action_id,
@@ -1651,6 +1653,7 @@ class BaselineMixin:
                         else self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             detail_ts,
+                            os_category=system.os_category,
                         )
                     )
                     self.activity_generator.generate_syslog_event(
@@ -6677,6 +6680,7 @@ class BaselineMixin:
                         pid = self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             ts,
+                            os_category=system.os_category,
                         )
                     else:
                         pid_key = _APP_TO_PID_KEY.get(app)
