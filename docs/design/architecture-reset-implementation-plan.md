@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit complete
 
 ## Summary
 
@@ -242,6 +242,24 @@ boundary for subject/session ownership, target account/group identity,
 source-ready timing, process/thread lifecycle validation, and shared Sysmon/eCAR
 context. Public scenario YAML, CLI behavior, output layout, concrete format
 names, and authoring skills remain unchanged for this slice.
+
+The final boundary audit found one true leftover correlated family: auxiliary
+auth/session and DC-validation helpers, which were moved behind auth/session
+bundles in the slice above. The remaining direct generator helpers are
+deliberately source-local or adapter-only:
+
+- `generate_wfp_connection()` renders Windows host-audit WFP companions requested
+  from the network-connection bundle.
+- `generate_image_load()` emits one module-load occurrence requested from
+  process side-effect adapters.
+- `generate_syslog_event()` and `generate_sensor_startup()` emit source-local
+  status/health evidence.
+- `generate_raw()` remains the user-facing raw event escape hatch.
+- `generate_system_process()` and `generate_system_process_termination()`
+  delegate to process lifecycle entrypoints.
+- `_emit_ocsp_http_response()`, `_emit_ad_srv_discovery()`, and
+  `_emit_process_network_correlation()` feed already-bundled HTTP, DNS, network,
+  and process paths rather than owning separate lifecycle families.
 
 ## Migration Gates
 

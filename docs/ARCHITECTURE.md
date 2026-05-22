@@ -400,6 +400,20 @@ Action bundles own cross-event concerns:
 receive only canonical events and source-local render rules; they do not inspect or
 execute action bundles directly.
 
+The final bundle-boundary audit classifies the remaining direct generator helpers
+as intentionally source-local or adapter-only. `generate_wfp_connection()` is the
+Windows host-audit renderer used by the network-connection bundle,
+`generate_image_load()` is a single module-load occurrence used by process
+side-effect adapters, `generate_syslog_event()` and `generate_sensor_startup()`
+emit source-local status/health evidence, and `generate_raw()` is the
+user-facing raw escape hatch. `generate_system_process()` and
+`generate_system_process_termination()` delegate to process lifecycle
+entrypoints, while helpers such as `_emit_ocsp_http_response()`,
+`_emit_ad_srv_discovery()`, and `_emit_process_network_correlation()` feed
+already-bundled HTTP/DNS/network/process paths. New correlated behavior should
+still start with an action bundle unless it is deliberately source-local and
+does not need cross-source lifecycle, timing, state, or identity ownership.
+
 ### WorldModel and WorldPlanner
 
 The compiled world-model layer (`src/evidenceforge/generation/world_model.py`) sits above the canonical event model and answers the realism question the event model does not: "why would this user/system do this here?"
