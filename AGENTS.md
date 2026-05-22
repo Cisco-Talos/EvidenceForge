@@ -312,6 +312,15 @@ bash-history timestamps, emit bash history, and then emit optional process
 telemetry through shared adapter hooks. Do not hand-roll separate bash-history
 and process timing paths for the same modeled command.
 
+For process execution, route canonical process create/terminate lifecycle and
+process-owned side effects through the process-execution action bundle. The
+bundle owns the boundary between modeled execution intent and `SecurityEvent`
+evidence: session/parent ownership, source-visible create/terminate timing,
+command-owned network effects, guaranteed process-image file evidence, and
+probabilistic file/module/registry endpoint side effects. Other bundles may call
+the public process entrypoints, but they should not duplicate process lifecycle
+or side-effect generation locally.
+
 When fixing realism defects:
 - Cross-event ordering, lifecycle, source timing, observation, and durable
   identities belong in bundle/lifecycle/timing/observation layers.

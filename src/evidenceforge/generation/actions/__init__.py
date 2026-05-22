@@ -44,6 +44,12 @@ from evidenceforge.generation.actions.linux_shell_command import (
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
 )
+from evidenceforge.generation.actions.process_execution import (
+    ProcessExecutionActionBundle,
+    ProcessExecutionRequest,
+    ProcessTerminationActionBundle,
+    ProcessTerminationRequest,
+)
 from evidenceforge.generation.actions.proxy_transaction import (
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
@@ -82,6 +88,10 @@ __all__ = [
     "file_transfer_hashes",
     "LinuxShellCommandActionBundle",
     "LinuxShellCommandRequest",
+    "ProcessExecutionActionBundle",
+    "ProcessExecutionRequest",
+    "ProcessTerminationActionBundle",
+    "ProcessTerminationRequest",
     "ProxyTransactionActionBundle",
     "ProxyTransactionRequest",
     "RdpSessionActionBundle",

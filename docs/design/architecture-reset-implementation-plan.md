@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command action-bundle slices complete; later slices pending
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution action-bundle slices complete; later slices pending
 
 ## Summary
 
@@ -139,6 +139,16 @@ preparation, schedules bash history after session readiness, emits the
 existing adapter hooks. Public scenario YAML, CLI behavior, output layout, and
 authoring skills remain unchanged for this slice.
 
+The process-execution action-bundle extraction moves canonical process
+create/terminate orchestration behind `ProcessExecutionActionBundle` and
+`ProcessTerminationActionBundle`. `ActivityGenerator.generate_process()` and
+`generate_process_termination()` remain the public compatibility entrypoints,
+while the bundles own the internal boundary for parent/session ownership,
+source-visible process lifecycle timing, command-owned network effects,
+guaranteed process-image file evidence, and probabilistic file/module/registry
+endpoint side effects. Public scenario YAML, CLI behavior, output layout, and
+authoring skills remain unchanged for this slice.
+
 ## Migration Gates
 
 - No public YAML or CLI changes in the first slice.
@@ -193,6 +203,10 @@ authoring skills remain unchanged for this slice.
   of bash-history dwell, same-user cross-host second deconfliction, scheduled
   bash/process timing, process telemetry suppression, alias/interpreter/pipeline
   process expansion, and foreground serialization.
+- Process-execution probes cover stable process create/terminate anchors,
+  bundle-to-adapter delegation, existing process-create behavior, process
+  termination behavior, parent/session repair, command-owned network effects,
+  and file/module/registry side-effect preservation.
 - Existing SSH, world-model, syslog, Zeek, EDR/eCAR, bash-history, validation, and
   ground-truth tests remain the regression suite for behavior preservation.
 - Normal validation before committing remains:

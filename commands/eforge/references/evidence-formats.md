@@ -149,6 +149,7 @@ only and `eforge eval` maps both variants back to the canonical
 - ProcessGuid is deterministic from (hostname, PID, process creation time), so Events 1/3/5/7/8/10/11/12/13/22 agree for the same known process — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
+- Process create/terminate lifecycle and process-owned file/module/registry/network side effects are coordinated through the internal process-execution bundle so endpoint sources share parent/session identity and source-visible ordering.
 - Implemented events focus on the project evidence model: 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22.
 
 ---

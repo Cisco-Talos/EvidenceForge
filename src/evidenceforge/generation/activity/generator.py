@@ -71,6 +71,10 @@ from evidenceforge.generation.actions import (
     HttpResponseFileTransferRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    ProcessExecutionActionBundle,
+    ProcessExecutionRequest,
+    ProcessTerminationActionBundle,
+    ProcessTerminationRequest,
     ProxyTransactionActionBundle,
     ProxyTransactionRequest,
     RdpSessionActionBundle,
@@ -7024,7 +7028,38 @@ class ActivityGenerator:
         Returns:
             PID of the new process
         """
+        request = ProcessExecutionRequest(
+            user=user,
+            system=system,
+            time=time,
+            logon_id=logon_id,
+            process_name=process_name,
+            command_line=command_line,
+            parent_pid=parent_pid,
+            ensure_file_event=ensure_file_event,
+            from_storyline=from_storyline,
+            suppress_command_file_effect=suppress_command_file_effect,
+            allow_existing_browser_reuse=allow_existing_browser_reuse,
+            allow_browser_launch_spacing=allow_browser_launch_spacing,
+        )
+        return ProcessExecutionActionBundle(self, request).execute()
+
+    def _execute_process_create_bundle(self, request: ProcessExecutionRequest) -> int:
+        """Expand a process-execution bundle through the compatibility adapter."""
         from evidenceforge.events.contexts import ProcessContext
+
+        user = request.user
+        system = request.system
+        time = request.time
+        logon_id = request.logon_id
+        process_name = request.process_name
+        command_line = request.command_line
+        parent_pid = request.parent_pid
+        ensure_file_event = request.ensure_file_event
+        from_storyline = request.from_storyline
+        suppress_command_file_effect = request.suppress_command_file_effect
+        allow_existing_browser_reuse = request.allow_existing_browser_reuse
+        allow_browser_launch_spacing = request.allow_browser_launch_spacing
 
         self.state_manager.set_current_time(time)
         if _get_os_category(system.os) == "windows":
@@ -8019,7 +8054,28 @@ class ActivityGenerator:
             process_name: Full path of the terminated process
             logon_id: LogonID of the owning session
         """
+        request = ProcessTerminationRequest(
+            user=user,
+            system=system,
+            time=time,
+            pid=pid,
+            process_name=process_name,
+            logon_id=logon_id,
+            from_storyline=from_storyline,
+        )
+        ProcessTerminationActionBundle(self, request).execute()
+
+    def _execute_process_termination_bundle(self, request: ProcessTerminationRequest) -> None:
+        """Expand a process-termination bundle through the compatibility adapter."""
         from evidenceforge.events.contexts import ProcessContext
+
+        user = request.user
+        system = request.system
+        time = request.time
+        pid = request.pid
+        process_name = request.process_name
+        logon_id = request.logon_id
+        from_storyline = request.from_storyline
 
         running_proc = self.state_manager.get_process(system.hostname, pid)
         if self._process_termination_recorded(

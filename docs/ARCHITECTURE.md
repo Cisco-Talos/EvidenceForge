@@ -301,6 +301,16 @@ keeps command pools, lifecycle clamps, and process side-effect builders as
 adapter hooks while moving the orchestration boundary above individual
 `SecurityEvent`s.
 
+Process-execution callers supply one process create or process terminate intent.
+`ProcessExecutionActionBundle` and `ProcessTerminationActionBundle` own the
+internal boundary around canonical process lifecycle evidence: parent/session
+ownership, source-visible create/terminate timing, command-owned network
+effects, guaranteed process-image file evidence, and probabilistic
+file/module/registry endpoint side effects. The current slice keeps the detailed
+identity repair and side-effect builders in the activity-generator adapter so
+existing callers, emitters, and public scenario behavior remain stable while
+other bundles gain one shared process lifecycle path.
+
 Action bundles own cross-event concerns:
 
 - Deterministic action anchors for durable references.

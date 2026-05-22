@@ -37,6 +37,10 @@ from evidenceforge.generation.actions import (
     ExplicitCredentialUseRequest,
     LinuxShellCommandActionBundle,
     LinuxShellCommandRequest,
+    ProcessExecutionActionBundle,
+    ProcessExecutionRequest,
+    ProcessTerminationActionBundle,
+    ProcessTerminationRequest,
     RdpSessionActionBundle,
     RdpSessionRequest,
     WindowsServiceInstallActionBundle,
@@ -2353,6 +2357,64 @@ class TestActivityGenerator:
         assert event.process.logon_id == logon_id
         assert event.process.image == process_name
         assert event.process.command_line == command_line
+
+    def test_process_execution_bundle_anchor_is_stable(self, test_user, test_system):
+        """Process execution requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+
+        first = ProcessExecutionActionBundle(Mock(), request).anchor
+        second = ProcessExecutionActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "process_execution"
+        assert first.stable_id.startswith("process-execution-")
+
+    def test_process_execution_bundle_delegates_to_adapter(self, test_user, test_system):
+        """The bundle should own the entrypoint while preserving the adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+        executor = Mock()
+        executor._execute_process_create_bundle.return_value = 4242
+
+        pid = ProcessExecutionActionBundle(executor, request).execute()
+
+        assert pid == 4242
+        executor._execute_process_create_bundle.assert_called_once_with(request)
+
+    def test_process_termination_bundle_delegates_to_adapter(self, test_user, test_system):
+        """Termination should share the process action-bundle boundary."""
+        timestamp = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
+        request = ProcessTerminationRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            pid=4242,
+            process_name=r"C:\Windows\System32\cmd.exe",
+            logon_id="0x12345",
+        )
+        executor = Mock()
+
+        ProcessTerminationActionBundle(executor, request).execute()
+
+        anchor = ProcessTerminationActionBundle(Mock(), request).anchor
+        assert anchor.family == "process_termination"
+        assert anchor.stable_id.startswith("process-termination-")
+        executor._execute_process_termination_bundle.assert_called_once_with(request)
 
     def test_generate_process_hosts_windows_batch_scripts_under_cmd(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
