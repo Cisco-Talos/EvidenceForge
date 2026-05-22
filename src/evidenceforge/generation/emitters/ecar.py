@@ -1047,7 +1047,10 @@ class EcarEmitter(HostMultiplexEmitter):
         def rewrite_pid_field(record: dict[str, Any]) -> None:
             object_id = str(record.get("objectID") or "")
             actor_id = str(record.get("actorID") or "")
-            new_pid = new_pid_by_object_id.get(object_id) or new_pid_by_object_id.get(actor_id)
+            if record.get("object") == "PROCESS" and record.get("action") == "OPEN":
+                new_pid = new_pid_by_object_id.get(actor_id) or new_pid_by_object_id.get(object_id)
+            else:
+                new_pid = new_pid_by_object_id.get(object_id) or new_pid_by_object_id.get(actor_id)
             if new_pid is None:
                 old_pid = cls._ecar_int(record.get("pid"))
                 new_pid = old_pid_map.get(old_pid)
