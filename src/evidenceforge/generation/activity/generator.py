@@ -8187,11 +8187,14 @@ class ActivityGenerator:
         time: datetime,
         dst_port: int,
         proto: str,
+        conn_state: str,
         service: str,
         source_system: System | None,
     ) -> None:
         """Ensure visible internal-to-DC Kerberos flows have nearby DC audit evidence."""
         if proto not in {"tcp", "udp"} or dst_port != 88 or service != "kerberos":
+            return
+        if proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"}:
             return
         if source_system is None:
             return
@@ -9430,7 +9433,9 @@ class ActivityGenerator:
             if duration is None or duration < http_min_duration:
                 duration = http_min_duration + rng.uniform(0.0, 0.025)
 
-        kerberos_has_response = not (conn_state in {"S0", "REJ", "OTH"} and (resp_bytes or 0) <= 0)
+        kerberos_has_response = conn_state not in {"S0", "S1", "SH", "SHR", "REJ", "OTH"} and (
+            (resp_bytes or 0) > 0 or conn_state == "SF"
+        )
         if kerberos_has_response:
             self._emit_dc_audit_for_kerberos_connection(
                 src_ip=src_ip,
@@ -9439,6 +9444,7 @@ class ActivityGenerator:
                 time=time,
                 dst_port=dst_port,
                 proto=proto,
+                conn_state=conn_state,
                 service=service or "",
                 source_system=resolved_source_system,
             )
@@ -9466,6 +9472,7 @@ class ActivityGenerator:
             and kerberos_dc_hostname
             and src_port is not None
             and src_port > 0
+            and not (proto == "tcp" and conn_state in {"S0", "S1", "SH", "SHR", "REJ", "OTH"})
         ):
             kerberos_audit_count = self._kerberos_audit_count_for_connection(
                 src_ip,
