@@ -956,6 +956,7 @@ Data works but experienced analysts spot tells. Grouped by format for efficient 
 - [x] Causal Ordering hard failure on generated audit sample — root cause was future same-hour session reuse during non-chronological baseline generation. Session lookup now only reuses sessions whose start time is at or before the activity timestamp. Fresh HTTP/proxy sample eval improved Causal Ordering from 95.53% to 99.94%, and all hard acceptance criteria pass.
 - [x] Storyline Trace Coverage hostname normalization bug — resolved by later FQDN/bare hostname indexing and storyline trace normalization fixes.
 - [ ] Ground truth File IOCs section truncated in GROUND_TRUTH.md output
+- [x] Harden Linux PID allocator against unbounded collision retries when parent PID is near `pid_max` (bounded Linux PID collision retries now fail fast with a clear `StateError` instead of spinning indefinitely).
 
 ### Cross-Source Correlation (depends on Tier 1 baseline migration)
 
