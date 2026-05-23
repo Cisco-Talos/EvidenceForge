@@ -793,6 +793,41 @@ class TestChronologicalOutput:
         assert emitted[0]["pid"] == -1
         assert "actorID" not in emitted[0]
 
+    def test_incomplete_flow_without_duration_stays_at_canonical_attempt_time(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """FLOW rows without a duration should not drift after a zero-duration Zeek row."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=135,
+                protocol="tcp",
+                conn_state="S0",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] == ts
+
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
         emitted: list[dict] = []

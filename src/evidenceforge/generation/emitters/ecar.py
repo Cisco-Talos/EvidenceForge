@@ -742,7 +742,11 @@ class EcarEmitter(HostMultiplexEmitter):
         """Return the latest source-native FLOW observation inside a connection interval."""
 
         net = event.network
-        if net is None or net.duration is None:
+        if net is None:
+            return None
+        if net.duration is None:
+            if net.conn_state in {"S0", "REJ", "RSTO", "RSTR", "SH", "SHR"}:
+                return event.timestamp
             return None
         close_time = event.timestamp + timedelta(seconds=max(0.0, net.duration))
         if close_time <= event.timestamp:
