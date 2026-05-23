@@ -49,6 +49,7 @@ from evidenceforge.generation.engine.baseline import (
     _module_matches_process,
     _ntp_observed_second,
     _ntp_sync_interval_seconds,
+    _ntp_sync_seconds_for_hour,
     _render_extra_sudo_command_template,
     _sample_lock_duration,
     _ufw_block_syn_packet_len,
@@ -421,6 +422,25 @@ class TestIdsAlertCorrelation:
         assert any(abs(interval - 3600.0) > 30.0 for interval in intervals)
         assert min(intervals) >= 300.0
         assert observed != [4096.0 * sequence for sequence in range(12)]
+
+    def test_ntp_schedule_produces_visible_syncs_after_warmup(self):
+        """Fast-forwarding the NTP schedule should not skip the visible window."""
+        generation_epoch = datetime(2024, 6, 14, 22, 0, tzinfo=UTC)
+        visible_hours = [generation_epoch + timedelta(hours=hour) for hour in range(8, 16)]
+        syncs_by_hour = [
+            _ntp_sync_seconds_for_hour(
+                "WS-01",
+                "129.6.15.28",
+                generation_epoch,
+                hour,
+                4096,
+            )
+            for hour in visible_hours
+        ]
+        total_syncs = sum(len(syncs) for syncs in syncs_by_hour)
+
+        assert total_syncs > 0
+        assert [len(syncs) for syncs in syncs_by_hour] != [1] * len(syncs_by_hour)
 
     def test_completed_tls_duration_contains_zeek_analyzer_evidence(
         self, activity_gen, mock_emitters, timestamp

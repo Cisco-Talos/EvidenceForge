@@ -148,6 +148,59 @@ def _ntp_observed_second(
     return scheduled_second + rng.uniform(-1.5, 2.5)
 
 
+def _ntp_sync_seconds_for_hour(
+    hostname: str,
+    ntp_ip: str,
+    generation_epoch: datetime,
+    current_hour: datetime,
+    poll_seconds: int,
+) -> list[float]:
+    """Return observed NTP sync seconds from generation epoch for one hour."""
+    hour_start_sec = (current_hour - generation_epoch).total_seconds()
+    hour_end_sec = hour_start_sec + 3600
+    phase_rng = random.Random(_stable_seed(f"ntp_phase:{hostname}:{ntp_ip}:{poll_seconds}"))
+    scheduled_second = phase_rng.uniform(0, min(3600, poll_seconds))
+    sequence = 0
+    max_interval = poll_seconds * 2.45
+    if scheduled_second < hour_start_sec:
+        skip_count = max(0, int((hour_start_sec - scheduled_second) // max_interval) - 2)
+        for _ in range(skip_count):
+            scheduled_second += _ntp_sync_interval_seconds(
+                hostname,
+                ntp_ip,
+                sequence,
+                poll_seconds,
+            )
+            sequence += 1
+    while scheduled_second < hour_start_sec:
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+
+    observed_seconds: list[float] = []
+    while scheduled_second < hour_end_sec:
+        observed_second = _ntp_observed_second(
+            hostname,
+            ntp_ip,
+            sequence,
+            scheduled_second,
+        )
+        if hour_start_sec <= observed_second < hour_end_sec:
+            observed_seconds.append(observed_second)
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+    return observed_seconds
+
+
 def _linux_baseline_session_initiator(
     user: str,
     *,
@@ -4894,7 +4947,6 @@ class BaselineMixin:
                 return -1
 
             hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
-            hour_end_sec = hour_start_sec + 3600
 
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
@@ -4950,68 +5002,33 @@ class BaselineMixin:
                         system.ip,
                         ntp_ip,
                     )
-                    phase_rng = random.Random(
-                        _stable_seed(f"ntp_phase:{system.hostname}:{ntp_ip}:{poll_seconds}")
-                    )
-                    scheduled_second = phase_rng.uniform(0, min(3600, poll_seconds))
-                    sequence = 0
-                    min_interval = max(300.0, poll_seconds * 0.45)
-                    if scheduled_second < hour_start_sec:
-                        skip_count = max(
-                            0,
-                            int((hour_start_sec - scheduled_second) // min_interval) - 2,
-                        )
-                        for _ in range(skip_count):
-                            scheduled_second += _ntp_sync_interval_seconds(
-                                system.hostname,
-                                ntp_ip,
-                                sequence,
-                                poll_seconds,
-                            )
-                            sequence += 1
-                    while scheduled_second < hour_start_sec:
-                        scheduled_second += _ntp_sync_interval_seconds(
-                            system.hostname,
-                            ntp_ip,
-                            sequence,
-                            poll_seconds,
-                        )
-                        sequence += 1
                     ntp_pid = (
                         _svc_pid("svchost_local_svc")
                         if os_cat == "windows"
                         else _svc_pid("chronyd", "timesyncd")
                     )
-                    while scheduled_second < hour_end_sec:
-                        observed_second = _ntp_observed_second(
-                            system.hostname,
-                            ntp_ip,
-                            sequence,
-                            scheduled_second,
+                    for observed_second in _ntp_sync_seconds_for_hour(
+                        system.hostname,
+                        ntp_ip,
+                        self._generation_epoch,
+                        current_hour,
+                        poll_seconds,
+                    ):
+                        ts = self._generation_epoch + timedelta(seconds=observed_second)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=ntp_ip,
+                            time=ts,
+                            dst_port=123,
+                            proto="udp",
+                            service="ntp",
+                            duration=rng.uniform(0.01, 0.1),
+                            orig_bytes=48,
+                            resp_bytes=48,
+                            source_system=system,
+                            pid=ntp_pid,
                         )
-                        if hour_start_sec <= observed_second < hour_end_sec:
-                            ts = self._generation_epoch + timedelta(seconds=observed_second)
-                            self.state_manager.set_current_time(ts)
-                            self.activity_generator.generate_connection(
-                                src_ip=system.ip,
-                                dst_ip=ntp_ip,
-                                time=ts,
-                                dst_port=123,
-                                proto="udp",
-                                service="ntp",
-                                duration=rng.uniform(0.01, 0.1),
-                                orig_bytes=48,
-                                resp_bytes=48,
-                                source_system=system,
-                                pid=ntp_pid,
-                            )
-                        scheduled_second += _ntp_sync_interval_seconds(
-                            system.hostname,
-                            ntp_ip,
-                            sequence,
-                            poll_seconds,
-                        )
-                        sequence += 1
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
