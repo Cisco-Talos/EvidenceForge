@@ -28,6 +28,7 @@ Random instance, avoiding GIL contention on shared state.
 
 import hashlib
 import random
+import uuid
 from threading import local
 
 _thread_local = local()
@@ -48,6 +49,11 @@ def _get_rng() -> random.Random:
     return _thread_local.rng
 
 
+def reset_thread_rng(seed: int = 42) -> None:
+    """Reset the current thread's deterministic RNG stream."""
+    _thread_local.rng = random.Random(seed)
+
+
 def _stable_seed(key: str) -> int:
     """Create a deterministic integer seed from a string.
 
@@ -55,3 +61,9 @@ def _stable_seed(key: str) -> int:
     Produces the same seed across processes and Python invocations.
     """
     return int(hashlib.sha256(key.encode()).hexdigest(), 16) % (2**32)
+
+
+def stable_uuid(namespace: str, *parts: object) -> str:
+    """Create a deterministic UUID-shaped identifier from stable semantic parts."""
+    normalized = "|".join("" if part is None else str(part) for part in parts)
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"evidenceforge:{namespace}:{normalized}"))

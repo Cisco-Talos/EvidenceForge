@@ -29,7 +29,6 @@ log generation, ensuring consistency across log formats.
 import hashlib
 import logging
 import random
-import uuid
 from datetime import datetime, timedelta
 from threading import RLock
 
@@ -42,7 +41,7 @@ from evidenceforge.models.state import (
     RunningProcess,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -342,7 +341,18 @@ class StateManager:
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=stable_uuid(
+                    "session",
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                    source_ip,
+                    source_port,
+                    session_start_time.isoformat(),
+                    logon_id,
+                    windows_session_id,
+                ),
                 logon_guid=logon_guid,
             )
 
@@ -459,7 +469,18 @@ class StateManager:
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=stable_uuid(
+                    "registered-session",
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                    source_ip,
+                    source_port,
+                    ensure_utc(start_time).isoformat(),
+                    logon_id,
+                    windows_session_id,
+                ),
                 logon_guid=logon_guid,
             )
             self.state.active_sessions[logon_id] = session
@@ -966,7 +987,17 @@ class StateManager:
                 )
 
             # Create process
-            ecar_object_id = str(uuid.uuid4())
+            ecar_object_id = stable_uuid(
+                "process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                self.state.current_time.isoformat(),
+                logon_id,
+            )
             process = RunningProcess(
                 pid=pid,
                 parent_pid=parent_pid,

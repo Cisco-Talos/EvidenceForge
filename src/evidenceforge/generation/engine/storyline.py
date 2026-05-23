@@ -37,7 +37,6 @@ import math
 import random
 import re
 import shlex
-import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -68,7 +67,7 @@ from evidenceforge.generation.activity.http_content import (
 )
 from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _get_rng, _stable_seed
+from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 from evidenceforge.utils.time import parse_duration, parse_iso8601
 
 logger = logging.getLogger(__name__)
@@ -2139,7 +2138,16 @@ class StorylineMixin:
                             else None,
                         ),
                         file=FileContext(path=output_file, action="create", pid=pid),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        edr=EdrContext(
+                            object_id=stable_uuid(
+                                "storyline-output-file-edr",
+                                system.hostname,
+                                pid,
+                                output_file,
+                                file_time.isoformat(),
+                            ),
+                            actor_id=proc_obj_id,
+                        ),
                         storyline_origin=True,
                     )
                 )

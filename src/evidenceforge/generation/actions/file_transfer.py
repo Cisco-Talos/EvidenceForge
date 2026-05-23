@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import hashlib
 import random
-import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -50,7 +49,7 @@ from evidenceforge.generation.activity.smb_file_transfers import (
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_zeek_uid
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
 
 def file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
@@ -557,7 +556,13 @@ class ScpReceiverFileActionBundle:
                     pid=sshd_pid,
                 ),
                 edr=EdrContext(
-                    object_id=str(uuid.uuid4()),
+                    object_id=stable_uuid(
+                        "scp-receiver-file-edr",
+                        self._request.target_system.hostname,
+                        sshd_pid,
+                        self._request.target_path,
+                        file_time.isoformat(),
+                    ),
                     actor_id=sshd_actor_id,
                 ),
                 storyline_origin=True,

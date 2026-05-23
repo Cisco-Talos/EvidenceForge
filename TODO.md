@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-05-22
+**Last Updated:** 2026-05-23
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -63,6 +63,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 - [x] Architecture reset Windows audit/account-management action-bundle slice — consolidated account/group management, log-clear, scheduled-task, and process-access/remote-thread audit evidence behind internal bundles that coordinate subject/session ownership, target identity, source timing, docs, and tests while preserving public scenario schema and CLI behavior.
 - [x] Architecture reset auxiliary auth/session action-bundle slice — consolidated service logons, machine account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence behind internal bundles that coordinate session/DC validation ownership, lock state, timing, docs, and tests while preserving public scenario schema and CLI behavior.
 - [x] Architecture reset final bundle-boundary audit and cleanup slice — mapped remaining correlated evidence entrypoints against accepted action-bundle responsibilities, split and completed the auxiliary auth/session slice, and documented the intentionally source-local adapter helpers after validation.
+- [x] Architecture reset branch acceptance review, separate eval, and deterministic-output stabilization slice — checkpoint-reviewed the branch, ran standalone acceptance generation/eval under `/private/tmp/eforge-architecture-reset-acceptance-final-*` outside `scenarios/iteration-test`, stabilized identical-input output across data files, `GROUND_TRUTH.md`, and `OBSERVATION_MANIFEST.json`, fixed non-resolver TCP/53 DNS fan-out, and passed final eval at 96.19 overall / 121,422 records / hard acceptance PASS. Next recommendation: open a merge-readiness PR/review against `dev`, with non-blocking follow-ups for stale coverage fixtures and eval warning cleanup.
 - [x] Simplify GitHub Actions CI checks so normal PR/push validation has stable required status checks, release-only slow tests never run with coverage, and branch-protection-required checks do not depend on skipped conditional jobs. Replaced separate fast/compatibility/coverage jobs with a Python-version matrix plus `Required CI`, moved slow release validation into a `Release Slow Tests` workflow with explicit `--no-cov`, and refreshed the README CI badge URL.
 - [x] Update the global `eforge-assess` Codex skill so iterative loops default to `scenarios/iteration-test`, prefer family-level realism improvements first, and treat automated eval as a regression guardrail rather than an optimization target. Added a progressive-disclosure family iteration reference, refreshed skill metadata, and verified with the lightweight skill validator only.
 - [x] Prepare the `dev` -> `main` PR for the loop-driven realism improvement batch — applied the required v0.9.0 minor version/changelog bump, refreshed `uv.lock`, and passed Ruff plus full normal `uv run pytest --no-cov` before opening the PR.

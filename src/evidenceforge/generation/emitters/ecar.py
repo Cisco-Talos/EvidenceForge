@@ -23,7 +23,6 @@
 """Emitter for EDR/XDR host telemetry in eCAR format."""
 
 import json
-import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -32,7 +31,7 @@ from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.windows_ids import align_windows_id
 
 _ECAR_SORT_PRIORITY = {
@@ -294,6 +293,23 @@ class EcarEmitter(HostMultiplexEmitter):
         if os_category == "windows":
             return align_windows_id(tid)
         return tid
+
+    @staticmethod
+    def _stable_record_uuid(
+        kind: str,
+        event_data: dict[str, Any],
+        timestamp_ms: int,
+        *extra: object,
+    ) -> str:
+        """Return a stable UUID for eCAR fields that are source-generated."""
+        comparable = {
+            key: value
+            for key, value in event_data.items()
+            if key not in {"id", "objectID", "actorID", "_host_fqdn", "timestamp"}
+        }
+        comparable["timestamp_ms"] = timestamp_ms
+        payload = json.dumps(comparable, sort_keys=True, default=str, separators=(",", ":"))
+        return stable_uuid(f"ecar-{kind}", payload, *extra)
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render eCAR USER_SESSION/LOGIN event (logged on dst_host)."""
@@ -808,7 +824,13 @@ class EcarEmitter(HostMultiplexEmitter):
             "target_pid": str(target_pid),
             "target_process_uuid": remote_thread.target_process_object_id
             if remote_thread
-            else str(uuid.uuid4()),
+            else stable_uuid(
+                "ecar-remote-thread-target",
+                self._host_name(host),
+                proc.pid if proc is not None else -1,
+                target_pid,
+                event_ts.isoformat(),
+            ),
             "tgt_tid": str(remote_thread.new_thread_id if remote_thread else 0),
             "start_address": f"{remote_thread.start_address:016x}" if remote_thread else "",
             "stack_base": f"{remote_thread.stack_base:016x}" if remote_thread else "",
@@ -841,8 +863,24 @@ class EcarEmitter(HostMultiplexEmitter):
             "hostname": self._host_name(host),
             "object": "PROCESS",
             "action": "OPEN",
-            "objectID": event.edr.object_id if event.edr else str(uuid.uuid4()),
-            "actorID": event.edr.actor_id if event.edr else str(uuid.uuid4()),
+            "objectID": event.edr.object_id
+            if event.edr
+            else stable_uuid(
+                "ecar-process-access-object",
+                self._host_name(host),
+                proc.pid,
+                target_pid,
+                event.timestamp.isoformat(),
+            ),
+            "actorID": event.edr.actor_id
+            if event.edr
+            else stable_uuid(
+                "ecar-process-access-actor",
+                self._host_name(host),
+                proc.pid,
+                target_pid,
+                event.timestamp.isoformat(),
+            ),
             "pid": proc.pid,
             "ppid": proc.parent_pid,
             "tid": access.source_thread_id if access else -1,
@@ -1739,14 +1777,26 @@ class EcarEmitter(HostMultiplexEmitter):
         # Convert timestamp to milliseconds since epoch
         ts = event_data["timestamp"]
         timestamp_ms = int(ts.timestamp() * 1000) if isinstance(ts, datetime) else int(ts * 1000)
+        object_id = event_data.get("objectID") or self._stable_record_uuid(
+            "object",
+            event_data,
+            timestamp_ms,
+        )
+        record_id = event_data.get("id") or self._stable_record_uuid(
+            "event",
+            event_data,
+            timestamp_ms,
+            object_id,
+            event_data.get("actorID", ""),
+        )
 
         record: dict[str, Any] = {
             "timestamp_ms": timestamp_ms,
-            "id": event_data.get("id") or str(uuid.uuid4()),
+            "id": record_id,
             "hostname": event_data.get("hostname", ""),
             "object": event_data["object"],
             "action": event_data["action"],
-            "objectID": event_data.get("objectID") or str(uuid.uuid4()),
+            "objectID": object_id,
         }
         if "_canonical_ms" in event_data:
             record["_canonical_ms"] = event_data["_canonical_ms"]

@@ -25,7 +25,6 @@
 from __future__ import annotations
 
 import ntpath
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
@@ -44,7 +43,7 @@ from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 _LINUX_LOCAL_ACCOUNTS = {
@@ -444,9 +443,10 @@ class WindowsServiceInstallActionBundle:
             self._request.system.hostname,
             services_pid,
         )
+        file_time = self._request.time - timedelta(milliseconds=250)
         self._executor.dispatcher.dispatch(
             SecurityEvent(
-                timestamp=self._request.time - timedelta(milliseconds=250),
+                timestamp=file_time,
                 event_type="file_create",
                 src_host=self._executor._build_host_context(self._request.system),
                 auth=AuthContext(username="SYSTEM"),
@@ -463,6 +463,15 @@ class WindowsServiceInstallActionBundle:
                     logon_id="0x3e7",
                 ),
                 file=FileContext(path=service_path, action="create", pid=services_pid),
-                edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=services_obj_id),
+                edr=EdrContext(
+                    object_id=stable_uuid(
+                        "service-install-file-edr",
+                        self._request.system.hostname,
+                        services_pid,
+                        service_path,
+                        file_time.isoformat(),
+                    ),
+                    actor_id=services_obj_id,
+                ),
             )
         )

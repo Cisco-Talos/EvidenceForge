@@ -4953,21 +4953,31 @@ class TestActivityGenerator:
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
         """Port-53 scan traffic to non-resolvers should not become dns.log evidence."""
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         activity_gen._dns_server_ips = ["10.0.0.53"]
+        previous = REVERSE_DNS.get(test_system.ip)
+        REVERSE_DNS[test_system.ip] = f"{test_system.hostname}.example.com"
 
-        activity_gen.generate_connection(
-            src_ip="198.51.100.25",
-            dst_ip=test_system.ip,
-            time=timestamp,
-            dst_port=53,
-            proto="tcp",
-            service="dns",
-            duration=0.1,
-            orig_bytes=80,
-            resp_bytes=0,
-        )
+        try:
+            activity_gen.generate_connection(
+                src_ip="198.51.100.25",
+                dst_ip=test_system.ip,
+                time=timestamp,
+                dst_port=53,
+                proto="tcp",
+                service="dns",
+                duration=0.1,
+                orig_bytes=80,
+                resp_bytes=0,
+            )
+        finally:
+            if previous is None:
+                REVERSE_DNS.pop(test_system.ip, None)
+            else:
+                REVERSE_DNS[test_system.ip] = previous
 
         dns_events = []
         for emitter in mock_emitters.values():

@@ -172,7 +172,7 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.windows_ids import windows_id_randint
 
@@ -6411,7 +6411,16 @@ class ActivityGenerator:
                 subject_domain="-",
                 subject_logon_id="0x0",
             ),
-            edr=EdrContext(object_id=str(uuid.uuid4())),
+            edr=EdrContext(
+                object_id=stable_uuid(
+                    "failed-logon-edr",
+                    system.hostname,
+                    effective_username,
+                    time.isoformat(),
+                    source_ip,
+                    linux_ssh_source_port or failed_profile["source_port"],
+                )
+            ),
         )
 
         # Attach SyslogContext for Linux hosts (sshd failed logon)
@@ -7555,7 +7564,16 @@ class ActivityGenerator:
                             start_time=file_process_start_time,
                         ),
                         file=FileContext(path=process_name, action="create", pid=file_process_pid),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=file_actor_obj_id),
+                        edr=EdrContext(
+                            object_id=stable_uuid(
+                                "process-file-create-edr",
+                                system.hostname,
+                                file_process_pid,
+                                process_name,
+                                file_create_time.isoformat(),
+                            ),
+                            actor_id=file_actor_obj_id,
+                        ),
                         storyline_origin=from_storyline,
                     )
                 )
@@ -7599,7 +7617,17 @@ class ActivityGenerator:
                             else None,
                         ),
                         file=FileContext(path=path, action=action, pid=pid),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        edr=EdrContext(
+                            object_id=stable_uuid(
+                                "command-file-effect-edr",
+                                system.hostname,
+                                pid,
+                                action,
+                                path,
+                                time.isoformat(),
+                            ),
+                            actor_id=proc_obj_id,
+                        ),
                         storyline_origin=from_storyline,
                     ),
                 )
@@ -7642,7 +7670,17 @@ class ActivityGenerator:
                             else None,
                         ),
                         file=FileContext(path=path, action=action, pid=pid),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        edr=EdrContext(
+                            object_id=stable_uuid(
+                                "sampled-file-effect-edr",
+                                system.hostname,
+                                pid,
+                                action,
+                                path,
+                                time.isoformat(),
+                            ),
+                            actor_id=proc_obj_id,
+                        ),
                         storyline_origin=from_storyline,
                     ),
                 )
@@ -7682,7 +7720,16 @@ class ActivityGenerator:
                             signature=str(dll_profile.get("signature", "Microsoft Windows")),
                             signature_status=str(dll_profile.get("signature_status", "Valid")),
                         ),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        edr=EdrContext(
+                            object_id=stable_uuid(
+                                "image-load-edr",
+                                system.hostname,
+                                pid,
+                                dll_path,
+                                time.isoformat(),
+                            ),
+                            actor_id=proc_obj_id,
+                        ),
                         storyline_origin=from_storyline,
                     )
                 )
@@ -7762,7 +7809,17 @@ class ActivityGenerator:
                         registry=RegistryContext(
                             key=_target, value=_details, action=reg_action, pid=pid
                         ),
-                        edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+                        edr=EdrContext(
+                            object_id=stable_uuid(
+                                "registry-modify-edr",
+                                system.hostname,
+                                pid,
+                                _target,
+                                _details,
+                                time.isoformat(),
+                            ),
+                            actor_id=proc_obj_id,
+                        ),
                         storyline_origin=from_storyline,
                     )
                 )
@@ -9659,7 +9716,18 @@ class ActivityGenerator:
                 responding_pid=responding_pid,
                 application_layer_only=http_application_layer_only,
             ),
-            edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=conn_actor_id),
+            edr=EdrContext(
+                object_id=stable_uuid(
+                    "connection-edr",
+                    src_ip,
+                    src_port,
+                    dst_ip,
+                    dst_port,
+                    proto,
+                    time.isoformat(),
+                ),
+                actor_id=conn_actor_id,
+            ),
         )
 
         # Caller-provided context overrides
@@ -9707,6 +9775,7 @@ class ActivityGenerator:
             and proto in ("udp", "tcp")
             and dst_port == 53
             and hostname
+            and (hostname_was_explicit or dst_ip in dns_server_ips)
             and not is_fw_deny
         ):
             dns_query = hostname or REVERSE_DNS.get(dst_ip) or f"host-{dst_ip.replace('.', '-')}"
@@ -15091,7 +15160,16 @@ class ActivityGenerator:
                 signature=signature,
                 signature_status=signature_status,
             ),
-            edr=EdrContext(object_id=str(uuid.uuid4()), actor_id=proc_obj_id),
+            edr=EdrContext(
+                object_id=stable_uuid(
+                    "manual-image-load-edr",
+                    system.hostname,
+                    pid,
+                    dll_path,
+                    time.isoformat(),
+                ),
+                actor_id=proc_obj_id,
+            ),
         )
         self.dispatcher.dispatch(event)
 
