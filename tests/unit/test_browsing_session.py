@@ -53,6 +53,15 @@ class TestBrowsingSessionBasics:
         offsets = [r.time_offset_ms for r in requests]
         assert offsets == sorted(offsets)
 
+    def test_https_first_domain_redirects_plaintext_http_without_assets(self):
+        rng = random.Random(42)
+        requests = generate_browsing_session(rng, "accounts.google.com", [], port=80)
+
+        assert len(requests) == 1
+        assert requests[0].is_page_load is True
+        assert requests[0].status_code in {301, 302}
+        assert 120 <= requests[0].response_body_len <= 480
+
 
 class TestBrowserSessionActionBundle:
     """Action-bundle expansion behavior."""

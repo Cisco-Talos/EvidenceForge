@@ -144,6 +144,43 @@ class TestProxyUriOsFiltering:
         }
         assert referrer_policy == "none"
 
+    def test_https_first_domains_have_plaintext_redirect_policy(self):
+        """Identity/social sites should not render HTTP 200 login pages on port 80."""
+        from evidenceforge.generation.activity.proxy_uri import plaintext_http_redirect_status
+
+        assert plaintext_http_redirect_status(
+            "accounts.google.com",
+            port=80,
+            path="/ServiceLogin",
+        ) in {301, 302}
+        assert (
+            plaintext_http_redirect_status(
+                "accounts.google.com",
+                port=443,
+                path="/ServiceLogin",
+            )
+            is None
+        )
+
+    def test_dbeaver_installer_template_uses_binary_content_type(self):
+        """Installer URI templates should not inherit text/html body-size semantics."""
+        from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+
+        seen_installer = False
+        for seed in range(40):
+            path, content_type, method, _ua_override, _policy = pick_proxy_uri(
+                random.Random(seed),
+                "dbeaver.io",
+                ["web"],
+                source_os="windows",
+            )
+            if path.endswith(".exe"):
+                seen_installer = True
+                assert method == "GET"
+                assert content_type == "application/x-msdownload"
+                break
+        assert seen_installer
+
     def test_linux_package_templates_do_not_apply_to_windows_sources(self):
         """OS-scoped exact templates should fall back instead of pairing Windows hosts with apt paths."""
         from evidenceforge.generation.activity.dns_registry import get_domains_by_tag

@@ -206,6 +206,68 @@ def activity_gen():
     return _make_activity_gen()
 
 
+def test_direct_http_infrastructure_domain_uses_source_native_user_agent(activity_gen):
+    """Direct HTTP auto-generation should honor domain-specific client contracts."""
+    gen, events = activity_gen
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="142.250.80.46",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=2000,
+        source_system=source,
+        hostname="clients4.google.com",
+        conn_state="SF",
+    )
+
+    http_event = next(event for event in events if event.http is not None)
+    assert http_event.http.host == "clients4.google.com"
+    assert http_event.http.user_agent == "GoogleDriveFS/97.0.1.0 Windows"
+
+
+def test_direct_http_https_first_domain_redirects_instead_of_success_page(activity_gen):
+    """Direct HTTP auto-generation should not serve plaintext login pages for HTTPS-first sites."""
+    gen, events = activity_gen
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="142.250.80.46",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=20_000,
+        source_system=source,
+        hostname="accounts.google.com",
+        conn_state="SF",
+    )
+
+    http_event = next(event for event in events if event.http is not None)
+    assert http_event.http.status_code in {301, 302}
+    assert 120 <= http_event.http.response_body_len <= 480
+
+
 class TestSslContextPopulation:
     """Verify SSL context is attached to connection events for port 443."""
 
@@ -855,6 +917,75 @@ class TestSslContextPopulation:
         assert egress.http.user_agent == client.http.user_agent == user_agent
         assert egress.http.status_code == client.http.status_code == 200
         assert egress.http.response_body_len == client.http.response_body_len == 4000
+
+    def test_explicit_proxy_http_origin_leg_uses_corrected_domain_user_agent(self, activity_gen):
+        """Proxy egress HTTP should not keep stale browser UAs after domain correction."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        proxy_context = ProxyContext(
+            client_ip=source.ip,
+            method="POST",
+            url="http://settings-win.data.microsoft.com/settings/v2.0/global",
+            host="settings-win.data.microsoft.com",
+            status_code=200,
+            tunnel_status_code=200,
+            sc_bytes=1800,
+            cs_bytes=800,
+            time_taken=450,
+            user_agent="Windows-Device-Management/10.0",
+            content_type="application/json",
+            cache_result="MISS",
+            referrer="",
+            proxy_fqdn=gen._proxy_fqdn(proxy),
+        )
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="13.107.4.50",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=3.0,
+            orig_bytes=600,
+            resp_bytes=1600,
+            conn_state="SF",
+            source_system=source,
+            hostname="settings-win.data.microsoft.com",
+            proxy=proxy_context,
+            http=HttpContext(
+                method="POST",
+                host="settings-win.data.microsoft.com",
+                uri="/settings/v2.0/global",
+                version="1.1",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                request_body_len=300,
+                response_body_len=1600,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/json"],
+            ),
+        )
+
+        egress = next(
+            event
+            for event in events
+            if event.http is not None and event.network and event.network.src_ip == proxy.ip
+        )
+        assert egress.http.user_agent == "Windows-Device-Management/10.0"
 
     def test_proxy_transaction_request_has_stable_action_anchor(self):
         proxy = System(

@@ -10177,7 +10177,19 @@ class ActivityGenerator:
             if dst_port not in (80, 443):
                 host = f"{host}:{dst_port}"
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
-            from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri
+            from evidenceforge.generation.activity.http_content import (
+                apply_transfer_size_variance,
+                http_status_message,
+                is_stable_resource_path,
+                response_mime_types_for_status,
+                response_size_for_mime,
+                response_size_for_status,
+            )
+            from evidenceforge.generation.activity.proxy_uri import (
+                is_browser_like_proxy_domain,
+                pick_proxy_uri,
+                plaintext_http_redirect_status,
+            )
 
             web_host = hostname if hostname is not None else REVERSE_DNS.get(dst_ip, dst_ip)
             if web_host == "":
@@ -10187,16 +10199,28 @@ class ActivityGenerator:
             uri, mime_type, http_method, http_ua_override, http_referrer_policy = pick_proxy_uri(
                 rng, web_host, web_domain_tags, source_os=_src_os_http
             )
-            if http_ua_override:
-                ua = http_ua_override
-            status_code, status_msg = _get_http_status(dst_ip, uri)
-            from evidenceforge.generation.activity.http_content import (
-                apply_transfer_size_variance,
-                is_stable_resource_path,
-                response_mime_types_for_status,
-                response_size_for_mime,
-                response_size_for_status,
+            domain_user_agent = pick_proxy_domain_user_agent(
+                rng,
+                source_system,
+                hostname=web_host,
             )
+            if domain_user_agent:
+                ua = domain_user_agent
+            elif http_ua_override:
+                ua = http_ua_override
+            elif not is_browser_like_proxy_domain(web_host):
+                ua = pick_proxy_user_agent(
+                    rng,
+                    source_system,
+                    hostname=web_host,
+                    domain_tags=web_domain_tags,
+                )
+            redirect_status = plaintext_http_redirect_status(web_host, port=dst_port, path=uri)
+            if redirect_status is not None:
+                status_code = redirect_status
+                status_msg = http_status_message(status_code)
+            else:
+                status_code, status_msg = _get_http_status(dst_ip, uri)
 
             if status_code in {204, 304}:
                 resp_body_len = 0

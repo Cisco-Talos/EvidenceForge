@@ -26,6 +26,14 @@ def test_known_extension_overrides_supplied_content_type():
     assert normalize_mime_type_for_path("/status.gif", "text/html") == "image/gif"
 
 
+def test_executable_download_uses_binary_mime_and_size_range():
+    assert normalize_mime_type_for_path("/files/tool.exe", "text/html") == (
+        "application/x-msdownload"
+    )
+    size = response_size_for_mime(random.Random(7), "application/x-msdownload")
+    assert 5_000_000 <= size <= 150_000_000
+
+
 def test_unknown_extension_keeps_supplied_content_type():
     assert normalize_mime_type_for_path("/download/custom.blob", "application/octet-stream") == (
         "application/octet-stream"

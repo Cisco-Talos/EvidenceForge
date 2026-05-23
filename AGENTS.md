@@ -347,6 +347,10 @@ suppression, response metadata, and direct-vs-explicit-proxy handoff through
 canonical connection generation. Single tool requests, raw storyline HTTP
 events, and source-local web server noise may remain direct canonical events
 unless they model a browser session.
+Browser/proxy HTTP planning owns source-native web semantics before render:
+HTTPS-first domains should redirect rather than serve plaintext HTTP success
+pages, non-browser service endpoints should keep compatible User-Agents, and
+installer/download paths should carry binary MIME and body-size semantics.
 
 For scanner/probe activity, typed `port_scan` and `web_scan` storyline events,
 scheduled scanner-overlap suspicious noise, and nmap process side effects should

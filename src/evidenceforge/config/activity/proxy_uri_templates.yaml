@@ -325,6 +325,7 @@ domains:
     methods: ["GET"]
 
   accounts.google.com:
+    http_policy: https_redirect
     paths:
       - "/ServiceLogin"
       - "/o/oauth2/auth"
@@ -529,6 +530,7 @@ domains:
 
   # --- Social ---
   www.facebook.com:
+    http_policy: https_redirect
     paths:
       - "/"
       - "/login"
@@ -896,6 +898,11 @@ domains:
       - "/download/"
       - "/product/dbeaver-ultimate/"
       - "/files/dbeaver-ce-latest-x86_64-setup.exe"
+    content_types:
+      - "text/html"
+      - "text/html"
+      - "text/html"
+      - "application/octet-stream"
     content_type: "text/html"
     methods: ["GET"]
 

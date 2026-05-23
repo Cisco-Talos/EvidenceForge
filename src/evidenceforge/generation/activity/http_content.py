@@ -11,6 +11,7 @@ from evidenceforge.utils.rng import _stable_seed
 _EXTENSION_MIME_TYPES: dict[str, str] = {
     ".cab": "application/vnd.ms-cab-compressed",
     ".css": "text/css",
+    ".exe": "application/x-msdownload",
     ".gif": "image/gif",
     ".gz": "application/x-gzip",
     ".ico": "image/x-icon",
@@ -37,6 +38,7 @@ _RESPONSE_SIZE_RANGES: dict[str, tuple[int, int]] = {
     "application/pdf": (20_000, 2_000_000),
     "application/pkix-crl": (2_000, 200_000),
     "application/vnd.ms-cab-compressed": (50_000, 5_000_000),
+    "application/x-msdownload": (5_000_000, 150_000_000),
     "application/x-gzip": (10_000, 5_000_000),
     "font/woff": (20_000, 100_000),
     "font/woff2": (20_000, 100_000),

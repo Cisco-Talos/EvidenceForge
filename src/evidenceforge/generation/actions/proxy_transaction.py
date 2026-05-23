@@ -25,7 +25,7 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Protocol
 
@@ -687,10 +687,18 @@ class ProxyTransactionActionBundle:
                 f"{request.time.timestamp()}"
             )
         ).uniform(1.72, 2.36)
-        client_duration = min(
-            request.duration if request.duration is not None else 0.2,
-            proxy_client_cap,
+        flow_transaction_count = (
+            request.http.flow_transaction_count
+            if request.http is not None and request.http.flow_transaction_count is not None
+            else 1
         )
+        if request.duration is not None and flow_transaction_count > 1:
+            client_duration = request.duration
+        else:
+            client_duration = min(
+                request.duration if request.duration is not None else 0.2,
+                proxy_client_cap,
+            )
         if request.duration is None:
             client_duration = generator_utils._jitter_default_connection_duration(
                 client_duration,
@@ -781,6 +789,12 @@ class ProxyTransactionActionBundle:
             if request.http is not None and proxy_context.cache_result == "MISS"
             else None
         )
+        if egress_http is not None:
+            egress_http = replace(
+                egress_http,
+                user_agent=proxy_context.user_agent,
+                referrer=proxy_context.referrer,
+            )
         if (
             egress_http is not None
             or request.dst_port != 80

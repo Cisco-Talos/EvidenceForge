@@ -18,6 +18,7 @@ from evidenceforge.generation.activity.http_content import (
     is_stable_resource_path,
     normalize_mime_type_for_path,
 )
+from evidenceforge.utils.rng import _stable_seed
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -73,6 +74,31 @@ def get_proxy_domain_class(hostname: str) -> str | None:
         return None
     domain_class = entry.get("domain_class")
     return str(domain_class) if domain_class else None
+
+
+def get_proxy_domain_http_policy(hostname: str) -> str:
+    """Return the configured plaintext HTTP policy for an exact hostname."""
+    entry = load_proxy_uri_templates().get("domains", {}).get(hostname, {})
+    if not isinstance(entry, dict):
+        return ""
+    policy = entry.get("http_policy")
+    return str(policy).strip().lower() if policy else ""
+
+
+def plaintext_http_redirect_status(
+    hostname: str,
+    *,
+    port: int,
+    path: str = "/",
+) -> int | None:
+    """Return redirect status when plaintext HTTP should not serve content."""
+    if port != 80:
+        return None
+    policy = get_proxy_domain_http_policy(hostname)
+    if policy not in {"https_redirect", "https_only"}:
+        return None
+    seed = f"http_plaintext_redirect:{hostname.lower().rstrip('.')}:{path}"
+    return 301 if _stable_seed(seed) % 4 else 302
 
 
 def is_browser_like_proxy_domain(hostname: str) -> bool:
