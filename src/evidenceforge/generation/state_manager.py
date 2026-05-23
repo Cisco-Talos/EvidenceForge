@@ -1057,6 +1057,17 @@ class StateManager:
                 proc.last_activity_time = activity_time
             return True
 
+    def update_session_activity_time(self, logon_id: str, activity_time: datetime) -> bool:
+        """Record the latest dependent activity timestamp for an active session."""
+        with self._lock:
+            session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
+            if session is None:
+                return False
+            activity_time = ensure_utc(activity_time)
+            if session.last_activity_time is None or activity_time > session.last_activity_time:
+                session.last_activity_time = activity_time
+            return True
+
     def get_processes_for_user(self, username: str) -> list[RunningProcess]:
         """Get all running processes for a user.
 

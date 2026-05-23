@@ -273,15 +273,19 @@ separate from the bundle only after the bundle has owned SSH auth/session timing
 and the network contract has owned transport tuple, Zeek UID, packet accounting,
 visibility, and transport close time. When source ports are allocated during
 execution, use the resolved execution anchor rather than the pre-reservation
-intent anchor for tuple-specific identity.
+intent anchor for tuple-specific identity. Source-native SSH close evidence must
+be lifecycle-compatible with the transport close, but should not be bit-identical
+to Zeek close timing unless the source semantics require exact equality.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process
 when a modeled source host is available, the TCP/3389 transport, target Type 10
 logon/session metadata, source-port reuse, and temporal ordering between
-source-visible transport evidence and target authentication evidence. Do not
-emit independent port 3389 connections or Type 10 logons for the same modeled RDP
-session outside the bundle.
+source-visible transport evidence and target authentication evidence. It also
+protects the source `mstsc.exe` process and its owning interactive session
+through the transport close so endpoint process telemetry cannot end before the
+visible RDP flow. Do not emit independent port 3389 connections or Type 10 logons
+for the same modeled RDP session outside the bundle.
 
 For Windows remote administration specifically, explicit credential use and
 remote service installation should route through the Windows remote-admin action
@@ -306,7 +310,11 @@ metadata, IDS/EDR flow correlation, source endpoint process ownership, Zeek UID
 and connection state identity, visibility handoff, and source-native timing.
 Higher-level bundles may request connections through the public generator
 entrypoint, but they should not duplicate tuple allocation, hostname resolution,
-packet accounting, or endpoint-flow ownership locally.
+packet accounting, or endpoint-flow ownership locally. Endpoint FLOW timestamps
+must remain inside the canonical connection interval; if a very short connection
+cannot also satisfy source-visible process-create ordering, omit process actor
+identity for that FLOW row instead of moving endpoint telemetry after the
+transport close.
 
 For DHCP leases, route acquisition and renewal transactions through the DHCP
 lease action bundle. The bundle owns lease identity, MAC/IP/server/domain

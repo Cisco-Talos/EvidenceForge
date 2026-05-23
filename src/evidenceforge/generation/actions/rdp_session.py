@@ -174,6 +174,7 @@ class RdpSessionActionBundle:
             self._request.source_ip,
         )
         source_ip, source_system, source_pid = self._resolve_source(rng, user)
+        duration = rng.uniform(60.0, 3600.0)
         source_pid = self._materialize_source_process(
             user=user,
             source_system=source_system,
@@ -188,7 +189,6 @@ class RdpSessionActionBundle:
             self._executor._os_for_ip(source_ip),
         )
 
-        duration = rng.uniform(60.0, 3600.0)
         uid = self._executor.generate_connection(
             src_ip=source_ip,
             dst_ip=self._request.target_system.ip,
@@ -203,6 +203,15 @@ class RdpSessionActionBundle:
             emit_dns=True,
             source_system=source_system,
             pid=source_pid,
+        )
+        network_close_time = self._transport_close_time(
+            uid,
+            fallback=self._request.time + timedelta(seconds=duration),
+        )
+        self._protect_source_client_lifecycle(
+            source_system=source_system,
+            source_pid=source_pid,
+            network_close_time=network_close_time,
         )
 
         logon_time = self._target_logon_time(
@@ -226,7 +235,7 @@ class RdpSessionActionBundle:
                 source_port=src_port,
                 session_kind="rdp",
                 transport_pid=source_pid if source_pid > 0 else None,
-                network_close_time=self._request.time + timedelta(seconds=duration),
+                network_close_time=network_close_time,
                 source_ready_time=logon_time,
             )
         rendered_logon_id = self._executor.generate_logon(
@@ -247,7 +256,7 @@ class RdpSessionActionBundle:
             source_port=src_port,
             session_kind="rdp",
             transport_pid=source_pid if source_pid > 0 else None,
-            network_close_time=self._request.time + timedelta(seconds=duration),
+            network_close_time=network_close_time,
             source_ready_time=logon_time,
         )
 
@@ -303,6 +312,51 @@ class RdpSessionActionBundle:
             target_system=self._request.target_system,
             time=self._request.source_process_time,
         )
+
+    def _transport_close_time(self, uid: str, *, fallback: datetime) -> datetime:
+        """Return the canonical network close time for the generated RDP transport."""
+
+        if not uid:
+            return fallback
+        connection = next(
+            (
+                conn
+                for conn in self._executor.state_manager.list_open_connections()
+                if conn.zeek_uid == uid
+            ),
+            None,
+        )
+        if connection is None or connection.close_time is None:
+            return fallback
+        return connection.close_time
+
+    def _protect_source_client_lifecycle(
+        self,
+        *,
+        source_system: System | None,
+        source_pid: int,
+        network_close_time: datetime,
+    ) -> None:
+        """Keep the source-side mstsc process/session alive through the transport close."""
+
+        if source_system is None or source_pid <= 0:
+            return
+        seed = _stable_seed(
+            "rdp_source_client_close:"
+            f"{source_system.hostname}:{source_pid}:{self._request.target_system.hostname}:"
+            f"{network_close_time.isoformat()}"
+        )
+        activity_time = network_close_time + timedelta(
+            milliseconds=250 + (seed % 1750),
+            microseconds=97 + (seed % 719),
+        )
+        state_manager = self._executor.state_manager
+        state_manager.update_process_activity_time(
+            source_system.hostname, source_pid, activity_time
+        )
+        process = state_manager.get_process(source_system.hostname, source_pid)
+        if process is not None and process.logon_id:
+            state_manager.update_session_activity_time(process.logon_id, activity_time)
 
     def _target_logon_time(
         self,

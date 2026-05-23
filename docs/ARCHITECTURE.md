@@ -254,10 +254,13 @@ canonical `NetworkConnectionActionBundle` through `generate_connection()`. The
 network contract owns tuple allocation, Zeek UID, packet/byte accounting,
 visibility, endpoint flow rendering, and transport close time; SSH constrains
 its session evidence against that transport lifecycle instead of rendering Zeek
-connection evidence from the `ssh_session` event. Transfer-specific receiver
-artifacts, such as the target-side file create for `scp`, are emitted after
-bundle-owned SSH auth/session timing rather than duplicating SSH auth or
-transport timing locally.
+connection evidence from the `ssh_session` event. Source-native PAM close
+evidence stays compatible with the transport close while retaining small
+source-local timing texture, so host close rows are not bit-identical to Zeek
+connection close rows unless a source contract requires exact equality.
+Transfer-specific receiver artifacts, such as the target-side file create for
+`scp`, are emitted after bundle-owned SSH auth/session timing rather than
+duplicating SSH auth or transport timing locally.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
@@ -266,7 +269,10 @@ connection generation, and emits the target Type 10 logon after source-visible
 transport evidence. The bundle keeps source port, target session metadata,
 transport PID, network close time, and source-ready timing aligned so storyline,
 world-planner, and baseline RDP paths do not independently invent partial RDP
-evidence.
+evidence. When the source host is modeled, the bundle also extends the source
+`mstsc.exe` process and owning interactive session through the canonical
+transport close so source endpoint telemetry cannot terminate before the visible
+RDP flow.
 
 Windows remote-admin callers supply explicit credential use or service-install
 intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
@@ -295,7 +301,11 @@ visibility handoff, Zeek UID/state identity, source endpoint process ownership,
 and Windows WFP companions. Higher-level bundles still call the public
 `generate_connection()` compatibility entrypoint, but connection truth is routed
 through this shared bundle boundary before becoming one canonical
-`SecurityEvent` plus any source-native companion evidence.
+`SecurityEvent` plus any source-native companion evidence. Endpoint FLOW
+timestamps are bounded by the canonical connection interval. When a very short
+connection cannot also satisfy source-visible process-create ordering, the eCAR
+renderer drops process actor identity for that FLOW row instead of moving
+endpoint telemetry after the network close.
 
 DHCP callers supply one acquisition or renewal transaction, and
 `DhcpLeaseActionBundle` owns lease identity, MAC/IP/server/domain metadata, Zeek

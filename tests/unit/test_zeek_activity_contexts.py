@@ -463,7 +463,9 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None and "session closed for user deploy" in event.syslog.message
         )
-        assert close_event.timestamp == transport_event.timestamp + timedelta(seconds=120)
+        transport_close = transport_event.timestamp + timedelta(seconds=120)
+        assert transport_close < close_event.timestamp
+        assert close_event.timestamp <= transport_close + timedelta(seconds=3)
 
     def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
         def run_bundle_once() -> list[tuple]:

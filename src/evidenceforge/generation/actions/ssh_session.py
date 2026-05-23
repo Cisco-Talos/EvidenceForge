@@ -864,7 +864,7 @@ class SshSessionActionBundle:
         request = self.request
         self.executor.dispatcher.dispatch(
             SecurityEvent(
-                timestamp=state.close_time,
+                timestamp=self._source_native_session_close_time(state, auth_state),
                 event_type="syslog",
                 src_host=event.dst_host,
                 syslog=SyslogContext(
@@ -877,4 +877,22 @@ class SshSessionActionBundle:
                     ),
                 ),
             )
+        )
+
+    def _source_native_session_close_time(
+        self,
+        state: _SshTransportState,
+        auth_state: _SshLinuxAuthState,
+    ) -> datetime:
+        """Return a PAM close time compatible with, but not identical to, transport close."""
+
+        request = self.request
+        seed = _stable_seed(
+            "ssh_session_source_close:"
+            f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
+            f"{state.source_port}:{auth_state.sshd_pid}:{state.close_time.isoformat()}"
+        )
+        return state.close_time + timedelta(
+            milliseconds=120 + (seed % 2380),
+            microseconds=211 + (seed % 613),
         )

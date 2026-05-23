@@ -585,28 +585,30 @@ class EcarEmitter(HostMultiplexEmitter):
                 if source_proc is not None
                 else None
             )
-            event_ts = _SOURCE_TIMING.source_time(
+            outbound_seed = (
+                "outbound",
+                event.src_host.hostname,
+                net.initiating_pid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            )
+            event_ts, process_identity_safe = self._flow_source_time(
                 event,
-                "source.ecar_flow",
-                seed_parts=(
-                    "outbound",
-                    event.src_host.hostname,
-                    net.initiating_pid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
+                seed_parts=outbound_seed,
                 not_before=not_before,
             )
+            rendered_source_proc = source_proc if process_identity_safe else None
+            rendered_pid = net.initiating_pid if process_identity_safe else -1
             event_data = {
                 "timestamp": event_ts,
                 "hostname": event.src_host.hostname,
                 "object": "FLOW",
                 "action": "CONNECT",
                 "direction": "OUTBOUND",
-                "pid": net.initiating_pid,
+                "pid": rendered_pid,
                 "src_ip": net.src_ip,
                 "src_port": net.src_port,
                 "dst_ip": net.dst_ip,
@@ -617,17 +619,17 @@ class EcarEmitter(HostMultiplexEmitter):
             principal = self._flow_principal_for_process(
                 event,
                 event.src_host,
-                source_proc,
+                rendered_source_proc,
                 "OUTBOUND",
             )
             if principal:
                 event_data["principal"] = principal
-            self._apply_edr_context(event_data, event)
+            self._apply_flow_edr_context(event_data, event, include_actor=process_identity_safe)
             event_data.setdefault(
                 "tid",
                 self._stable_tid(
                     event.src_host.hostname,
-                    net.initiating_pid,
+                    rendered_pid,
                     event_ts,
                     "flow_outbound",
                     getattr(event.src_host, "os_category", ""),
@@ -639,19 +641,19 @@ class EcarEmitter(HostMultiplexEmitter):
         if event.dst_host:
             listener_observed = self._inbound_listener_observed(event)
             inbound_pid = self._resolve_inbound_service_pid(event) if listener_observed else -1
-            event_ts = _SOURCE_TIMING.source_time(
+            inbound_seed = (
+                "inbound",
+                event.dst_host.hostname,
+                net.initiating_pid,
+                net.src_ip,
+                net.src_port,
+                net.dst_ip,
+                net.dst_port,
+                event.timestamp,
+            )
+            event_ts, _ = self._flow_source_time(
                 event,
-                "source.ecar_flow",
-                seed_parts=(
-                    "inbound",
-                    event.dst_host.hostname,
-                    net.initiating_pid,
-                    net.src_ip,
-                    net.src_port,
-                    net.dst_ip,
-                    net.dst_port,
-                    event.timestamp,
-                ),
+                seed_parts=inbound_seed,
             )
             # Host-based EDR sees the local interface IP, not the NAT VIP
             dst_ip = net.dst_ip
@@ -677,21 +679,15 @@ class EcarEmitter(HostMultiplexEmitter):
             else:
                 inbound_proc = self._lookup_running_process(event.dst_host, inbound_pid)
                 if inbound_proc is not None:
-                    event_ts = _SOURCE_TIMING.source_time(
+                    event_ts, process_identity_safe = self._flow_source_time(
                         event,
-                        "source.ecar_flow",
-                        seed_parts=(
-                            "inbound",
-                            event.dst_host.hostname,
-                            net.initiating_pid,
-                            net.src_ip,
-                            net.src_port,
-                            net.dst_ip,
-                            net.dst_port,
-                            event.timestamp,
-                        ),
+                        seed_parts=inbound_seed,
                         not_before=self._after_process_create_timestamp(event, inbound_proc),
                     )
+                    if not process_identity_safe:
+                        inbound_proc = None
+                        inbound_pid = -1
+                        event_data["pid"] = inbound_pid
                     event_data["timestamp"] = event_ts
                 principal = self._flow_principal_for_process(
                     event,
@@ -713,6 +709,68 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
             # INBOUND flow gets its own objectID (separate telemetry observation)
             self.emit_event(event_data)
+
+    def _flow_source_time(
+        self,
+        event: SecurityEvent,
+        *,
+        seed_parts: tuple[Any, ...],
+        not_before: datetime | None = None,
+    ) -> tuple[datetime, bool]:
+        """Return a FLOW timestamp bounded by the canonical connection interval.
+
+        If a very short connection cannot also satisfy source-visible process-create
+        ordering, omit the process identity from that FLOW row instead of moving the
+        endpoint observation after the network close.
+        """
+
+        not_after = self._flow_not_after(event, seed_parts)
+        process_identity_safe = not_before is None or not_after is None or not_before <= not_after
+        return (
+            _SOURCE_TIMING.source_time(
+                event,
+                "source.ecar_flow",
+                seed_parts=seed_parts,
+                not_before=not_before if process_identity_safe else None,
+                not_after=not_after,
+            ),
+            process_identity_safe,
+        )
+
+    @staticmethod
+    def _flow_not_after(event: SecurityEvent, seed_parts: tuple[Any, ...]) -> datetime | None:
+        """Return the latest source-native FLOW observation inside a connection interval."""
+
+        net = event.network
+        if net is None or net.duration is None:
+            return None
+        close_time = event.timestamp + timedelta(seconds=max(0.0, net.duration))
+        if close_time <= event.timestamp:
+            return close_time
+        duration_us = int((close_time - event.timestamp).total_seconds() * 1_000_000)
+        seed = _stable_seed("ecar_flow_not_after:" + ":".join(str(part) for part in seed_parts))
+        margin_us = 1000 + (seed % 4000)
+        if duration_us <= margin_us:
+            margin_us = max(0, duration_us // 2)
+        return close_time - timedelta(microseconds=margin_us)
+
+    @staticmethod
+    def _apply_flow_edr_context(
+        event_data: dict[str, Any],
+        event: SecurityEvent,
+        *,
+        include_actor: bool,
+    ) -> None:
+        """Copy eCAR FLOW identity fields, omitting actors when process timing conflicts."""
+
+        if event.edr is None:
+            return
+        if event.edr.object_id:
+            event_data["objectID"] = event.edr.object_id
+        if include_actor and event.edr.actor_id:
+            event_data["actorID"] = event.edr.actor_id
+        if event.edr.tid != -1:
+            event_data["tid"] = event.edr.tid
 
     def _flow_principal_for_process(
         self,

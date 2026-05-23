@@ -1877,6 +1877,19 @@ class TestActivityGenerator:
         assert network_event.network.initiating_pid == source_process.process.pid
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
+        network_close_time = network_event.timestamp + timedelta(
+            seconds=network_event.network.duration
+        )
+        running_source_process = state_manager.get_process(
+            source_system.hostname,
+            source_process.process.pid,
+        )
+        assert running_source_process is not None
+        assert running_source_process.last_activity_time is not None
+        assert running_source_process.last_activity_time > network_close_time
+        source_session = state_manager.get_session(running_source_process.logon_id)
+        assert source_session is not None
+        assert source_session.last_activity_time == running_source_process.last_activity_time
 
     def test_generate_rdp_session_does_not_self_source_target(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
