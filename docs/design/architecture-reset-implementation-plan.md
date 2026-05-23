@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit complete
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit complete; contract-composition/lifecycle follow-up in progress
 
 ## Summary
 
@@ -20,6 +20,10 @@ emitters while introducing an internal action-bundle layer above canonical
 - Multi-phase activities produce multiple coordinated `SecurityEvent`s.
 - Cross-event lifecycle, timing, observation, and durable identity ownership belong
   in bundle/lifecycle/timing/observation layers.
+- Bundle contracts compose through canonical semantic layers only. Higher-level
+  bundles may delegate sub-occurrences to lower-level bundles or generator
+  entrypoints, but rendered source artifacts such as Zeek rows, eCAR rows, syslog
+  lines, or Windows XML events do not trigger new generation cascades.
 - Emitters render source-native views of canonical facts and do not repair upstream
   lifecycle contradictions.
 
@@ -72,6 +76,17 @@ EDR login-readiness timing onto graph-owned constraints. The bundle still
 preserves existing scenario schema, CLI behavior, and output layout, but SSH
 connection, accepted-auth, PAM, logind, and endpoint login observations now share
 one causal timing model instead of separate local clamps.
+
+The SSH contract-composition follow-up delegates TCP/22 transport evidence to the
+canonical network-connection contract. `SshSessionActionBundle` still owns SSH
+auth/session/PAM/logind ordering, endpoint session login readiness, shell
+readiness, and session-close intent, but it no longer renders Zeek connection
+evidence from the `ssh_session` event. The network contract owns source-port
+reservation, tuple identity, Zeek UID, packet/byte accounting, visibility,
+endpoint FLOW evidence, and transport close time; the SSH bundle uses that
+transport close as its lifecycle boundary. Late cleanup that would create a PAM
+close long after the visible transport ended is suppressed rather than creating a
+contradictory source-native close.
 
 The proxy temporal-graph migration starts with explicit forward-proxy request
 handoff. Client-to-proxy request visibility and proxy-to-origin egress are now
@@ -265,7 +280,8 @@ deliberately source-local or adapter-only:
 
 - No public YAML or CLI changes in the first slice.
 - Existing typed `ssh_session` events continue to generate Zeek, syslog, EDR/eCAR,
-  and bash-history evidence through the current output files.
+  and bash-history evidence through the current output files, with Zeek transport
+  evidence owned by a canonical connection occurrence.
 - Existing tests remain migration assets. Replace brittle implementation tests only
   when the new bundle contract supersedes their assumptions.
 - Generated output should be preserved unless current behavior contradicts

@@ -40,14 +40,12 @@ from evidenceforge.events.contexts import (
     AuthContext,
     EdrContext,
     HostContext,
-    NetworkContext,
     ProcessContext,
     SyslogContext,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
-from evidenceforge.generation.activity.network import _is_private_ip
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
@@ -220,6 +218,10 @@ class SshSessionExecutor(Protocol):
         """Emit a DNS lookup for correlated activity."""
         ...
 
+    def generate_connection(self, **kwargs: Any) -> str:
+        """Generate one canonical network connection through the shared connection bundle."""
+        ...
+
     def reserve_ssh_source_port(
         self,
         source_ip: str,
@@ -266,29 +268,6 @@ class SshSessionExecutor(Protocol):
         """Return a stable system process PID."""
         ...
 
-    def _ssh_tcp_success_history(self, rng: random.Random) -> str:
-        """Choose a source-native successful TCP history value."""
-        ...
-
-    def _ssh_tcp_packet_counts_from_payload_and_history(
-        self,
-        orig_bytes: int | None,
-        resp_bytes: int | None,
-        history: str | None,
-        rng: random.Random,
-    ) -> tuple[int, int]:
-        """Return source-native packet counts for an SSH connection."""
-        ...
-
-    def _ssh_tcp_ip_byte_count(
-        self,
-        payload_bytes: int | None,
-        packet_count: int,
-        rng: random.Random,
-    ) -> int:
-        """Return source-native IP byte accounting for an SSH connection."""
-        ...
-
 
 @dataclass(frozen=True, slots=True)
 class SshSessionActionBundle:
@@ -311,9 +290,12 @@ class SshSessionActionBundle:
         """Expand and dispatch SSH session evidence through the generator runtime."""
 
         state = self._plan_transport()
-        self._open_transport(state)
         event = self._build_session_event(state)
         auth_state = self._plan_linux_auth(state, event)
+        self._open_transport(
+            state,
+            responding_pid=auth_state.sshd_pid if auth_state is not None else self.request.sshd_pid,
+        )
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             self._mark_edr_login_readiness(state, event, auth_state)
@@ -407,18 +389,44 @@ class SshSessionActionBundle:
             ),
         )
 
-    def _open_transport(self, state: _SshTransportState) -> None:
-        """Open the canonical transport and attach source-side process details."""
+    def _open_transport(self, state: _SshTransportState, responding_pid: int | None) -> None:
+        """Delegate SSH TCP transport to the canonical network connection contract."""
 
         request = self.request
         executor = self.executor
+
+        state.source_process = self._resolve_source_process()
+        network_uid = executor.generate_connection(
+            src_ip=request.source_ip,
+            dst_ip=request.target_system.ip,
+            time=request.time,
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=state.duration,
+            orig_bytes=state.orig_bytes,
+            resp_bytes=state.resp_bytes,
+            src_port=state.source_port,
+            emit_dns=True,
+            pid=request.source_pid,
+            source_system=request.source_system,
+            conn_state="SF",
+            hostname=state.dst_host.fqdn or request.target_system.hostname,
+            process_image=request.source_process_image,
+            preserve_dst_ip=True,
+            responding_pid=responding_pid or -1,
+        )
+        state.uid = network_uid
+        state.network_visible = bool(network_uid)
+        if network_uid:
+            self._sync_transport_from_connection_state(state, network_uid)
 
         if request.logon_id:
             executor.state_manager.update_session_metadata(
                 request.logon_id,
                 source_port=state.source_port,
                 session_kind="ssh",
-                transport_pid=request.sshd_pid,
+                transport_pid=responding_pid,
                 network_close_time=state.close_time,
             )
             if not state.session_obj_id:
@@ -426,51 +434,32 @@ class SshSessionActionBundle:
                     request.logon_id
                 )
 
-        state.conn_id = executor.state_manager.open_connection(
-            src_ip=request.source_ip,
-            src_port=state.source_port,
-            dst_ip=request.target_system.ip,
-            dst_port=22,
-            protocol="tcp",
-            source_system=state.src_host.hostname if state.src_host else "",
-            source_hostname=state.src_host.fqdn if state.src_host else "",
-            hostname=state.dst_host.fqdn,
-            initiating_pid=request.source_pid,
-            close_time=state.close_time,
-        )
-        state.uid = executor.state_manager.get_zeek_uid(state.conn_id)
-        executor.state_manager.update_connection_bytes(
-            state.conn_id,
-            state.orig_bytes,
-            state.resp_bytes,
-        )
+    def _sync_transport_from_connection_state(
+        self,
+        state: _SshTransportState,
+        network_uid: str,
+    ) -> None:
+        """Copy canonical network ownership details back into the SSH lifecycle state."""
 
-        if _is_private_ip(request.source_ip):
-            executor._emit_dns_lookup(
-                request.source_ip,
-                request.target_system.ip,
-                request.time,
-                force_address=True,
+        connection = next(
+            (
+                conn
+                for conn in self.executor.state_manager.list_open_connections()
+                if conn.zeek_uid == network_uid
+            ),
+            None,
+        )
+        if connection is None:
+            return
+        state.conn_id = connection.conn_id
+        state.orig_bytes = connection.bytes_sent
+        state.resp_bytes = connection.bytes_received
+        if connection.close_time is not None:
+            state.close_time = connection.close_time
+            state.duration = max(
+                1.0,
+                (state.close_time - self.request.time).total_seconds(),
             )
-
-        state.source_process = self._resolve_source_process()
-        state.history = executor._ssh_tcp_success_history(state.rng)
-        state.orig_pkts, state.resp_pkts = executor._ssh_tcp_packet_counts_from_payload_and_history(
-            state.orig_bytes,
-            state.resp_bytes,
-            state.history,
-            state.rng,
-        )
-        state.orig_ip_bytes = executor._ssh_tcp_ip_byte_count(
-            state.orig_bytes,
-            state.orig_pkts,
-            state.rng,
-        )
-        state.resp_ip_bytes = executor._ssh_tcp_ip_byte_count(
-            state.resp_bytes,
-            state.resp_pkts,
-            state.rng,
-        )
 
     def _resolve_source_process(self) -> ProcessContext | None:
         """Return source process context when the caller supplied one."""
@@ -502,7 +491,12 @@ class SshSessionActionBundle:
         return None
 
     def _build_session_event(self, state: _SshTransportState) -> SecurityEvent:
-        """Build the canonical SSH session occurrence."""
+        """Build the canonical SSH session occurrence.
+
+        The TCP transport is a separate canonical ``connection`` occurrence owned by
+        the network-connection bundle. The SSH session event carries only the
+        authentication/session facts needed by endpoint session renderers.
+        """
 
         request = self.request
         return SecurityEvent(
@@ -516,29 +510,6 @@ class SshSessionActionBundle:
                 source_port=state.source_port,
                 logon_id=request.logon_id,
                 logon_type=10,
-            ),
-            network=NetworkContext(
-                src_ip=request.source_ip,
-                src_port=state.source_port,
-                dst_ip=request.target_system.ip,
-                dst_port=22,
-                protocol="tcp",
-                service="ssh",
-                zeek_uid=state.uid,
-                conn_id=state.conn_id,
-                duration=state.duration,
-                orig_bytes=state.orig_bytes,
-                resp_bytes=state.resp_bytes,
-                conn_state="SF",
-                history=state.history,
-                orig_pkts=state.orig_pkts,
-                resp_pkts=state.resp_pkts,
-                orig_ip_bytes=state.orig_ip_bytes,
-                resp_ip_bytes=state.resp_ip_bytes,
-                local_orig=_is_private_ip(request.source_ip),
-                local_resp=_is_private_ip(request.target_system.ip),
-                ip_proto=6,
-                initiating_pid=request.source_pid,
             ),
             process=state.source_process,
             edr=EdrContext(object_id=state.session_obj_id),
@@ -567,8 +538,6 @@ class SshSessionActionBundle:
         pam_delay_ms = accepted_delay_ms + pam_gap_ms
         logind_delay_ms = pam_delay_ms + logind_gap_ms
         sshd_pid = self._resolve_responder_pid(state, conn_delay_ms)
-        assert event.network is not None
-        event.network.responding_pid = sshd_pid
         if request.logon_id:
             executor.state_manager.update_session_metadata(request.logon_id, transport_pid=sshd_pid)
         syslog_seed = (
@@ -677,8 +646,6 @@ class SshSessionActionBundle:
 
         state.close_time = earliest_close_time
         state.duration = max(1.0, (state.close_time - request.time).total_seconds())
-        assert event.network is not None
-        event.network.duration = state.duration
 
         if request.logon_id:
             self.executor.state_manager.update_session_metadata(

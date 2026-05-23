@@ -90,7 +90,7 @@ def _make_activity_gen() -> tuple[ActivityGenerator, list[SecurityEvent]]:
         mock_emitters[name] = m
     # conn emitter accepts connection events
     mock_emitters["zeek_conn"].can_handle.side_effect = lambda e: (
-        e.event_type in {"connection", "ssh_session"} and e.network is not None
+        e.event_type == "connection" and e.network is not None
     )
 
     dispatcher = EventDispatcher(state_manager, mock_emitters)
@@ -184,6 +184,18 @@ def _event_signature(event: SecurityEvent) -> tuple:
         )
         if event.edr
         else None,
+    )
+
+
+def _ssh_transport_event(events: list[SecurityEvent]) -> SecurityEvent:
+    """Return the canonical connection event that owns an SSH session transport."""
+
+    return next(
+        event
+        for event in events
+        if event.event_type == "connection"
+        and event.network is not None
+        and event.network.service == "ssh"
     )
 
 
@@ -320,9 +332,10 @@ class TestSslContextPopulation:
 
         assert uid
         ssh_event = next(event for event in events if event.event_type == "ssh_session")
-        assert ssh_event.network is not None
-        assert ssh_event.network.src_port == 51111
-        assert ssh_event.network.responding_pid is not None
+        transport_event = _ssh_transport_event(events)
+        assert ssh_event.network is None
+        assert transport_event.network.src_port == 51111
+        assert transport_event.network.responding_pid is not None
 
         syslog_events = [
             event for event in events if event.event_type == "syslog" and event.syslog is not None
@@ -345,9 +358,9 @@ class TestSslContextPopulation:
         assert connection_event.timestamp < accepted_event.timestamp
         assert accepted_event.timestamp < pam_event.timestamp
         assert pam_event.timestamp < logind_event.timestamp
-        assert connection_event.syslog.pid == ssh_event.network.responding_pid
-        assert accepted_event.syslog.pid == ssh_event.network.responding_pid
-        assert pam_event.syslog.pid == ssh_event.network.responding_pid
+        assert connection_event.syslog.pid == transport_event.network.responding_pid
+        assert accepted_event.syslog.pid == transport_event.network.responding_pid
+        assert pam_event.syslog.pid == transport_event.network.responding_pid
 
     def test_ssh_session_bundle_graph_orders_collapsed_auth_timestamps(
         self,
@@ -433,10 +446,10 @@ class TestSslContextPopulation:
 
         SshSessionActionBundle(request=request, executor=gen).execute()
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
-        assert ssh_event.network.duration == 120.0
-        assert ssh_event.network.orig_bytes == 12_000
-        assert ssh_event.network.resp_bytes == 44_000
+        transport_event = _ssh_transport_event(events)
+        assert transport_event.network.duration == 120.0
+        assert transport_event.network.orig_bytes == 12_000
+        assert transport_event.network.resp_bytes == 44_000
 
         syslog_messages = [event.syslog.message for event in events if event.syslog is not None]
         assert any(
@@ -450,7 +463,7 @@ class TestSslContextPopulation:
             for event in events
             if event.syslog is not None and "session closed for user deploy" in event.syslog.message
         )
-        assert close_event.timestamp == base_time + timedelta(seconds=120)
+        assert close_event.timestamp == transport_event.timestamp + timedelta(seconds=120)
 
     def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
         def run_bundle_once() -> list[tuple]:
@@ -531,12 +544,13 @@ class TestSslContextPopulation:
         SshSessionActionBundle(request=request, executor=gen).execute()
 
         ssh_event = next(event for event in events if event.event_type == "ssh_session")
-        assert ssh_event.network is not None
+        transport_event = _ssh_transport_event(events)
+        assert ssh_event.network is None
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        close_time = base_time + timedelta(seconds=ssh_event.network.duration)
+        close_time = transport_event.timestamp + timedelta(seconds=transport_event.network.duration)
         assert session.network_close_time == close_time
-        assert session.transport_pid == ssh_event.network.responding_pid
+        assert session.transport_pid == transport_event.network.responding_pid
         assert session.source_ready_time is not None
         assert session.source_ready_time < close_time
 
@@ -1153,7 +1167,7 @@ class TestSslContextPopulation:
             source_port=51111,
         )
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_event = _ssh_transport_event(events)
         transport_events = [
             event
             for event in events
@@ -1162,13 +1176,13 @@ class TestSslContextPopulation:
             and event.process.command_line == "sshd: [accepted]"
         ]
         assert transport_events
-        assert ssh_event.network.responding_pid == transport_events[0].process.pid
+        assert transport_event.network.responding_pid == transport_events[0].process.pid
         syslog_pids = {
             event.syslog.pid
             for event in events
             if event.syslog is not None and event.syslog.app_name == "sshd"
         }
-        assert syslog_pids == {ssh_event.network.responding_pid}
+        assert syslog_pids == {transport_event.network.responding_pid}
 
     def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
         gen, events = activity_gen
@@ -1284,15 +1298,15 @@ class TestSslContextPopulation:
             source_port=51111,
         )
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
-        assert ssh_event.network.src_port != first_conn.network.src_port
-        assert ssh_event.network.responding_pid != first_conn.network.responding_pid
+        ssh_transport = [event for event in events if event.event_type == "connection"][-1]
+        assert ssh_transport.network.src_port != first_conn.network.src_port
+        assert ssh_transport.network.responding_pid != first_conn.network.responding_pid
         syslog_pids = {
             event.syslog.pid
             for event in events
             if event.syslog is not None and event.syslog.app_name == "sshd"
         }
-        assert syslog_pids == {ssh_event.network.responding_pid}
+        assert syslog_pids == {ssh_transport.network.responding_pid}
 
     def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
         gen, events = activity_gen
@@ -1431,11 +1445,12 @@ class TestSslContextPopulation:
             source_port=51111,
         )
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_event = _ssh_transport_event(events)
         syslog_events = [
             event
             for event in events
-            if event.syslog is not None and event.syslog.pid == ssh_event.network.responding_pid
+            if event.syslog is not None
+            and event.syslog.pid == transport_event.network.responding_pid
         ]
         messages = [event.syslog.message for event in syslog_events]
         times = [event.timestamp for event in syslog_events]
@@ -1713,15 +1728,11 @@ class TestSslContextPopulation:
             logon_id=logon_id,
         )
 
-        ssh_event = next(
-            event
-            for event in events
-            if event.network is not None and event.network.service == "ssh"
-        )
+        transport_event = _ssh_transport_event(events)
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        assert session.network_close_time == base_time + timedelta(
-            seconds=ssh_event.network.duration
+        assert session.network_close_time == transport_event.timestamp + timedelta(
+            seconds=transport_event.network.duration
         )
 
     def test_ssh_session_records_transport_close_time_with_existing_object_id(self, activity_gen):
@@ -1756,15 +1767,11 @@ class TestSslContextPopulation:
             session_obj_id=session_obj_id,
         )
 
-        ssh_event = next(
-            event
-            for event in events
-            if event.network is not None and event.network.service == "ssh"
-        )
+        transport_event = _ssh_transport_event(events)
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        assert session.network_close_time == base_time + timedelta(
-            seconds=ssh_event.network.duration
+        assert session.network_close_time == transport_event.timestamp + timedelta(
+            seconds=transport_event.network.duration
         )
 
     def test_ssh_session_honors_min_duration(self, activity_gen):
@@ -1787,12 +1794,8 @@ class TestSslContextPopulation:
             min_duration=7200.0,
         )
 
-        ssh_event = next(
-            event
-            for event in events
-            if event.network is not None and event.network.service == "ssh"
-        )
-        assert ssh_event.network.duration >= 7200.0
+        transport_event = _ssh_transport_event(events)
+        assert transport_event.network.duration >= 7200.0
 
     def test_ssh_source_ports_are_unique_per_endpoint_tuple(self, activity_gen):
         gen, events = activity_gen

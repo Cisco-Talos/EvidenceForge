@@ -118,6 +118,16 @@ The bundle owns lifecycle, timing constraints, observation intent, and durable
 anchors across those events; each `SecurityEvent` remains the canonical evidence
 unit dispatched to state and emitters.
 
+Bundle contracts compose only through canonical semantic layers. A higher-level
+bundle may call a lower-level bundle or generator entrypoint when that lower
+layer owns a sub-occurrence; for example, an SSH session delegates its TCP/22
+transport occurrence to the network-connection contract, and browser sessions
+delegate request transport to network/proxy/DNS/file-transfer contracts. Rendered
+artifacts do not cascade. A Zeek `conn.log` row, eCAR FLOW row, syslog line, or
+Windows XML event can be validated against sibling evidence, but it must not
+trigger generation of that sibling evidence; the sibling must come from a
+canonical event, context, or upstream bundle.
+
 `SecurityEvent.timestamp` is canonical world time. Source-native timestamps are
 planned separately by `SourceTimingPlanner`
 (`src/evidenceforge/generation/source_timing.py`) and stored on
@@ -238,9 +248,16 @@ events, baseline remote-admin noise, or storyline `scp` transfers to modeled
 Linux receivers. The bundle keeps an intent anchor for durable narrative
 references and a resolved execution anchor after source-port reservation, so two
 otherwise identical SSH sessions do not collapse when the network tuple differs.
-Transfer-specific receiver artifacts, such as the target-side file create for
-`scp`, are emitted after the bundle-owned SSH lifecycle rather than duplicating
-SSH auth or transport timing locally.
+The bundle owns SSH auth/session/PAM/logind ordering, shell readiness, and
+session close intent, but the TCP/22 transport occurrence is delegated to the
+canonical `NetworkConnectionActionBundle` through `generate_connection()`. The
+network contract owns tuple allocation, Zeek UID, packet/byte accounting,
+visibility, endpoint flow rendering, and transport close time; SSH constrains
+its session evidence against that transport lifecycle instead of rendering Zeek
+connection evidence from the `ssh_session` event. Transfer-specific receiver
+artifacts, such as the target-side file create for `scp`, are emitted after
+bundle-owned SSH auth/session timing rather than duplicating SSH auth or
+transport timing locally.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled

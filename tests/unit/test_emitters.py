@@ -2808,6 +2808,34 @@ class TestZeekEmitter:
         """Create temporary output file path."""
         return tmp_path / "conn.json"
 
+    def test_can_handle_ssh_transport_only_as_connection(self, format_def, temp_output):
+        """SSH transport rows must come from canonical connection events."""
+        emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)
+        network = NetworkContext(
+            src_ip="10.0.1.10",
+            src_port=51111,
+            dst_ip="10.0.2.20",
+            dst_port=22,
+            protocol="tcp",
+            service="ssh",
+            zeek_uid=generate_zeek_uid(),
+            conn_state="SF",
+        )
+
+        connection_event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="connection",
+            network=network,
+        )
+        ssh_session_event = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            event_type="ssh_session",
+            network=network,
+        )
+
+        assert emitter.can_handle(connection_event) is True
+        assert emitter.can_handle(ssh_session_event) is False
+
     def test_emit_tcp_connection(self, format_def, temp_output):
         """Test emitting a TCP connection."""
         emitter = ZeekEmitter(format_def, temp_output, buffer_size=1)

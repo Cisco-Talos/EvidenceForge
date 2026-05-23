@@ -6818,13 +6818,25 @@ class ActivityGenerator:
         if event.dst_host and event.dst_host.os_category == "linux" and is_ssh_session:
             from evidenceforge.events.contexts import SyslogContext
 
+            transport_close_consistent = True
+            if session is not None and session.network_close_time is not None:
+                network_close_time = ensure_utc(session.network_close_time)
+                logoff_time = ensure_utc(time)
+                transport_close_consistent = logoff_time <= network_close_time + timedelta(
+                    seconds=90
+                )
             sshd_pid = (
                 session.transport_pid
                 if session and session.transport_pid is not None
                 else self.state_manager.allocate_transient_linux_pid(system.hostname, time)
             )
             source_port = session.source_port if session else 0
-            if not source_port or not session or session.source_ip == system.ip:
+            if (
+                not source_port
+                or not session
+                or session.source_ip == system.ip
+                or not transport_close_consistent
+            ):
                 event.syslog = None
             else:
                 event.syslog = SyslogContext(

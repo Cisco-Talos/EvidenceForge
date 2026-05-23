@@ -456,7 +456,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
-| `ssh_session` | Zeek conn + syslog sshd + EDR/eCAR | | `source_ip` |
+| `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
@@ -523,7 +523,7 @@ The generation engine automatically emits prerequisite events for certain event 
 | `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname through the DNS lookup bundle; may include source-native resolver companion questions | `network.dns_before_tcp` profile before |
 | `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | `auth.kerberos_before_logon` profile before. Elevated-session 4672 is emitted with the target-host 4624. |
 | `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, target logon after source-visible transport evidence |
-| `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
+| `ssh_session` | DNS query + canonical connection (port 22) + syslog auth | Connection at event time |
 | `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | `windows.audit_from_admin_command` profile after |
 | `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | `process.remote_thread_lsass_access` profile after |
 

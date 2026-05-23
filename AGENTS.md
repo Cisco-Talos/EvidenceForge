@@ -255,13 +255,25 @@ Use action bundles for correlated behavior families across storyline, baseline,
 red herrings, and scanners. The source of intent may differ, but evidence
 construction should share the same bundle/lifecycle/timing path.
 
+Contracts compose only through canonical semantic layers. Higher-level bundles may
+request lower-level bundle contracts (for example SSH -> network connection, or
+browser -> proxy/network/DNS/file transfer), but rendered source artifacts must
+not become generation triggers. A Zeek `conn.log` row, eCAR FLOW row, Syslog
+line, or Windows event may have validation/rendering contracts, but it must not
+generate sibling evidence. Model those siblings as canonical events or contexts
+owned by the appropriate bundle before rendering.
+
 For SSH specifically, modeled sessions from typed storyline events, baseline
 remote-admin noise, and `scp` transfers to modeled Linux receivers should route
-through the SSH action bundle. Keep transfer-specific receiver artifacts (for
-example, target-side file creation) separate from the bundle only after the
-bundle has owned SSH transport/auth/session timing. When source ports are
-allocated during execution, use the resolved execution anchor rather than the
-pre-reservation intent anchor for tuple-specific identity.
+through the SSH action bundle. The SSH bundle owns SSH auth/session/PAM/logind
+semantics, shell readiness, and session close intent; it delegates the TCP/22
+transport occurrence to the canonical network-connection contract. Keep
+transfer-specific receiver artifacts (for example, target-side file creation)
+separate from the bundle only after the bundle has owned SSH auth/session timing
+and the network contract has owned transport tuple, Zeek UID, packet accounting,
+visibility, and transport close time. When source ports are allocated during
+execution, use the resolved execution anchor rather than the pre-reservation
+intent anchor for tuple-specific identity.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process
