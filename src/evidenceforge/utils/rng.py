@@ -64,6 +64,11 @@ def _stable_seed(key: str) -> int:
 
 
 def stable_uuid(namespace: str, *parts: object) -> str:
-    """Create a deterministic UUID-shaped identifier from stable semantic parts."""
+    """Create a deterministic UUIDv4-shaped identifier from stable semantic parts."""
     normalized = "|".join("" if part is None else str(part) for part in parts)
-    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"evidenceforge:{namespace}:{normalized}"))
+    digest = bytearray(
+        hashlib.sha256(f"evidenceforge:{namespace}:{normalized}".encode()).digest()[:16]
+    )
+    digest[6] = (digest[6] & 0x0F) | 0x40
+    digest[8] = (digest[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(digest)))

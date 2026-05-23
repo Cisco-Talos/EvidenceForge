@@ -35,7 +35,6 @@ import ntpath
 import random
 import re
 import shlex
-import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -5973,11 +5972,11 @@ class ActivityGenerator:
             # eCAR object lifecycles should still be single-login, so model the
             # re-auth as a child observation linked to the durable session.
             session_actor_id = session_obj_id
-            session_obj_id = str(
-                uuid.uuid5(
-                    uuid.NAMESPACE_DNS,
-                    f"ecar_unlock_reauth:{system.hostname}:{logon_id}:{time.isoformat()}",
-                )
+            session_obj_id = stable_uuid(
+                "ecar-unlock-reauth",
+                system.hostname,
+                logon_id,
+                time.isoformat(),
             )
         event = SecurityEvent(
             timestamp=time,
@@ -14919,11 +14918,13 @@ class ActivityGenerator:
         self.state_manager.update_process_activity_time(system.hostname, source_pid, time)
         source_obj_id = self.state_manager.get_process_object_id(system.hostname, source_pid)
         target_obj_id = self.state_manager.get_process_object_id(system.hostname, target_pid)
-        thread_obj_id = str(
-            uuid.uuid5(
-                uuid.NAMESPACE_DNS,
-                f"{system.hostname}:{source_pid}:{target_pid}:{time.isoformat()}:{start_address}",
-            )
+        thread_obj_id = stable_uuid(
+            "ecar-remote-thread",
+            system.hostname,
+            source_pid,
+            target_pid,
+            time.isoformat(),
+            start_address,
         )
         stack_base = 0x000000C0000000 + (rng.randint(0, 0x7FFF) << 12)
         user_stack_base = stack_base

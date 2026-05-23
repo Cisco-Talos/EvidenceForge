@@ -63,7 +63,7 @@ from evidenceforge.generation.emitters import (
     ZeekX509Emitter,
 )
 from evidenceforge.models.scenario import System
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -768,11 +768,9 @@ class EmitterSetupMixin:
             _advance_boot_clock()
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
-        import uuid
-
         from evidenceforge.models.state import RunningProcess
 
-        systemd_object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"linux-systemd:{hn}"))
+        systemd_object_id = stable_uuid("linux-systemd", hn)
         sm.state.running_processes[(hn, 1)] = RunningProcess(
             pid=1,
             parent_pid=0,
