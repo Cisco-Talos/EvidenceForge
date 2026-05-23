@@ -276,6 +276,13 @@ execution, use the resolved execution anchor rather than the pre-reservation
 intent anchor for tuple-specific identity. Source-native SSH close evidence must
 be lifecycle-compatible with the transport close, but should not be bit-identical
 to Zeek close timing unless the source semantics require exact equality.
+Compatibility paths that receive a Linux remote-interactive logon intent
+(`logon_type=10` with a remote source) must delegate to the SSH bundle as the
+single owner. Do not emit a generic Linux `logon` event before or after the SSH
+bundle for the same session; that creates duplicate endpoint `USER_SESSION`
+evidence and breaks transport-before-auth ordering. In eCAR/EDR rendering, the
+matching inbound SSH `FLOW` row is the transport observation and must render
+before the bundle-owned SSH `USER_SESSION/LOGIN` row for the same source tuple.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process

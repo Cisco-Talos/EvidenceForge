@@ -5903,6 +5903,68 @@ class ActivityGenerator:
                 10: "rdp",
             }.get(logon_type, "interactive")
 
+        if (
+            os_cat == "linux"
+            and logon_type == 10
+            and source_ip
+            and source_ip not in {"-", system.ip}
+        ):
+            if logon_id is None:
+                logon_id = self.state_manager.create_session(
+                    username=user.username,
+                    system=system.hostname,
+                    logon_type=logon_type,
+                    source_ip=auth_source_ip,
+                    source_port=source_port or 0,
+                    session_kind="ssh",
+                )
+            else:
+                existing_session = self.state_manager.get_session(logon_id)
+                if existing_session is None:
+                    self.state_manager.register_session(
+                        logon_id=logon_id,
+                        username=user.username,
+                        system=system.hostname,
+                        logon_type=logon_type,
+                        source_ip=auth_source_ip,
+                        start_time=time,
+                        source_port=source_port or 0,
+                        session_kind="ssh",
+                    )
+                else:
+                    self.state_manager.update_session_metadata(
+                        logon_id,
+                        source_ip=auth_source_ip,
+                        source_port=source_port or 0,
+                        session_kind="ssh",
+                    )
+
+            session_obj_id = self.state_manager.get_session_object_id(logon_id)
+            source_system = (
+                self._ip_to_system.get(source_ip) if hasattr(self, "_ip_to_system") else None
+            )
+            self.generate_ssh_session(
+                user=user,
+                target_system=system,
+                time=time,
+                source_ip=source_ip,
+                source_system=source_system,
+                source_port=source_port,
+                logon_id=logon_id,
+                session_obj_id=session_obj_id,
+                source="linux_logon_compat",
+            )
+            session = self.state_manager.get_session(logon_id)
+            if session is not None:
+                session.last_activity_time = time
+            logger.debug(
+                "Generated Linux SSH logon via SSH bundle: %s on %s (LogonID: %s)",
+                user.username,
+                system.hostname,
+                logon_id,
+            )
+            return logon_id
+
         # Select auth package (semantic data, not format-specific)
         auth_pkg = self._select_auth_package(logon_type)
 
@@ -12518,23 +12580,23 @@ class ActivityGenerator:
             else:
                 source_ip = None  # Local console on Windows — defaults to system.ip
 
-            emit_transport_syslog = True
-            # For Linux hosts with remote logon, emit SSH session (network-side evidence)
-            # before the host-side auth event — matches real-world ordering.
+            # Linux remote interactive logons are SSH sessions. Let the SSH
+            # compatibility path own transport, auth/PAM, endpoint session, and
+            # session state so eCAR does not see a duplicate generic login.
             if (
                 _get_os_category(system.os) == "linux"
                 and logon_type in (2, 10)
                 and source_ip
                 and source_ip != system.ip
             ):
-                ssh_time = time - timedelta(seconds=_get_rng().uniform(0.5, 2.0))
-                self.generate_ssh_session(
-                    user=user,
-                    target_system=system,
-                    time=ssh_time,
+                self.generate_logon(
+                    user,
+                    system,
+                    time,
+                    logon_type=10,
                     source_ip=source_ip,
                 )
-                emit_transport_syslog = False
+                return
             elif (
                 _get_os_category(system.os) == "windows"
                 and logon_type == 10
@@ -12556,7 +12618,6 @@ class ActivityGenerator:
                 time,
                 logon_type=logon_type,
                 source_ip=source_ip,
-                emit_transport_syslog=emit_transport_syslog,
             )
 
         # Process activities

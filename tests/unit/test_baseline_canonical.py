@@ -738,11 +738,47 @@ class TestSyslogContext:
         )
 
         syslog = mock_emitters["syslog"]
-        assert syslog.emit.called
-        event = syslog.emit.call_args[0][0]
-        assert event.syslog is not None
-        assert event.syslog.app_name == "sshd"
-        assert "Accepted password for alice" in event.syslog.message
+        syslog_events = [call.args[0] for call in syslog.emit.call_args_list]
+        assert any(
+            event.syslog
+            and event.syslog.app_name == "sshd"
+            and "Accepted password for alice" in event.syslog.message
+            for event in syslog_events
+        )
+
+    def test_linux_remote_logon_delegates_to_single_ssh_session_contract(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Linux Type 10 compatibility should not emit a duplicate generic logon."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        logon_id = activity_gen.generate_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            source_ip="10.0.10.1",
+            logon_type=10,
+        )
+
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.session_kind == "ssh"
+
+        ecar_session_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].auth is not None and call.args[0].auth.username == "alice"
+        ]
+        assert [event.event_type for event in ecar_session_events] == ["ssh_session"]
+        assert ecar_session_events[0].auth.logon_id == logon_id
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_port == 22
+        ]
+        assert network_events
 
     def test_logon_no_syslog_context_on_windows(
         self, activity_gen, state_manager, mock_emitters, timestamp

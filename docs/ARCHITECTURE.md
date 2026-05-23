@@ -261,6 +261,13 @@ connection close rows unless a source contract requires exact equality.
 Transfer-specific receiver artifacts, such as the target-side file create for
 `scp`, are emitted after bundle-owned SSH auth/session timing rather than
 duplicating SSH auth or transport timing locally.
+The legacy Linux remote-interactive logon compatibility path also delegates to
+the SSH bundle when the source is remote. It returns the allocated session ID,
+but does not render a separate generic `logon` event; endpoint session evidence
+comes from the bundle-owned `ssh_session` occurrence so eCAR/EDR cannot observe
+two logins for one SSH transport. eCAR/EDR keeps a same-source ordering contract
+for modeled SSH: the matching inbound `FLOW` transport row renders before the
+SSH `USER_SESSION/LOGIN` row for the same source tuple.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
