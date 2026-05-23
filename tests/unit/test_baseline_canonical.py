@@ -47,6 +47,8 @@ from evidenceforge.generation.engine.baseline import (
     _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
     _module_matches_process,
+    _ntp_observed_second,
+    _ntp_sync_interval_seconds,
     _render_extra_sudo_command_template,
     _sample_lock_duration,
     _ufw_block_syn_packet_len,
@@ -349,6 +351,36 @@ class TestIdsAlertCorrelation:
         assert event.ntp.stratum >= 1
         assert event.ntp.rec_ts > event.ntp.org_ts
         assert event.ntp.xmt_ts >= event.ntp.rec_ts
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_bytes > 0
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_ip_bytes > 0
+
+    def test_ntp_no_response_connection_does_not_emit_ntp_log(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """NTP parser rows require responder payload in the matching conn row."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="129.6.15.28",
+            time=timestamp,
+            dst_port=123,
+            proto="udp",
+            service="ntp",
+            duration=0.02,
+            orig_bytes=48,
+            resp_bytes=0,
+            conn_state="S0",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.ntp is None
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
 
     def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
         """NTP version and poll behavior should be stable per client/server pair."""
@@ -373,6 +405,22 @@ class TestIdsAlertCorrelation:
         assert first.precision == second.precision
         assert first.root_delay == second.root_delay
         assert first.root_disp == second.root_disp
+
+    def test_ntp_schedule_helpers_avoid_exact_hourly_fingerprint(self):
+        """Baseline NTP intervals should vary around the association poll."""
+        intervals = [
+            round(_ntp_sync_interval_seconds("WS-01", "129.6.15.28", sequence, 4096), 3)
+            for sequence in range(12)
+        ]
+        observed = [
+            round(_ntp_observed_second("WS-01", "129.6.15.28", sequence, 4096.0 * sequence), 3)
+            for sequence in range(12)
+        ]
+
+        assert len(set(intervals)) > 1
+        assert any(abs(interval - 3600.0) > 30.0 for interval in intervals)
+        assert min(intervals) >= 300.0
+        assert observed != [4096.0 * sequence for sequence in range(12)]
 
     def test_completed_tls_duration_contains_zeek_analyzer_evidence(
         self, activity_gen, mock_emitters, timestamp

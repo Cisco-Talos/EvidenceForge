@@ -326,6 +326,13 @@ be delayed behind the `USER_SESSION` login solely to wait for destination-side
 `sshd` process visibility; omit the listener PID/principal when that identity
 would invert transport-before-session ordering.
 
+For NTP specifically, `ntp.log` fan-out is a parser view of a response-bearing
+UDP/123 connection. The network-connection contract must own the shared UID,
+`conn_state`, history, byte/packet accounting, duration, and `NtpContext`.
+Do not emit Zeek NTP rows for S0/no-response connections. Baseline NTP traffic
+should follow a stable per-client/server poll schedule with source-observation
+texture, not one exact hourly tick per host.
+
 For DHCP leases, route acquisition and renewal transactions through the DHCP
 lease action bundle. The bundle owns lease identity, MAC/IP/server/domain
 metadata, Zeek DHCP plus connection fan-out, link-local visibility semantics,

@@ -2843,6 +2843,13 @@ def _ntp_stratum_and_ref_id(dst_ip: str) -> tuple[int, str]:
     return rng.choice([1, 1, 2]), rng.choice([".GPS.", ".PPS.", ".GOES.", ".ACTS."])
 
 
+def _ntp_association_poll_seconds(src_ip: str, dst_ip: str) -> int:
+    """Return the stable poll interval for an NTP client/server association."""
+    profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
+    profile_rng.random()  # version draw; keep poll aligned with full profile generation
+    return int(profile_rng.choices([1024, 2048, 4096], weights=[20, 35, 45], k=1)[0])
+
+
 def _file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
     """Return deterministic Zeek files.log hashes for requested analyzers."""
 
@@ -3275,7 +3282,7 @@ class ActivityGenerator:
 
         profile_rng = random.Random(_stable_seed(f"ntp_association:{src_ip}:{dst_ip}"))
         version = 3 if profile_rng.random() < 0.08 else 4
-        poll = float(profile_rng.choices([256, 512, 1024], weights=[25, 45, 30], k=1)[0])
+        poll = float(profile_rng.choices([1024, 2048, 4096], weights=[20, 35, 45], k=1)[0])
         profile = {
             "version": version,
             "poll": poll,
@@ -9427,6 +9434,8 @@ class ActivityGenerator:
                     conn_state, history = "SF", "Ddd"  # Multi-packet response
                 else:
                     conn_state, history = "SF", "Dd"
+            elif service == "ntp" and resp_bytes and resp_bytes > 0:
+                conn_state, history = "SF", "Dd"
             else:
                 entry = rng.choices(_UDP_CONN_ENTRIES, weights=_UDP_CONN_WEIGHTS, k=1)[0]
                 conn_state, _, history = entry
@@ -10366,8 +10375,17 @@ class ActivityGenerator:
                 rng,
             ).execute()
 
-        # NTP context for Zeek ntp.log fan-out
-        if not local_only and service == "ntp" and proto == "udp":
+        # NTP context for Zeek ntp.log fan-out. Zeek ntp.log records server response
+        # fields, so only attach the context when the matching conn.log row has a
+        # responder payload.
+        if (
+            not local_only
+            and service == "ntp"
+            and proto == "udp"
+            and event.network.conn_state == "SF"
+            and (event.network.resp_pkts or 0) > 0
+            and (event.network.resp_bytes or 0) > 0
+        ):
             from evidenceforge.events.contexts import NtpContext
 
             ntp_rng = _get_rng()
@@ -10380,6 +10398,9 @@ class ActivityGenerator:
             rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
             proc_sec = ntp_rng.lognormvariate(math.log(0.5) - 0.3**2 / 2, 0.3) / 1000.0
             ntp_jitter = ntp_rng.uniform(-0.005, 0.005)
+            ntp_duration = max(0.001, rtt_sec + proc_sec + ntp_rng.uniform(0.001, 0.008))
+            if event.network.duration is None or event.network.duration < ntp_duration:
+                event.network.duration = ntp_duration
             event.ntp = NtpContext(
                 version=int(association["version"]),
                 mode=4,  # server response

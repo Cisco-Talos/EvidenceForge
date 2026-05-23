@@ -318,6 +318,14 @@ transport observations: they must remain before the corresponding endpoint
 visible later, so the renderer omits listener PID/principal rather than delaying
 the FLOW behind the session.
 
+NTP is a protocol parser fan-out from the same network-connection contract.
+When `NtpContext` is attached, the matching UDP/123 `conn.log` row must be
+response-bearing (`SF`/`Dd` with responder bytes and packets), because Zeek
+`ntp.log` mode 4 rows contain server response timing fields. Baseline NTP
+traffic uses a stable per-client/server poll schedule with small observation
+texture rather than one exact hourly event per host; the NTP association owns
+version, poll, precision, delay, dispersion, and ref-id stability.
+
 DHCP callers supply one acquisition or renewal transaction, and
 `DhcpLeaseActionBundle` owns lease identity, MAC/IP/server/domain metadata, Zeek
 DHCP plus connection fan-out, link-local visibility semantics, and Linux

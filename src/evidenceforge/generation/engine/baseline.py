@@ -61,6 +61,7 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _linux_foreground_lifetime,
     _linux_uid_for_user,
+    _ntp_association_poll_seconds,
     _windows_foreground_lifetime,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
@@ -117,6 +118,34 @@ def _ufw_block_ttl(src_ip: str) -> int:
         initial = rng.choices((64, 128, 255), weights=(58, 36, 6), k=1)[0]
         hops = rng.randint(7, 30) if initial == 255 else rng.randint(5, 24)
     return max(32, initial - hops)
+
+
+def _ntp_sync_interval_seconds(
+    hostname: str,
+    ntp_ip: str,
+    sequence: int,
+    poll_seconds: int,
+) -> float:
+    """Return the next observed NTP sync interval for a client/server association."""
+    poll = max(300, poll_seconds)
+    rng = random.Random(_stable_seed(f"ntp_interval:{hostname}:{ntp_ip}:{sequence}"))
+    interval = poll * rng.uniform(0.82, 1.18)
+    if rng.random() < 0.10:
+        interval += poll * rng.uniform(0.35, 1.25)
+    if rng.random() < 0.05:
+        interval = max(300.0, poll * rng.uniform(0.45, 0.80))
+    return max(300.0, interval)
+
+
+def _ntp_observed_second(
+    hostname: str,
+    ntp_ip: str,
+    sequence: int,
+    scheduled_second: float,
+) -> float:
+    """Return a small source-observation offset for an NTP sync."""
+    rng = random.Random(_stable_seed(f"ntp_observed:{hostname}:{ntp_ip}:{sequence}"))
+    return scheduled_second + rng.uniform(-1.5, 2.5)
 
 
 def _linux_baseline_session_initiator(
@@ -4864,6 +4893,9 @@ class BaselineMixin:
                         return _pids[k]
                 return -1
 
+            hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+            hour_end_sec = hour_start_sec + 3600
+
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
                 _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
@@ -4873,7 +4905,6 @@ class BaselineMixin:
                 _dns_range = max(1, _dns_hi - _dns_lo)
                 dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
                 dns_phase = _stable_seed(f"dns_ph_{system.hostname}") % dns_interval
-                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = dns_phase
                 while t < hour_start_sec:
                     t += dns_interval
@@ -4903,12 +4934,9 @@ class BaselineMixin:
                     )
                     t += dns_interval
 
-            # NTP sync: 1 per hour
+            # NTP syncs follow a stable per-association poll schedule rather
+            # than a fixed hourly tick.
             if "ntp-client" in services:
-                offset = (_stable_seed(f"ntp_phase_{system.hostname}") % 3600) + rng.gauss(0, 5)
-                offset = max(0, min(3599, offset))
-                ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
                 # Deterministic NTP source per host (stable across hours)
                 # Exclude the host's own IP — DCs don't NTP-sync to themselves
                 ntp_candidates = [ip for ip in ntp_ips if ip != system.ip]
@@ -4918,24 +4946,72 @@ class BaselineMixin:
                     else None  # This host IS the NTP server; skip NTP client traffic only
                 )
                 if ntp_ip:
+                    poll_seconds = _ntp_association_poll_seconds(
+                        system.ip,
+                        ntp_ip,
+                    )
+                    phase_rng = random.Random(
+                        _stable_seed(f"ntp_phase:{system.hostname}:{ntp_ip}:{poll_seconds}")
+                    )
+                    scheduled_second = phase_rng.uniform(0, min(3600, poll_seconds))
+                    sequence = 0
+                    min_interval = max(300.0, poll_seconds * 0.45)
+                    if scheduled_second < hour_start_sec:
+                        skip_count = max(
+                            0,
+                            int((hour_start_sec - scheduled_second) // min_interval) - 2,
+                        )
+                        for _ in range(skip_count):
+                            scheduled_second += _ntp_sync_interval_seconds(
+                                system.hostname,
+                                ntp_ip,
+                                sequence,
+                                poll_seconds,
+                            )
+                            sequence += 1
+                    while scheduled_second < hour_start_sec:
+                        scheduled_second += _ntp_sync_interval_seconds(
+                            system.hostname,
+                            ntp_ip,
+                            sequence,
+                            poll_seconds,
+                        )
+                        sequence += 1
                     ntp_pid = (
                         _svc_pid("svchost_local_svc")
                         if os_cat == "windows"
                         else _svc_pid("chronyd", "timesyncd")
                     )
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=ntp_ip,
-                        time=ts,
-                        dst_port=123,
-                        proto="udp",
-                        service="ntp",
-                        duration=rng.uniform(0.01, 0.1),
-                        orig_bytes=48,
-                        resp_bytes=48,
-                        source_system=system,
-                        pid=ntp_pid,
-                    )
+                    while scheduled_second < hour_end_sec:
+                        observed_second = _ntp_observed_second(
+                            system.hostname,
+                            ntp_ip,
+                            sequence,
+                            scheduled_second,
+                        )
+                        if hour_start_sec <= observed_second < hour_end_sec:
+                            ts = self._generation_epoch + timedelta(seconds=observed_second)
+                            self.state_manager.set_current_time(ts)
+                            self.activity_generator.generate_connection(
+                                src_ip=system.ip,
+                                dst_ip=ntp_ip,
+                                time=ts,
+                                dst_port=123,
+                                proto="udp",
+                                service="ntp",
+                                duration=rng.uniform(0.01, 0.1),
+                                orig_bytes=48,
+                                resp_bytes=48,
+                                source_system=system,
+                                pid=ntp_pid,
+                            )
+                        scheduled_second += _ntp_sync_interval_seconds(
+                            system.hostname,
+                            ntp_ip,
+                            sequence,
+                            poll_seconds,
+                        )
+                        sequence += 1
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
@@ -6253,21 +6329,60 @@ class BaselineMixin:
                     ]
                     if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
+                    if not hasattr(self, "_timesyncd_last_state"):
+                        self._timesyncd_last_state = {}
                     if system.hostname not in self._timesyncd_first_seen:
                         msg = f"Synchronized to time server for the first time {ntp_ip}:123."
+                        timesync_state = "sync"
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
-                        msg = rng.choices(
-                            [
+                        step = f"{-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d}"
+                        candidates = [
+                            (
+                                "config",
                                 f"Network configuration changed, trying to establish synchronization with {ntp_ip}:123.",
-                                f"System clock synchronized to {ntp_ip}:123.",
-                                f"Time has been changed by {-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d} seconds.",
-                                f"Timed out waiting for reply from {ntp_ip}:123.",
-                                f"Selected time server {ntp_ip}:123.",
-                            ],
-                            weights=[8, 45, 8, 4, 35],
+                                8,
+                            ),
+                            ("sync", f"System clock synchronized to {ntp_ip}:123.", 45),
+                            ("step", f"Time has been changed by {step} seconds.", 8),
+                            ("timeout", f"Timed out waiting for reply from {ntp_ip}:123.", 4),
+                            ("selected", f"Selected time server {ntp_ip}:123.", 35),
+                        ]
+                        last_state = self._timesyncd_last_state.get(system.hostname)
+                        weighted: list[tuple[str, str, float]] = []
+                        for candidate_state, candidate_msg, weight in candidates:
+                            adjusted_weight = float(weight)
+                            if last_state is not None:
+                                previous_state, previous_time = last_state
+                                recent = ts - previous_time
+                                if recent < timedelta(minutes=10):
+                                    if (
+                                        previous_state in {"sync", "step"}
+                                        and candidate_state == "timeout"
+                                    ):
+                                        adjusted_weight = 0.0
+                                    elif previous_state == "timeout" and candidate_state in {
+                                        "sync",
+                                        "step",
+                                    }:
+                                        adjusted_weight = 0.0
+                                if (
+                                    recent < timedelta(minutes=2)
+                                    and candidate_state == previous_state
+                                ):
+                                    adjusted_weight *= 0.15
+                            weighted.append((candidate_state, candidate_msg, adjusted_weight))
+                        if not any(weight for _state, _msg, weight in weighted):
+                            weighted = [
+                                ("selected", f"Selected time server {ntp_ip}:123.", 1.0),
+                            ]
+                        selected_idx = rng.choices(
+                            range(len(weighted)),
+                            weights=[weight for _state, _msg, weight in weighted],
                             k=1,
                         )[0]
+                        timesync_state, msg, _weight = weighted[selected_idx]
+                    self._timesyncd_last_state[system.hostname] = (timesync_state, ts)
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
