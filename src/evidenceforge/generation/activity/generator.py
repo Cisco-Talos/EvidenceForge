@@ -552,8 +552,11 @@ def _http_context_from_process_command(
 def _normalize_http_context_for_source_native_response(http: HttpContext) -> HttpContext:
     """Keep caller-provided HTTP metadata source-native before cross-source fan-out."""
     from evidenceforge.generation.activity.http_content import (
+        coerce_response_size_for_mime,
         http_status_message,
+        is_download_scale_mime,
         is_stable_resource_path,
+        normalize_mime_type_for_path,
         response_mime_types_for_status,
     )
 
@@ -577,6 +580,26 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
         status_msg = http_status_message(status_code)
 
     resp_mime_types = list(http.resp_mime_types)
+    if 200 <= status_code < 300 and method not in {"CONNECT", "HEAD"}:
+        mime_type = (
+            resp_mime_types[0]
+            if resp_mime_types
+            else normalize_mime_type_for_path(
+                http.uri,
+                "text/html",
+            )
+        )
+        if is_download_scale_mime(mime_type):
+            response_body_len = coerce_response_size_for_mime(
+                random.Random(
+                    _stable_seed(
+                        "http_context_body_size:"
+                        f"{http.host}:{http.uri}:{mime_type}:{response_body_len}"
+                    )
+                ),
+                mime_type,
+                response_body_len,
+            )
     if (
         not resp_mime_types
         or response_body_len <= 0
@@ -2530,6 +2553,8 @@ def _proxy_http_response_body_len(
     http: HttpContext | None = None,
 ) -> int:
     """Return Zeek HTTP entity-body length for an explicit proxy response."""
+    from evidenceforge.generation.activity.http_content import coerce_response_size_for_mime
+
     if proxy_context.status_code in {204, 304} or proxy_context.method == "HEAD":
         return 0
     if proxy_context.status_code >= 400:
@@ -2537,8 +2562,28 @@ def _proxy_http_response_body_len(
     if http is not None and http.status_code == proxy_context.status_code:
         return max(0, http.response_body_len)
     if resp_bytes is not None:
-        return max(0, resp_bytes)
-    return max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1])
+        return coerce_response_size_for_mime(
+            random.Random(
+                _stable_seed(
+                    "proxy_http_body_size:"
+                    f"{proxy_context.host}:{proxy_context.url}:{proxy_context.content_type}:"
+                    f"{resp_bytes}"
+                )
+            ),
+            proxy_context.content_type or "text/html",
+            resp_bytes,
+        )
+    return coerce_response_size_for_mime(
+        random.Random(
+            _stable_seed(
+                "proxy_http_body_size:"
+                f"{proxy_context.host}:{proxy_context.url}:{proxy_context.content_type}:"
+                f"{proxy_context.sc_bytes}"
+            )
+        ),
+        proxy_context.content_type or "text/html",
+        max(0, proxy_context.sc_bytes - _PROXY_SC_OVERHEAD[1]),
+    )
 
 
 def _proxy_time_taken_ms(
@@ -10179,10 +10224,10 @@ class ActivityGenerator:
             from evidenceforge.generation.activity.dns_registry import get_domain_tags
             from evidenceforge.generation.activity.http_content import (
                 apply_transfer_size_variance,
+                coerce_response_size_for_mime,
                 http_status_message,
                 is_stable_resource_path,
                 response_mime_types_for_status,
-                response_size_for_mime,
                 response_size_for_status,
             )
             from evidenceforge.generation.activity.proxy_uri import (
@@ -10235,7 +10280,16 @@ class ActivityGenerator:
                         variant_key=f"{src_ip}:{ua}",
                     )
                 else:
-                    resp_body_len = resp_bytes or response_size_for_mime(rng, mime_type)
+                    resp_body_len = coerce_response_size_for_mime(rng, mime_type, resp_bytes)
+            if event.network.conn_state == "SF" and resp_body_len > (event.network.resp_bytes or 0):
+                event.network.resp_bytes = resp_body_len
+                min_resp_pkts = max(1, math.ceil(resp_body_len / 1460))
+                event.network.resp_pkts = max(event.network.resp_pkts or 0, min_resp_pkts)
+                min_resp_ip_bytes = resp_body_len + event.network.resp_pkts * 40
+                event.network.resp_ip_bytes = max(
+                    event.network.resp_ip_bytes or 0,
+                    min_resp_ip_bytes,
+                )
             from evidenceforge.generation.activity.referrer import pick_referrer
 
             _http_referer = (

@@ -268,6 +268,42 @@ def test_direct_http_https_first_domain_redirects_instead_of_success_page(activi
     assert 120 <= http_event.http.response_body_len <= 480
 
 
+def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_gen, monkeypatch):
+    """HTTP download semantics should not inherit tiny generic flow byte counts."""
+    gen, events = activity_gen
+    monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(0))
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="104.21.20.58",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=32_000,
+        source_system=source,
+        hostname="dbeaver.io",
+        conn_state="SF",
+    )
+
+    http_event = next(
+        event for event in events if event.http is not None and event.http.uri.endswith(".exe")
+    )
+    assert http_event.http.resp_mime_types == ["application/x-msdownload"]
+    assert http_event.http.response_body_len >= 5_000_000
+    assert http_event.network is not None
+    assert http_event.network.resp_bytes >= http_event.http.response_body_len
+
+
 class TestSslContextPopulation:
     """Verify SSL context is attached to connection events for port 443."""
 

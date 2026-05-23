@@ -117,6 +117,30 @@ def response_size_for_mime(rng: random.Random, content_type: str) -> int:
     return rng.randint(lo, hi)
 
 
+def response_size_floor_for_mime(content_type: str) -> int:
+    """Return the configured minimum body size for a MIME type."""
+    lo, _hi = _RESPONSE_SIZE_RANGES.get(content_type, (500, 50_000))
+    return lo
+
+
+def is_download_scale_mime(content_type: str) -> bool:
+    """Return whether a MIME type should use download-scale body sizes."""
+    return response_size_floor_for_mime(content_type) >= 1_000_000
+
+
+def coerce_response_size_for_mime(
+    rng: random.Random,
+    content_type: str,
+    preferred_size: int | None,
+) -> int:
+    """Return a source-native body size, replacing tiny download bodies."""
+    preferred = max(0, preferred_size or 0)
+    floor = response_size_floor_for_mime(content_type)
+    if preferred and (not is_download_scale_mime(content_type) or preferred >= floor):
+        return preferred
+    return response_size_for_mime(rng, content_type)
+
+
 def apply_transfer_size_variance(
     body_size: int,
     *,

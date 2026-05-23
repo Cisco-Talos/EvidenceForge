@@ -7,6 +7,7 @@ import random
 
 from evidenceforge.generation.activity.http_content import (
     apply_transfer_size_variance,
+    coerce_response_size_for_mime,
     infer_mime_type_from_path,
     is_health_endpoint_path,
     is_stable_resource_path,
@@ -31,6 +32,15 @@ def test_executable_download_uses_binary_mime_and_size_range():
         "application/x-msdownload"
     )
     size = response_size_for_mime(random.Random(7), "application/x-msdownload")
+    assert 5_000_000 <= size <= 150_000_000
+
+
+def test_download_mime_replaces_tiny_preferred_response_size():
+    size = coerce_response_size_for_mime(
+        random.Random(7),
+        "application/x-msdownload",
+        32_000,
+    )
     assert 5_000_000 <= size <= 150_000_000
 
 

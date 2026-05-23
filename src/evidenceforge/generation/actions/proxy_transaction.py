@@ -294,6 +294,11 @@ class ProxyTransactionActionBundle:
         client_http = self._build_client_http(proxy_context)
         if proxy_context.method == "CONNECT" and proxy_context.status_code >= 400:
             self._shape_failed_connect(proxy_context, client_http)
+        if proxy_context.status_code < 400 and client_http.response_body_len > 0:
+            proxy_context.sc_bytes = max(
+                proxy_context.sc_bytes,
+                client_http.response_body_len + generator_utils._PROXY_SC_OVERHEAD[0],
+            )
 
         if (
             proxy_context.host
