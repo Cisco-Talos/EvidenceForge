@@ -6348,6 +6348,11 @@ class BaselineMixin:
                         self._timesyncd_first_seen = set()
                     if not hasattr(self, "_timesyncd_last_state"):
                         self._timesyncd_last_state = {}
+                    previous_timesync_state = self._timesyncd_last_state.get(system.hostname)
+                    if previous_timesync_state is not None and ts - previous_timesync_state[
+                        1
+                    ] < timedelta(minutes=5):
+                        continue
                     if system.hostname not in self._timesyncd_first_seen:
                         msg = f"Synchronized to time server for the first time {ntp_ip}:123."
                         timesync_state = "sync"
@@ -6365,12 +6370,11 @@ class BaselineMixin:
                             ("timeout", f"Timed out waiting for reply from {ntp_ip}:123.", 4),
                             ("selected", f"Selected time server {ntp_ip}:123.", 35),
                         ]
-                        last_state = self._timesyncd_last_state.get(system.hostname)
                         weighted: list[tuple[str, str, float]] = []
                         for candidate_state, candidate_msg, weight in candidates:
                             adjusted_weight = float(weight)
-                            if last_state is not None:
-                                previous_state, previous_time = last_state
+                            if previous_timesync_state is not None:
+                                previous_state, previous_time = previous_timesync_state
                                 recent = ts - previous_time
                                 if recent < timedelta(minutes=10):
                                     if (
