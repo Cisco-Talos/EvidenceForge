@@ -29,6 +29,7 @@ from typing import Any
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import HostContext
 from evidenceforge.generation.activity.endpoint_noise import ecar_flow_identity_config
+from evidenceforge.generation.activity.timing_profiles import get_timing_window
 from evidenceforge.generation.emitters.host_base import HostMultiplexEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
@@ -683,6 +684,11 @@ class EcarEmitter(HostMultiplexEmitter):
                         event,
                         seed_parts=inbound_seed,
                         not_before=self._after_process_create_timestamp(event, inbound_proc),
+                        drop_late_process_identity=(
+                            net.protocol == "tcp"
+                            and net.dst_port == 22
+                            and net.duration is not None
+                        ),
                     )
                     if not process_identity_safe:
                         inbound_proc = None
@@ -716,6 +722,7 @@ class EcarEmitter(HostMultiplexEmitter):
         *,
         seed_parts: tuple[Any, ...],
         not_before: datetime | None = None,
+        drop_late_process_identity: bool = False,
     ) -> tuple[datetime, bool]:
         """Return a FLOW timestamp bounded by the canonical connection interval.
 
@@ -725,6 +732,20 @@ class EcarEmitter(HostMultiplexEmitter):
         """
 
         not_after = self._flow_not_after(event, seed_parts)
+        if (
+            drop_late_process_identity
+            and not_before is not None
+            and not_before > self._flow_identity_deadline(event)
+        ):
+            return (
+                _SOURCE_TIMING.source_time(
+                    event,
+                    "source.ecar_flow",
+                    seed_parts=seed_parts,
+                    not_after=not_after,
+                ),
+                False,
+            )
         process_identity_safe = not_before is None or not_after is None or not_before <= not_after
         return (
             _SOURCE_TIMING.source_time(
@@ -736,6 +757,19 @@ class EcarEmitter(HostMultiplexEmitter):
             ),
             process_identity_safe,
         )
+
+    @staticmethod
+    def _flow_identity_deadline(event: SecurityEvent) -> datetime:
+        """Return the latest normal FLOW source time before process identity should be omitted."""
+
+        window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+        return event.timestamp + timedelta(milliseconds=window.max_ms + 1)
 
     @staticmethod
     def _flow_not_after(event: SecurityEvent, seed_parts: tuple[Any, ...]) -> datetime | None:

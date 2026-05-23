@@ -314,7 +314,10 @@ packet accounting, or endpoint-flow ownership locally. Endpoint FLOW timestamps
 must remain inside the canonical connection interval; if a very short connection
 cannot also satisfy source-visible process-create ordering, omit process actor
 identity for that FLOW row instead of moving endpoint telemetry after the
-transport close.
+transport close. For inbound SSH, eCAR FLOW is transport evidence and must not
+be delayed behind the `USER_SESSION` login solely to wait for destination-side
+`sshd` process visibility; omit the listener PID/principal when that identity
+would invert transport-before-session ordering.
 
 For DHCP leases, route acquisition and renewal transactions through the DHCP
 lease action bundle. The bundle owns lease identity, MAC/IP/server/domain

@@ -305,7 +305,11 @@ through this shared bundle boundary before becoming one canonical
 timestamps are bounded by the canonical connection interval. When a very short
 connection cannot also satisfy source-visible process-create ordering, the eCAR
 renderer drops process actor identity for that FLOW row instead of moving
-endpoint telemetry after the network close.
+endpoint telemetry after the network close. SSH inbound FLOW rows are treated as
+transport observations: they must remain before the corresponding endpoint
+`USER_SESSION` login even when destination-side `sshd` process identity would be
+visible later, so the renderer omits listener PID/principal rather than delaying
+the FLOW behind the session.
 
 DHCP callers supply one acquisition or renewal transaction, and
 `DhcpLeaseActionBundle` owns lease identity, MAC/IP/server/domain metadata, Zeek
