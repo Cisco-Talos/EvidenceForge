@@ -194,13 +194,18 @@ def _http_pe_is_64bit(uri: str, content_seed_material: str) -> bool:
 def _http_pe_compile_ts(content_seed_material: str, observed_at: datetime) -> int:
     """Return a content-scoped PE compile timestamp before the observation."""
 
+    fixed_span = max(1, _PE_COMPILE_LATEST_TS - _PE_COMPILE_EARLIEST_TS)
+    compile_ts = _PE_COMPILE_EARLIEST_TS + (
+        _stable_seed(f"http_pe_compile_ts:{content_seed_material}") % fixed_span
+    )
     latest_allowed = int(observed_at.timestamp()) - _PE_COMPILE_OBSERVATION_MARGIN_SECONDS
-    upper_bound = min(_PE_COMPILE_LATEST_TS, latest_allowed)
-    lower_bound = _PE_COMPILE_EARLIEST_TS
-    if upper_bound <= lower_bound:
-        lower_bound = max(0, upper_bound - 3 * 365 * 24 * 60 * 60)
-    span = max(1, upper_bound - lower_bound)
-    return lower_bound + (_stable_seed(f"http_pe_compile_ts:{content_seed_material}") % span)
+    if compile_ts <= latest_allowed:
+        return compile_ts
+
+    one_year_seconds = 365 * 24 * 60 * 60
+    while compile_ts > latest_allowed and compile_ts - one_year_seconds >= _PE_COMPILE_EARLIEST_TS:
+        compile_ts -= one_year_seconds
+    return min(compile_ts, latest_allowed)
 
 
 def _http_pe_analysis_enabled(mime_type: str, content_seed_material: str) -> bool:

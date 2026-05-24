@@ -798,19 +798,37 @@ class TestFileTransferActionBundles:
 
         first = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
         second = HttpResponseFileTransferActionBundle(request, random.Random(9)).execute()
+        later_request = HttpResponseFileTransferRequest(
+            host=request.host,
+            uri=request.uri,
+            dst_ip=request.dst_ip,
+            response_body_len=request.response_body_len,
+            response_mime_types=request.response_mime_types,
+            timestamp=request.timestamp + timedelta(hours=2),
+            parent_duration=request.parent_duration,
+        )
+        later = HttpResponseFileTransferActionBundle(later_request, random.Random(12)).execute()
 
         assert first.pe is not None
         assert second.pe is not None
+        assert later.pe is not None
         assert first.pe.id == first.file_transfer.fuid
         assert second.pe.id == second.file_transfer.fuid
+        assert later.pe.id == later.file_transfer.fuid
         assert first.pe.id != second.pe.id
         assert first.pe.machine == second.pe.machine == "AMD64"
+        assert later.pe.machine == "AMD64"
         assert first.pe.is_64bit is True
         assert second.pe.is_64bit is True
+        assert later.pe.is_64bit is True
         assert first.pe.compile_ts == second.pe.compile_ts
+        assert later.pe.compile_ts == first.pe.compile_ts
         assert first.pe.section_names == second.pe.section_names
+        assert later.pe.section_names == first.pe.section_names
         assert first.pe.uses_aslr == second.pe.uses_aslr
+        assert later.pe.uses_aslr == first.pe.uses_aslr
         assert first.pe.has_cert_table == second.pe.has_cert_table
+        assert later.pe.has_cert_table == first.pe.has_cert_table
 
     def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
         """SMB files.log metadata should preserve caller-owned transfer direction."""
