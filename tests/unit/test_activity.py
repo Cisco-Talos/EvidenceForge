@@ -8147,7 +8147,7 @@ def test_tcp_success_history_uses_varied_completed_flow_shapes():
 
 
 def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch):
-    """Failed TLS handshakes should not retain full response-byte accounting."""
+    """Failed TLS handshakes should keep byte counts aligned with Zeek history."""
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
     event = SecurityEvent(
@@ -8184,8 +8184,12 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
 
     assert event.ssl is not None
     assert event.ssl.established is False
-    assert event.network.conn_state in {"S1", "SH"}
+    assert event.network.conn_state == "S1"
+    assert event.network.history in {"ShAD", "ShADd"}
+    assert "D" in event.network.history
+    if event.network.resp_bytes:
+        assert "d" in event.network.history
     assert 0 < event.network.orig_bytes < 1200
     assert 0 <= event.network.resp_bytes < 55000
-    assert event.network.orig_pkts <= 2
-    assert event.network.resp_pkts <= 2
+    assert event.network.orig_pkts >= 1
+    assert event.network.resp_pkts >= 0

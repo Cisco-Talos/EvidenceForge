@@ -55,6 +55,7 @@ from evidenceforge.events.contexts import (
     IdsContext,
     ImageLoadContext,
     KerberosContext,
+    NetworkContext,
     OcspContext,
     ProcessAccessContext,
     ProcessContext,
@@ -1935,6 +1936,34 @@ def _tcp_payload_bytes_consistent_with_history(
     if (resp_bytes or 0) > 0 and "d" not in history:
         normalized_resp = 0
     return normalized_orig, normalized_resp
+
+
+def _align_tcp_network_payload_with_history(
+    net: NetworkContext,
+    rng: random.Random,
+) -> bool:
+    """Align TCP payload, packet, and IP-byte fields with Zeek history markers."""
+    if net.protocol != "tcp":
+        return False
+    orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
+        net.orig_bytes,
+        net.resp_bytes,
+        net.history,
+    )
+    if orig_bytes == net.orig_bytes and resp_bytes == net.resp_bytes:
+        return False
+
+    net.orig_bytes = orig_bytes
+    net.resp_bytes = resp_bytes
+    net.orig_pkts, net.resp_pkts = _tcp_packet_counts_from_payload_and_history(
+        net.orig_bytes,
+        net.resp_bytes,
+        net.history,
+        rng,
+    )
+    net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
+    net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
+    return True
 
 
 def _tcp_ip_byte_count(
@@ -5355,15 +5384,18 @@ class ActivityGenerator:
             ssl_history=ssl_hist,
         )
         if not ssl_established:
-            net.conn_state = rng.choice(["S1", "SH"])
-            net.history = "Sh" if net.conn_state == "SH" else "ShR"
+            net.conn_state = "S1"
             net.orig_bytes = rng.randint(90, 260)
-            net.resp_bytes = rng.randint(40, 180) if net.conn_state == "S1" else 0
-            net.orig_pkts = max(1, sum(1 for char in net.history if char.isupper()))
-            net.resp_pkts = sum(1 for char in net.history if char.islower())
-            overhead = rng.choices(_TCP_OVERHEAD_VALUES, weights=_TCP_OVERHEAD_WEIGHTS, k=1)[0]
-            net.orig_ip_bytes = net.orig_bytes + net.orig_pkts * overhead
-            net.resp_ip_bytes = net.resp_bytes + net.resp_pkts * overhead if net.resp_pkts else None
+            net.resp_bytes = rng.randint(40, 180) if rng.random() < 0.55 else 0
+            net.history = "ShADd" if net.resp_bytes else "ShAD"
+            net.orig_pkts, net.resp_pkts = _tcp_packet_counts_from_payload_and_history(
+                net.orig_bytes,
+                net.resp_bytes,
+                net.history,
+                rng,
+            )
+            net.orig_ip_bytes = _tcp_ip_byte_count(net.orig_bytes, net.orig_pkts, rng)
+            net.resp_ip_bytes = _tcp_ip_byte_count(net.resp_bytes, net.resp_pkts, rng)
             if net.duration is not None:
                 net.duration = rng.uniform(0.0, 0.5)
             return
@@ -10681,6 +10713,13 @@ class ActivityGenerator:
                 dst_ip=dst_ip,
                 rng=rng,
                 allow_failure=False,
+            )
+
+        if _align_tcp_network_payload_with_history(event.network, rng):
+            self.state_manager.update_connection_bytes(
+                event.network.conn_id,
+                event.network.orig_bytes or 0,
+                event.network.resp_bytes or 0,
             )
 
         self._repair_browser_http_process_attribution(
