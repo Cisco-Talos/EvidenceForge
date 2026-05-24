@@ -351,7 +351,8 @@ response-bearing (`SF`/`Dd` with responder bytes and packets), because Zeek
 `ntp.log` mode 4 rows contain server response timing fields. Baseline NTP
 traffic uses a stable per-client/server poll schedule with small observation
 texture rather than one exact hourly event per host; the NTP association owns
-version, poll, precision, delay, dispersion, and ref-id stability.
+version and poll stability, while the responding server owns stratum, ref-id,
+precision, root delay, and root dispersion.
 
 DHCP callers supply one acquisition or renewal transaction, and
 `DhcpLeaseActionBundle` owns lease identity, MAC/IP/server/domain metadata, Zeek

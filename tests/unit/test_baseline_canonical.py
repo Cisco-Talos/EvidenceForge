@@ -384,7 +384,7 @@ class TestIdsAlertCorrelation:
         assert event.network.resp_pkts == 0
 
     def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
-        """NTP version and poll behavior should be stable per client/server pair."""
+        """NTP association and server response fields should be stable."""
         for minute in (0, 10):
             activity_gen.generate_connection(
                 src_ip="10.0.1.50",
@@ -406,6 +406,27 @@ class TestIdsAlertCorrelation:
         assert first.precision == second.precision
         assert first.root_delay == second.root_delay
         assert first.root_disp == second.root_disp
+
+    def test_ntp_response_fields_are_server_owned(self, activity_gen, mock_emitters, timestamp):
+        """Server-owned NTP response fields should not vary by requesting client."""
+        for src_ip in ("10.0.1.50", "10.0.1.51", "10.0.2.10"):
+            activity_gen.generate_connection(
+                src_ip=src_ip,
+                dst_ip="10.0.3.10",
+                time=timestamp,
+                dst_port=123,
+                proto="udp",
+                service="ntp",
+                duration=0.02,
+                orig_bytes=48,
+                resp_bytes=48,
+            )
+
+        ntp_rows = [call.args[0].ntp for call in mock_emitters["zeek_ntp"].emit.call_args_list]
+        assert len(ntp_rows) == 3
+        assert {row.precision for row in ntp_rows} == {ntp_rows[0].precision}
+        assert {row.root_delay for row in ntp_rows} == {ntp_rows[0].root_delay}
+        assert {row.root_disp for row in ntp_rows} == {ntp_rows[0].root_disp}
 
     def test_ntp_schedule_helpers_avoid_exact_hourly_fingerprint(self):
         """Baseline NTP intervals should vary around the association poll."""

@@ -3174,6 +3174,7 @@ class ActivityGenerator:
         self._tls_ocsp_windows: dict[tuple[str, str, int], tuple[int, int]] = {}
         self._tls_ocsp_response_sizes: dict[tuple[str, str, str, float, float, str], int] = {}
         self._ntp_association_profiles: dict[tuple[str, str], dict[str, float | int]] = {}
+        self._ntp_server_response_profiles: dict[str, dict[str, float]] = {}
         self._bash_history_next_time: dict[tuple[str, str], datetime] = {}
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
@@ -3459,11 +3460,29 @@ class ActivityGenerator:
         profile = {
             "version": version,
             "poll": poll,
-            "precision": float(profile_rng.randint(-24, -19)),
-            "root_delay": profile_rng.uniform(0.001, 0.08),
-            "root_disp": profile_rng.uniform(0.001, 0.04),
         }
         self._ntp_association_profiles[key] = profile
+        return profile
+
+    def _ntp_server_response_profile(self, dst_ip: str) -> dict[str, float]:
+        """Return NTP response fields owned by the server, not by clients."""
+        profile = self._ntp_server_response_profiles.get(dst_ip)
+        if profile is not None:
+            return profile
+
+        profile_rng = random.Random(_stable_seed(f"ntp_server_response:{dst_ip}"))
+        if _is_private_ip(dst_ip):
+            root_delay = profile_rng.uniform(0.006, 0.055)
+            root_disp = profile_rng.uniform(0.004, 0.028)
+        else:
+            root_delay = profile_rng.uniform(0.001, 0.08)
+            root_disp = profile_rng.uniform(0.001, 0.04)
+        profile = {
+            "precision": float(profile_rng.randint(-24, -19)),
+            "root_delay": root_delay,
+            "root_disp": root_disp,
+        }
+        self._ntp_server_response_profiles[dst_ip] = profile
         return profile
 
     def _build_host_context(self, system: System) -> HostContext:
@@ -10608,6 +10627,7 @@ class ActivityGenerator:
             # Stratum-aware timing via log-normal distribution
             stratum, ref_id = _ntp_stratum_and_ref_id(dst_ip)
             association = self._ntp_association_profile(event.network.src_ip, dst_ip)
+            server_response = self._ntp_server_response_profile(dst_ip)
             _ntp_mean_ms, _ntp_sigma = _NTP_STRATUM_TIMING.get(stratum, (10.0, 0.7))
             _ntp_mu = math.log(_ntp_mean_ms) - (_ntp_sigma**2) / 2
             rtt_sec = ntp_rng.lognormvariate(_ntp_mu, _ntp_sigma) / 1000.0
@@ -10621,9 +10641,9 @@ class ActivityGenerator:
                 mode=4,  # server response
                 stratum=stratum,
                 poll=float(association["poll"]),
-                precision=float(association["precision"]),
-                root_delay=float(association["root_delay"]),
-                root_disp=float(association["root_disp"]),
+                precision=float(server_response["precision"]),
+                root_delay=float(server_response["root_delay"]),
+                root_disp=float(server_response["root_disp"]),
                 ref_id=ref_id,
                 ref_ts=round(ntp_epoch - ntp_rng.uniform(30, 300), 6),
                 org_ts=round(ntp_epoch + ntp_jitter, 6),
