@@ -1211,6 +1211,15 @@ class TestAnonymousLogon:
         assert event.auth.source_ip == ws.ip
         assert event.auth.source_port > 0
         assert event.auth.workstation_name == ws.hostname
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert network_event.network.src_ip == ws.ip
+        assert network_event.network.src_port == event.auth.source_port
+        assert network_event.network.dst_ip == dc.ip
+        assert network_event.network.dst_port == 445
 
     def test_anonymous_logon_no_session_created(
         self, activity_gen, state_manager, mock_emitters, timestamp

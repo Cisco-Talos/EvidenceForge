@@ -2387,6 +2387,67 @@ class TestActivityGenerator:
         assert network_event.network.dst_ip == test_system.ip
         assert network_event.network.conn_state == "SF"
 
+    def test_internal_remote_successful_logon_emits_matching_network_evidence(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Internal Type 3 logon IpPort should be owned by matching network evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.0.50"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=52595,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert logon_event.auth.source_ip == source_ip
+        assert logon_event.auth.source_port == network_event.network.src_port == 52595
+        assert network_event.network.src_ip == source_ip
+        assert network_event.network.dst_ip == test_system.ip
+
+    def test_same_host_network_logon_does_not_claim_unowned_source_port(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Same-host Type 3 logons should not invent a source port without a flow."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=test_system.ip,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert logon_event.auth.source_ip == test_system.ip
+        assert logon_event.auth.source_port == 0
+        assert network_events == []
+
     def test_elevated_logon_carries_configured_privilege_profile(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -2744,6 +2805,19 @@ class TestActivityGenerator:
         assert all(event.kerberos.source_ip == "::ffff:10.0.1.10" for event in kerberos_events)
         assert all(
             abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
+        )
+        machine_logon = next(
+            event for event in security_events if event.event_type == "machine_logon"
+        )
+        kerberos_connection = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        )
+        assert machine_logon.auth.source_port == kerberos_connection.network.src_port
+        assert all(
+            event.kerberos.source_port == machine_logon.auth.source_port
+            for event in kerberos_events
         )
 
     def test_bash_history_preserves_blocking_command_dwell(

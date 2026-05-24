@@ -924,7 +924,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": "0x0",
             "ProcessName": "-",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": str(rng.randint(49152, 65535)),
+            "IpPort": auth.source_port,
             "ImpersonationLevel": "%%1833",
             "RestrictedAdminMode": "-",
             "TargetOutboundUserName": "-",

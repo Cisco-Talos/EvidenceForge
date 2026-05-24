@@ -6043,7 +6043,10 @@ class ActivityGenerator:
             source_ip = "-" if local_logon else system.ip
         auth_source_ip = "-" if local_logon else source_ip
         if not local_logon and source_port is None and source_ip and source_ip != "-":
-            source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
+            if logon_type == 3 and source_ip == system.ip:
+                source_port = 0
+            else:
+                source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
         # Linux type-10 remote logons are SSH, not RDP
         if logon_type == 10 and os_cat == "linux":
@@ -13293,11 +13296,13 @@ class ActivityGenerator:
             tgs_before_ms=(8, 65),
             tgt_before_tgs_ms=(35, 220),
         )
+        source_port = self._reserve_kerberos_source_port(source_ip, dc_hostname, tgt_time)
         self.generate_kerberos_tgt(
             username=machine_username,
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgt_time,
+            source_port=source_port,
         )
         service_name = rng.choices(
             [
@@ -13315,6 +13320,7 @@ class ActivityGenerator:
             source_ip=source_ip,
             dc_hostname=dc_hostname,
             time=tgs_time,
+            source_port=source_port,
         )
         event = SecurityEvent(
             timestamp=time,
@@ -13327,6 +13333,7 @@ class ActivityGenerator:
                 logon_type=3,
                 auth_package="Kerberos",
                 source_ip=source_ip,
+                source_port=source_port,
                 logon_process="Kerberos",
                 lm_package="-",
                 logon_guid="{00000000-0000-0000-0000-000000000000}",
@@ -13364,6 +13371,7 @@ class ActivityGenerator:
             duration=rng.uniform(0.001, 0.03),
             orig_bytes=rng.randint(200, 1000),
             resp_bytes=rng.randint(200, 1500),
+            src_port=source_port,
         )
 
     def generate_kerberos_tgt(
@@ -15771,11 +15779,26 @@ class ActivityGenerator:
             for ip in getattr(self, "_all_system_ips", [])
             if ip != system.ip and _is_private_ip(ip)
         ]
+        source_system = None
         if candidate_ips:
             source_ip = rng.choice(candidate_ips)
             source_port = _ephemeral_port(rng, "windows")
             source_system = getattr(self, "_ip_to_system", {}).get(source_ip)
             workstation_name = source_system.hostname if source_system else "-"
+            self.generate_connection(
+                src_ip=source_ip,
+                dst_ip=system.ip,
+                time=time - timedelta(milliseconds=rng.randint(150, 900)),
+                dst_port=445,
+                proto="tcp",
+                service="smb",
+                duration=rng.uniform(0.2, 4.0),
+                orig_bytes=rng.randint(250, 2600),
+                resp_bytes=rng.randint(350, 4200),
+                src_port=source_port,
+                conn_state="SF",
+                source_system=source_system,
+            )
         event = SecurityEvent(
             timestamp=time,
             event_type="logon",
@@ -16211,9 +16234,10 @@ class ActivityGenerator:
             return
         if not source_ip or source_ip == "-" or source_port <= 0:
             return
-        if _get_os_category(system.os) != "windows":
+        source_ip = source_ip.removeprefix("::ffff:")
+        if source_ip == system.ip:
             return
-        if _is_private_ip(source_ip):
+        if _get_os_category(system.os) != "windows":
             return
         rng = _get_rng()
         dst_port = 3389 if logon_type == 10 else 445
