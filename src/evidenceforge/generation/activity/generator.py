@@ -1919,6 +1919,24 @@ def _tcp_packet_counts_from_payload_and_history(
     return _apply_tcp_ack_packet_floors(orig_pkts, resp_pkts, orig_bytes, resp_bytes, rng)
 
 
+def _tcp_payload_bytes_consistent_with_history(
+    orig_bytes: int | None,
+    resp_bytes: int | None,
+    history: str | None,
+) -> tuple[int | None, int | None]:
+    """Return TCP payload byte counts that agree with Zeek history data markers."""
+    if not history or history == "-":
+        return orig_bytes, resp_bytes
+
+    normalized_orig = orig_bytes
+    normalized_resp = resp_bytes
+    if (orig_bytes or 0) > 0 and "D" not in history:
+        normalized_orig = 0
+    if (resp_bytes or 0) > 0 and "d" not in history:
+        normalized_resp = 0
+    return normalized_orig, normalized_resp
+
+
 def _tcp_ip_byte_count(
     payload_bytes: int | None,
     packet_count: int,
@@ -9744,6 +9762,18 @@ class ActivityGenerator:
                     history = "Dd" * kerberos_audit_count
                 else:
                     history = _tcp_success_history(rng)
+
+        if proto == "tcp":
+            orig_bytes, resp_bytes = _tcp_payload_bytes_consistent_with_history(
+                orig_bytes,
+                resp_bytes,
+                history,
+            )
+            self.state_manager.update_connection_bytes(
+                conn_id,
+                orig_bytes or 0,
+                resp_bytes or 0,
+            )
 
         # Calculate packet counts — enforce consistency with history
         if proto == "udp" and history:

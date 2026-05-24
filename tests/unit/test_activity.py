@@ -6610,6 +6610,58 @@ class TestActivityGenerator:
         elif net.conn_state in ("RSTO", "RSTR"):
             assert net.duration is not None and net.duration <= duration
 
+    def test_tcp_handshake_only_history_does_not_claim_payload_bytes(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """TCP conn.log byte counts must agree with source-native history markers."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            duration=2.5,
+            orig_bytes=1000,
+            resp_bytes=2000,
+            conn_state="S1",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        net = event.network
+        assert net.history == "ShR"
+        assert "D" not in net.history
+        assert "d" not in net.history
+        assert net.orig_bytes == 0
+        assert net.resp_bytes == 0
+        assert net.orig_ip_bytes >= net.orig_pkts * 40
+        assert net.resp_ip_bytes >= net.resp_pkts * 40
+
+    def test_tcp_one_sided_history_zeroes_unmarked_payload_side(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """One-sided TCP history may only claim payload bytes for the marked side."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            duration=2.5,
+            orig_bytes=1000,
+            resp_bytes=2000,
+            conn_state="RSTO",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        net = event.network
+        assert net.history == "ShADaR"
+        assert "D" in net.history
+        assert "d" not in net.history
+        assert net.orig_bytes > 0
+        assert net.resp_bytes == 0
+
     def test_generate_connection_without_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection without duration should set conn_state to S0."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
