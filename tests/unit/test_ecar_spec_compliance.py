@@ -961,7 +961,7 @@ class TestChronologicalOutput:
                 dst_ip="10.0.0.20",
                 dst_port=22,
                 protocol="tcp",
-                duration=60.0,
+                duration=None,
                 conn_state="SF",
                 history="ShADadfF",
                 initiating_pid=-1,
@@ -1219,22 +1219,24 @@ class TestChronologicalOutput:
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
 
-    def test_inbound_flow_prefers_canonical_destination_pid(self, emitter, monkeypatch, ts):
-        """Session-owned inbound flows should not fall back to the generic listener PID."""
+    def test_inbound_flow_prefers_canonical_destination_pid_for_non_remote_session(
+        self, emitter, monkeypatch, ts
+    ):
+        """Non-remote-session inbound flows should prefer a canonical listener PID."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         state = StateManager()
-        state.set_current_time(ts)
-        ssh_child_pid = state.create_process(
+        state.set_current_time(ts - timedelta(seconds=2))
+        listener_pid = state.create_process(
             "APP-INT-01",
             0,
-            "/usr/sbin/sshd",
-            "sshd: [accepted]",
-            "root",
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
             "System",
         )
         emitter._state_manager = state
-        emitter._system_pids = {"APP-INT-01": {"sshd": 36148}}
+        emitter._system_pids = {"APP-INT-01": {"apache2": 36148}}
         event = SecurityEvent(
             timestamp=ts,
             event_type="connection",
@@ -1250,9 +1252,9 @@ class TestChronologicalOutput:
                 src_ip="10.10.1.31",
                 src_port=50049,
                 dst_ip="10.10.2.30",
-                dst_port=22,
+                dst_port=443,
                 protocol="tcp",
-                responding_pid=ssh_child_pid,
+                responding_pid=listener_pid,
             ),
             edr=EdrContext(object_id="flow-1", actor_id=""),
         )
@@ -1260,7 +1262,7 @@ class TestChronologicalOutput:
         emitter._render_connection(event)
 
         assert emitted[0]["direction"] == "INBOUND"
-        assert emitted[0]["pid"] == ssh_child_pid
+        assert emitted[0]["pid"] == listener_pid
         assert emitted[0]["pid"] != 36148
 
     def test_inbound_listener_flow_can_render_principal(self, emitter, monkeypatch, ts):
