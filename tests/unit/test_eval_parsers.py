@@ -504,6 +504,19 @@ class TestParserDiscovery:
         assert "web_access" in files
         assert "bash_history" in files
 
+    def test_discovers_bash_history_under_standard_output_bundle_root(self, tmp_path):
+        from evidenceforge.evaluation.parsers import discover_log_files
+
+        history_file = (
+            tmp_path / "data" / "SRV-LIN-01.corp.com" / "bash_history" / "dev01.bash_history"
+        )
+        history_file.parent.mkdir(parents=True)
+        history_file.write_text("#1718431208\nwhoami\n", encoding="utf-8")
+
+        files = discover_log_files(tmp_path)
+
+        assert files["bash_history"] == [history_file]
+
     def test_skips_symlinked_sensor_directories(self, tmp_path):
         """Symlinked subdirectories should be skipped during discovery."""
         from evidenceforge.evaluation.parsers import discover_log_files
