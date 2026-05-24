@@ -2806,6 +2806,40 @@ class TestFileTransferContext:
         assert event.http.resp_mime_types == ["text/html"]
         assert event.file_transfer is None
 
+    def test_large_http_file_transfer_extends_parent_connection_duration(self, activity_gen):
+        """Large HTTP files.log rows should have plausible duration inside the parent flow."""
+        gen, events = activity_gen
+        response_body_len = 78_306_264
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.05,
+            orig_bytes=200,
+            resp_bytes=response_body_len,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="downloads.example.test",
+                uri="/installer.exe",
+                response_body_len=response_body_len,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/x-msdownload"],
+            ),
+        )
+
+        event = events[-1]
+        assert event.file_transfer is not None
+        assert event.network is not None
+        assert event.file_transfer.duration > 0.5
+        assert event.network.duration is not None
+        assert event.network.duration > event.file_transfer.duration
+
     def test_file_transfer_sometimes_populated(self, activity_gen):
         """Over many HTTP connections, some should have FileTransferContext."""
         gen, events = activity_gen

@@ -60,6 +60,59 @@ _HTTP_HASH_ANALYZER_MIME_TYPES = {
     "application/x-msdownload",
     "application/zip",
 }
+_HTTP_ANALYZER_SHORT_BODY_BYTES = 64 * 1024
+_HTTP_BULK_BODY_BYTES = 1_000_000
+
+
+def _http_transfer_throughput_floor(response_body_len: int, rng: random.Random) -> float:
+    """Return a source-native lower-bound duration for HTTP file payload analysis."""
+
+    if response_body_len <= _HTTP_ANALYZER_SHORT_BODY_BYTES:
+        return 0.0
+    if response_body_len >= 50 * 1024 * 1024:
+        bytes_per_second = rng.uniform(18 * 1024 * 1024, 80 * 1024 * 1024)
+    elif response_body_len >= 10 * 1024 * 1024:
+        bytes_per_second = rng.uniform(12 * 1024 * 1024, 70 * 1024 * 1024)
+    elif response_body_len >= _HTTP_BULK_BODY_BYTES:
+        bytes_per_second = rng.uniform(6 * 1024 * 1024, 55 * 1024 * 1024)
+    else:
+        bytes_per_second = rng.uniform(2 * 1024 * 1024, 35 * 1024 * 1024)
+    return max(0.012, response_body_len / bytes_per_second)
+
+
+def http_response_transfer_duration_floor(
+    response_body_len: int,
+    rng: random.Random,
+) -> float:
+    """Return the minimum plausible parent-connection duration for HTTP files.log."""
+
+    return _http_transfer_throughput_floor(response_body_len, rng)
+
+
+def _http_response_file_duration(
+    response_body_len: int,
+    parent_duration: float | None,
+    rng: random.Random,
+) -> float:
+    """Return a source-native files.log duration for an HTTP response body."""
+
+    if response_body_len <= _HTTP_ANALYZER_SHORT_BODY_BYTES:
+        return rng.uniform(0.0, 0.01)
+
+    duration_floor = _http_transfer_throughput_floor(response_body_len, rng)
+    if parent_duration is None or parent_duration <= 0:
+        return duration_floor
+
+    if response_body_len >= 10 * 1024 * 1024:
+        parent_fraction = rng.uniform(0.55, 0.92)
+    elif response_body_len >= _HTTP_BULK_BODY_BYTES:
+        parent_fraction = rng.uniform(0.35, 0.85)
+    else:
+        parent_fraction = rng.uniform(0.08, 0.35)
+    candidate = max(duration_floor, parent_duration * parent_fraction)
+    if parent_duration > duration_floor + 0.002:
+        return min(candidate, parent_duration - 0.002)
+    return duration_floor
 
 
 def file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
@@ -86,6 +139,7 @@ class HttpResponseFileTransferRequest:
     response_body_len: int
     response_mime_types: list[str]
     timestamp: datetime
+    parent_duration: float | None = None
     source: str = "activity_generator"
 
     @property
@@ -95,7 +149,8 @@ class HttpResponseFileTransferRequest:
         seed = _stable_seed(
             "action_bundle:http_file_transfer:"
             f"{self.host}:{self.uri}:{self.dst_ip}:{self.response_body_len}:"
-            f"{','.join(self.response_mime_types)}:{self.timestamp.isoformat()}:{self.source}"
+            f"{','.join(self.response_mime_types)}:{self.timestamp.isoformat()}:"
+            f"{self.parent_duration or ''}:{self.source}"
         )
         return f"http-file-transfer-{seed:016x}"
 
@@ -146,7 +201,11 @@ class HttpResponseFileTransferActionBundle:
             depth=0,
             analyzers=analyzers,
             mime_type=file_mime_type,
-            duration=self._rng.uniform(0.0, 0.01),
+            duration=_http_response_file_duration(
+                self._request.response_body_len,
+                self._request.parent_duration,
+                self._rng,
+            ),
             local_orig=_is_private_ip(self._request.dst_ip),
             is_orig=False,
             seen_bytes=self._request.response_body_len,

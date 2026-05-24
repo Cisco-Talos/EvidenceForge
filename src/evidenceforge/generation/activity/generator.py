@@ -144,6 +144,7 @@ from evidenceforge.generation.actions import (
     WorkstationUnlockActionBundle,
     WorkstationUnlockRequest,
     file_transfer_hashes,
+    http_response_transfer_duration_floor,
 )
 from evidenceforge.generation.activity.dns_txt import choose_dns_txt_query, dns_registrable_domain
 from evidenceforge.generation.activity.edr_pools import normalize_defender_platform_path
@@ -697,6 +698,7 @@ def _attach_http_response_file_transfer(
             response_body_len=http.response_body_len,
             response_mime_types=list(http.resp_mime_types),
             timestamp=event.timestamp,
+            parent_duration=event.network.duration,
         ),
         rng,
     ).execute()
@@ -9701,6 +9703,26 @@ class ActivityGenerator:
             caller_provided_duration=caller_provided_duration or duration_locked_to_dns_rtt,
             seed_parts=(src_ip, src_port, dst_ip, dst_port, proto, service or "", time),
         )
+        if (
+            http is not None
+            and conn_state == "SF"
+            and service == "http"
+            and _http_response_requires_file_transfer(http)
+        ):
+            floor_rng = random.Random(
+                _stable_seed(
+                    "http_response_file_transfer_duration_floor:"
+                    f"{src_ip}:{src_port}:{dst_ip}:{dst_port}:"
+                    f"{http.host}:{http.uri}:{http.response_body_len}:{time.isoformat()}"
+                )
+            )
+            duration_floor = http_response_transfer_duration_floor(
+                http.response_body_len,
+                floor_rng,
+            )
+            if duration_floor > 0:
+                min_http_file_duration = duration_floor + floor_rng.uniform(0.025, 0.35)
+                duration = max(duration or 0.0, min_http_file_duration)
 
         kerberos_audit_count = 0
         if (
