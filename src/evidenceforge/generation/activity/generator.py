@@ -6984,12 +6984,7 @@ class ActivityGenerator:
                     "windows.logoff_after_last_activity",
                     seed_parts=(system.hostname, logon_id, ssh_transport_close_time),
                 )
-                requested_logoff_time = ensure_utc(time)
-                if (
-                    requested_logoff_time <= transport_logoff_time
-                    or requested_logoff_time > ssh_transport_close_time + timedelta(seconds=90)
-                ):
-                    time = transport_logoff_time
+                time = transport_logoff_time
             raw_session_end_markers = (
                 session.last_activity_time,
                 session.network_close_time,
