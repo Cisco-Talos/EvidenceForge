@@ -1746,6 +1746,19 @@ class TestActivityGenerator:
         assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
         assert event.auth.auth_package != "CredSSP"
 
+    def test_generate_logon_rdp_without_remote_source_downgrades_to_interactive(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Direct Type 10 compatibility calls should not fabricate self-sourced RDP."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=10)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 2
+        assert event.auth.source_ip == "-"
+
     def test_generate_rdp_session_reuses_source_port_across_network_and_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

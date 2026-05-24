@@ -281,7 +281,9 @@ evidence. When the source host is modeled, the bundle also extends the source
 transport close so source endpoint telemetry cannot terminate before the visible
 RDP flow. Successful RDP sessions request an `SF` transport with response-bearing
 byte/packet accounting and then use the resolved network interval as the floor
-and ceiling for target authentication timing.
+and ceiling for target authentication timing. Compatibility calls that request a
+Windows Type 10 logon without a real remote source are treated as local
+interactive logons rather than inventing self-sourced RDP evidence.
 
 Windows remote-admin callers supply explicit credential use or service-install
 intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:

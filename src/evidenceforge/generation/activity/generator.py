@@ -5927,6 +5927,9 @@ class ActivityGenerator:
         if logon_type == 10 and os_cat == "linux" and source_ip in (None, "", "-", system.ip):
             logon_type = 2
             source_ip = None
+        if logon_type == 10 and os_cat == "windows" and source_ip in (None, "", "-", system.ip):
+            logon_type = 2
+            source_ip = None
         if logon_id is None and os_cat == "windows" and logon_type in (2, 11):
             existing_interactive = self._active_user_workstation_windows_session(
                 user,

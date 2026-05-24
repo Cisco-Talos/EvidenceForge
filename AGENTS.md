@@ -293,8 +293,11 @@ protects the source `mstsc.exe` process and its owning interactive session
 through the transport close so endpoint process telemetry cannot end before the
 visible RDP flow. Successful RDP logons must consume an `SF` transport interval
 from the network-connection contract, not a failed, reset, or tiny placeholder
-flow. Do not emit independent port 3389 connections or Type 10 logons for the
-same modeled RDP session outside the bundle.
+flow. Compatibility paths must not fabricate self-sourced Type 10 logons when no
+real remote source exists; use the RDP bundle with a source, or downgrade the
+event to local interactive semantics. Do not emit independent port 3389
+connections or Type 10 logons for the same modeled RDP session outside the
+bundle.
 
 For Windows remote administration specifically, explicit credential use and
 remote service installation should route through the Windows remote-admin action
