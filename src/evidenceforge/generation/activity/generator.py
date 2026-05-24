@@ -2249,6 +2249,30 @@ def _dns_txt_query_and_answer(rng: random.Random, hostname: str) -> tuple[str, s
     return choose_dns_txt_query(hostname, roll=rng.random())
 
 
+def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) -> list[str]:
+    """Return the canonical resolver-visible address RRset for a connection target."""
+    if is_internal or not hostname:
+        return [dst_ip]
+
+    from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+    domain_ips = list(dict.fromkeys(get_domain_ips(hostname)))
+    if not domain_ips:
+        return [dst_ip]
+    if dst_ip not in domain_ips:
+        domain_ips.insert(0, dst_ip)
+    if len(domain_ips) <= 4:
+        return domain_ips
+
+    ranked = sorted(
+        domain_ips,
+        key=lambda ip: _stable_seed(f"dns_address_rrset:{hostname.lower()}:{ip}"),
+    )
+    selected = set(ranked[:4])
+    selected.add(dst_ip)
+    return [ip for ip in domain_ips if ip in selected]
+
+
 def _dns_hostname_allows_mx(hostname: str) -> bool:
     """Return whether a hostname is plausible owner context for MX lookups."""
     lowered = hostname.lower().rstrip(".")
@@ -12026,19 +12050,7 @@ class ActivityGenerator:
             # A record: hostname → IPv4
             qtype, qtype_name = 1, "A"
             query = hostname
-            # Multi-answer: CDNs/clouds return multiple A records (40% chance)
-            if not is_internal and rng.random() < 0.40:
-                from evidenceforge.generation.activity.dns_registry import get_domain_ips
-
-                domain_ips = get_domain_ips(hostname) if hostname else []
-                sibling_ips = [ip for ip in domain_ips if ip != dst_ip]
-                if sibling_ips:
-                    extra = rng.sample(sibling_ips, min(rng.randint(1, 2), len(sibling_ips)))
-                    answers = [dst_ip] + extra
-                else:
-                    answers = [dst_ip]
-            else:
-                answers = [dst_ip]
+            answers = _dns_address_rrset(hostname, dst_ip, is_internal=is_internal)
         elif qtype_roll < 0.85:
             # AAAA record: hostname → IPv6
             qtype, qtype_name = 28, "AAAA"
