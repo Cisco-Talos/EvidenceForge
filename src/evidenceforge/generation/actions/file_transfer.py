@@ -62,21 +62,30 @@ _HTTP_HASH_ANALYZER_MIME_TYPES = {
 }
 _HTTP_ANALYZER_SHORT_BODY_BYTES = 64 * 1024
 _HTTP_BULK_BODY_BYTES = 1_000_000
+_HTTP_PARENT_ANALYZER_MARGIN_SECONDS = 0.75
+
+
+def _http_transfer_throughput_range(response_body_len: int) -> tuple[int, int] | None:
+    """Return source-native HTTP file throughput bounds in bytes/second."""
+
+    if response_body_len <= _HTTP_ANALYZER_SHORT_BODY_BYTES:
+        return None
+    if response_body_len >= 50 * 1024 * 1024:
+        return (18 * 1024 * 1024, 80 * 1024 * 1024)
+    if response_body_len >= 10 * 1024 * 1024:
+        return (12 * 1024 * 1024, 70 * 1024 * 1024)
+    if response_body_len >= _HTTP_BULK_BODY_BYTES:
+        return (6 * 1024 * 1024, 55 * 1024 * 1024)
+    return (2 * 1024 * 1024, 35 * 1024 * 1024)
 
 
 def _http_transfer_throughput_floor(response_body_len: int, rng: random.Random) -> float:
     """Return a source-native lower-bound duration for HTTP file payload analysis."""
 
-    if response_body_len <= _HTTP_ANALYZER_SHORT_BODY_BYTES:
+    throughput_range = _http_transfer_throughput_range(response_body_len)
+    if throughput_range is None:
         return 0.0
-    if response_body_len >= 50 * 1024 * 1024:
-        bytes_per_second = rng.uniform(18 * 1024 * 1024, 80 * 1024 * 1024)
-    elif response_body_len >= 10 * 1024 * 1024:
-        bytes_per_second = rng.uniform(12 * 1024 * 1024, 70 * 1024 * 1024)
-    elif response_body_len >= _HTTP_BULK_BODY_BYTES:
-        bytes_per_second = rng.uniform(6 * 1024 * 1024, 55 * 1024 * 1024)
-    else:
-        bytes_per_second = rng.uniform(2 * 1024 * 1024, 35 * 1024 * 1024)
+    bytes_per_second = rng.uniform(*throughput_range)
     return max(0.012, response_body_len / bytes_per_second)
 
 
@@ -87,6 +96,19 @@ def http_response_transfer_duration_floor(
     """Return the minimum plausible parent-connection duration for HTTP files.log."""
 
     return _http_transfer_throughput_floor(response_body_len, rng)
+
+
+def http_response_parent_duration_floor(response_body_len: int) -> float:
+    """Return a conservative parent-flow duration floor for HTTP file analysis."""
+
+    throughput_range = _http_transfer_throughput_range(response_body_len)
+    if throughput_range is None:
+        return 0.0
+    slowest_bytes_per_second = throughput_range[0]
+    return (
+        max(0.012, response_body_len / slowest_bytes_per_second)
+        + _HTTP_PARENT_ANALYZER_MARGIN_SECONDS
+    )
 
 
 def _http_response_file_duration(

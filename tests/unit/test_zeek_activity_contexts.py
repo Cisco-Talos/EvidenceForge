@@ -2836,6 +2836,10 @@ class TestFileTransferContext:
         event = events[-1]
         assert event.file_transfer is not None
         assert event.network is not None
+        assert event.file_transfer.duration > 1.0
+        assert event.network.duration is not None
+        assert event.network.duration > 4.5
+        assert event.network.duration > event.file_transfer.duration
         assert event.file_transfer.duration > 0.5
         assert event.network.duration is not None
         assert event.network.duration > event.file_transfer.duration

@@ -67,6 +67,7 @@ from evidenceforge.generation.actions.file_transfer import (
     StagedArchiveSmbReadActionBundle,
     StagedArchiveSmbReadRequest,
     file_transfer_hashes,
+    http_response_parent_duration_floor,
     http_response_transfer_duration_floor,
 )
 from evidenceforge.generation.actions.ids_alert import (
@@ -179,6 +180,7 @@ __all__ = [
     "HttpResponseFileTransferActionBundle",
     "HttpResponseFileTransferRequest",
     "HttpResponseFileTransferResult",
+    "http_response_parent_duration_floor",
     "http_response_transfer_duration_floor",
     "IdsAlertActionBundle",
     "IdsAlertRequest",
