@@ -32,6 +32,7 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
+    HostContext,
     HttpContext,
     NetworkContext,
     OcspContext,
@@ -517,6 +518,60 @@ class TestSslContextPopulation:
         assert connection_event.timestamp < accepted_event.timestamp
         assert accepted_event.timestamp < pam_event.timestamp
         assert pam_event.timestamp < logind_event.timestamp
+
+    def test_ssh_session_auth_graph_accounts_for_ecar_flow_offset(self):
+        """SSH syslog auth should wait for source-timed eCAR FLOW visibility."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+        event = SecurityEvent(
+            timestamp=base_time + timedelta(milliseconds=600),
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.20.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51111,
+                dst_ip="10.0.20.10",
+                dst_port=22,
+                protocol="tcp",
+                duration=60.0,
+            ),
+        )
+
+        resolved = SshSessionActionBundle(
+            request=request,
+            executor=MagicMock(),
+        )._resolve_linux_auth_lifecycle(
+            event=event,
+            syslog_seed=("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
+            conn_delay_ms=35,
+            accepted_gap_ms=90,
+            pam_gap_ms=45,
+            logind_gap_ms=420,
+            transport_open_time=base_time,
+        )
+
+        assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
 
     def test_ssh_session_bundle_renders_publickey_and_optional_close(self, activity_gen):
         gen, events = activity_gen

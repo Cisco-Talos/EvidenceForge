@@ -269,7 +269,10 @@ two logins for one SSH transport. eCAR/EDR keeps a same-source ordering contract
 for modeled SSH: the matching inbound `FLOW` transport row renders before the
 SSH `USER_SESSION/LOGIN` row for the same source tuple. Endpoint FLOW rendering
 also treats outbound SSH client-process visibility as optional when preserving
-it would delay the transport observation past remote authentication.
+it would delay the transport observation past remote authentication. The SSH
+auth graph accounts for both the resolved network-sensor transport timestamp and
+the canonical connection event's eCAR/EDR source-latency window before placing
+syslog authentication rows.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled

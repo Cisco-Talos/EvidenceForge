@@ -30,6 +30,7 @@ for shared state, host context construction, source timing, and dispatch.
 from __future__ import annotations
 
 import logging
+import math
 import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -627,7 +628,14 @@ class SshSessionActionBundle:
             default_position="after",
             default_class="source_latency",
         )
-        transport_to_syslog_ms = max(conn_delay_ms, flow_window.max_ms + 25)
+        canonical_offset_ms = max(
+            0,
+            math.ceil((event.timestamp - transport_open_time).total_seconds() * 1000),
+        )
+        transport_to_syslog_ms = max(
+            conn_delay_ms,
+            canonical_offset_ms + flow_window.max_ms + 25,
+        )
         graph = TemporalConstraintGraph()
         graph.add_node("transport_open", transport_open_time)
         graph.add_node(

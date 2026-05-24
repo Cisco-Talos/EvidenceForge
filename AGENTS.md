@@ -285,7 +285,9 @@ matching inbound SSH `FLOW` row is the transport observation and must render
 before the bundle-owned SSH `USER_SESSION/LOGIN` row for the same source tuple.
 If outbound client process visibility would delay the source-host SSH `FLOW`
 past remote authentication, omit that FLOW's process identity rather than moving
-the transport observation later.
+the transport observation later. SSH syslog auth timing must account for the
+canonical event's eCAR/EDR FLOW source-latency window, not only the network
+sensor's final rendered connection timestamp.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process
