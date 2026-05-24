@@ -1036,6 +1036,63 @@ class TestChronologicalOutput:
         assert inbound["pid"] == -1
         assert "principal" not in inbound
 
+    def test_outbound_remote_session_flow_drops_late_process_identity(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Remote-session FLOW observations should not wait for late client PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=4321,
+            parent_pid=1000,
+            image="/usr/bin/ssh",
+            command_line="ssh admin@linux01",
+            username="alice",
+            start_time=ts + timedelta(seconds=2),
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="linux02",
+                ip="10.0.0.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux02.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.0.20",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                duration=60.0,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=process.pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        outbound = next(row for row in emitted if row["direction"] == "OUTBOUND")
+        assert outbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert outbound["pid"] == -1
+        assert "principal" not in outbound
+
     def test_outbound_flow_can_render_user_principal(self, emitter, monkeypatch, ts):
         """User-owned FLOW records should be able to carry mixed principal attribution."""
         monkeypatch.setattr(

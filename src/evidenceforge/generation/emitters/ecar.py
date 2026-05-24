@@ -636,6 +636,11 @@ class EcarEmitter(HostMultiplexEmitter):
                 event,
                 seed_parts=outbound_seed,
                 not_before=not_before,
+                drop_late_process_identity=(
+                    net.protocol == "tcp"
+                    and net.dst_port in {22, 3389}
+                    and net.duration is not None
+                ),
             )
             rendered_source_proc = source_proc if process_identity_safe else None
             rendered_pid = net.initiating_pid if process_identity_safe else -1

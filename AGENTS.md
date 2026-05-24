@@ -283,6 +283,9 @@ bundle for the same session; that creates duplicate endpoint `USER_SESSION`
 evidence and breaks transport-before-auth ordering. In eCAR/EDR rendering, the
 matching inbound SSH `FLOW` row is the transport observation and must render
 before the bundle-owned SSH `USER_SESSION/LOGIN` row for the same source tuple.
+If outbound client process visibility would delay the source-host SSH `FLOW`
+past remote authentication, omit that FLOW's process identity rather than moving
+the transport observation later.
 
 For RDP specifically, modeled remote interactive Windows sessions should route
 through the RDP action bundle. The bundle owns the source-side RDP client process
@@ -298,6 +301,9 @@ real remote source exists; use the RDP bundle with a source, or downgrade the
 event to local interactive semantics. Do not emit independent port 3389
 connections or Type 10 logons for the same modeled RDP session outside the
 bundle.
+As with SSH, endpoint `FLOW` rows for RDP transport should stay near the
+transport open; if late process visibility would invert transport-before-auth
+ordering, drop PID/principal from the FLOW instead of delaying it.
 
 For Windows remote administration specifically, explicit credential use and
 remote service installation should route through the Windows remote-admin action

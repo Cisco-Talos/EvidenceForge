@@ -267,7 +267,9 @@ but does not render a separate generic `logon` event; endpoint session evidence
 comes from the bundle-owned `ssh_session` occurrence so eCAR/EDR cannot observe
 two logins for one SSH transport. eCAR/EDR keeps a same-source ordering contract
 for modeled SSH: the matching inbound `FLOW` transport row renders before the
-SSH `USER_SESSION/LOGIN` row for the same source tuple.
+SSH `USER_SESSION/LOGIN` row for the same source tuple. Endpoint FLOW rendering
+also treats outbound SSH client-process visibility as optional when preserving
+it would delay the transport observation past remote authentication.
 
 RDP bundle callers supply one remote interactive Windows session intent. The
 `RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
@@ -284,6 +286,9 @@ byte/packet accounting and then use the resolved network interval as the floor
 and ceiling for target authentication timing. Compatibility calls that request a
 Windows Type 10 logon without a real remote source are treated as local
 interactive logons rather than inventing self-sourced RDP evidence.
+Endpoint FLOW rendering keeps RDP transport observations near the connection
+open, dropping late process identity when necessary instead of moving FLOW rows
+past target authentication.
 
 Windows remote-admin callers supply explicit credential use or service-install
 intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
