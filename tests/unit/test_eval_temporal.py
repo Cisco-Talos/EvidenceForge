@@ -251,6 +251,35 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score < 100.0
 
+    def test_process_before_later_unlock_is_not_logon_violation(self):
+        """A later 4624 type 7 unlock is not the original session-establishing logon."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "SubjectLogonId": "0x1a2b3c",
+                    },
+                    ts=base,
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4624,
+                        "LogonType": 7,
+                        "TargetLogonId": "0x1a2b3c",
+                    },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ]
+        }
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
     def test_grace_period_skips_early_events(self):
         """Events within grace period are not checked for causal ordering."""
         records = {

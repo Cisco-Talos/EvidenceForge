@@ -21,6 +21,8 @@ pairs:
       format: windows_event_security
       condition:
         EventID: 4624
+        exclude:
+          LogonType: 7
     after:
       format: windows_event_security
       condition:
