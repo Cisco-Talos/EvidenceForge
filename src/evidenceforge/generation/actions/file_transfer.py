@@ -257,7 +257,7 @@ class HttpResponseFileTransferActionBundle:
         return PeContext(
             id=fuid,
             machine="AMD64" if is_64 else "I386",
-            compile_ts=self._request.timestamp.timestamp()
+            compile_ts=int(self._request.timestamp.timestamp())
             - self._rng.randint(86400, 86400 * 365 * 3),
             is_exe=True,
             is_64bit=is_64,
