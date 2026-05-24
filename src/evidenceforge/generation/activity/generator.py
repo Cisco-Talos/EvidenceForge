@@ -6968,12 +6968,40 @@ class ActivityGenerator:
 
         # Terminate session-specific processes before ending session
         session = self.state_manager.get_session(logon_id)
+        is_ssh_session = session and (
+            session.session_kind == "ssh"
+            or (_get_os_category(system.os) == "linux" and logon_type == 10)
+        )
         if session:
             logon_type = session.logon_type
+            ssh_transport_close_time = (
+                ensure_utc(session.network_close_time)
+                if is_ssh_session and session.network_close_time is not None
+                else None
+            )
+            if ssh_transport_close_time is not None and not from_storyline:
+                transport_logoff_time = ssh_transport_close_time + sample_timing_delta(
+                    "windows.logoff_after_last_activity",
+                    seed_parts=(system.hostname, logon_id, ssh_transport_close_time),
+                )
+                requested_logoff_time = ensure_utc(time)
+                if (
+                    requested_logoff_time <= transport_logoff_time
+                    or requested_logoff_time > ssh_transport_close_time + timedelta(seconds=90)
+                ):
+                    time = transport_logoff_time
+            raw_session_end_markers = (
+                session.last_activity_time,
+                session.network_close_time,
+            )
             session_end_markers = [
                 marker
-                for marker in (session.last_activity_time, session.network_close_time)
+                for marker in raw_session_end_markers
                 if marker is not None
+                and (
+                    ssh_transport_close_time is None
+                    or ensure_utc(marker) <= ssh_transport_close_time
+                )
             ]
             session_end_markers.extend(
                 marker
@@ -6981,6 +7009,10 @@ class ActivityGenerator:
                 if proc.system == system.hostname and proc.logon_id == logon_id
                 for marker in (proc.last_activity_time or proc.start_time,)
                 if marker is not None
+                and (
+                    ssh_transport_close_time is None
+                    or ensure_utc(marker) <= ssh_transport_close_time
+                )
             )
             if session_end_markers and not from_storyline:
                 # Source emitters add small native delays (for example Sysmon
@@ -7029,10 +7061,6 @@ class ActivityGenerator:
 
         # Attach SyslogContext for Linux SSH sessions only (sshd session closed).
         # Non-SSH sessions (interactive, network) don't produce sshd evidence.
-        is_ssh_session = session and (
-            session.session_kind == "ssh"
-            or (event.dst_host and event.dst_host.os_category == "linux" and logon_type == 10)
-        )
         if event.dst_host and event.dst_host.os_category == "linux" and is_ssh_session:
             from evidenceforge.events.contexts import SyslogContext
 

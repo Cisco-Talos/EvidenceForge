@@ -15,7 +15,10 @@ from evidenceforge.generation.activity.generator import (
     _session_active_for_activity,
     _windows_foreground_lifetime,
 )
-from evidenceforge.generation.engine.baseline import _eligible_for_hourly_module_load
+from evidenceforge.generation.engine.baseline import (
+    _eligible_for_hourly_module_load,
+    _session_active_at,
+)
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import RunningProcess
@@ -156,6 +159,21 @@ def test_ssh_session_activity_stops_before_transport_close() -> None:
         margin_seconds=1.5,
     )
     assert not _session_active_for_activity(session, close + timedelta(milliseconds=1))
+
+
+def test_baseline_session_activity_stops_at_network_close() -> None:
+    start = datetime(2024, 3, 18, 20, 20, 0, tzinfo=UTC)
+    close = start + timedelta(minutes=7)
+    session = SimpleNamespace(
+        start_time=start,
+        network_close_time=close,
+        system="SRV-LIN-01",
+        logon_id="0x1234",
+    )
+
+    assert _session_active_at(session, close - timedelta(milliseconds=1), start, None)
+    assert not _session_active_at(session, close, start, None)
+    assert not _session_active_at(session, close + timedelta(seconds=1), start, None)
 
 
 def test_finalize_foreground_process_lifetimes_closes_tracked_one_shot() -> None:

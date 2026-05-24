@@ -52,6 +52,7 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
@@ -1999,6 +2000,58 @@ class TestSslContextPopulation:
         assert session.network_close_time == transport_event.timestamp + timedelta(
             seconds=transport_event.network.duration
         )
+
+    def test_ssh_logoff_after_transport_close_is_bounded_to_close(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+            duration=120.0,
+        )
+        transport_event = _ssh_transport_event(events)
+        transport_close = transport_event.timestamp + timedelta(
+            seconds=transport_event.network.duration
+        )
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(target.hostname, logon_id, transport_close),
+        )
+
+        gen.generate_logoff(
+            user=user,
+            system=target,
+            time=base_time + timedelta(hours=4),
+            logon_id=logon_id,
+            logon_type=10,
+        )
+
+        logoff_event = next(event for event in events if event.event_type == "logoff")
+        assert logoff_event.timestamp == transport_close + expected_delta
+        assert logoff_event.auth.source_ip == "10.0.10.50"
+        assert logoff_event.auth.source_port == 51111
 
     def test_ssh_session_honors_min_duration(self, activity_gen):
         gen, events = activity_gen

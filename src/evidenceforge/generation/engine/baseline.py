@@ -394,6 +394,16 @@ def _session_active_at(
     """Return whether a session should be used for activity at ``time``."""
     if not _session_started_by(session, time):
         return False
+    network_close_time = getattr(session, "network_close_time", None)
+    if network_close_time is not None:
+        network_close_time = (
+            network_close_time.replace(tzinfo=UTC)
+            if network_close_time.tzinfo is None
+            else network_close_time.astimezone(UTC)
+        )
+        activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+        if activity_time >= network_close_time:
+            return False
     logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
     return logoff_time is None or time < logoff_time
 
@@ -3320,6 +3330,30 @@ class BaselineMixin:
                 # storyline controls when these sessions end.
                 if session.storyline_protected:
                     continue
+                network_close_time = getattr(session, "network_close_time", None)
+                if session.session_kind == "ssh" and network_close_time is not None:
+                    network_close_time = (
+                        network_close_time.replace(tzinfo=UTC)
+                        if network_close_time.tzinfo is None
+                        else network_close_time.astimezone(UTC)
+                    )
+                    hour_end = current_hour + timedelta(hours=1)
+                    if network_close_time < hour_end:
+                        close_seed = _stable_seed(
+                            "baseline_ssh_logoff_after_transport:"
+                            f"{session.system}:{session.logon_id}:"
+                            f"{network_close_time.isoformat()}"
+                        )
+                        close_offset = (
+                            network_close_time
+                            - current_hour
+                            + timedelta(milliseconds=80 + (close_seed % 1420))
+                        ).total_seconds()
+                        planned[(session.system, session.logon_id)] = min(
+                            max(0.0, close_offset),
+                            3599.0,
+                        )
+                        continue
                 session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
                 if session_age_hours < 0.5:
                     continue
