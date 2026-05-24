@@ -46,7 +46,10 @@ from evidenceforge.events.contexts import (
 from evidenceforge.events.dispatcher import EventDispatcher
 from evidenceforge.generation.actions.base import ActionAnchor
 from evidenceforge.generation.activity.helpers import _get_os_category, _get_rng
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
+from evidenceforge.generation.activity.timing_profiles import (
+    get_timing_window,
+    sample_timing_delta,
+)
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
@@ -179,6 +182,7 @@ class _SshTransportState:
     resp_pkts: int = 0
     orig_ip_bytes: int = 0
     resp_ip_bytes: int = 0
+    open_time: datetime | None = None
     execution_anchor: ActionAnchor | None = None
 
 
@@ -192,6 +196,18 @@ class _SshLinuxAuthState:
     accepted_time: datetime
     pam_time: datetime
     logind_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _SshLinuxAuthPlan:
+    """Linux SSH auth ownership that must be known before transport opens."""
+
+    sshd_pid: int
+    conn_delay_ms: int
+    accepted_gap_ms: int
+    pam_gap_ms: int
+    logind_gap_ms: int
+    syslog_seed: tuple[Any, ...]
 
 
 class SshSessionExecutor(Protocol):
@@ -290,12 +306,13 @@ class SshSessionActionBundle:
         """Expand and dispatch SSH session evidence through the generator runtime."""
 
         state = self._plan_transport()
-        event = self._build_session_event(state)
-        auth_state = self._plan_linux_auth(state, event)
+        auth_plan = self._prepare_linux_auth_plan(state)
         self._open_transport(
             state,
-            responding_pid=auth_state.sshd_pid if auth_state is not None else self.request.sshd_pid,
+            responding_pid=auth_plan.sshd_pid if auth_plan is not None else self.request.sshd_pid,
         )
+        event = self._build_session_event(state)
+        auth_state = self._plan_linux_auth(state, event, auth_plan)
         if auth_state is not None:
             self._dispatch_linux_connection_message(state, event, auth_state)
             self._mark_edr_login_readiness(state, event, auth_state)
@@ -382,6 +399,7 @@ class SshSessionActionBundle:
             dst_host=self.executor._build_host_context(request.target_system),
             session_obj_id=request.session_obj_id,
             src_host=self._source_host_context(),
+            open_time=request.time,
             execution_anchor=ActionAnchor(
                 family="ssh_session",
                 stable_id=request.execution_stable_id(src_port),
@@ -452,6 +470,7 @@ class SshSessionActionBundle:
         if connection is None:
             return
         state.conn_id = connection.conn_id
+        state.open_time = connection.start_time
         state.orig_bytes = connection.bytes_sent
         state.resp_bytes = connection.bytes_received
         if connection.close_time is not None:
@@ -519,12 +538,49 @@ class SshSessionActionBundle:
         self,
         state: _SshTransportState,
         event: SecurityEvent,
+        plan: _SshLinuxAuthPlan | None,
     ) -> _SshLinuxAuthState | None:
         """Plan Linux SSH auth evidence and destination-side sshd ownership."""
 
         request = self.request
         executor = self.executor
-        if not event.dst_host or event.dst_host.os_category != "linux":
+        if plan is None or not event.dst_host or event.dst_host.os_category != "linux":
+            return None
+
+        if request.logon_id:
+            executor.state_manager.update_session_metadata(
+                request.logon_id,
+                transport_pid=plan.sshd_pid,
+            )
+        resolved_times = self._resolve_linux_auth_lifecycle(
+            event=event,
+            syslog_seed=plan.syslog_seed,
+            conn_delay_ms=plan.conn_delay_ms,
+            accepted_gap_ms=plan.accepted_gap_ms,
+            pam_gap_ms=plan.pam_gap_ms,
+            logind_gap_ms=plan.logind_gap_ms,
+            transport_open_time=state.open_time or request.time,
+        )
+        if request.emit_session_close:
+            self._extend_transport_close_after(
+                state,
+                event,
+                resolved_times["logind"] + timedelta(milliseconds=1),
+            )
+        return _SshLinuxAuthState(
+            sshd_pid=plan.sshd_pid,
+            syslog_seed=plan.syslog_seed,
+            connection_time=resolved_times["connection"],
+            accepted_time=resolved_times["accepted"],
+            pam_time=resolved_times["pam"],
+            logind_time=resolved_times["logind"],
+        )
+
+    def _prepare_linux_auth_plan(self, state: _SshTransportState) -> _SshLinuxAuthPlan | None:
+        """Resolve Linux SSH responder identity before opening canonical transport."""
+
+        request = self.request
+        if state.dst_host.os_category != "linux":
             return None
 
         conn_delay_ms = state.rng.randint(35, 160)
@@ -534,43 +590,20 @@ class SshSessionActionBundle:
             accepted_gap_ms = state.rng.randint(450, 3500)
         pam_gap_ms = state.rng.randint(45, 180)
         logind_gap_ms = state.rng.randint(420, 760)
-        accepted_delay_ms = conn_delay_ms + accepted_gap_ms
-        pam_delay_ms = accepted_delay_ms + pam_gap_ms
-        logind_delay_ms = pam_delay_ms + logind_gap_ms
         sshd_pid = self._resolve_responder_pid(state, conn_delay_ms)
-        if request.logon_id:
-            executor.state_manager.update_session_metadata(request.logon_id, transport_pid=sshd_pid)
-        syslog_seed = (
-            request.target_system.hostname,
-            request.source_ip,
-            state.source_port,
-            sshd_pid,
-            request.time.isoformat(),
-        )
-        resolved_times = self._resolve_linux_auth_lifecycle(
-            event=event,
-            syslog_seed=syslog_seed,
+        return _SshLinuxAuthPlan(
+            sshd_pid=sshd_pid,
             conn_delay_ms=conn_delay_ms,
-            accepted_delay_ms=accepted_delay_ms,
-            pam_delay_ms=pam_delay_ms,
-            logind_delay_ms=logind_delay_ms,
             accepted_gap_ms=accepted_gap_ms,
             pam_gap_ms=pam_gap_ms,
             logind_gap_ms=logind_gap_ms,
-        )
-        if request.emit_session_close:
-            self._extend_transport_close_after(
-                state,
-                event,
-                resolved_times["logind"] + timedelta(milliseconds=1),
-            )
-        return _SshLinuxAuthState(
-            sshd_pid=sshd_pid,
-            syslog_seed=syslog_seed,
-            connection_time=resolved_times["connection"],
-            accepted_time=resolved_times["accepted"],
-            pam_time=resolved_times["pam"],
-            logind_time=resolved_times["logind"],
+            syslog_seed=(
+                request.target_system.hostname,
+                request.source_ip,
+                state.source_port,
+                sshd_pid,
+                request.time.isoformat(),
+            ),
         )
 
     def _resolve_linux_auth_lifecycle(
@@ -579,35 +612,64 @@ class SshSessionActionBundle:
         event: SecurityEvent,
         syslog_seed: tuple[Any, ...],
         conn_delay_ms: int,
-        accepted_delay_ms: int,
-        pam_delay_ms: int,
-        logind_delay_ms: int,
         accepted_gap_ms: int,
         pam_gap_ms: int,
         logind_gap_ms: int,
+        transport_open_time: datetime,
     ) -> dict[str, datetime]:
         """Resolve SSH auth/syslog lifecycle times through the temporal graph."""
 
         request = self.request
+        flow_window = get_timing_window(
+            "source.ecar_flow",
+            default_min_ms=40,
+            default_max_ms=300,
+            default_position="after",
+            default_class="source_latency",
+        )
+        transport_to_syslog_ms = max(conn_delay_ms, flow_window.max_ms + 25)
         graph = TemporalConstraintGraph()
-        graph.add_node("transport_open", request.time)
+        graph.add_node("transport_open", transport_open_time)
         graph.add_node(
             "connection",
-            _ssh_syslog_time(request.time, "connection", conn_delay_ms, *syslog_seed),
+            _ssh_syslog_time(
+                transport_open_time,
+                "connection",
+                transport_to_syslog_ms,
+                *syslog_seed,
+            ),
         )
         graph.add_node(
             "accepted",
-            _ssh_syslog_time(request.time, "accepted", accepted_delay_ms, *syslog_seed),
+            _ssh_syslog_time(
+                transport_open_time,
+                "accepted",
+                transport_to_syslog_ms + accepted_gap_ms,
+                *syslog_seed,
+            ),
         )
-        graph.add_node("pam", _ssh_syslog_time(request.time, "pam", pam_delay_ms, *syslog_seed))
+        graph.add_node(
+            "pam",
+            _ssh_syslog_time(
+                transport_open_time,
+                "pam",
+                transport_to_syslog_ms + accepted_gap_ms + pam_gap_ms,
+                *syslog_seed,
+            ),
+        )
         graph.add_node(
             "logind",
-            _ssh_syslog_time(request.time, "logind", logind_delay_ms, *syslog_seed),
+            _ssh_syslog_time(
+                transport_open_time,
+                "logind",
+                transport_to_syslog_ms + accepted_gap_ms + pam_gap_ms + logind_gap_ms,
+                *syslog_seed,
+            ),
         )
         graph.constrain_after(
             "connection",
             "transport_open",
-            min_gap=timedelta(milliseconds=conn_delay_ms),
+            min_gap=timedelta(milliseconds=transport_to_syslog_ms),
         )
         graph.constrain_after(
             "accepted",
@@ -681,7 +743,8 @@ class SshSessionActionBundle:
         ):
             return executor.ensure_linux_ssh_responder_process(
                 target_system=request.target_system,
-                time=request.time + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
+                time=(state.open_time or request.time)
+                + timedelta(milliseconds=max(5, conn_delay_ms - 15)),
                 source_ip=request.source_ip,
                 source_port=state.source_port,
             )

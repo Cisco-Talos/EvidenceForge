@@ -1232,6 +1232,21 @@ class StateManager:
         with self._lock:
             return self.state.open_connections.get(conn_id)
 
+    def update_connection_interval(
+        self,
+        conn_id: str,
+        start_time: datetime,
+        close_time: datetime | None,
+    ) -> bool:
+        """Update the canonical source-visible interval for an open connection."""
+        with self._lock:
+            conn = self.state.open_connections.get(conn_id)
+            if conn is None:
+                return False
+            conn.start_time = ensure_utc(start_time)
+            conn.close_time = ensure_utc(close_time) if close_time is not None else None
+            return True
+
     def update_connection_bytes(self, conn_id: str, bytes_sent: int, bytes_received: int) -> bool:
         """Update cumulative byte counts for a connection.
 

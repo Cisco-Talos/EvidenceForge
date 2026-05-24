@@ -456,6 +456,7 @@ class TestSslContextPopulation:
         assert connection_event.timestamp < accepted_event.timestamp
         assert accepted_event.timestamp < pam_event.timestamp
         assert pam_event.timestamp < logind_event.timestamp
+        assert transport_event.timestamp < connection_event.timestamp
         assert connection_event.syslog.pid == transport_event.network.responding_pid
         assert accepted_event.syslog.pid == transport_event.network.responding_pid
         assert pam_event.syslog.pid == transport_event.network.responding_pid
@@ -510,8 +511,9 @@ class TestSslContextPopulation:
         logind_event = next(
             event for event in syslog_events if event.syslog.message.startswith("New session")
         )
+        transport_event = _ssh_transport_event(events)
 
-        assert base_time < connection_event.timestamp
+        assert transport_event.timestamp < connection_event.timestamp
         assert connection_event.timestamp < accepted_event.timestamp
         assert accepted_event.timestamp < pam_event.timestamp
         assert pam_event.timestamp < logind_event.timestamp
@@ -1628,8 +1630,8 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert base_time < times[0] < times[1] < times[2]
-        assert timedelta(milliseconds=35) <= times[0] - base_time <= timedelta(milliseconds=160)
+        assert base_time < transport_event.timestamp < times[0] < times[1] < times[2]
+        assert times[0] - transport_event.timestamp >= timedelta(milliseconds=300)
         assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(milliseconds=3501)
         assert timedelta(milliseconds=45) <= times[2] - times[1] <= timedelta(milliseconds=181)
         assert times[2] - times[0] != timedelta(seconds=1)

@@ -291,8 +291,10 @@ logon/session metadata, source-port reuse, and temporal ordering between
 source-visible transport evidence and target authentication evidence. It also
 protects the source `mstsc.exe` process and its owning interactive session
 through the transport close so endpoint process telemetry cannot end before the
-visible RDP flow. Do not emit independent port 3389 connections or Type 10 logons
-for the same modeled RDP session outside the bundle.
+visible RDP flow. Successful RDP logons must consume an `SF` transport interval
+from the network-connection contract, not a failed, reset, or tiny placeholder
+flow. Do not emit independent port 3389 connections or Type 10 logons for the
+same modeled RDP session outside the bundle.
 
 For Windows remote administration specifically, explicit credential use and
 remote service installation should route through the Windows remote-admin action
@@ -318,10 +320,13 @@ and connection state identity, visibility handoff, and source-native timing.
 Higher-level bundles may request connections through the public generator
 entrypoint, but they should not duplicate tuple allocation, hostname resolution,
 packet accounting, or endpoint-flow ownership locally. Endpoint FLOW timestamps
-must remain inside the canonical connection interval; if a very short connection
+must remain inside the canonical source-visible connection interval recorded in
+state after network observation jitter is resolved; if a very short connection
 cannot also satisfy source-visible process-create ordering, omit process actor
 identity for that FLOW row instead of moving endpoint telemetry after the
-transport close. For inbound SSH, eCAR FLOW is transport evidence and must not
+transport close. Higher-level auth/session bundles such as SSH and RDP should
+anchor successful authentication evidence to that interval, not to their original
+intent timestamp. For inbound SSH, eCAR FLOW is transport evidence and must not
 be delayed behind the `USER_SESSION` login solely to wait for destination-side
 `sshd` process visibility; omit the listener PID/principal when that identity
 would invert transport-before-session ordering.

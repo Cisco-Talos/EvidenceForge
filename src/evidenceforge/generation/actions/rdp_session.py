@@ -203,10 +203,12 @@ class RdpSessionActionBundle:
             emit_dns=True,
             source_system=source_system,
             pid=source_pid,
+            conn_state="SF",
         )
-        network_close_time = self._transport_close_time(
+        network_start_time, network_close_time = self._transport_interval(
             uid,
-            fallback=self._request.time + timedelta(seconds=duration),
+            fallback_start=self._request.time,
+            fallback_close=self._request.time + timedelta(seconds=duration),
         )
         self._protect_source_client_lifecycle(
             source_system=source_system,
@@ -218,6 +220,7 @@ class RdpSessionActionBundle:
             rng=rng,
             source_ip=source_ip,
             src_port=src_port,
+            transport_start_time=network_start_time,
         )
         logon_id = self._request.logon_id
         if logon_id:
@@ -313,11 +316,17 @@ class RdpSessionActionBundle:
             time=self._request.source_process_time,
         )
 
-    def _transport_close_time(self, uid: str, *, fallback: datetime) -> datetime:
-        """Return the canonical network close time for the generated RDP transport."""
+    def _transport_interval(
+        self,
+        uid: str,
+        *,
+        fallback_start: datetime,
+        fallback_close: datetime,
+    ) -> tuple[datetime, datetime]:
+        """Return the canonical network interval for the generated RDP transport."""
 
         if not uid:
-            return fallback
+            return fallback_start, fallback_close
         connection = next(
             (
                 conn
@@ -327,8 +336,8 @@ class RdpSessionActionBundle:
             None,
         )
         if connection is None or connection.close_time is None:
-            return fallback
-        return connection.close_time
+            return fallback_start, fallback_close
+        return connection.start_time, connection.close_time
 
     def _protect_source_client_lifecycle(
         self,
@@ -364,21 +373,24 @@ class RdpSessionActionBundle:
         rng: random.Random,
         source_ip: str,
         src_port: int,
+        transport_start_time: datetime | None = None,
     ) -> datetime:
         """Resolve target 4624 timing after source-visible network evidence."""
 
-        observed_connection_time = self._request.time + sample_timing_delta(
-            "network.connection_start_jitter",
-            seed_parts=(
-                source_ip,
-                src_port,
-                self._request.target_system.ip,
-                3389,
-                "tcp",
-                "rdp",
-                self._request.time,
-            ),
-        )
+        observed_connection_time = transport_start_time
+        if observed_connection_time is None:
+            observed_connection_time = self._request.time + sample_timing_delta(
+                "network.connection_start_jitter",
+                seed_parts=(
+                    source_ip,
+                    src_port,
+                    self._request.target_system.ip,
+                    3389,
+                    "tcp",
+                    "rdp",
+                    self._request.time,
+                ),
+            )
         graph = TemporalConstraintGraph()
         graph.add_node(
             "transport_observed",

@@ -9692,6 +9692,11 @@ class ActivityGenerator:
                 time,
                 duration=duration,
             )
+        self.state_manager.update_connection_interval(
+            conn_id,
+            time,
+            time + timedelta(seconds=duration) if duration is not None else None,
+        )
 
         if pid > 0 and resolved_source_system:
             activity_time = time

@@ -279,7 +279,9 @@ world-planner, and baseline RDP paths do not independently invent partial RDP
 evidence. When the source host is modeled, the bundle also extends the source
 `mstsc.exe` process and owning interactive session through the canonical
 transport close so source endpoint telemetry cannot terminate before the visible
-RDP flow.
+RDP flow. Successful RDP sessions request an `SF` transport with response-bearing
+byte/packet accounting and then use the resolved network interval as the floor
+and ceiling for target authentication timing.
 
 Windows remote-admin callers supply explicit credential use or service-install
 intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
@@ -309,10 +311,13 @@ and Windows WFP companions. Higher-level bundles still call the public
 `generate_connection()` compatibility entrypoint, but connection truth is routed
 through this shared bundle boundary before becoming one canonical
 `SecurityEvent` plus any source-native companion evidence. Endpoint FLOW
-timestamps are bounded by the canonical connection interval. When a very short
-connection cannot also satisfy source-visible process-create ordering, the eCAR
-renderer drops process actor identity for that FLOW row instead of moving
-endpoint telemetry after the network close. SSH inbound FLOW rows are treated as
+timestamps are bounded by the canonical source-visible connection interval that
+is stored in state after Zeek/source observation jitter is resolved. When a very
+short connection cannot also satisfy source-visible process-create ordering, the
+eCAR renderer drops process actor identity for that FLOW row instead of moving
+endpoint telemetry after the network close. SSH and RDP authentication bundles
+anchor successful session evidence to this resolved transport interval rather
+than to the original intent timestamp. SSH inbound FLOW rows are treated as
 transport observations: they must remain before the corresponding endpoint
 `USER_SESSION` login even when destination-side `sshd` process identity would be
 visible later, so the renderer omits listener PID/principal rather than delaying

@@ -1774,8 +1774,22 @@ class TestActivityGenerator:
         )
         assert network_event.network.dst_port == 3389
         assert network_event.network.src_port > 0
+        assert network_event.network.conn_state == "SF"
+        assert network_event.network.duration is not None
+        assert network_event.network.orig_bytes > 0
+        assert network_event.network.resp_bytes > 0
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
+        connection = next(
+            conn
+            for conn in state_manager.list_open_connections()
+            if conn.zeek_uid == network_event.network.zeek_uid
+        )
+        assert connection.start_time == network_event.timestamp
+        assert connection.close_time == network_event.timestamp + timedelta(
+            seconds=network_event.network.duration
+        )
+        assert logon_event.timestamp < connection.close_time
 
     def test_rdp_session_bundle_anchor_is_stable(self, test_user, test_system):
         """Identical RDP bundle requests should have stable action anchors."""
@@ -1874,6 +1888,7 @@ class TestActivityGenerator:
             and call.args[0].process is not None
             and call.args[0].process.image.endswith("mstsc.exe")
         )
+        assert network_event.network.conn_state == "SF"
         assert network_event.network.initiating_pid == source_process.process.pid
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
