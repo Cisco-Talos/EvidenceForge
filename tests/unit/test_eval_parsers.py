@@ -178,7 +178,42 @@ class TestSysmonEventParser:
         assert records[0].source_format == "windows_event_sysmon"
         assert records[0].fields["EventID"] == 1
         assert records[0].fields["Image"] == "C:\\Windows\\System32\\cmd.exe"
+        assert records[0].fields["ProcessId"] == 4321
         assert records[0].timestamp.year == 2026
+        assert records[0].parse_errors == []
+
+    def test_parses_sysmon_xml_numeric_event_data(self, tmp_path):
+        from evidenceforge.evaluation.parsers.windows import SysmonEventParser
+
+        log = tmp_path / "windows_event_sysmon.xml"
+        log.write_text(
+            """<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
+  <System>
+    <EventID>3</EventID>
+    <TimeCreated SystemTime="2024-06-15T14:23:06.1234567Z" />
+    <Computer>win-01.example.test</Computer>
+    <Channel>Microsoft-Windows-Sysmon/Operational</Channel>
+    <Level>4</Level>
+    <EventRecordID>101</EventRecordID>
+    <Execution ProcessID="2524" ThreadID="6700" />
+  </System>
+  <EventData>
+    <Data Name="ProcessId">4321</Data>
+    <Data Name="SourcePort">51544</Data>
+    <Data Name="DestinationPort">443</Data>
+    <Data Name="Image">C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe</Data>
+  </EventData>
+</Event>
+""",
+            encoding="utf-8",
+        )
+
+        records = list(SysmonEventParser().parse_file(log))
+
+        assert len(records) == 1
+        assert records[0].fields["ProcessId"] == 4321
+        assert records[0].fields["SourcePort"] == 51544
+        assert records[0].fields["DestinationPort"] == 443
         assert records[0].parse_errors == []
 
 
