@@ -784,6 +784,34 @@ class TestFileTransferActionBundles:
         assert first.file_transfer.fuid != second.file_transfer.fuid
         assert first.file_transfer.sha1 == second.file_transfer.sha1
 
+    def test_http_file_transfer_pe_metadata_follows_content_identity(self):
+        """Identical HTTP response objects should not get new PE metadata per FUID."""
+        request = HttpResponseFileTransferRequest(
+            host="dbeaver.io",
+            uri="/files/dbeaver-ce-latest-x86_64-setup.exe",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        first = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+        second = HttpResponseFileTransferActionBundle(request, random.Random(9)).execute()
+
+        assert first.pe is not None
+        assert second.pe is not None
+        assert first.pe.id == first.file_transfer.fuid
+        assert second.pe.id == second.file_transfer.fuid
+        assert first.pe.id != second.pe.id
+        assert first.pe.machine == second.pe.machine == "AMD64"
+        assert first.pe.is_64bit is True
+        assert second.pe.is_64bit is True
+        assert first.pe.compile_ts == second.pe.compile_ts
+        assert first.pe.section_names == second.pe.section_names
+        assert first.pe.uses_aslr == second.pe.uses_aslr
+        assert first.pe.has_cert_table == second.pe.has_cert_table
+
     def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
         """SMB files.log metadata should preserve caller-owned transfer direction."""
         request = SmbFileTransferMetadataRequest(

@@ -493,7 +493,7 @@ class TestFilesUidCorrelation:
 
         assert result.pe is not None
         assert isinstance(result.pe.compile_ts, int)
-        assert result.pe.compile_ts == int(request.timestamp.timestamp()) - 86400
+        assert result.pe.compile_ts <= int(request.timestamp.timestamp()) - (30 * 24 * 60 * 60)
 
     def test_certificate_file_timestamp_follows_parent_ssl_record(self):
         """Certificate files should not predate the owning ssl.log row."""

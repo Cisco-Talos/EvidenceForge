@@ -28,7 +28,7 @@ import hashlib
 import random
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from evidenceforge.events.base import SecurityEvent
@@ -60,9 +60,27 @@ _HTTP_HASH_ANALYZER_MIME_TYPES = {
     "application/x-msdownload",
     "application/zip",
 }
+_HTTP_PE_ANALYZER_MIME_TYPES = {
+    "application/octet-stream",
+    "application/x-dosexec",
+    "application/x-msdownload",
+}
+_HTTP_PE_DEFINITE_MIME_TYPES = {
+    "application/x-dosexec",
+    "application/x-msdownload",
+}
 _HTTP_ANALYZER_SHORT_BODY_BYTES = 64 * 1024
 _HTTP_BULK_BODY_BYTES = 1_000_000
 _HTTP_PARENT_ANALYZER_MARGIN_SECONDS = 0.75
+_PE_COMPILE_EARLIEST_TS = int(datetime(2018, 1, 1, tzinfo=UTC).timestamp())
+_PE_COMPILE_LATEST_TS = int(datetime(2024, 6, 1, tzinfo=UTC).timestamp())
+_PE_COMPILE_OBSERVATION_MARGIN_SECONDS = 30 * 24 * 60 * 60
+_PE_SECTION_PROFILES = (
+    [".text", ".rdata", ".data", ".pdata", ".rsrc", ".reloc"],
+    [".text", ".rdata", ".data", ".rsrc", ".reloc"],
+    [".text", ".idata", ".data", ".rsrc", ".reloc"],
+    [".text", ".rdata", ".data", ".rsrc"],
+)
 
 
 def _http_transfer_throughput_range(response_body_len: int) -> tuple[int, int] | None:
@@ -151,6 +169,50 @@ def file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, 
     return hashes
 
 
+def _http_content_seed_material(
+    host: str,
+    uri: str,
+    response_body_len: int,
+    mime_type: str,
+) -> str:
+    """Return the canonical HTTP response-content identity seed."""
+
+    return f"http:{host}:{uri}:{response_body_len}:{mime_type}"
+
+
+def _http_pe_is_64bit(uri: str, content_seed_material: str) -> bool:
+    """Return a content-scoped PE architecture decision."""
+
+    normalized_uri = uri.lower()
+    if any(token in normalized_uri for token in ("x86_64", "amd64", "x64", "win64")):
+        return True
+    if any(token in normalized_uri for token in ("i386", "x86", "win32")):
+        return False
+    return _stable_seed(f"http_pe_arch:{content_seed_material}") % 100 < 70
+
+
+def _http_pe_compile_ts(content_seed_material: str, observed_at: datetime) -> int:
+    """Return a content-scoped PE compile timestamp before the observation."""
+
+    latest_allowed = int(observed_at.timestamp()) - _PE_COMPILE_OBSERVATION_MARGIN_SECONDS
+    upper_bound = min(_PE_COMPILE_LATEST_TS, latest_allowed)
+    lower_bound = _PE_COMPILE_EARLIEST_TS
+    if upper_bound <= lower_bound:
+        lower_bound = max(0, upper_bound - 3 * 365 * 24 * 60 * 60)
+    span = max(1, upper_bound - lower_bound)
+    return lower_bound + (_stable_seed(f"http_pe_compile_ts:{content_seed_material}") % span)
+
+
+def _http_pe_analysis_enabled(mime_type: str, content_seed_material: str) -> bool:
+    """Return whether this content object should produce PE analyzer records."""
+
+    if mime_type not in _HTTP_PE_ANALYZER_MIME_TYPES:
+        return False
+    if mime_type in _HTTP_PE_DEFINITE_MIME_TYPES:
+        return True
+    return _stable_seed(f"http_pe_enabled:{content_seed_material}") % 100 < 25
+
+
 @dataclass(frozen=True, slots=True)
 class HttpResponseFileTransferRequest:
     """Intent for one HTTP response body visible to Zeek file analysis."""
@@ -212,11 +274,13 @@ class HttpResponseFileTransferActionBundle:
         fuid = generate_zeek_uid("F")
         file_mime_type = self._request.response_mime_types[0]
         analyzers = ["SHA1"] if file_mime_type in _HTTP_HASH_ANALYZER_MIME_TYPES else []
-        file_hashes = file_transfer_hashes(
-            f"http:{self._request.host}:{self._request.uri}:"
-            f"{self._request.response_body_len}:{file_mime_type}",
-            analyzers,
+        content_seed_material = _http_content_seed_material(
+            self._request.host,
+            self._request.uri,
+            self._request.response_body_len,
+            file_mime_type,
         )
+        file_hashes = file_transfer_hashes(content_seed_material, analyzers)
         file_transfer = FileTransferContext(
             fuid=fuid,
             source="HTTP",
@@ -239,35 +303,38 @@ class HttpResponseFileTransferActionBundle:
         )
         return HttpResponseFileTransferResult(
             file_transfer=file_transfer,
-            pe=self._maybe_build_pe_context(fuid, file_mime_type),
+            pe=self._maybe_build_pe_context(fuid, file_mime_type, content_seed_material),
         )
 
-    def _maybe_build_pe_context(self, fuid: str, mime_type: str) -> PeContext | None:
-        """Return PE analysis for occasional executable file transfers."""
+    def _maybe_build_pe_context(
+        self,
+        fuid: str,
+        mime_type: str,
+        content_seed_material: str,
+    ) -> PeContext | None:
+        """Return content-scoped PE analysis for executable file transfers."""
 
-        if mime_type not in {
-            "application/octet-stream",
-            "application/x-dosexec",
-            "application/x-msdownload",
-        }:
+        if not _http_pe_analysis_enabled(mime_type, content_seed_material):
             return None
-        if self._rng.random() >= 0.1:
-            return None
-        is_64 = self._rng.random() < 0.7
+        profile_rng = random.Random(_stable_seed(f"http_pe_profile:{content_seed_material}"))
+        is_64 = _http_pe_is_64bit(self._request.uri, content_seed_material)
         return PeContext(
             id=fuid,
             machine="AMD64" if is_64 else "I386",
-            compile_ts=int(self._request.timestamp.timestamp())
-            - self._rng.randint(86400, 86400 * 365 * 3),
+            compile_ts=_http_pe_compile_ts(content_seed_material, self._request.timestamp),
             is_exe=True,
             is_64bit=is_64,
-            uses_aslr=self._rng.random() < 0.8,
-            uses_dep=self._rng.random() < 0.9,
-            uses_code_integrity=self._rng.random() < 0.1,
+            uses_aslr=profile_rng.random() < 0.88,
+            uses_dep=profile_rng.random() < 0.95,
+            uses_code_integrity=profile_rng.random() < 0.12,
             has_import_table=True,
-            has_export_table=self._rng.random() < 0.2,
-            has_cert_table=self._rng.random() < 0.3,
-            has_debug_data=self._rng.random() < 0.4,
+            has_export_table=profile_rng.random() < 0.18,
+            has_cert_table=profile_rng.random() < 0.72,
+            has_debug_data=profile_rng.random() < 0.28,
+            section_names=_PE_SECTION_PROFILES[
+                _stable_seed(f"http_pe_sections:{content_seed_material}")
+                % len(_PE_SECTION_PROFILES)
+            ],
         )
 
 
