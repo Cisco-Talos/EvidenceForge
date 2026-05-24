@@ -690,6 +690,20 @@ def _attach_http_response_file_transfer(
     if not should_attach:
         return
 
+    duration_floor = http_response_parent_duration_floor(http.response_body_len)
+    if duration_floor > 0:
+        floor_rng = random.Random(
+            _stable_seed(
+                "http_response_file_transfer_parent_duration:"
+                f"{event.network.src_ip}:{event.network.src_port}:"
+                f"{event.network.dst_ip}:{event.network.dst_port}:"
+                f"{http.host}:{http.uri}:{http.response_body_len}:"
+                f"{event.timestamp.isoformat()}"
+            )
+        )
+        min_http_file_duration = duration_floor + floor_rng.uniform(0.05, 0.55)
+        event.network.duration = max(event.network.duration or 0.0, min_http_file_duration)
+
     file_result = HttpResponseFileTransferActionBundle(
         HttpResponseFileTransferRequest(
             host=http.host,
@@ -9703,24 +9717,6 @@ class ActivityGenerator:
             caller_provided_duration=caller_provided_duration or duration_locked_to_dns_rtt,
             seed_parts=(src_ip, src_port, dst_ip, dst_port, proto, service or "", time),
         )
-        if (
-            http is not None
-            and conn_state == "SF"
-            and service == "http"
-            and _http_response_requires_file_transfer(http)
-        ):
-            duration_floor = http_response_parent_duration_floor(http.response_body_len)
-            if duration_floor > 0:
-                floor_rng = random.Random(
-                    _stable_seed(
-                        "http_response_file_transfer_parent_duration:"
-                        f"{src_ip}:{src_port}:{dst_ip}:{dst_port}:"
-                        f"{http.host}:{http.uri}:{http.response_body_len}:{time.isoformat()}"
-                    )
-                )
-                min_http_file_duration = duration_floor + floor_rng.uniform(0.05, 0.55)
-                duration = max(duration or 0.0, min_http_file_duration)
-
         kerberos_audit_count = 0
         if (
             service == "kerberos"
