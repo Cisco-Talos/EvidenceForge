@@ -672,6 +672,9 @@ class EmitterSetupMixin:
         for name, cmdline, user in svchost_groups:
             pids[name] = _c(pids["services"], r"C:\Windows\System32\svchost.exe", cmdline, user)
 
+        if (system.type or "").lower() == "domain_controller":
+            pids["dns"] = _c(pids["services"], r"C:\Windows\System32\dns.exe", "dns.exe", "SYSTEM")
+
         pids["msmpeng"] = _c(
             pids["services"],
             r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe",

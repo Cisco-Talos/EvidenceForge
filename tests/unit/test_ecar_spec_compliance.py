@@ -1219,6 +1219,106 @@ class TestChronologicalOutput:
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
 
+    @pytest.mark.parametrize(
+        ("dst_port", "proto", "system_pids", "expected_pid"),
+        [
+            (53, "udp", {"dns": 5300, "lsass": 700}, 5300),
+            (88, "udp", {"dns": 5300, "lsass": 700}, 700),
+            (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
+            (445, "tcp", {"system": 4, "lsass": 700}, 4),
+        ],
+    )
+    def test_inbound_infrastructure_flow_uses_destination_service_pid(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+        dst_port,
+        proto,
+        system_pids,
+        expected_pid,
+    ):
+        """DC DNS/auth/SMB listener FLOW rows should use destination-local owners."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        emitter._system_pids = {"DC-01": system_pids}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.3.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.7",
+                src_port=49152,
+                dst_ip="10.0.3.10",
+                dst_port=dst_port,
+                protocol=proto,
+                conn_state="SF",
+                history="ShADadF" if proto == "tcp" else "Dd",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == expected_pid
+
+    def test_short_inbound_service_flow_keeps_preexisting_listener_pid(
+        self, emitter, monkeypatch, ts
+    ):
+        """Long-running service PIDs should survive tiny source-native flow windows."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts - timedelta(minutes=10))
+        dns_pid = state.create_process(
+            "DC-01",
+            0,
+            r"C:\Windows\System32\dns.exe",
+            "dns.exe",
+            "SYSTEM",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"DC-01": {"dns": dns_pid}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.3.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.7",
+                src_port=49152,
+                dst_ip="10.0.3.10",
+                dst_port=53,
+                protocol="udp",
+                duration=0.0002,
+                conn_state="SF",
+                history="Dd",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == dns_pid
+
     def test_inbound_flow_prefers_canonical_destination_pid_for_non_remote_session(
         self, emitter, monkeypatch, ts
     ):

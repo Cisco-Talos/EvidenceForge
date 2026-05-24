@@ -51,10 +51,14 @@ _ECAR_SORT_PRIORITY = {
 }
 
 _INBOUND_SERVICE_PID_CANDIDATES: dict[int, tuple[str, ...]] = {
+    53: ("dns", "svchost_netsvcs", "svchost_net_svc"),
+    88: ("lsass",),
+    123: ("timesyncd", "chronyd", "svchost_netsvcs"),
+    389: ("lsass",),
     22: ("sshd",),
     80: ("nginx", "apache2", "httpd"),
     443: ("nginx", "apache2", "httpd"),
-    445: ("smbd", "lanmanserver"),
+    445: ("system", "smbd", "lanmanserver"),
     1433: ("sqlservr",),
     3306: ("mysqld",),
     3389: ("svchost_termservice", "svchost_netsvcs"),
@@ -1071,6 +1075,8 @@ class EcarEmitter(HostMultiplexEmitter):
         """Clamp dependent eCAR observations after their PROCESS/CREATE record."""
         if proc is None or proc.start_time is None:
             return event.timestamp
+        if event.timestamp - proc.start_time >= timedelta(seconds=5):
+            return proc.start_time
         process_create_ts = self._process_create_timestamp(event, proc)
         return _SOURCE_TIMING.source_time(
             event,
