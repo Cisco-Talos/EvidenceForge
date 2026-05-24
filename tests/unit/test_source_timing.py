@@ -222,6 +222,27 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     assert dependent_time > process_time
 
 
+def test_ecar_dependent_timestamp_for_long_running_process_uses_event_time(
+    tmp_path: Path,
+) -> None:
+    """Later eCAR dependent rows for long-running processes should not backdate to startup."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    base = _base_time()
+    event_time = base + timedelta(minutes=10)
+    host = _host_context()
+    proc = _process_context(base)
+    dependent_event = SecurityEvent(
+        timestamp=event_time,
+        event_type="registry_modify",
+        src_host=host,
+        process=proc,
+    )
+
+    dependent_time = emitter._after_process_create_timestamp(dependent_event, proc)
+
+    assert event_time <= dependent_time < event_time + timedelta(milliseconds=40)
+
+
 def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> None:
     """eCAR process-create latency should not collapse visible command duration."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)

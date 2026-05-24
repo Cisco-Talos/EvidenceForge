@@ -622,7 +622,7 @@ class EcarEmitter(HostMultiplexEmitter):
         # OUTBOUND FLOW on source host (if source is internal/known)
         if event.src_host:
             not_before = (
-                self._after_process_create_timestamp(event, source_proc)
+                self._process_identity_not_before_timestamp(event, source_proc)
                 if source_proc is not None
                 else None
             )
@@ -724,7 +724,10 @@ class EcarEmitter(HostMultiplexEmitter):
                     event_ts, process_identity_safe = self._flow_source_time(
                         event,
                         seed_parts=inbound_seed,
-                        not_before=self._after_process_create_timestamp(event, inbound_proc),
+                        not_before=self._process_identity_not_before_timestamp(
+                            event,
+                            inbound_proc,
+                        ),
                         drop_late_process_identity=(
                             net.protocol == "tcp" and net.dst_port in {22, 3389}
                         ),
@@ -1076,7 +1079,17 @@ class EcarEmitter(HostMultiplexEmitter):
         if proc is None or proc.start_time is None:
             return event.timestamp
         if event.timestamp - proc.start_time >= timedelta(seconds=5):
-            return proc.start_time
+            return _SOURCE_TIMING.source_time(
+                event,
+                "source.ecar_dependent_after_process_create",
+                seed_parts=(
+                    event.event_type,
+                    self._host_name(event.src_host),
+                    proc.pid,
+                    event.timestamp,
+                ),
+                not_before=event.timestamp,
+            )
         process_create_ts = self._process_create_timestamp(event, proc)
         return _SOURCE_TIMING.source_time(
             event,
@@ -1089,6 +1102,18 @@ class EcarEmitter(HostMultiplexEmitter):
             ),
             not_before=process_create_ts + timedelta(milliseconds=1),
         )
+
+    def _process_identity_not_before_timestamp(
+        self,
+        event: SecurityEvent,
+        proc: Any,
+    ) -> datetime:
+        """Return the earliest eCAR time that can safely claim a process identity."""
+        if proc is None or proc.start_time is None:
+            return event.timestamp
+        if event.timestamp - proc.start_time >= timedelta(seconds=5):
+            return proc.start_time
+        return self._after_process_create_timestamp(event, proc)
 
     def _process_terminate_timestamp(
         self,
