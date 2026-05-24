@@ -214,7 +214,7 @@ class HttpResponseFileTransferActionBundle:
         analyzers = ["SHA1"] if file_mime_type in _HTTP_HASH_ANALYZER_MIME_TYPES else []
         file_hashes = file_transfer_hashes(
             f"http:{self._request.host}:{self._request.uri}:"
-            f"{self._request.response_body_len}:{fuid}",
+            f"{self._request.response_body_len}:{file_mime_type}",
             analyzers,
         )
         file_transfer = FileTransferContext(

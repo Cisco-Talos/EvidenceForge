@@ -357,6 +357,7 @@ class TestFilesUidCorrelation:
             file_row = json.loads(files_output.read_text().splitlines()[0])
 
         assert file_row["ts"] > http_row["ts"]
+        assert file_row["ts"] - http_row["ts"] > 0.005
 
     def test_http_file_timestamp_uses_final_monotonic_http_timestamp(self):
         """files.log should follow http.log after same-UID timestamp repairs."""

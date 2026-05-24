@@ -476,6 +476,15 @@ def _is_tool_http_user_agent(user_agent: str) -> bool:
     )
 
 
+def _source_native_http_referrer(user_agent: str, referrer: str) -> str:
+    """Return a referrer that agrees with the HTTP client family."""
+    if not referrer:
+        return ""
+    if _is_tool_http_user_agent(user_agent):
+        return ""
+    return referrer
+
+
 def _http_method_for_process_command(command_line: str) -> str:
     """Infer the HTTP method visible for a simple CLI HTTP command."""
     lowered = f" {command_line.lower()} "
@@ -1110,7 +1119,9 @@ _WINDOWS_ONE_SHOT_CLI_EXES = {
     "whoami.exe",
     "wmic.exe",
 }
-_WINDOWS_BROWSER_EXES = frozenset({"chrome.exe", "firefox.exe", "msedge.exe", "iexplore.exe"})
+_WINDOWS_BROWSER_EXES = frozenset(
+    {"chrome.exe", "firefox.exe", "iexplore.exe", "msedge.exe", "opera.exe"}
+)
 _WINDOWS_BROWSER_CHILD_MARKERS = (
     "--type=",
     "--utility-sub-type=",
@@ -4502,6 +4513,7 @@ class ActivityGenerator:
             hostname=proxy_hostname,
             domain_tags=domain_tags,
         )
+        proxy_referrer = _source_native_http_referrer(user_agent, proxy_referrer)
 
         proxy_cacheable = _proxy_request_allows_cache_hit(
             method=proxy_method,
@@ -4800,6 +4812,9 @@ class ActivityGenerator:
         if "edg/" in ua or "edge/" in ua:
             image = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
             return image, f'"{image}" --single-argument {target_url}'
+        if "opr/" in ua or "opera/" in ua:
+            image = r"C:\Program Files\Opera\opera.exe"
+            return image, f'"{image}" {target_url}'
         if "chrome/" in ua and "google update" not in ua:
             image = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
             return image, f'"{image}" --single-argument {target_url}'
@@ -10302,6 +10317,7 @@ class ActivityGenerator:
                     hostname=proxy_hostname,
                     domain_tags=domain_tags,
                 )
+                proxy_referrer = _source_native_http_referrer(user_agent, proxy_referrer)
                 cache_roll = rng.random()
                 proxy_cacheable = _proxy_request_allows_cache_hit(
                     method=proxy_method,
@@ -10518,6 +10534,7 @@ class ActivityGenerator:
                 if http_referrer_policy == "none"
                 else pick_referrer(rng, host, context="general", port=dst_port)
             )
+            _http_referer = _source_native_http_referrer(ua, _http_referer)
             event.http = HttpContext(
                 method=http_method,
                 host=host,

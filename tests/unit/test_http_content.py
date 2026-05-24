@@ -33,6 +33,7 @@ def test_executable_download_uses_binary_mime_and_size_range():
     )
     size = response_size_for_mime(random.Random(7), "application/x-msdownload")
     assert 5_000_000 <= size <= 150_000_000
+    assert is_stable_resource_path("/files/tool.exe")
 
 
 def test_download_mime_replaces_tiny_preferred_response_size():
@@ -150,6 +151,29 @@ def test_transfer_variant_changes_static_resource_bytes_by_client_profile():
         )
         == 0
     )
+
+
+def test_transfer_variant_does_not_change_static_download_object_bytes():
+    base = response_size_for_status(200, "dbeaver.io", "/files/dbeaver-ce-latest-x86_64-setup.exe")
+    client_a = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="dbeaver.io",
+        uri="/files/dbeaver-ce-latest-x86_64-setup.exe",
+        content_type="application/x-msdownload",
+        variant_key="10.0.1.1:chrome",
+    )
+    client_b = apply_transfer_size_variance(
+        base,
+        status_code=200,
+        host="dbeaver.io",
+        uri="/files/dbeaver-ce-latest-x86_64-setup.exe",
+        content_type="application/x-msdownload",
+        variant_key="10.0.1.4:firefox",
+    )
+
+    assert client_a == base
+    assert client_b == base
 
 
 def test_health_endpoint_response_sizes_are_small_and_stable():

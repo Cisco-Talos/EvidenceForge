@@ -167,6 +167,9 @@ def apply_transfer_size_variance(
         return body_size
 
     mime_type = content_type or normalize_mime_type_for_path(uri, "text/html")
+    if is_download_scale_mime(mime_type):
+        return body_size
+
     rng = random.Random(
         _stable_seed(f"web_transfer_variant:{status_code}:{host}:{uri}:{mime_type}:{variant_key}")
     )
@@ -252,20 +255,25 @@ def is_stable_resource_path(uri: str) -> bool:
     if clean_path in {"/", "/index.html", "/robots.txt", "/sitemap.xml", "/favicon.ico"}:
         return True
     return suffix in {
+        ".cab",
         ".css",
+        ".exe",
         ".gif",
+        ".gz",
         ".ico",
         ".jpeg",
         ".jpg",
         ".js",
         ".map",
         ".png",
+        ".pdf",
         ".svg",
         ".txt",
         ".webp",
         ".woff",
         ".woff2",
         ".xml",
+        ".zip",
     }
 
 

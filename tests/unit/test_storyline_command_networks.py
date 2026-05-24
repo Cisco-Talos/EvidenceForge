@@ -766,6 +766,24 @@ class TestFileTransferActionBundles:
         assert result.file_transfer.duration < request.parent_duration
         assert result.file_transfer.seen_bytes == request.response_body_len
 
+    def test_http_file_transfer_hashes_follow_static_object_identity(self):
+        """Identical HTTP response objects should not get new hashes per FUID."""
+        request = HttpResponseFileTransferRequest(
+            host="dbeaver.io",
+            uri="/files/dbeaver-ce-latest-x86_64-setup.exe",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        first = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+        second = HttpResponseFileTransferActionBundle(request, random.Random(9)).execute()
+
+        assert first.file_transfer.fuid != second.file_transfer.fuid
+        assert first.file_transfer.sha1 == second.file_transfer.sha1
+
     def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
         """SMB files.log metadata should preserve caller-owned transfer direction."""
         request = SmbFileTransferMetadataRequest(

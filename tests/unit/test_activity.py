@@ -115,6 +115,7 @@ from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
+    _source_native_http_referrer,
     _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.http_content import response_size_for_status
@@ -318,6 +319,21 @@ class TestProcessHttpCommandCorrelation:
 
         assert proxy_context.url == "https://api.github.com/rate_limit"
         assert proxy_context.user_agent == "curl/7.88.1"
+
+    def test_tool_http_referrer_drops_browser_navigation_context(self):
+        """Command-line HTTP clients should not inherit browser search referrers."""
+        assert (
+            _source_native_http_referrer(
+                "curl/7.88.1",
+                "https://www.google.com/search?q=www+office+com",
+            )
+            == ""
+        )
+        assert _source_native_http_referrer(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "https://www.google.com/search?q=www+office+com",
+        ).startswith("https://www.google.com/")
 
     def test_network_effect_context_keeps_rendered_cli_http_command(self):
         """A stale process-state lookup should not retarget a rendered curl command."""
