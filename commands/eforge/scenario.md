@@ -409,7 +409,7 @@ process-owned file/module/registry/audit evidence by hand.
 - `dns_tunnel` — DNS exfiltration via encoded subdomains. Fields: `base_domain`, `encoding` (base32/base64/hex), `qtype` (TXT/NULL/CNAME), `label_length`, `payload`/`payload_size`.
 - `explicit_credentials` — RunAs / pass-the-hash / service account delegation (4648). Fields: `target_username`, `target_server`, `process_name`, `source_ip`.
 - `workstation_lock` — Lock workstation (4800). No additional fields.
-- `workstation_unlock` — Unlock workstation (4801 + 4624 type 7 re-auth). No additional fields.
+- `workstation_unlock` — Unlock workstation (4624 type 7 re-auth followed by 4801). No additional fields.
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type. Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 

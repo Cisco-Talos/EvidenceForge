@@ -2515,9 +2515,57 @@ class TestActivityGenerator:
         unlock_logon = next(
             event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
         )
-        assert unlock.timestamp == lock_time + timedelta(seconds=127)
-        assert unlock_logon.timestamp == unlock.timestamp + timedelta(milliseconds=50)
+        assert unlock.timestamp >= lock_time + timedelta(seconds=127)
+        assert unlock_logon.timestamp < unlock.timestamp
+        assert (
+            timedelta(milliseconds=80)
+            <= (unlock.timestamp - unlock_logon.timestamp)
+            <= timedelta(milliseconds=650)
+        )
         assert unlock_logon.auth.source_ip == "-"
+
+    def test_workstation_unlock_reauth_precedes_4801_with_varied_gap(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Type 7 re-auth should precede 4801 without a fleet-wide fixed delta."""
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        gaps: set[timedelta] = set()
+
+        for index in range(4):
+            mock_emitters["windows_event_security"].reset_mock()
+            logon_id = f"0x4f2a1{index}"
+            lock_time = start + timedelta(hours=index)
+            state_manager.register_session(
+                logon_id=logon_id,
+                username=test_user.username,
+                system=test_system.hostname,
+                logon_type=2,
+                source_ip="-",
+                start_time=lock_time - timedelta(minutes=5),
+                session_id=10 + index,
+            )
+            activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+            activity_gen.generate_workstation_unlock(
+                test_user,
+                test_system,
+                lock_time + timedelta(minutes=10),
+                logon_id,
+            )
+            events = [
+                call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            ]
+            unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+            unlock_logon = next(
+                event
+                for event in events
+                if event.event_type == "logon" and event.auth.logon_type == 7
+            )
+
+            assert unlock_logon.timestamp < unlock.timestamp
+            gaps.add(unlock.timestamp - unlock_logon.timestamp)
+
+        assert len(gaps) > 1
+        assert timedelta(milliseconds=50) not in gaps
 
     def test_workstation_lock_unlock_carry_state_session_id(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

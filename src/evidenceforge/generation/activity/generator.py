@@ -170,6 +170,7 @@ from evidenceforge.generation.causal.engine import CausalExpansionEngine, Expans
 from evidenceforge.generation.emitters import WindowsEventEmitter, ZeekEmitter
 from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.generation.state_manager import StateManager
+from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.scenario import System, User
 from evidenceforge.models.state import ActiveSession, RunningProcess
 from evidenceforge.utils.ids import generate_stable_zeek_uid
@@ -14045,16 +14046,39 @@ class ActivityGenerator:
             or not _is_windows_workstation_session(session)
         ):
             return
+        reauth_gap = self._workstation_unlock_reauth_gap(user, system, time, logon_id)
+        reauth_not_before = session.start_time
         if lock_time is not None:
-            min_unlock_time = lock_time + timedelta(seconds=min_unlock_gap_seconds())
-            if time < min_unlock_time:
-                time = min_unlock_time
+            min_reauth_time = lock_time + timedelta(seconds=min_unlock_gap_seconds())
+            reauth_not_before = max(reauth_not_before, min_reauth_time)
             self._last_workstation_lock_time.pop(lock_key, None)
+        timing_graph = TemporalConstraintGraph()
+        timing_graph.add_node(
+            "reauth",
+            time - reauth_gap,
+            not_before=reauth_not_before,
+        )
+        timing_graph.add_node("unlock", time)
+        timing_graph.constrain_after("unlock", "reauth", min_gap=reauth_gap)
+        resolved_times = timing_graph.resolve()
+        reauth_time = resolved_times["reauth"]
+        unlock_time = resolved_times["unlock"]
+
         session = self.state_manager.get_session(logon_id)
         if session is not None:
-            session.last_activity_time = time
+            session.last_activity_time = unlock_time
+        # Unlock is a re-authentication: Windows records the Type 7 4624 before
+        # the workstation-unlocked audit event for the same terminal session.
+        self.generate_logon(
+            user=user,
+            system=system,
+            time=reauth_time,
+            logon_type=7,
+            source_ip="-",
+            logon_id=logon_id,
+        )
         event = SecurityEvent(
-            timestamp=time,
+            timestamp=unlock_time,
             event_type="workstation_unlocked",
             dst_host=self._build_host_context(system),
             auth=AuthContext(
@@ -14065,15 +14089,21 @@ class ActivityGenerator:
             ),
         )
         self.dispatcher.dispatch(event)
-        # Unlock is a re-authentication — emit 4624 type 7 with same session
-        self.generate_logon(
-            user=user,
-            system=system,
-            time=time + timedelta(milliseconds=50),
-            logon_type=7,
-            source_ip="-",
-            logon_id=logon_id,
+
+    @staticmethod
+    def _workstation_unlock_reauth_gap(
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> timedelta:
+        """Return source-native spacing from unlock re-auth to 4801 audit."""
+
+        seed = _stable_seed(
+            "workstation_unlock_reauth_gap:"
+            f"{system.hostname}:{user.username}:{logon_id}:{time.isoformat()}"
         )
+        return timedelta(milliseconds=80 + (seed % 571))
 
     def generate_wfp_connection(
         self,
