@@ -722,7 +722,7 @@ class EcarEmitter(HostMultiplexEmitter):
                         not_before=self._after_process_create_timestamp(event, inbound_proc),
                         drop_late_process_identity=(
                             net.protocol == "tcp"
-                            and net.dst_port == 22
+                            and net.dst_port in {22, 3389}
                             and net.duration is not None
                         ),
                     )
@@ -778,20 +778,17 @@ class EcarEmitter(HostMultiplexEmitter):
         """
 
         not_after = self._flow_not_after(event, seed_parts)
-        if (
-            drop_late_process_identity
-            and not_before is not None
-            and not_before > self._flow_identity_deadline(event)
-        ):
-            return (
-                _SOURCE_TIMING.source_time(
-                    event,
-                    "source.ecar_flow",
-                    seed_parts=seed_parts,
-                    not_after=not_after,
-                ),
-                False,
+        if drop_late_process_identity and not_before is not None:
+            flow_time = _SOURCE_TIMING.source_time(
+                event,
+                "source.ecar_flow",
+                seed_parts=seed_parts,
+                not_after=not_after,
             )
+            if not_before > flow_time:
+                return flow_time, False
+            return flow_time, True
+
         process_identity_safe = not_before is None or not_after is None or not_before <= not_after
         return (
             _SOURCE_TIMING.source_time(

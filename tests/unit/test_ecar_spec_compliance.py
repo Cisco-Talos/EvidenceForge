@@ -976,6 +976,66 @@ class TestChronologicalOutput:
         assert inbound["pid"] == -1
         assert "principal" not in inbound
 
+    def test_rdp_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """RDP FLOW observations should not wait for late TermService PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state_manager = StateManager()
+        state_manager.set_current_time(ts + timedelta(seconds=2))
+        listener_pid = state_manager.create_process(
+            "win01",
+            parent_pid=4,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line=r"C:\Windows\System32\svchost.exe -k termsvcs",
+            username="NETWORK SERVICE",
+            integrity_level="System",
+        )
+        emitter._state_manager = state_manager
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="win01",
+                ip="10.0.0.20",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+                fqdn="win01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=3389,
+                protocol="tcp",
+                duration=60.0,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=-1,
+                responding_pid=listener_pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        inbound = next(row for row in emitted if row["direction"] == "INBOUND")
+        assert inbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert inbound["pid"] == -1
+        assert "principal" not in inbound
+
     def test_outbound_flow_can_render_user_principal(self, emitter, monkeypatch, ts):
         """User-owned FLOW records should be able to carry mixed principal attribution."""
         monkeypatch.setattr(
