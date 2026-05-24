@@ -1,6 +1,6 @@
 # Architecture Reset Implementation Plan
 
-Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit complete; contract-composition/lifecycle follow-up in progress
+Status: accepted implementation direction, SSH/proxy/browser-session/RDP/Windows-remote-admin/file-transfer/Linux-shell-command/process-execution/auth-session/auxiliary-auth-session/network-connection/DHCP-lease/DNS-lookup/scanner-probe/IDS-alert/Kerberos-DC/Windows-audit action-bundle slices complete; final boundary audit complete; source-observation and HTTP/browser contract follow-ups complete
 
 ## Summary
 
@@ -112,6 +112,9 @@ persona browsing and inbound human web-server visitor sessions now share the sam
 bundle for request grouping, transaction depth, page/subresource timing,
 referrer chains, static-asset cache suppression, response MIME/status metadata,
 and direct-vs-explicit-proxy handoff through canonical connection generation.
+The HTTP/browser contract follow-up keeps flow-level transaction counts and
+aggregate byte budgets enabled for browser-style sessions so plaintext
+same-flow subresources reuse one Zeek UID and render later `trans_depth` values.
 Single tool requests, raw storyline HTTP events, and source-local web server
 noise remain direct canonical events unless they model a browser session.
 Public scenario YAML, CLI behavior, output layout, and authoring skills remain
@@ -145,6 +148,10 @@ through `StagedArchiveSmbReadActionBundle`, and modeled SCP receiver-side file
 creation now routes through `ScpReceiverFileActionBundle` after the SSH bundle
 has owned transport/auth/session timing. Public scenario YAML, CLI behavior,
 output layout, and authoring skills remain unchanged for this slice.
+The HTTP/browser contract follow-up also attaches the HTTP response file-transfer
+bundle deterministically for large/download-scale responses after canonical HTTP
+metadata is known, including caller-provided HTTP contexts from browser-session,
+proxy, process-command, or storyline paths.
 
 The Linux shell-command action-bundle extraction moves bash-history command
 execution orchestration into `LinuxShellCommandActionBundle`. The bundle resolves

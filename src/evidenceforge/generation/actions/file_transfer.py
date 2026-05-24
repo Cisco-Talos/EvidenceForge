@@ -51,6 +51,16 @@ from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.ids import generate_zeek_uid
 from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
+_HTTP_HASH_ANALYZER_MIME_TYPES = {
+    "application/octet-stream",
+    "application/vnd.debian.binary-package",
+    "application/vnd.ms-cab-compressed",
+    "application/x-dosexec",
+    "application/x-gzip",
+    "application/x-msdownload",
+    "application/zip",
+}
+
 
 def file_transfer_hashes(seed_material: str, analyzers: list[str]) -> dict[str, str]:
     """Return deterministic Zeek files.log hashes for requested analyzers."""
@@ -124,11 +134,7 @@ class HttpResponseFileTransferActionBundle:
 
         fuid = generate_zeek_uid("F")
         file_mime_type = self._request.response_mime_types[0]
-        analyzers = (
-            ["SHA1"]
-            if file_mime_type in {"application/x-dosexec", "application/octet-stream"}
-            else []
-        )
+        analyzers = ["SHA1"] if file_mime_type in _HTTP_HASH_ANALYZER_MIME_TYPES else []
         file_hashes = file_transfer_hashes(
             f"http:{self._request.host}:{self._request.uri}:"
             f"{self._request.response_body_len}:{fuid}",
@@ -138,7 +144,7 @@ class HttpResponseFileTransferActionBundle:
             fuid=fuid,
             source="HTTP",
             depth=0,
-            analyzers=[],
+            analyzers=analyzers,
             mime_type=file_mime_type,
             duration=self._rng.uniform(0.0, 0.01),
             local_orig=_is_private_ip(self._request.dst_ip),
@@ -158,7 +164,11 @@ class HttpResponseFileTransferActionBundle:
     def _maybe_build_pe_context(self, fuid: str, mime_type: str) -> PeContext | None:
         """Return PE analysis for occasional executable file transfers."""
 
-        if mime_type not in {"application/x-dosexec", "application/octet-stream"}:
+        if mime_type not in {
+            "application/octet-stream",
+            "application/x-dosexec",
+            "application/x-msdownload",
+        }:
             return None
         if self._rng.random() >= 0.1:
             return None

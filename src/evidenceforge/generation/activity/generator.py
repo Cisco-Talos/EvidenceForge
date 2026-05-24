@@ -632,6 +632,80 @@ def _normalize_http_context_for_source_native_response(http: HttpContext) -> Htt
     )
 
 
+_HTTP_FILE_TRANSFER_MIME_TYPES = {
+    "application/octet-stream",
+    "application/pdf",
+    "application/vnd.debian.binary-package",
+    "application/vnd.ms-cab-compressed",
+    "application/x-gzip",
+    "application/x-msdownload",
+    "application/zip",
+}
+_HTTP_FILE_TRANSFER_BODY_THRESHOLD = 64 * 1024
+_HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD = 1_000_000
+
+
+def _http_response_requires_file_transfer(http: HttpContext) -> bool:
+    """Return whether Zeek should always analyze this HTTP response body as a file."""
+
+    if http.response_body_len >= _HTTP_FILE_TRANSFER_LARGE_BODY_THRESHOLD:
+        return True
+    mime_type = http.resp_mime_types[0] if http.resp_mime_types else ""
+    return (
+        http.response_body_len >= _HTTP_FILE_TRANSFER_BODY_THRESHOLD
+        and mime_type in _HTTP_FILE_TRANSFER_MIME_TYPES
+    )
+
+
+def _attach_http_response_file_transfer(
+    event: SecurityEvent,
+    *,
+    dst_ip: str,
+    rng: random.Random,
+    probabilistic_file_analysis: bool,
+) -> None:
+    """Attach source-native Zeek files.log metadata for eligible HTTP responses."""
+
+    if event.network is None or event.http is None or event.file_transfer is not None:
+        return
+    if event.network.service != "http" or event.network.conn_state != "SF":
+        return
+    http = event.http
+    method = (http.method or "GET").upper()
+    if (
+        method in {"CONNECT", "HEAD"}
+        or not (200 <= http.status_code < 300)
+        or http.response_body_len <= 100
+        or not http.resp_mime_types
+    ):
+        return
+
+    required = _http_response_requires_file_transfer(http)
+    if probabilistic_file_analysis:
+        sampled = rng.random() < 0.3
+        should_attach = required or sampled
+    else:
+        should_attach = required
+    if not should_attach:
+        return
+
+    file_result = HttpResponseFileTransferActionBundle(
+        HttpResponseFileTransferRequest(
+            host=http.host,
+            uri=http.uri,
+            dst_ip=dst_ip,
+            response_body_len=http.response_body_len,
+            response_mime_types=list(http.resp_mime_types),
+            timestamp=event.timestamp,
+        ),
+        rng,
+    ).execute()
+    event.file_transfer = file_result.file_transfer
+    event.http.resp_fuids = [event.file_transfer.fuid]
+    event.http.resp_mime_types = [event.file_transfer.mime_type]
+    event.pe = file_result.pe
+
+
 def _http_context_flow_body_len(http: HttpContext, side: str) -> int:
     """Return the HTTP body bytes represented by the parent TCP flow."""
     if side == "request":
@@ -8807,6 +8881,7 @@ class ActivityGenerator:
         dns = request.dns
         ids = request.ids
         http = request.http
+        caller_supplied_http = http is not None
         file_transfer = request.file_transfer
         ocsp = request.ocsp
         proxy = request.proxy
@@ -8831,6 +8906,8 @@ class ActivityGenerator:
             and (orig_bytes or 0) > 0
             and (resp_bytes or 0) > 0
         )
+        if http is not None and proto == "tcp" and conn_state is None:
+            conn_state = "SF"
         process_exe = (process_image or "").rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         is_tcp_probe = process_exe in {"nmap", "nmap.exe"}
         if source_system is None and hasattr(self, "_ip_to_system"):
@@ -10333,28 +10410,13 @@ class ActivityGenerator:
                 ),
                 tags=[],
             )
-            # Probabilistic file transfer for HTTP responses with content
-            if (
-                200 <= status_code < 300
-                and resp_body_len > 100
-                and event.http.resp_mime_types
-                and rng.random() < 0.3
-            ):
-                file_result = HttpResponseFileTransferActionBundle(
-                    HttpResponseFileTransferRequest(
-                        host=host,
-                        uri=uri,
-                        dst_ip=dst_ip,
-                        response_body_len=resp_body_len,
-                        response_mime_types=list(event.http.resp_mime_types),
-                        timestamp=event.timestamp,
-                    ),
-                    rng,
-                ).execute()
-                event.file_transfer = file_result.file_transfer
-                event.http.resp_fuids = [event.file_transfer.fuid]
-                event.http.resp_mime_types = [event.file_transfer.mime_type]
-                event.pe = file_result.pe
+
+        _attach_http_response_file_transfer(
+            event,
+            dst_ip=dst_ip,
+            rng=rng,
+            probabilistic_file_analysis=not caller_supplied_http,
+        )
 
         if (
             event.file_transfer is None

@@ -375,8 +375,12 @@ static-asset cache suppression, response MIME/status metadata, and per-request
 timing. The bundle emits each request through canonical connection generation, so
 the same browser-session path works for direct network evidence and for hosts
 whose traffic is handed to `ProxyTransactionActionBundle` by explicit proxy
-routing. Tool-like HTTP requests and raw storyline HTTP events remain single
-canonical events unless they are intentionally modeled as browser sessions.
+routing. The parent plaintext HTTP transaction carries flow-level transaction
+counts and aggregate body-byte budgets so same-flow subresources reuse one Zeek
+UID and render later `trans_depth` values instead of being collapsed into
+independent single-request flows. Tool-like HTTP requests and raw storyline HTTP
+events remain single canonical events unless they are intentionally modeled as
+browser sessions.
 
 Scanner/probe callers supply one scan/probe intent, and scanner action bundles
 expand it into the relevant probe requests while preserving the canonical
@@ -403,9 +407,12 @@ byte counts, transfer direction, and optional PE analysis from one transfer
 description. `StagedArchiveSmbReadActionBundle` emits the SMB read that moves a
 staged archive before exfiltration, and `ScpReceiverFileActionBundle` emits only
 the receiver-side endpoint file evidence after the SSH bundle owns transport,
-auth, and session timing. This keeps transport/session ownership separate from
-file evidence while preventing each caller from inventing transfer metadata
-independently.
+auth, and session timing. Large or download-scale HTTP responses attach the HTTP
+file-transfer bundle deterministically after canonical HTTP metadata is known,
+including caller-provided HTTP contexts from browser-session, proxy,
+process-command, or storyline paths. This keeps transport/session ownership
+separate from file evidence while preventing each caller from inventing transfer
+metadata independently.
 
 Linux shell-command callers supply one interactive shell command intent.
 `LinuxShellCommandActionBundle` owns the execution sequence around bash history:

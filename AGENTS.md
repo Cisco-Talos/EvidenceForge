@@ -384,6 +384,10 @@ Browser/proxy HTTP planning owns source-native web semantics before render:
 HTTPS-first domains should redirect rather than serve plaintext HTTP success
 pages, non-browser service endpoints should keep compatible User-Agents, and
 installer/download paths should carry binary MIME and body-size semantics.
+The first request on a persistent plaintext HTTP flow must carry flow-level
+transaction count and body-byte budgets so later same-flow requests can reuse the
+Zeek UID and render `trans_depth > 1`; do not disable that accounting for
+browser-style page/subresource sessions.
 
 For scanner/probe activity, typed `port_scan` and `web_scan` storyline events,
 scheduled scanner-overlap suspicious noise, and nmap process side effects should
@@ -408,7 +412,10 @@ staged-archive SMB reads, and SCP receiver-side file creation should share the
 bundle helpers instead of independently inventing FUIDs, hashes, filenames,
 transfer direction, or target process ownership. SSH/RDP/proxy bundles still own
 their transport/session semantics; file-transfer bundles own the transfer/file
-evidence layered on top.
+evidence layered on top. Large or download-scale HTTP responses with
+source-native MIME/body metadata should attach the HTTP file-transfer bundle
+deterministically, even when the `HttpContext` was supplied by a browser-session,
+proxy, process-command, or storyline path.
 
 For Linux shell command execution, route bash-history emission and correlated
 foreground process telemetry through the Linux shell-command action bundle. The

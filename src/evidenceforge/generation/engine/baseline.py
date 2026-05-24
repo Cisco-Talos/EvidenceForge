@@ -7021,7 +7021,6 @@ class BaselineMixin:
                         page_load_budget=top_level_budget - top_level_emitted,
                         request_body_floor=200,
                         secondary_duration_min=0.03,
-                        include_flow_context=False,
                         set_current_time=False,
                         source="baseline_web_server_access",
                     ),
