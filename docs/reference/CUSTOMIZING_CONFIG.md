@@ -164,7 +164,7 @@ Configuration files are interconnected. When you add an entry to one file, other
 | Baseline auth noise | `auth_noise.yaml` (stale scheduled-credential account pools, host counts, recurrence intervals, jitter, skips, and backoff) |
 | Endpoint background noise | `endpoint_noise.yaml` (Windows scheduled-process trigger windows, host drift, skip probability, and DHCP registry emission policy) |
 | Host/persona/role volume realism | `host_activity_profiles.yaml` (coarse rate-family multipliers, firewall deny burst shaping, and data-driven artifact variants) |
-| Observation/source coverage | `observation_profiles.yaml` (named source-level missingness/delay profiles selected by scenario `observation_profile`; default `complete` keeps perfect coverage) |
+| Observation/source coverage | `observation_profiles.yaml` (named source-level missingness/delay profiles selected by scenario `observation_profile`; default `complete` keeps perfect coverage; non-complete decisions are coherent per source-local process, session, and same-UID network group) |
 | Causal/source-native timing | `timing_profiles.yaml` (`relationships` for causal prerequisites, source latency, teardown margins, Zeek analyzer offsets and TLS duration floors, plus Windows/Sysmon collision spacing) |
 | Public NTP fallback servers and DNS tunnel timing | `network_params.yaml` (`public_ntp_servers`, `dns_tunnel_rtt`; scenario-defined internal/domain NTP servers still take precedence) |
 | A new application | `spawn_rules.yaml` (process tree), `process_network_map.yaml` (if it generates traffic) |

@@ -139,6 +139,18 @@ it, and independent events may still share source timestamps. Across different
 source families there is no global total order; each source is responsible for
 preserving its own causal order with stable, explainable offsets.
 
+`ObservationPolicy` (`src/evidenceforge/events/observation.py`) is the
+source-coverage contract. It applies named `observation_profile`s after
+canonical state is updated and before a matching emitter renders. Profiles may
+drop or delay source evidence, but decisions are coherent within source-local
+lifecycle groups: endpoint process create/dependent/terminate rows for one
+process, logon/logoff rows for one session, and network/protocol companions for
+one Zeek UID/tuple share one source-local observation decision. This models
+partial collection without leaving a single source with impossible orphaned
+process, session, or flow fragments. The default `complete` profile preserves
+full coverage; non-default profiles make observation status visible through
+`OBSERVATION_MANIFEST.json` and the ground-truth source evidence table.
+
 The temporal constraint graph
 (`src/evidenceforge/generation/timing/constraint_graph.py`) is the internal
 foundation for multi-event timing. It resolves preferred timestamps, hard

@@ -444,7 +444,7 @@ profiles:
         delay_ms: {min_ms: 5, max_ms: 250}
 ```
 
-Profiles are intentionally source-level, not event-type matrices. Scenario authors select a named profile; code owns safe source-native application semantics so new event types inherit their source-family default. Non-complete profiles may make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but must not create contradictory identifiers or field values across sources.
+Profiles are intentionally source-level, not event-type matrices. Scenario authors select a named profile; code owns safe source-native application semantics so new event types inherit their source-family default. Non-complete profiles may make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_window`, but must not create contradictory identifiers or field values across sources. The dispatcher shares source-local decisions for process lifecycles, session lifecycles, and same-UID network companions so partial collection does not orphan one source's own process, session, or flow evidence.
 
 Generation writes `OBSERVATION_MANIFEST.json` beside `GROUND_TRUTH.md`. `eforge eval` uses this
 sidecar to adjust only coverage-style causality scoring for expected missing evidence under

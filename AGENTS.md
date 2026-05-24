@@ -263,6 +263,16 @@ line, or Windows event may have validation/rendering contracts, but it must not
 generate sibling evidence. Model those siblings as canonical events or contexts
 owned by the appropriate bundle before rendering.
 
+Source-observation profiles own source-level gaps and collection delay after
+canonical events are built, but before rendering. Observation decisions must be
+coherent for source-local lifecycle groups: process create/dependent/terminate
+rows for one process, logon/logoff rows for one session, and network/protocol
+companions for one UID/tuple should share the same source-local drop/delay
+decision. Do not add emitter-local missingness or one-off timestamp delays that
+can orphan a same-source lifecycle. Use observation profiles for coverage shape,
+`SourceTimingPlanner` for source-native timestamp relationships, and bundles for
+canonical lifecycle ownership.
+
 For SSH specifically, modeled sessions from typed storyline events, baseline
 remote-admin noise, and `scp` transfers to modeled Linux receivers should route
 through the SSH action bundle. The SSH bundle owns SSH auth/session/PAM/logind

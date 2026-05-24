@@ -422,6 +422,9 @@ they can make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_w
 must not create contradictory users, PIDs, ports, hashes, UIDs, or session identifiers across
 sources. `GROUND_TRUTH.md` records source evidence status for instructors, and
 `OBSERVATION_MANIFEST.json` records the same source-observation contract for automated eval.
+Observation decisions are coherent inside source-local lifecycle groups, so a single source does
+not drop or delay process create/dependent/terminate rows, logon/logoff rows, or same-UID network
+companions independently in a way that would orphan its own evidence.
 
 ## Storyline
 
