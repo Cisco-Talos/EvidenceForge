@@ -556,6 +556,42 @@ class TestTimingPlausibility:
         result = scorer._score_rate_plausibility(user_events, records)
         assert result.score < 100.0
 
+    def test_lifecycle_teardown_fanout_not_user_action_rate(self):
+        """Many teardown records in a small window should not count as user actions."""
+        timestamps = [T0 + timedelta(milliseconds=i * 100) for i in range(25)]
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "jsmith", "EventID": 4689},
+                    ts=t,
+                )
+                for t in timestamps
+            ]
+            + [
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "jsmith", "EventID": 4634},
+                    ts=T0 + timedelta(seconds=3),
+                )
+            ],
+            "ecar": [
+                _record(
+                    "ecar",
+                    {
+                        "principal": "jsmith",
+                        "object": "USER_SESSION",
+                        "action": "LOGOUT",
+                    },
+                    ts=T0 + timedelta(seconds=3, milliseconds=200),
+                )
+            ],
+        }
+        scorer = TemporalRealismScorer()
+        user_events = _group_by_user(records)
+        result = scorer._score_rate_plausibility(user_events, records)
+        assert result.score == 100.0
+
 
 class TestEndToEnd:
     def test_returns_full_dimension_score(self):

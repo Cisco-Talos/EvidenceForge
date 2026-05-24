@@ -60,6 +60,27 @@ from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 logger = logging.getLogger(__name__)
 
 _VOLUME_TARGETS = {"low": 200, "medium": 2000, "high": 5000}
+_RATE_PLAUSIBILITY_WINDOWS_EVENT_IDS = frozenset(
+    {
+        4624,  # successful logon
+        4625,  # failed logon
+        4648,  # explicit credentials
+        4688,  # process creation
+        4720,  # account created
+        4723,  # password change
+        4724,  # password reset
+        4726,  # account deleted
+        4728,  # group membership added
+        4729,  # group membership removed
+        4732,  # local group membership added
+        4733,  # local group membership removed
+        4738,  # account changed
+        4756,  # universal group membership added
+        4757,  # universal group membership removed
+        4800,  # workstation locked
+        4801,  # workstation unlocked
+    }
+)
 
 
 class TimingScorer(DimensionScorer):
@@ -449,6 +470,9 @@ class TimingScorer(DimensionScorer):
         user_events: dict[str, list[datetime]],
         records: dict[str, list[ParsedRecord]] | None = None,
     ) -> SubScore:
+        if records is not None:
+            user_events = _group_rate_plausibility_user_events(records)
+
         total_checks = 0
         plausible = 0
         failures: list[str] = []
@@ -523,6 +547,55 @@ def _group_by_user(records: dict[str, list[ParsedRecord]]) -> dict[str, list[dat
                     ts = ts.replace(tzinfo=UTC)
                 user_events[user].append(ts)
     return dict(user_events)
+
+
+def _group_rate_plausibility_user_events(
+    records: dict[str, list[ParsedRecord]],
+) -> dict[str, list[datetime]]:
+    user_events: dict[str, list[datetime]] = defaultdict(list)
+    for _fmt, record_list in records.items():
+        for record in record_list:
+            if record.timestamp is None or not _is_rate_plausibility_user_event(record):
+                continue
+            user = _extract_username(record)
+            if user:
+                ts = record.timestamp
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=UTC)
+                user_events[user].append(ts)
+    return dict(user_events)
+
+
+def _is_rate_plausibility_user_event(record: ParsedRecord) -> bool:
+    fmt = record.source_format
+    fields = record.fields
+
+    if fmt == "windows_event_security":
+        event_id = fields.get("EventID")
+        if event_id is None:
+            return True
+        return event_id in _RATE_PLAUSIBILITY_WINDOWS_EVENT_IDS
+
+    if fmt == "ecar":
+        obj = str(fields.get("object") or "").upper()
+        action = str(fields.get("action") or "").upper()
+        if obj == "USER_SESSION":
+            return action in {"LOGIN", "FAILED_LOGIN"}
+        if obj == "PROCESS":
+            return action not in {"TERMINATE", "EXIT"}
+        return False
+
+    if fmt == "syslog":
+        message = str(fields.get("message") or "").lower()
+        lifecycle_fragments = (
+            "session closed",
+            "session close",
+            "logged out",
+            "connection closed",
+        )
+        return not any(fragment in message for fragment in lifecycle_fragments)
+
+    return fmt in {"bash_history", "web_access"}
 
 
 def _extract_system_service(record: ParsedRecord) -> str:
