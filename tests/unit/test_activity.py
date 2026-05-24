@@ -1955,6 +1955,105 @@ class TestActivityGenerator:
         assert logon_event.auth.source_ip == source_system.ip
         assert logon_event.src_host.hostname == source_system.hostname
 
+    def test_generate_rdp_session_replaces_linux_source_with_windows_client(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP bundles should not model Linux hosts as mstsc-capable Windows clients."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_source = System(
+            hostname="SRV-LIN-01",
+            ip="10.0.0.20",
+            os="Ubuntu Server 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        windows_source = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            linux_source.ip: linux_source,
+            windows_source.ip: windows_source,
+        }
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_rdp_session(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=linux_source.ip,
+        )
+
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 10
+        )
+
+        assert network_event.network.src_ip == windows_source.ip
+        assert logon_event.auth.source_ip == windows_source.ip
+        assert logon_event.src_host.hostname == windows_source.hostname
+
+    def test_direct_rdp_source_factory_materializes_mstsc_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Direct Type 10 adapters should route source process ownership through RDP."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_source = System(
+            hostname="SRV-LIN-01",
+            ip="10.0.0.20",
+            os="Ubuntu Server 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        windows_source = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            linux_source.ip: linux_source,
+            windows_source.ip: windows_source,
+        }
+        chosen = activity_gen._resolve_direct_rdp_source_system(
+            test_user,
+            test_system,
+            linux_source.ip,
+            random.Random(7),
+        )
+        assert chosen == windows_source
+
+        factory = activity_gen._direct_rdp_source_process_factory(random.Random(11))
+        pid = factory(
+            user=test_user,
+            source_system=windows_source,
+            target_system=test_system,
+            time=timestamp,
+        )
+
+        process_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("mstsc.exe")
+        )
+        assert pid == process_event.process.pid
+        assert process_event.src_host.hostname == windows_source.hostname
+        assert process_event.process.command_line == f"mstsc.exe /v:{test_system.hostname}"
+
     def test_generate_rdp_session_updates_preallocated_session_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):

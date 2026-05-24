@@ -12773,11 +12773,31 @@ class ActivityGenerator:
                 and source_ip != system.ip
             ):
                 rdp_time = time - timedelta(milliseconds=_get_rng().randint(80, 400))
+                rdp_source_system = self._resolve_direct_rdp_source_system(
+                    user,
+                    system,
+                    source_ip,
+                    _get_rng(),
+                )
+                if rdp_source_system is not None:
+                    source_ip = rdp_source_system.ip
+                source_process_time = (
+                    rdp_time - timedelta(milliseconds=_get_rng().randint(1800, 3200))
+                    if rdp_source_system is not None
+                    else None
+                )
                 self.generate_rdp_session(
                     user=user,
                     target_system=system,
                     time=rdp_time,
                     source_ip=source_ip,
+                    source_system=rdp_source_system,
+                    source_process_time=source_process_time,
+                    source_process_factory=(
+                        self._direct_rdp_source_process_factory(_get_rng())
+                        if rdp_source_system is not None
+                        else None
+                    ),
                 )
                 return
 
@@ -14018,6 +14038,99 @@ class ActivityGenerator:
             source_process_factory=source_process_factory,
         )
         return bundle.execute()
+
+    def _resolve_direct_rdp_source_system(
+        self,
+        user: User,
+        target_system: System,
+        source_ip: str,
+        rng: random.Random,
+    ) -> System | None:
+        """Return a modeled Windows source host for direct Type 10 compatibility calls."""
+
+        source_system = self._ip_to_system.get(source_ip)
+        if (
+            source_system is not None
+            and source_system.ip != target_system.ip
+            and _get_os_category(source_system.os) == "windows"
+        ):
+            return source_system
+
+        candidates = sorted(
+            {
+                system.hostname: system
+                for system in self._ip_to_system.values()
+                if system.ip != target_system.ip and _get_os_category(system.os) == "windows"
+            }.values(),
+            key=lambda system: system.hostname,
+        )
+        workstations = [
+            system
+            for system in candidates
+            if (system.type or "workstation").lower() == "workstation"
+        ]
+        preferred = [
+            system for system in workstations or candidates if system.assigned_user == user.username
+        ]
+        return rng.choice(preferred or workstations or candidates) if candidates else None
+
+    def _direct_rdp_source_process_factory(
+        self,
+        rng: random.Random,
+    ) -> RdpSourceProcessFactory:
+        """Return a source-process factory for direct RDP compatibility generation."""
+
+        def _factory(
+            *,
+            user: User,
+            source_system: System,
+            target_system: System,
+            time: datetime,
+        ) -> int:
+            source_session = self._active_user_interactive_windows_session(
+                user,
+                source_system,
+                time,
+            )
+            if source_session is None:
+                logon_time = time - timedelta(seconds=rng.uniform(30.0, 180.0))
+                logon_id = self.generate_logon(
+                    user,
+                    source_system,
+                    logon_time,
+                    logon_type=2,
+                )
+                source_session = self.state_manager.get_session(logon_id)
+            if source_session is None:
+                return -1
+
+            parent_pid = source_session.explorer_pid or source_session.process_tree_root
+            if parent_pid is None:
+                sys_pids = getattr(self, "_system_pids", {}).get(source_system.hostname, {})
+                parent_pid = sys_pids.get(
+                    "explorer",
+                    sys_pids.get("winlogon", sys_pids.get("services", 4)),
+                )
+
+            self.state_manager.set_current_time(time)
+            pid = self.generate_process(
+                user=user,
+                system=source_system,
+                time=time,
+                logon_id=source_session.logon_id,
+                process_name=r"C:\Windows\System32\mstsc.exe",
+                command_line=f"mstsc.exe /v:{target_system.hostname}",
+                parent_pid=parent_pid,
+            )
+            self._record_user_process(
+                source_system,
+                user,
+                pid,
+                r"C:\Windows\System32\mstsc.exe",
+            )
+            return pid
+
+        return _factory
 
     def _coerce_windows_rdp_user_from_existing_session(
         self,

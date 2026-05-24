@@ -271,8 +271,27 @@ class RdpSessionActionBundle:
         source_ip = self._request.source_ip
         source_system = self._request.source_system
         source_pid = self._request.source_pid
+        if source_system is None:
+            source_system = self._executor._ip_to_system.get(source_ip)
+        if (
+            source_system is not None
+            and _get_os_category(source_system.os) != "windows"
+            and _get_os_category(self._request.target_system.os) == "windows"
+        ):
+            replacement = self._choose_windows_source(rng, user)
+            if replacement is not None:
+                return replacement.ip, replacement, -1
+            return source_ip, None, -1
         if source_ip != self._request.target_system.ip:
             return source_ip, source_system, source_pid
+
+        replacement = self._choose_windows_source(rng, user)
+        if replacement is not None:
+            return replacement.ip, replacement, -1
+        return source_ip, None, -1
+
+    def _choose_windows_source(self, rng: random.Random, user: User) -> System | None:
+        """Choose a modeled Windows RDP client host when the request source is unusable."""
 
         candidates = sorted(
             {
@@ -280,18 +299,20 @@ class RdpSessionActionBundle:
                 for candidate in getattr(self._executor, "_ip_to_system", {}).values()
                 if candidate.ip != self._request.target_system.ip
                 and _get_os_category(candidate.os) == "windows"
-                and (candidate.type or "workstation").lower() == "workstation"
             }.values(),
             key=lambda candidate: candidate.hostname,
         )
-        preferred = [
-            candidate for candidate in candidates if candidate.assigned_user == user.username
+        workstations = [
+            candidate
+            for candidate in candidates
+            if (candidate.type or "workstation").lower() == "workstation"
         ]
-        if preferred or candidates:
-            source_system = rng.choice(preferred or candidates)
-            source_ip = source_system.ip
-            source_pid = -1
-        return source_ip, source_system, source_pid
+        preferred = [
+            candidate
+            for candidate in workstations or candidates
+            if candidate.assigned_user == user.username
+        ]
+        return rng.choice(preferred or workstations or candidates) if candidates else None
 
     def _materialize_source_process(
         self,
