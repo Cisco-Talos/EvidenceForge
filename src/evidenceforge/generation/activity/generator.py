@@ -477,12 +477,25 @@ def _is_tool_http_user_agent(user_agent: str) -> bool:
     )
 
 
-def _source_native_http_referrer(user_agent: str, referrer: str) -> str:
+def _source_native_http_referrer(
+    user_agent: str,
+    referrer: str,
+    *,
+    request_scheme: str | None = None,
+    request_port: int | None = None,
+) -> str:
     """Return a referrer that agrees with the HTTP client family."""
     if not referrer:
         return ""
     if _is_tool_http_user_agent(user_agent):
         return ""
+    target_is_plaintext = request_scheme == "http" or request_port == 80
+    if target_is_plaintext:
+        try:
+            if urlsplit(referrer).scheme == "https":
+                return ""
+        except ValueError:
+            return ""
     return referrer
 
 
@@ -4533,7 +4546,12 @@ class ActivityGenerator:
             hostname=proxy_hostname,
             domain_tags=domain_tags,
         )
-        proxy_referrer = _source_native_http_referrer(user_agent, proxy_referrer)
+        proxy_referrer = _source_native_http_referrer(
+            user_agent,
+            proxy_referrer,
+            request_scheme="https" if dst_port == 443 or service == "ssl" else "http",
+            request_port=dst_port,
+        )
 
         proxy_cacheable = _proxy_request_allows_cache_hit(
             method=proxy_method,
@@ -10337,7 +10355,12 @@ class ActivityGenerator:
                     hostname=proxy_hostname,
                     domain_tags=domain_tags,
                 )
-                proxy_referrer = _source_native_http_referrer(user_agent, proxy_referrer)
+                proxy_referrer = _source_native_http_referrer(
+                    user_agent,
+                    proxy_referrer,
+                    request_scheme="https" if dst_port == 443 else "http",
+                    request_port=dst_port,
+                )
                 cache_roll = rng.random()
                 proxy_cacheable = _proxy_request_allows_cache_hit(
                     method=proxy_method,
@@ -10517,7 +10540,12 @@ class ActivityGenerator:
                     hostname=web_host,
                     domain_tags=web_domain_tags,
                 )
-            redirect_status = plaintext_http_redirect_status(web_host, port=dst_port, path=uri)
+            redirect_status = plaintext_http_redirect_status(
+                web_host,
+                port=dst_port,
+                path=uri,
+                dst_ip=dst_ip,
+            )
             if redirect_status is not None:
                 status_code = redirect_status
                 status_msg = http_status_message(status_code)
@@ -10554,7 +10582,12 @@ class ActivityGenerator:
                 if http_referrer_policy == "none"
                 else pick_referrer(rng, host, context="general", port=dst_port)
             )
-            _http_referer = _source_native_http_referrer(ua, _http_referer)
+            _http_referer = _source_native_http_referrer(
+                ua,
+                _http_referer,
+                request_scheme="https" if dst_port == 443 else "http",
+                request_port=dst_port,
+            )
             event.http = HttpContext(
                 method=http_method,
                 host=host,

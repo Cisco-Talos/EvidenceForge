@@ -335,6 +335,26 @@ class TestProcessHttpCommandCorrelation:
             "https://www.google.com/search?q=www+office+com",
         ).startswith("https://www.google.com/")
 
+    def test_plaintext_http_referrer_drops_https_downgrade(self):
+        """Browser HTTP requests should follow no-referrer-when-downgrade defaults."""
+        assert (
+            _source_native_http_referrer(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "https://www.bing.com/search?q=www+office+com",
+                request_scheme="http",
+                request_port=80,
+            )
+            == ""
+        )
+        assert _source_native_http_referrer(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "http://www.office.com/",
+            request_scheme="http",
+            request_port=80,
+        ).startswith("http://www.office.com/")
+
     def test_network_effect_context_keeps_rendered_cli_http_command(self):
         """A stale process-state lookup should not retarget a rendered curl command."""
         process_name, command_line = _network_effect_context_for_process(

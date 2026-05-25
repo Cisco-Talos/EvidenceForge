@@ -236,6 +236,13 @@ def _make_referrer(hostname: str, path: str, port: int = 443) -> str:
     return f"{scheme}://{hostname}{path}"
 
 
+def _source_native_browser_referrer(referrer: str, *, port: int) -> str:
+    """Apply browser default referrer policy for plaintext downgrades."""
+    if port == 80 and referrer.startswith("https://"):
+        return ""
+    return referrer
+
+
 def _pick_subresources(
     rng: random.Random,
     page: PageDef,
@@ -382,7 +389,7 @@ def generate_browsing_session(
                 path=page.path,
                 method="GET",
                 content_type=page_content_type,
-                referrer=previous_page_url,
+                referrer=_source_native_browser_referrer(previous_page_url, port=port),
                 trans_depth=1,
                 is_page_load=True,
                 response_body_len=_response_size_for_status_code(
@@ -427,7 +434,7 @@ def generate_browsing_session(
                     path=sub.path,
                     method=sub.method,
                     content_type=sub_content_type,
-                    referrer=page_url,
+                    referrer=_source_native_browser_referrer(page_url, port=port),
                     trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
                     is_page_load=False,
                     response_body_len=_response_size_for_status_code(

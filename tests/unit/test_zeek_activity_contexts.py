@@ -270,10 +270,9 @@ def test_direct_http_https_first_domain_redirects_instead_of_success_page(activi
     assert 120 <= http_event.http.response_body_len <= 480
 
 
-def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_gen, monkeypatch):
-    """HTTP download semantics should not inherit tiny generic flow byte counts."""
+def test_direct_http_public_browser_domain_redirects_by_default(activity_gen):
+    """Public browser-like domains should redirect on port 80 without exact policy entries."""
     gen, events = activity_gen
-    monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(0))
     source = System(
         hostname="WKS-01",
         ip="10.0.10.50",
@@ -284,7 +283,39 @@ def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_
 
     gen.generate_connection(
         src_ip=source.ip,
-        dst_ip="104.21.20.58",
+        dst_ip="13.107.42.14",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=20_000,
+        source_system=source,
+        hostname="www.office.com",
+        conn_state="SF",
+    )
+
+    http_event = next(event for event in events if event.http is not None)
+    assert http_event.http.status_code in {301, 302}
+
+
+def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_gen, monkeypatch):
+    """HTTP download semantics should not inherit tiny generic flow byte counts."""
+    gen, events = activity_gen
+    monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(0))
+    monkeypatch.setattr(generator_module, "_get_http_status", lambda _dst_ip, _uri: (200, "OK"))
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="104.21.73.124",
         time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
         dst_port=80,
         proto="tcp",
@@ -293,7 +324,7 @@ def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_
         orig_bytes=500,
         resp_bytes=32_000,
         source_system=source,
-        hostname="dbeaver.io",
+        hostname="update.dbeaver.io",
         conn_state="SF",
     )
 

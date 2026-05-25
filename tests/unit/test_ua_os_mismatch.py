@@ -162,6 +162,51 @@ class TestProxyUriOsFiltering:
             is None
         )
 
+    def test_public_browser_domains_default_to_plaintext_redirects(self):
+        """Public browser-like domains should not need per-domain redirect entries."""
+        from evidenceforge.generation.activity.proxy_uri import plaintext_http_redirect_status
+
+        assert plaintext_http_redirect_status(
+            "www.office.com",
+            port=80,
+            path="/login",
+        ) in {301, 302}
+        assert plaintext_http_redirect_status(
+            "dbeaver.io",
+            port=80,
+            path="/files/dbeaver-ce-latest-x86_64-setup.exe",
+        ) in {301, 302}
+
+    def test_plaintext_redirect_default_excludes_internal_and_service_endpoints(self):
+        """Internal hosts and source-native service endpoints keep plaintext behavior."""
+        from evidenceforge.generation.activity.proxy_uri import plaintext_http_redirect_status
+
+        assert (
+            plaintext_http_redirect_status(
+                "app01.corp.com",
+                port=80,
+                path="/",
+            )
+            is None
+        )
+        assert (
+            plaintext_http_redirect_status(
+                "ocsp.digicert.com",
+                port=80,
+                path="/",
+            )
+            is None
+        )
+        assert (
+            plaintext_http_redirect_status(
+                "portal.example.com",
+                port=80,
+                path="/favicon.ico",
+                dst_ip="10.0.10.5",
+            )
+            is None
+        )
+
     def test_dbeaver_installer_template_uses_binary_content_type(self):
         """Installer URI templates should not inherit text/html body-size semantics."""
         from evidenceforge.generation.activity.proxy_uri import pick_proxy_uri

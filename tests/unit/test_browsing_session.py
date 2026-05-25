@@ -62,6 +62,17 @@ class TestBrowsingSessionBasics:
         assert requests[0].status_code in {301, 302}
         assert 120 <= requests[0].response_body_len <= 480
 
+    def test_plaintext_http_landing_pages_do_not_send_https_referrers(self):
+        """Browser sessions should not send HTTPS referrers to plaintext HTTP pages."""
+        for seed in range(200):
+            requests = generate_browsing_session(
+                random.Random(seed),
+                "www.office.com",
+                ["web", "saas"],
+                port=80,
+            )
+            assert not any(req.referrer.startswith("https://") for req in requests)
+
 
 class TestBrowserSessionActionBundle:
     """Action-bundle expansion behavior."""
@@ -165,6 +176,49 @@ class TestBrowserSessionActionBundle:
         assert emitted[0]["resp_bytes"] >= 4096 + 2048
         assert emitted[1]["http"].trans_depth == 2
         assert emitted[1]["http"].referrer == "https://www.google.com/"
+
+    def test_plaintext_http_bundle_drops_https_subresource_referrer(self, monkeypatch):
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/assets/app.css",
+                    method="GET",
+                    content_type="text/css",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=1,
+                    is_page_load=False,
+                    response_body_len=2048,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+            ],
+        )
+        emitted = []
+        executor = MagicMock()
+        executor.state_manager = MagicMock()
+        executor.generate_connection.side_effect = lambda **kwargs: emitted.append(kwargs) or "C1"
+
+        BrowserSessionActionBundle(
+            request=BrowserSessionRequest(
+                src_ip="10.0.10.50",
+                dst_ip="13.107.42.14",
+                time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                hostname="www.office.com",
+                dst_port=80,
+                service="http",
+                source_system=SimpleNamespace(hostname="WKS-01"),
+                domain_tags=("web", "saas"),
+                user_agent="Mozilla/5.0",
+            ),
+            executor=executor,
+            rng=random.Random(11),
+        ).execute()
+
+        assert emitted[0]["http"].referrer == ""
 
 
 class TestReferrerChains:

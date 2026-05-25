@@ -377,10 +377,13 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 **Status and byte semantics:** For explicit proxy mode, client-side Zeek HTTP records describe the client-to-proxy exchange. Plain HTTP denials therefore show the proxy's status code and proxy response size, not the origin's status/body. For intercepted HTTPS, the CONNECT setup status is tracked separately from the inspected request status, so a successful tunnel setup can coexist with a denied inspected GET.
 
 **Source-native HTTP semantics:** Domain/path planning is resolved before proxy
-and Zeek HTTP rows are rendered. HTTPS-first identity/social domains redirect
-plaintext port-80 requests instead of serving login pages, service/update
-endpoints keep source-compatible User-Agents, and executable/download paths use
-binary content types with download-scale body sizes.
+and Zeek HTTP rows are rendered. Public browser-like domains default to
+HTTPS-first behavior, so plaintext port-80 requests redirect instead of serving
+login pages; internal hosts and service/update endpoints can keep plaintext
+source-native behavior. Browser requests also follow no-referrer-when-downgrade
+semantics, service/update endpoints keep source-compatible User-Agents, and
+executable/download paths use binary content types with download-scale body
+sizes.
 
 **Session depth:** Persona HTTP traffic and inbound `web_server` human visitors generate multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, fonts, and same-origin API calls, producing realistic request clusters in proxy and web access logs. Persona browsing depth is controlled by `browsing_intensity`; inbound web visitor classes, tool/API requests, and User-Agent pools are controlled by `web_session_profiles.yaml`.
 

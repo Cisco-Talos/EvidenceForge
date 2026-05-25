@@ -12,6 +12,8 @@
 #
 # Full schema: see commands/eforge/references/config-proxy-uri-templates.md
 
+default_http_policy: https_redirect_public
+
 domains:
   # --- Windows Update / Delivery Optimization ---
   download.windowsupdate.com:

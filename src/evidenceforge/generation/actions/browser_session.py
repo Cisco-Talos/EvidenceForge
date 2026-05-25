@@ -28,6 +28,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from evidenceforge.events.contexts import HttpContext
 from evidenceforge.generation.actions.base import ActionAnchor
@@ -376,6 +377,13 @@ class BrowserSessionActionBundle:
         """Build source-native HTTP context for a browser request."""
 
         request = self.request
+        referrer = req.referrer
+        if request.dst_port == 80:
+            try:
+                if urlsplit(referrer).scheme == "https":
+                    referrer = ""
+            except ValueError:
+                referrer = ""
         return HttpContext(
             method=req.method,
             host=req_hostname,
@@ -399,7 +407,7 @@ class BrowserSessionActionBundle:
             ),
             status_code=req.status_code,
             status_msg=http_status_message(req.status_code),
-            referrer=req.referrer,
+            referrer=referrer,
             trans_depth=trans_depth,
             resp_mime_types=response_mime_types_for_status(
                 req.status_code,
