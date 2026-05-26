@@ -1655,6 +1655,17 @@ class WindowsEventEmitter(LogEmitter):
         for rowid, payload in cursor:
             yield int(rowid), _spool_decode(payload)
 
+    def _iter_spooled_kerberos_rows_unlocked(self):
+        """Yield only Security Kerberos (4768/4769) rows from the spool."""
+        if self._spool_conn is None:
+            return
+        cursor = self._spool_conn.execute(
+            "SELECT rowid, payload FROM events "
+            "WHERE CAST(json_extract(payload, '$.fields.EventID.value') AS INTEGER) IN (4768, 4769)"
+        )
+        for rowid, payload in cursor:
+            yield int(rowid), _spool_decode(payload)
+
     def _update_spooled_events_unlocked(self, updates: list[tuple[str, str, int]]) -> None:
         """Persist encoded payload and sort-key updates for spooled Windows events."""
         if not updates or self._spool_conn is None:
@@ -1754,7 +1765,9 @@ class WindowsEventEmitter(LogEmitter):
 
     def _shift_spooled_kerberos_tgts_before_service_tickets_unlocked(self) -> None:
         """Prevent spooled Security 4769 rows from preceding their visible 4768 rows."""
-        rows = list(self._iter_spooled_rows_unlocked())
+        rows = list(self._iter_spooled_kerberos_rows_unlocked())
+        if not rows:
+            return
         moved = self._shift_kerberos_tgts_before_service_ticket_rows(rows)
         if not moved:
             return
