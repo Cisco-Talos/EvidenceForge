@@ -36,7 +36,7 @@ scenarios/<slug>/
       ssl.json                             # Zeek ssl.log
       files.json                           # Zeek files.log
       ...                                  # Other Zeek logs
-    ecar.json                              # eCAR EDR/XDR telemetry (NDJSON)
+    ecar.json                              # Simulated EDR telemetry in eCAR format (NDJSON)
     snort_alert.log                        # Snort/Suricata IDS alerts
     <fw-hostname>/                         # Per-firewall directories
       cisco_asa.log                        # Cisco ASA firewall syslog (default target)
@@ -120,6 +120,10 @@ Windows Security events without requiring binary EVTX files.
 - Account management events (4720-4738) and group membership events (4728-4757) require storyline triggers; they are not generated in baseline activity
 - SubjectDomainName correctly uses "NT AUTHORITY" for SYSTEM, NETWORK SERVICE, and LOCAL SERVICE accounts
 - 4648 (explicit credentials) fires in baseline for scheduled task execution with randomized counts (2-5/hour) plus storyline lateral movement
+- Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence route through the internal auth/session bundles so Windows Security, Linux syslog, EDR/eCAR, DC validation, lock state, and companion network evidence share session IDs, source endpoints, and lifecycle ordering.
+- DC-side Kerberos 4768/4769/4770/4771 evidence routes through the internal Kerberos/DC bundle so ticket timing, source IP/port, TGT cache behavior, service-principal identity, and companion KDC network evidence stay aligned.
+- Windows audit/account-management events route through the internal Windows audit bundle so subject LogonID/session ownership, target account/group identity, scheduled-task XML, log-clear subject identity, and Sysmon/eCAR thread/process-access context stay aligned.
+- Canonical connections route through the internal network-connection bundle so Zeek, EDR/eCAR FLOW, proxy/firewall/IDS companions, DNS/TLS/HTTP/file metadata, endpoint process ownership, and Windows WFP rows share one tuple, source port, hostname, UID/state, and visibility decision.
 - Domain controllers receive admin-only baseline activity: type 3 logons from RSAT sessions (mmc.exe runs on the admin workstation, not the DC), type 10 RDP for direct admin access, and no user desktop sessions (no browsers, Office, or user profile artifacts)
 - RSAT sessions produce correlated cross-host events: mmc.exe + DLL loads on the workstation, LDAP/RPC connections from workstation to DC, and a type 3 logon on the DC — all within seconds
 
@@ -149,6 +153,7 @@ only and `eforge eval` maps both variants back to the canonical
 - ProcessGuid is deterministic from (hostname, PID, process creation time), so Events 1/3/5/7/8/10/11/12/13/22 agree for the same known process — not a real Windows GUID
 - File hashes are fake but consistent (same binary on same host always produces same hash)
 - Sysmon Event 1 is emitted alongside Security 4688 for the same process creation — both emitters handle `process_create` events
+- Process create/terminate lifecycle and process-owned file/module/registry/network side effects are coordinated through the internal process-execution bundle so endpoint sources share parent/session identity and source-visible ordering.
 - Implemented events focus on the project evidence model: 1, 3, 5, 7, 8, 10, 11, 12, 13, and 22.
 
 ---
@@ -163,12 +168,12 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 | Log Type | File | Description | Notes |
 |----------|------|-------------|-------|
 | conn.log | `conn.json` | Connection metadata | TCP, UDP, ICMP. Includes duration, bytes, packets, conn_state, history. |
-| dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, and MX query types. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
-| http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length. Only for port 80 TCP connections. |
+| dns.log | `dns.json` | DNS queries/responses | A, AAAA, PTR, SRV, TXT, MX, NS, and SOA query types. Automatic connection-prerequisite lookups route through the internal DNS lookup bundle so resolver choice, cache behavior, TTL observations, Zeek DNS/conn fan-out, Sysmon DNS visibility, and companion resolver questions stay consistent with connection hostnames. MX generation avoids CDN-style hostnames; TXT covers SPF/DKIM/DMARC-style background lookups. NXDOMAIN for suffix search. AA flag for internal zones. |
+| http.log | `http.json` | HTTP transactions | Method, URI, status code, user-agent, response body length, and Zeek `trans_depth`. Only for port 80 TCP connections. Browser/page-load sessions can reuse one UID for multiple same-flow transactions; file-analyzed responses include `resp_fuids`/`resp_mime_types` vectors linked to `files.log`. |
 | ssl.log | `ssl.json` | TLS handshakes | TLS version, cipher suite, SNI server_name, and `cert_chain_fuids` linking to x509 certificates. Generated for port 443 connections. Certificate-chain depth is driven by `tls_realism.yaml`. |
-| files.log | `files.json` | File transfers | Extracted from HTTP responses, OCSP responses, and substantial SMB transfers. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional `filename` for SMB, MIME type, byte counts, and `md5`/`sha1`/`sha256` when the matching analyzer ran. SMB thresholds, filename templates, and MIME/analyzer mix are driven by `smb_file_transfers.yaml`. |
-| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
-| ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. Version, poll, precision, root delay, and root dispersion are stable per client/server association. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
+| files.log | `files.json` | File transfers | Extracted from HTTP responses, OCSP responses, and substantial SMB transfers. Uses Zeek-native `tx_hosts`, `rx_hosts`, and `conn_uids` arrays plus `fuid`, optional `filename` for SMB, MIME type, byte counts, and `md5`/`sha1`/`sha256` when the matching analyzer ran. Transfer metadata is built through the internal file-transfer bundle path so FUIDs, hashes, filenames, direction, byte counts, and optional PE analysis stay coordinated. Large/download-scale HTTP responses attach this metadata deterministically; smaller eligible HTTP bodies remain sampled. SMB thresholds, filename templates, and MIME/analyzer mix are driven by `smb_file_transfers.yaml`. |
+| dhcp.log | `dhcp.json` | DHCP transactions | Client address, MAC (diversified OUI from network_params.yaml), hostname. Acquisition and renewal route through the internal DHCP lease bundle so Zeek DHCP/conn rows and Linux `dhclient` syslog companions share one lease identity. DHCP broadcast is treated as link-local: visible to SPAN sensors on the client segment, not routed through unrelated TAP/firewall segments. |
+| ntp.log | `ntp.json` | NTP synchronization | Server-response records with version, mode 4, stratum, poll interval, and timing fields. NTP rows are emitted only when the matching UDP/123 conn row is response-bearing, so Zeek UID, conn_state/history, bytes, packets, duration, and parser timing agree. Version and poll are stable per client/server association, while stratum, ref-id, precision, root delay, and root dispersion are owned by the responding server. Scenario-defined internal/domain NTP servers are preferred; public fallback servers come from `network_params.yaml`. |
 | x509.log | `x509.json` | X.509 certificates | Leaf and intermediate certificate `id`/fingerprint, subject/issuer, validity (issuer-aware from tls_issuers.yaml), key info, and CA constraints. Intermediate CA certificate profiles are reused by subject/issuer so the same CA does not appear as many different certificates in one dataset. |
 | weird.log | `weird.json` | Protocol anomalies | Unusual network behavior. Automatic weird generation is currently disabled pending a data-driven Zeek weird compatibility model; explicitly supplied `WeirdContext` events still render. |
 | pe.log | `pe.json` | Portable Executable | Windows binary metadata over network. |
@@ -185,12 +190,12 @@ Zeek logs are per-sensor. Which connections appear depends on sensor placement (
 
 ---
 
-## eCAR Format (EDR/XDR Telemetry)
+## eCAR Format (Simulated EDR Telemetry)
 
 **File:** `ecar.json`
 **Format:** NDJSON
 
-EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
+Simulated EDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an EDR agent would observe.
 
 **Record structure:** Every eCAR record contains `pid` and `tid` as always-present top-level integers (`-1` = unavailable). `ppid` appears on PROCESS events only. The `properties` map contains event-specific key-value pairs where all values are strings (including ports).
 
@@ -200,7 +205,7 @@ EDR/XDR telemetry rendered in MITRE CAR-based eCAR format. Represents what an ED
 |-------------|---------|-------|
 | PROCESS | CREATE, TERMINATE, OPEN | CREATE/TERMINATE include pid, ppid, image_path, parent_image_path, command_line, user. Correlated with syslog for CRON jobs and systemd service start/stop on Linux. OPEN maps to Sysmon Event 10 (ProcessAccess) — includes granted_access, target_pid, target_image_path, and target_process_uuid in properties. |
 | THREAD | REMOTE_CREATE | Maps to Sysmon Event 8 (CreateRemoteThread). Properties include src_pid, target_pid, target_process_uuid, start_address, and stack addresses matching OpTC eCAR format. Thread ID, target PID, and start address are generated once in `RemoteThreadContext` and rendered consistently across Sysmon and eCAR. |
-| FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity and baseline SMB file-server access. |
+| FILE | READ, CREATE, WRITE, DELETE | Generated alongside process activity, baseline SMB file-server access, and modeled transfer receiver evidence such as SCP target-side file creation. |
 | FLOW | CONNECT | Network connections from host perspective. Includes src/dst IP, port, protocol. |
 | REGISTRY | MODIFY | Windows registry operations. |
 | MODULE | LOAD | DLL loads for Windows processes using the same process-aware DLL profile data as Sysmon ImageLoaded events. |
@@ -229,10 +234,12 @@ partitions files by event year so SOF-ELK can recover the timestamp year from
 the archive path. `eforge eval` accepts both current target variants plus older
 legacy RFC5424 and flat BSD/RFC3164 files. All generated syslog entries are
 rendered from `SyslogContext` on `SecurityEvent` — the emitter doesn't derive
-messages from other contexts. This enables correlated dispatch: a logon event
-carries both `AuthContext` (for Windows 4624) and `SyslogContext` (for sshd
-accepted) on the same SecurityEvent. Remote Linux `sshd` failed-password rows
-reuse the same source port as the companion Zeek SSH connection tuple.
+messages from other contexts. Multi-phase activities such as SSH sessions are
+coordinated by action-bundle semantics above individual `SecurityEvent`s: the
+bundle owns lifecycle, ordering, source timing, and shared identities, while each
+syslog row remains a distinct canonical occurrence. Remote Linux `sshd`
+failed-password rows reuse the same source port as the companion Zeek SSH
+connection tuple.
 
 | Program | Description | Notes |
 |---------|-------------|-------|
@@ -259,7 +266,7 @@ reuse the same source port as the companion Zeek SSH connection tuple.
 **File:** `<hostname.domain>/bash_history/<username>.bash_history`
 **Format:** Timestamped bash history (`#<epoch>\n<command>`)
 
-Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving.
+Per-user command history for Linux systems. Baseline SSH sessions to Linux servers generate organic admin commands (ls, df, ps, systemctl, etc.) for realistic admin users (sysadmin, help_desk, developer, security_analyst personas), creating per-user history files on all Linux hosts. Storyline process events inject 0-3 organic noise commands around each attack command for realistic interleaving. Bash-history timing and optional foreground process telemetry are coordinated by the internal Linux shell-command bundle so command text, source-visible timing, and endpoint process evidence stay aligned.
 
 **Known Limitations:**
 - No command typos, tab-completion artifacts, or repeated commands
@@ -272,7 +279,7 @@ Per-user command history for Linux systems. Baseline SSH sessions to Linux serve
 **File:** `snort_alert.log`
 **Format:** Snort fast alert format
 
-Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections.
+Network intrusion detection alerts. Baseline generates false-positive alerts (e.g., ICMP PING, SSH scan, policy violations) correlated with Zeek conn records via canonical SecurityEvent dispatch. Storyline generates true-positive alerts for malicious connections. IDS signature-to-context construction is owned by the internal IDS alert action bundle so Snort/Suricata rows render canonical network/DNS/HTTP evidence rather than independently inventing alert payloads.
 
 Web scan events (`web_scan` storyline type) generate three layers of IDS alerts:
 1. **Scanner UA detection** — identifies the scanning tool by user-agent (non-TLS only)
@@ -372,6 +379,15 @@ Fields are whitespace-delimited; values with spaces, such as User-Agent strings,
 **CONNECT tunnel behavior:** HTTPS traffic generates one CONNECT entry per unique (client_ip, host) pair per session, with a 5-minute idle timeout. Subsequent HTTPS requests to the same host within the timeout reuse the existing tunnel without emitting another CONNECT. The current proxy model assumes TLS interception, so inspected HTTPS requests can also appear as W3C Extended request rows such as `GET https://host/path HTTP/1.1`.
 
 **Status and byte semantics:** For explicit proxy mode, client-side Zeek HTTP records describe the client-to-proxy exchange. Plain HTTP denials therefore show the proxy's status code and proxy response size, not the origin's status/body. For intercepted HTTPS, the CONNECT setup status is tracked separately from the inspected request status, so a successful tunnel setup can coexist with a denied inspected GET.
+
+**Source-native HTTP semantics:** Domain/path planning is resolved before proxy
+and Zeek HTTP rows are rendered. Public browser-like domains default to
+HTTPS-first behavior, so plaintext port-80 requests redirect instead of serving
+login pages; internal hosts and service/update endpoints can keep plaintext
+source-native behavior. Browser requests also follow no-referrer-when-downgrade
+semantics, service/update endpoints keep source-compatible User-Agents, and
+executable/download paths use binary content types with download-scale body
+sizes.
 
 **Session depth:** Persona HTTP traffic and inbound `web_server` human visitors generate multi-request browsing sessions with subresource cascades. Each page load triggers follow-on requests for JS, CSS, images, fonts, and same-origin API calls, producing realistic request clusters in proxy and web access logs. Persona browsing depth is controlled by `browsing_intensity`; inbound web visitor classes, tool/API requests, and User-Agent pools are controlled by `web_session_profiles.yaml`.
 

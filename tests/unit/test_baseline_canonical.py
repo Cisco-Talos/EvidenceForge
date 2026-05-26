@@ -34,6 +34,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
+from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
@@ -46,6 +47,9 @@ from evidenceforge.generation.engine.baseline import (
     _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
     _module_matches_process,
+    _ntp_observed_second,
+    _ntp_sync_interval_seconds,
+    _ntp_sync_seconds_for_hour,
     _render_extra_sudo_command_template,
     _sample_lock_duration,
     _ufw_block_syn_packet_len,
@@ -348,9 +352,39 @@ class TestIdsAlertCorrelation:
         assert event.ntp.stratum >= 1
         assert event.ntp.rec_ts > event.ntp.org_ts
         assert event.ntp.xmt_ts >= event.ntp.rec_ts
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_bytes > 0
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_ip_bytes > 0
+
+    def test_ntp_no_response_connection_does_not_emit_ntp_log(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """NTP parser rows require responder payload in the matching conn row."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="129.6.15.28",
+            time=timestamp,
+            dst_port=123,
+            proto="udp",
+            service="ntp",
+            duration=0.02,
+            orig_bytes=48,
+            resp_bytes=0,
+            conn_state="S0",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.ntp is None
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
 
     def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
-        """NTP version and poll behavior should be stable per client/server pair."""
+        """NTP association and server response fields should be stable."""
         for minute in (0, 10):
             activity_gen.generate_connection(
                 src_ip="10.0.1.50",
@@ -372,6 +406,62 @@ class TestIdsAlertCorrelation:
         assert first.precision == second.precision
         assert first.root_delay == second.root_delay
         assert first.root_disp == second.root_disp
+
+    def test_ntp_response_fields_are_server_owned(self, activity_gen, mock_emitters, timestamp):
+        """Server-owned NTP response fields should not vary by requesting client."""
+        for src_ip in ("10.0.1.50", "10.0.1.51", "10.0.2.10"):
+            activity_gen.generate_connection(
+                src_ip=src_ip,
+                dst_ip="10.0.3.10",
+                time=timestamp,
+                dst_port=123,
+                proto="udp",
+                service="ntp",
+                duration=0.02,
+                orig_bytes=48,
+                resp_bytes=48,
+            )
+
+        ntp_rows = [call.args[0].ntp for call in mock_emitters["zeek_ntp"].emit.call_args_list]
+        assert len(ntp_rows) == 3
+        assert {row.precision for row in ntp_rows} == {ntp_rows[0].precision}
+        assert {row.root_delay for row in ntp_rows} == {ntp_rows[0].root_delay}
+        assert {row.root_disp for row in ntp_rows} == {ntp_rows[0].root_disp}
+
+    def test_ntp_schedule_helpers_avoid_exact_hourly_fingerprint(self):
+        """Baseline NTP intervals should vary around the association poll."""
+        intervals = [
+            round(_ntp_sync_interval_seconds("WS-01", "129.6.15.28", sequence, 4096), 3)
+            for sequence in range(12)
+        ]
+        observed = [
+            round(_ntp_observed_second("WS-01", "129.6.15.28", sequence, 4096.0 * sequence), 3)
+            for sequence in range(12)
+        ]
+
+        assert len(set(intervals)) > 1
+        assert any(abs(interval - 3600.0) > 30.0 for interval in intervals)
+        assert min(intervals) >= 300.0
+        assert observed != [4096.0 * sequence for sequence in range(12)]
+
+    def test_ntp_schedule_produces_visible_syncs_after_warmup(self):
+        """Fast-forwarding the NTP schedule should not skip the visible window."""
+        generation_epoch = datetime(2024, 6, 14, 22, 0, tzinfo=UTC)
+        visible_hours = [generation_epoch + timedelta(hours=hour) for hour in range(8, 16)]
+        syncs_by_hour = [
+            _ntp_sync_seconds_for_hour(
+                "WS-01",
+                "129.6.15.28",
+                generation_epoch,
+                hour,
+                4096,
+            )
+            for hour in visible_hours
+        ]
+        total_syncs = sum(len(syncs) for syncs in syncs_by_hour)
+
+        assert total_syncs > 0
+        assert [len(syncs) for syncs in syncs_by_hour] != [1] * len(syncs_by_hour)
 
     def test_completed_tls_duration_contains_zeek_analyzer_evidence(
         self, activity_gen, mock_emitters, timestamp
@@ -737,11 +827,47 @@ class TestSyslogContext:
         )
 
         syslog = mock_emitters["syslog"]
-        assert syslog.emit.called
-        event = syslog.emit.call_args[0][0]
-        assert event.syslog is not None
-        assert event.syslog.app_name == "sshd"
-        assert "Accepted password for alice" in event.syslog.message
+        syslog_events = [call.args[0] for call in syslog.emit.call_args_list]
+        assert any(
+            event.syslog
+            and event.syslog.app_name == "sshd"
+            and "Accepted password for alice" in event.syslog.message
+            for event in syslog_events
+        )
+
+    def test_linux_remote_logon_delegates_to_single_ssh_session_contract(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Linux Type 10 compatibility should not emit a duplicate generic logon."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        logon_id = activity_gen.generate_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            source_ip="10.0.10.1",
+            logon_type=10,
+        )
+
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.session_kind == "ssh"
+
+        ecar_session_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].auth is not None and call.args[0].auth.username == "alice"
+        ]
+        assert [event.event_type for event in ecar_session_events] == ["ssh_session"]
+        assert ecar_session_events[0].auth.logon_id == logon_id
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_port == 22
+        ]
+        assert network_events
 
     def test_logon_no_syslog_context_on_windows(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -929,6 +1055,41 @@ class TestWeirdContext:
 class TestDhcpLease:
     """DHCP lease events dispatch through canonical path."""
 
+    def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
+        """DHCP lease requests should expose durable deterministic anchors."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        request = DhcpLeaseRequest(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
+            lease_time=7200.0,
+            uid="CTest123456789ab",
+            msg_types=["REQUEST", "ACK"],
+            domain="corp.local",
+        )
+
+        first = DhcpLeaseActionBundle(Mock(), request).anchor
+        second = DhcpLeaseActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "dhcp_lease"
+        assert first.stable_id.startswith("dhcp-lease-")
+
+    def test_dhcp_lease_bundle_delegates_to_adapter(self, timestamp):
+        """The bundle should preserve the current generator adapter contract."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        request = DhcpLeaseRequest(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+        )
+        executor = Mock()
+
+        DhcpLeaseActionBundle(executor, request).execute()
+
+        executor._execute_dhcp_lease_bundle.assert_called_once_with(request)
+
     def test_generate_dhcp_lease_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -1071,6 +1232,15 @@ class TestAnonymousLogon:
         assert event.auth.source_ip == ws.ip
         assert event.auth.source_port > 0
         assert event.auth.workstation_name == ws.hostname
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert network_event.network.src_ip == ws.ip
+        assert network_event.network.src_port == event.auth.source_port
+        assert network_event.network.dst_ip == dc.ip
+        assert network_event.network.dst_port == 445
 
     def test_anonymous_logon_no_session_created(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1115,16 +1285,18 @@ class TestBaselineSshTiming:
     """Regression tests for baseline SSH connection/syslog correlation."""
 
     def test_disconnect_uses_same_duration_as_generated_connection(self):
-        """Baseline SSH disconnect timing should share the conn.log duration."""
+        """Baseline SSH disconnect timing should share the bundle transport duration."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
         assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
+        assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
-        assert 'conn_state="SF"' in source
         assert "max(1.0, ssh_duration)" in source
+        assert "emit_session_close=(" in source
+        assert 'source="baseline_ssh_noise"' in source
 
     def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
         """Generic syslog SSH churn should not blanket every Linux host."""

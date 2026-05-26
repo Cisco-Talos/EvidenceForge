@@ -1,0 +1,52 @@
+name: Release Slow Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-slow-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  slow-comprehensive:
+    name: Slow comprehensive tests (no coverage)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Run slow comprehensive tests without coverage
+        run: uv run pytest --include-slow -m slow --no-cov --durations=20
+
+  release-required:
+    name: Required Release CI
+    runs-on: ubuntu-latest
+    needs: [slow-comprehensive]
+    if: always()
+
+    steps:
+      - name: Check release jobs
+        run: |
+          if [ "${{ needs['slow-comprehensive'].result }}" != "success" ]; then
+            echo "Slow comprehensive tests finished with result: ${{ needs['slow-comprehensive'].result }}"
+            exit 1
+          fi

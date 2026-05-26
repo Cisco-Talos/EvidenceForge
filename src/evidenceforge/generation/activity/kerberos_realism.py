@@ -13,7 +13,7 @@ from evidenceforge.config.overlay import deep_merge_dict, load_with_overlay
 
 _CONFIG_PATH = get_activity_directory() / "kerberos_realism.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
-_MAX_TRANSPORT_WEIGHT = 1_000_000
+_MAX_SELECTION_WEIGHT = 1_000_000
 
 
 def _merge_kerberos_realism(default: dict, overlay: dict) -> dict:
@@ -73,19 +73,29 @@ def pick_kerberos_transport(rng: random.Random, profile: str = "default") -> str
     cfg = load_kerberos_realism()
     profiles = cfg.get("transport_profiles", {})
     weights = profiles.get(profile) or profiles.get("default") or {}
-    entries = [
-        (proto, min(int(weight), _MAX_TRANSPORT_WEIGHT))
-        for proto, weight in weights.items()
-        if proto in {"udp", "tcp"} and int(weight) > 0
-    ]
+    entries: list[tuple[str, int]] = []
+    for proto, raw_weight in weights.items():
+        if proto not in {"udp", "tcp"}:
+            continue
+        weight = _coerce_positive_int_weight(raw_weight)
+        if weight > 0:
+            entries.append((proto, weight))
     if not entries:
         return "tcp"
     protocols = [entry[0] for entry in entries]
     protocol_weights = [entry[1] for entry in entries]
+    return rng.choices(protocols, weights=protocol_weights, k=1)[0]
+
+
+def _coerce_positive_int_weight(value: Any) -> int:
+    """Return a finite, bounded positive integer weight or zero for invalid input."""
     try:
-        return rng.choices(protocols, weights=protocol_weights, k=1)[0]
-    except OverflowError:
-        return "tcp"
+        weight = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    if weight <= 0:
+        return 0
+    return min(weight, _MAX_SELECTION_WEIGHT)
 
 
 def _pick_weighted_value(profiles: dict[str, dict[str, Any]], rng: random.Random) -> str:
@@ -98,14 +108,17 @@ def _pick_weighted_profile(
     profiles: dict[str, dict[str, Any]], rng: random.Random
 ) -> dict[str, Any]:
     """Pick one profile from a keyed weighted profile dict."""
-    valid_profiles = [
-        profile
+    weighted_profiles = [
+        (profile, weight)
         for profile in profiles.values()
-        if isinstance(profile, dict) and int(profile.get("weight", 0)) > 0
+        if isinstance(profile, dict)
+        for weight in (_coerce_positive_int_weight(profile.get("weight", 0)),)
+        if weight > 0
     ]
-    if not valid_profiles:
+    if not weighted_profiles:
         return {}
-    weights = [int(profile.get("weight", 1)) for profile in valid_profiles]
+    valid_profiles = [profile for profile, _weight in weighted_profiles]
+    weights = [weight for _profile, weight in weighted_profiles]
     return rng.choices(valid_profiles, weights=weights, k=1)[0]
 
 

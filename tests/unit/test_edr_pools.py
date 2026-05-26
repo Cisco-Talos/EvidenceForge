@@ -4,6 +4,7 @@
 """Unit tests for EDR pools YAML loader."""
 
 import random
+from unittest.mock import patch
 
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
@@ -253,6 +254,33 @@ class TestTemplateMaterialization:
         assert len({details for _key, _value_name, details in outputs}) >= 8
         assert all(details.endswith(r"\1") for _key, _value_name, details in outputs)
         assert any("alice.smith" in details for _key, _value_name, details in outputs)
+
+    def test_runmru_command_treats_non_user_braces_as_literals(self):
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"runmru_commands": ["powershell.exe -Command { Get-Process }"]},
+        ):
+            key, _value_name, details = materialize_edr_template_group(
+                (
+                    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU",
+                    "{runmru_name}",
+                    "{runmru_command}",
+                ),
+                random.Random(1),
+                "alice",
+            )
+
+        assert key.endswith(r"RunMRU")
+        assert details == r"powershell.exe -Command { Get-Process }\1"
+
+    def test_runmru_command_does_not_interpret_format_specifiers(self):
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"runmru_commands": ["cmd.exe /c echo {user:1000000000}"]},
+        ):
+            details = materialize_edr_template("{runmru_command}", random.Random(3), "alice")
+
+        assert details == r"cmd.exe /c echo {user:1000000000}\1"
 
     def test_materializes_host_ip_context(self):
         import random

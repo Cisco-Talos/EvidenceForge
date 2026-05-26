@@ -19,6 +19,7 @@ from evidenceforge.generation.activity.timing_profiles import (
     network_sensor_observation_timing,
     sample_timing_delta,
 )
+from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.utils.rng import _stable_seed
 
 if TYPE_CHECKING:
@@ -110,23 +111,33 @@ class SourceTimingPlanner:
         """Return a source timestamp constrained after another source observation."""
         effective_seed = seed_parts or self._event_seed_parts(event)
         anchor_seed = after_seed_parts or effective_seed
-        anchor_time = self.source_time(
-            event,
-            after_source_key,
-            seed_parts=anchor_seed,
+
+        anchor_cache_key = self._cache_key(after_source_key, anchor_seed)
+        source_cache_key = self._cache_key(source_key, effective_seed)
+        graph = TemporalConstraintGraph()
+        graph.add_node(
+            "anchor",
+            self._preferred_source_time(event, after_source_key, anchor_seed),
             not_before=after_not_before,
         )
-        lower_bound = anchor_time + sample_timing_delta(gap_key, seed_parts=effective_seed)
-        if not_before is not None:
-            lower_bound = max(lower_bound, not_before)
-        return self.source_time(
-            event,
-            source_key,
-            seed_parts=effective_seed,
-            not_before=lower_bound,
+        graph.add_node(
+            "source",
+            self._preferred_source_time(event, source_key, effective_seed),
+            not_before=not_before,
             not_after=not_after,
             within=within,
         )
+        graph.constrain_after(
+            "source",
+            "anchor",
+            min_gap=sample_timing_delta(gap_key, seed_parts=effective_seed),
+        )
+        resolved = graph.resolve()
+
+        plan = self._ensure_plan(event)
+        plan.source_times[anchor_cache_key] = resolved["anchor"]
+        plan.source_times[source_cache_key] = resolved["source"]
+        return resolved["source"]
 
     def ordered_pair(
         self,
@@ -137,25 +148,29 @@ class SourceTimingPlanner:
     ) -> tuple[datetime, datetime]:
         """Plan a same-source causal pair such that ``before < after``."""
         gap = max(timedelta(milliseconds=max(1, min_gap_ms)), _SOURCE_EPSILON)
-        before_time = self.source_time(
-            before_event,
-            source_key,
-            seed_parts=("ordered-before", *self._event_seed_parts(before_event)),
+        before_seed = ("ordered-before", *self._event_seed_parts(before_event))
+        after_seed = ("ordered-after", *self._event_seed_parts(after_event))
+
+        graph = TemporalConstraintGraph()
+        graph.add_node(
+            "before",
+            self._preferred_source_time(before_event, source_key, before_seed),
         )
-        after_time = self.source_time(
-            after_event,
-            source_key,
-            seed_parts=("ordered-after", *self._event_seed_parts(after_event)),
-            not_before=before_time + gap,
+        graph.add_node(
+            "after",
+            self._preferred_source_time(after_event, source_key, after_seed),
         )
-        if after_time <= before_time:
-            after_time = before_time + gap
-            self._ensure_plan(after_event).source_times[
-                self._cache_key(
-                    source_key,
-                    ("ordered-after", *self._event_seed_parts(after_event)),
-                )
-            ] = after_time
+        graph.constrain_after("after", "before", min_gap=gap)
+        resolved = graph.resolve()
+
+        before_time = resolved["before"]
+        after_time = resolved["after"]
+        self._ensure_plan(before_event).source_times[self._cache_key(source_key, before_seed)] = (
+            before_time
+        )
+        self._ensure_plan(after_event).source_times[self._cache_key(source_key, after_seed)] = (
+            after_time
+        )
         return before_time, after_time
 
     def sensor_observation_time(
@@ -221,6 +236,21 @@ class SourceTimingPlanner:
         if window.position == "before":
             return canonical_time - delta - micro_noise
         return canonical_time + delta + micro_noise
+
+    def _preferred_source_time(
+        self,
+        event: SecurityEvent,
+        source_key: str,
+        seed_parts: tuple[Any, ...],
+    ) -> datetime:
+        """Return cached or sampled preferred source time before graph constraints."""
+
+        plan = self._ensure_plan(event)
+        cache_key = self._cache_key(source_key, seed_parts)
+        preferred_time = plan.source_times.get(cache_key)
+        if preferred_time is not None:
+            return preferred_time
+        return self._sample_source_time(event.timestamp, source_key, seed_parts)
 
     @staticmethod
     def _source_micro_noise(
