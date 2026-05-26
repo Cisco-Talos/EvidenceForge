@@ -186,6 +186,7 @@ class DnsContext:
     rcode_num: int = 0  # Numeric: 0=NOERROR, 2=SERVFAIL, 3=NXDOMAIN
     answers: list[str] = field(default_factory=list)
     TTLs: list[float] = field(default_factory=list)
+    preserve_ttls: bool = False
     AA: bool = False
     TC: bool = False
     RD: bool = True

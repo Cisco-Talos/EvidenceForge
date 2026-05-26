@@ -373,6 +373,34 @@ class TestHostnameConsistency:
         second_ttl = dns_events[1].dns.TTLs[0]
         assert 0 <= first_ttl - second_ttl <= 15
 
+    def test_registered_a_rrset_is_stable_across_cache_expirations(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Repeated registered A lookups should not redraw answer shape per call."""
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        state_manager.set_current_time(timestamp)
+        expected_answers = get_domain_ips("postman.com")
+
+        for offset in (0, 7200):
+            activity_gen._emit_dns_lookup(
+                src_ip="10.0.1.50",
+                dst_ip=expected_answers[0],
+                time=timestamp + timedelta(seconds=offset),
+                hostname="postman.com",
+                force_address=True,
+            )
+
+        dns_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "postman.com"
+            and call.args[0].dns.query_type == "A"
+        ]
+        assert len(dns_events) == 2
+        assert [event.dns.answers for event in dns_events] == [expected_answers, expected_answers]
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""
@@ -1306,6 +1334,24 @@ class TestDnsSupportQueryTypes:
 
         assert second.TTLs[0] < first.TTLs[0]
         assert second.TTLs[0] <= first.TTLs[0] - 50
+
+    def test_authored_dns_context_ttls_are_preserved(self, activity_gen, timestamp):
+        """Explicit scenario DNS TTL overrides should bypass resolver normalization."""
+        authored = DnsContext(
+            query="cache-poison.example",
+            query_type="A",
+            qtype=1,
+            answers=["203.0.113.77"],
+            TTLs=[42.0],
+            preserve_ttls=True,
+        )
+        activity_gen._normalize_dns_context_for_resolver(
+            authored,
+            resolver_ip="10.0.0.1",
+            time=timestamp,
+        )
+
+        assert authored.TTLs == [42.0]
 
     def test_external_rrset_ttl_countdown_is_generation_order_independent(
         self, activity_gen, timestamp

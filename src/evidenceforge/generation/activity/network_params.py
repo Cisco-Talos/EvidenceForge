@@ -41,18 +41,44 @@ _DEFAULT_PROXY_CONNECT_STATUS_MESSAGES: dict[int, list[str]] = {
 }
 _DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES: list[dict[str, Any]] = [
     {
+        "name": "web_recon",
+        "weight": 32.0,
+        "ports": [(80, 34.0), (443, 38.0), (8080, 16.0), (8443, 7.0), (22, 5.0)],
+    },
+    {
+        "name": "windows_exposure",
+        "weight": 24.0,
+        "ports": [(445, 36.0), (3389, 28.0), (135, 14.0), (139, 10.0), (5985, 7.0)],
+    },
+    {
+        "name": "iot_telnet",
+        "weight": 15.0,
+        "ports": [(23, 48.0), (2323, 18.0), (22, 16.0), (80, 10.0), (8080, 8.0)],
+    },
+    {
+        "name": "mail_relay_probe",
+        "weight": 10.0,
+        "ports": [(25, 44.0), (587, 24.0), (465, 16.0), (110, 8.0), (143, 8.0)],
+    },
+    {
+        "name": "database_probe",
+        "weight": 9.0,
+        "ports": [(1433, 32.0), (3306, 24.0), (5432, 22.0), (6379, 12.0), (9200, 10.0)],
+    },
+    {
         "name": "broad_low_rate",
-        "weight": 1.0,
+        "weight": 10.0,
         "ports": [
-            {"port": 22, "weight": 1.0},
-            {"port": 23, "weight": 1.0},
-            {"port": 80, "weight": 1.0},
-            {"port": 443, "weight": 1.0},
-            {"port": 445, "weight": 1.0},
-            {"port": 3389, "weight": 1.0},
-            {"port": 8080, "weight": 1.0},
+            (22, 12.0),
+            (23, 10.0),
+            (80, 18.0),
+            (443, 18.0),
+            (445, 12.0),
+            (3389, 12.0),
+            (8080, 10.0),
+            (8443, 8.0),
         ],
-    }
+    },
 ]
 
 
@@ -239,7 +265,22 @@ def external_scanner_port_profiles() -> list[dict[str, Any]]:
                 ports.append((port, weight))
         if ports:
             profiles.append({"name": name, "weight": profile_weight, "ports": ports})
-    return profiles or list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+    if not profiles:
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    total_profile_weight = sum(float(profile["weight"]) for profile in profiles)
+    if not math.isfinite(total_profile_weight):
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    cleaned_profiles: list[dict[str, Any]] = []
+    for profile in profiles:
+        ports = list(profile.get("ports", []))
+        total_port_weight = sum(float(weight) for _port, weight in ports)
+        if not math.isfinite(total_port_weight):
+            continue
+        cleaned_profiles.append(profile)
+
+    return cleaned_profiles or list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
 
 
 def external_scanner_port_profile_for_source(src_ip: str) -> dict[str, Any]:

@@ -284,6 +284,34 @@ class TestConnectTunnelBehavior:
         assert proxy_context.status_code == 200
         assert proxy_context.cache_result == "MISS"
 
+
+class TestProxyActionSemantics:
+    """Verify proxy_action reflects proxy policy/cache state, not origin status."""
+
+    def test_origin_403_with_miss_remains_forward(self):
+        from evidenceforge.generation.activity.generator import _proxy_action_for_context
+
+        action = _proxy_action_for_context(
+            method="GET",
+            url="http://example.test/forbidden",
+            status_code=403,
+            cache_result="MISS",
+        )
+
+        assert action == "forward"
+
+    def test_origin_503_with_miss_remains_forward(self):
+        from evidenceforge.generation.activity.generator import _proxy_action_for_context
+
+        action = _proxy_action_for_context(
+            method="GET",
+            url="http://example.test/downstream",
+            status_code=503,
+            cache_result="MISS",
+        )
+
+        assert action == "forward"
+
     def test_first_https_request_emits_connect(self):
         from pathlib import Path
 

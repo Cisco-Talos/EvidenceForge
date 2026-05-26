@@ -46,6 +46,7 @@ from evidenceforge.generation.engine.baseline import (
     _pick_dc_kerberos_service,
     _pick_dc_kerberos_target,
     _registry_writer_candidates,
+    _resolve_cron_command,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System, User
@@ -377,6 +378,22 @@ def test_cron_schedule_launches_on_minute_boundaries(linux_system):
     assert len(fire_times) == 2
     assert all(fire_time.second == 0 for fire_time in fire_times)
     assert all(fire_time.microsecond == 0 for fire_time in fire_times)
+
+
+def test_resolve_cron_command_rejects_non_string_overlay_values():
+    """Cron command resolution should reject malformed truthy non-string values."""
+    assert _resolve_cron_command({"all": True}, is_rhel_like=False) is None
+    assert _resolve_cron_command({"debian": ["sa1", "1", "1"]}, is_rhel_like=False) is None
+    assert _resolve_cron_command({"rhel": {"cmd": "sa1 1 1"}}, is_rhel_like=True) is None
+
+
+def test_resolve_cron_command_trims_and_selects_distro_specific_value():
+    """Cron command resolution should select and trim valid string commands."""
+    resolved = _resolve_cron_command(
+        {"all": "  fallback  ", "debian": "  debian-sa1 1 1  "},
+        is_rhel_like=False,
+    )
+    assert resolved == "debian-sa1 1 1"
 
 
 @pytest.fixture

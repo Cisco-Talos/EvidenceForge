@@ -4,6 +4,76 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v1.0.0 (2026-05-26)
+
+This major release promotes the architecture-reset work and post-reset hardening
+from `dev` to `main`. The release includes public `feat:` commits for the action
+bundle architecture, so the project moves from `0.9.1` to `1.0.0`.
+
+**Action-bundle architecture reset**
+
+- Added the action-bundle foundation and routed major correlated-evidence families
+  through canonical bundle ownership: RDP, Windows remote admin, file transfer,
+  Linux shell command, process execution, auth/session, network connection, DHCP,
+  DNS lookup, scanner/probe, IDS alert, Kerberos/DC, Windows audit, and auxiliary
+  auth/session bundles (`5d2d3245`, `edd968c4`, `89b83c81`, `afabe54c`,
+  `81884ab1`, `c8364594`, `e88a33af`, `60461124`, `3b3ea66b`, `15e7f511`,
+  `400de49b`, `3fc7c370`, `732f2fc4`, `96cf1d5b`, `4428ef2c`).
+- Documented the reset requirements, A/B comparison, draft PR validation, blind
+  review findings, contract-loop results, and final bundle audit (`417d241d`,
+  `9fb11245`, `4897008b`, `eb00a7fc`, `f4766076`, `e5170757`, `2e809059`,
+  `ebe41126`, `40431b39`).
+
+**Cross-source timing, lifecycle, and source-native realism**
+
+- Hardened SSH/RDP/remote-session ordering, endpoint flow timing, NTP scheduling,
+  browser/proxy HTTP semantics, source observation groups, and eCAR/source timing
+  contracts (`83037da5`, `70b40bdb`, `93d8e2df`, `7873c51b`, `0e0caf82`,
+  `f3862eef`, `018440ba`, `e09d857d`, `6dceaede`, `7093eec5`, `ecb80405`,
+  `7202e4b9`, `61b805f7`, `a49c0027`, `d72e3eae`, `b9d5b696`, `0d24cd8c`,
+  `650d2f2f`, `3452d3d6`, `777c905d`, `644421d2`, `8c45320f`, `2603fa75`,
+  `3bcdd8d4`, `13cb08ed`, `0c9f3209`, `85ea4f2f`, `30a897ef`, `df9988f1`).
+- Stabilized generated-output repeatability while preserving realistic identity
+  morphology, then tightened HTTP file/PE duration and analysis ordering, Zeek TCP
+  byte/history semantics, TLS failure histories, HTTP transaction identity, NTP
+  server-owned response fields, workstation unlock ordering, and HTTP downgrade
+  behavior (`d8768a07`, `2bbe634a`, `6c526c54`, `5552af63`, `4e06e671`,
+  `5f49c401`, `4d97ea66`, `5eb404c7`, `e90c5a55`, `05a77536`, `1d305a1c`,
+  `7587cf57`, `3d49e31b`, `5ba27315`, `d7454333`).
+
+**Security and robustness fix-family batch**
+
+- Landed hardening for storyline slicing, syslog PAM backfill, Windows PID and
+  Sysmon GUID normalization, eCAR timing/PID attribution, SQL target handling,
+  placeholder expansion, Linux PID collision handling, Kerberos spool ordering,
+  OCSP path bounds, external scanner weights, bash workflow config coercion,
+  sshd PID normalization, runmru templating, TLS issuer selection, TCP packet
+  accounting, Kerberos transport weights, cron/syslog config validation, transient
+  PID scoping, proxy/browser URI handling, RDP source alignment, DNS TTL overrides,
+  causal ordering after process visibility clamps, and warm-up quota accounting
+  (`10191ec5`, `52b4037e`, `bc77f327`, `1f9ee143`, `fa15a10e`, `7cadbde8`,
+  `ab6d12f6`, `0a386ae3`, `12937456`, `8334f0f4`, `a40e1fe9`, `8320f0f4`,
+  `dc3e19f0`, `8546b41a`, `98de7cec`, `cad89ce8`, `544a4c0a`, `3514b968`,
+  `31cf96ff`, `f3ba8e9c`, `1cfa066b`, `1bbc108e`, `74c0f081`, `0a64f8dc`,
+  `f0c18942`, `7bfffac1`, `b33ca658`, `c1934477`, `0bb29e42`, `5061e57a`).
+- Repaired the final dev-to-main release check failures by adding a default
+  Kerberos connection audit state, preserving HTTPS semantics for malformed
+  CONNECT browser hints, and restoring rich external scanner fallback profiles
+  (`a7d3880d`).
+
+**CI, roadmap, and release hygiene**
+
+- Simplified GitHub Actions into stable required checks with release-only slow
+  tests, recorded fix-family PR dispositions, and kept repeated TODO alignment
+  commits out of the active roadmap surface (`ac811e4f`, `5feeeac0`, `9502eaaf`,
+  `7963dac9`, `93ab3908`, `997c1768`, `9fd42caf`, `188b8126`, `f38b652a`,
+  `23c18afe`, `046ca9fa`, `338b04d1`, `bf6998b1`, `f99803ab`, `81caf021`,
+  `70fd5abf`, `4ed42909`, `df4784fc`, `d2cecc93`, `3501c1ed`, `b0a0d8d5`,
+  `ee6046dd`, `ad9645e6`, `f23c37d5`, `6e242966`, `dfcbae68`, `416fa41a`,
+  `b76841a4`).
+- Reworked project memory so `TODO.md` is a durable roadmap and multi-session
+  agent handoff state lives in tracked `docs/worklog/` files (`6a2ef81a`).
+
 ## v0.9.1 (2026-05-21)
 
 This patch release packages the loop 189-199 realism follow-up work after v0.9.0.

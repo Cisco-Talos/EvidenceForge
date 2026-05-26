@@ -98,6 +98,24 @@ class TestTlsIssuers:
         issuer = pick_issuer(rng, "www.linkedin.com")
         assert "DigiCert SHA2 Extended Validation" in issuer["name"]
 
+    def test_expired_issuer_is_excluded_for_post_expiration_event_time(self):
+        rng = random.Random(42)
+        issuer = pick_issuer(rng, "", event_time=datetime(2026, 2, 1, tzinfo=UTC))
+        assert issuer["name"] != "CN=R3, O=Let's Encrypt, C=US"
+        assert issuer["name"] != "CN=E1, O=Let's Encrypt, C=US"
+
+    def test_historical_event_time_can_still_select_historical_issuer(self):
+        issuer_names = {
+            pick_issuer(
+                random.Random(seed),
+                "",
+                event_time=datetime(2024, 1, 1, tzinfo=UTC),
+            )["name"]
+            for seed in range(500)
+        }
+        assert "CN=R3, O=Let's Encrypt, C=US" in issuer_names
+        assert "CN=E1, O=Let's Encrypt, C=US" in issuer_names
+
     def test_internal_test_domain_uses_enterprise_ca(self):
         rng = random.Random(42)
         issuer = pick_issuer(rng, "WKS-02.acme.test")
@@ -231,6 +249,39 @@ class TestTlsIssuers:
         assert path.startswith(("/MFE", "/MFU", "/MFI"))
         assert len(path) >= 73
         assert not re.fullmatch(r"/[0-9a-f]{12}", path)
+
+    def test_ocsp_request_path_ignores_non_finite_bound_overrides(self, tmp_path, monkeypatch):
+        """Non-finite request-path bounds from overlay should fall back safely."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "ocsp": {
+                        "request_path": {
+                            "min_encoded_chars": float("inf"),
+                            "max_encoded_chars": 96,
+                        }
+                    }
+                }
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            path = ocsp_request_path(
+                responder="ocsp.digicert.com",
+                issuer_name="CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US",
+                cert_name="ctldl.windowsupdate.com",
+                serial_number="ABCDEF0123456789",
+                this_update=1710763200,
+            )
+        finally:
+            reset_tls_realism_cache()
+
+        assert path.startswith("/")
+        assert len(path) >= 33
 
     def test_tls_certificate_serial_lengths_vary_but_remain_stable(self):
         """Certificate serials should not all look like fixed 128-bit generated values."""

@@ -48,7 +48,7 @@ from evidenceforge.output_targets import (
     normalize_output_target,
     write_output_target_marker,
 )
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, reset_thread_rng
 from evidenceforge.utils.time import parse_duration, resolve_time_window
 from evidenceforge.validation.schema import BUILTIN_ACCOUNTS
 
@@ -90,6 +90,7 @@ class GenerationEngine(EmitterSetupMixin, BaselineMixin, StorylineMixin):
             ground_truth_dir: Directory for GROUND_TRUTH.md. Defaults to output_dir.
             output_target: Render/layout target for generated output.
         """
+        reset_thread_rng()
         self.scenario = scenario
         self.output_dir = output_dir
         self.ground_truth_dir = ground_truth_dir or output_dir
