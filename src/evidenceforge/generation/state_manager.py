@@ -895,7 +895,12 @@ class StateManager:
         allocations.append((current_time, pid))
         return pid
 
-    def allocate_transient_linux_pid(self, system: str, event_time: datetime) -> int:
+    def allocate_transient_linux_pid(
+        self,
+        system: str,
+        event_time: datetime,
+        os_category: str = "linux",
+    ) -> int:
         """Allocate a Linux PID for syslog-only transient process observations.
 
         Syslog records such as ``sudo[pid]`` and per-session ``sshd[pid]`` can
@@ -905,6 +910,13 @@ class StateManager:
         and used-ID ledger without registering a durable RunningProcess.
         """
         with self._lock:
+            if os_category != "linux":
+                raise StateError(f"Cannot allocate Linux transient PID for non-Linux host {system}")
+            if self._pid_os.get(system) not in {None, "linux"}:
+                raise StateError(
+                    f"Cannot allocate Linux transient PID in {self._pid_os[system]} "
+                    f"PID namespace for {system}"
+                )
             self._initialize_pid_allocator(system, "linux")
             pid_rng = self._pid_rngs[system]
             return self._allocate_linux_pid(system, pid_rng, event_time)

@@ -323,6 +323,49 @@ class TestStateManagerInit:
         assert len({sudo_pid, ecar_pid, sshd_pid}) == 3
         assert max(sudo_pid, ecar_pid, sshd_pid) - min(sudo_pid, ecar_pid, sshd_pid) < 15_000
 
+    def test_linux_transient_pid_rejects_non_linux_hosts_before_allocator_init(self):
+        """Transient Linux PIDs should not initialize a Windows host namespace."""
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+
+        with pytest.raises(StateError, match="non-Linux host"):
+            sm.allocate_transient_linux_pid("win01", event_time, os_category="windows")
+
+        assert "win01" not in sm._pid_os
+
+    def test_linux_transient_pid_rejects_existing_windows_namespace(self):
+        """Transient Linux PID calls should not poison an established Windows allocator."""
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.set_current_time(event_time)
+        win_pid = sm.create_process(
+            system="win01",
+            parent_pid=0,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe",
+            username="SYSTEM",
+            integrity_level="System",
+        )
+
+        with pytest.raises(StateError, match="non-Linux host"):
+            sm.allocate_transient_linux_pid("win01", event_time, os_category="windows")
+
+        with pytest.raises(StateError, match="PID namespace"):
+            sm.allocate_transient_linux_pid("win01", event_time)
+
+        next_pid = sm.create_process(
+            system="win01",
+            parent_pid=0,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe",
+            username="SYSTEM",
+            integrity_level="System",
+        )
+
+        assert win_pid % 4 == 0
+        assert next_pid % 4 == 0
+        assert sm._pid_os["win01"] == "windows"
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
