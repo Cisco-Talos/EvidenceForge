@@ -4,6 +4,45 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v1.0.1 (2026-05-27)
+
+This patch release packages the final GitHub/source release-readiness cleanup
+after v1.0.0. The branch contains only `fix:`, `docs:`, and `chore:` commits
+since v1.0.0, so the project moves from `1.0.0` to `1.0.1`.
+
+**CLI and ASA parser polish**
+
+- Fixed Cisco ASA ICMP parsing/rendering so ICMP messages do not include
+  TCP/UDP-style interface port suffixes, and added parser/emitter coverage for
+  the corrected behavior (`05180a12`).
+- Added `-h` as a short alias for `--help` on the root `eforge` command and all
+  subcommands, with focused CLI regression coverage (`3134ed1a`).
+
+**Documentation and onboarding**
+
+- Added the `branch-office-example` beginner scenario, updated the README Quick
+  Start to use it, fixed the public repo clone URL, and validated the scenario
+  with validate/generate/eval smoke checks (`fe5d4785`).
+- Aligned dev copies of the `/eforge` command docs with current CLI behavior,
+  removed stale options, corrected scenario-authoring guidance, and updated
+  source-checkout command examples (`73d47a39`).
+- Clarified release test gates, including the no-coverage slow-suite guidance,
+  refreshed the approximate test count, and added the Talos announcement link to
+  the README (`0e69385d`, `a8e021d5`).
+
+**Release metadata and public-source hygiene**
+
+- Added project URL metadata, corrected stale repository links, refreshed
+  evaluation wording, and Talos-branded the Code of Conduct report contact
+  (`e31fd1ed`).
+- Added MIT package license metadata, switched package author metadata to
+  `Cisco Talos`, enabled Dependabot coverage for GitHub Actions, and recorded
+  security/legal release checks (`f47563af`).
+- Removed tracked iteration-test prompt/review artifacts while keeping the
+  approved coverage prompts and public beginner scenario YAML (`fafc6f81`).
+- Created and maintained the release-readiness worklog used to track the review
+  decisions and handoff state (`72e210dc`).
+
 ## v1.0.0 (2026-05-26)
 
 This major release promotes the architecture-reset work and post-reset hardening

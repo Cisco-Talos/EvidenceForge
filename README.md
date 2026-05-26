@@ -6,6 +6,9 @@
 
 Generate realistic synthetic security logs for cybersecurity threat hunting training and research.
 
+For background on the project and why we built it, read our announcement:
+[Introducing EvidenceForge: synthetic security logs that don't look as fake](https://blog.talosintelligence.com/introducing-evidenceforge-synthetic-security-logs-that-dont-look-as-fake).
+
 ## What Makes EvidenceForge Different
 
 Most synthetic log generators produce isolated, single-format data that experienced analysts identify as fake within seconds. EvidenceForge takes a fundamentally different approach:
@@ -22,13 +25,13 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 - **Deterministic engine, LLM-assisted authoring.** Scenario creation uses Claude Code Skills for interactive, research-backed attack planning. Log generation is fully deterministic — no LLM calls, no API costs, reproducible output every time.
 
-- **Built-in quality evaluation.** A 5-dimension scoring framework (23 sub-scores) measures parsability, cross-source consistency, noise realism, temporal patterns, and signal integrity. Know exactly how good your data is before using it.
+- **Built-in quality evaluation.** A 4-pillar scoring framework (20 sub-scores) measures parseability, plausibility, causality, and timing. Know exactly how good your data is before using it.
 
 ## Quick Start
 
 ```bash
 # Install
-git clone https://github.com/cisco-foundation-ai/EvidenceForge.git
+git clone https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 uv sync
 
@@ -42,13 +45,13 @@ uv run eforge install-skills --agent codex
 # /eforge scenario
 
 # Or generate from an existing scenario
-uv run eforge generate scenarios/retail-store-ftp-attack.yaml -o ./output
+uv run eforge generate scenarios/branch-office-example/scenario.yaml -o ./output
 
 # Validate a scenario file
-uv run eforge validate scenarios/retail-store-ftp-attack.yaml
+uv run eforge validate scenarios/branch-office-example/scenario.yaml
 
 # Evaluate generated data quality
-uv run eforge eval ./output --scenario scenarios/retail-store-ftp-attack.yaml
+uv run eforge eval ./output/data --scenario scenarios/branch-office-example/scenario.yaml
 ```
 
 ## Agent Skills (Recommended)
@@ -73,18 +76,22 @@ For scripted or non-interactive use:
 |---------|-------------|
 | `eforge generate <scenario.yaml> -o <dir>` | Generate logs from a scenario file |
 | `eforge validate <scenario.yaml>` | Validate scenario schema and cross-references |
-| `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (5 dimensions, 23 sub-scores) |
+| `eforge eval <output_dir> -s <scenario.yaml>` | Evaluate data quality (4 pillars, 20 sub-scores) |
 | `eforge info [field]` | Show installation info, config paths, and data inventories. Pass a dot-path field for a specific value (e.g., `eforge info personas`). Use `--fields` to list available fields, `--json` for machine output. |
 | `eforge validate-config` | Validate config files for cross-reference integrity. Use `--json` for machine output. |
 | `eforge install-skills [--agent claude\|codex] [--global]` | Install agent skills (`--global` is Claude-only) |
 | `eforge version` | Show version |
 
-Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output
-directory, `--force` / `-f` to overwrite existing output without prompting,
-and `--target default|sof-elk` to choose the generated file layout. The
-`default` target is SIEM-neutral; `sof-elk` emits target-specific variants such
-as Snare Windows events and year-partitioned RFC3164 syslog for parser
-validation.
+Useful command flags: `generate` accepts `--verbose` / `--debug` for logging,
+`--output` / `-o` for output directory overrides, `--force` / `-f` to overwrite
+existing output without prompting, and `--target default|sof-elk` to choose the
+generated file layout. The `default` target is SIEM-neutral; `sof-elk` emits
+target-specific variants such as Snare Windows events and year-partitioned
+RFC3164 syslog for parser validation. `eval` uses `--scenario` / `-s` and
+`--format text|json`; `info` and `validate-config` support `--json` for machine
+output.
+
+All commands accept `--help` and `-h` for usage information.
 
 ## Customizing Configuration
 
@@ -114,7 +121,7 @@ Every generated scenario includes a `GROUND_TRUTH.md` file. Attack scenarios doc
 - **Ground truth documentation** — Every run generates a GROUND_TRUTH.md; attack scenarios include narrative, timeline, and IOCs
 - **Parallel generation** — Threaded emitters write all formats simultaneously with temporal consistency
 - **Scenario validation** — Cross-reference checking, uniqueness constraints, and network topology validation
-- **Data quality evaluation** — 5-dimension scoring framework (23 sub-scores) with acceptance criteria
+- **Data quality evaluation** — 4-pillar scoring framework (20 sub-scores) with acceptance criteria
 - **Multi-timezone support** — Pattern-based timezone overrides per system hostname
 
 ## Supported Log Formats
@@ -184,6 +191,7 @@ See [Scenario Reference](docs/reference/scenario-reference.md) for complete sche
 
 | Scenario | Users | Duration | Description |
 |----------|-------|----------|-------------|
+| [branch-office-example](scenarios/branch-office-example/scenario.yaml) | 5 | 6 hours | Beginner branch office scenario with Windows, Zeek, eCAR, syslog, bash history, Snort, ASA, web, and proxy logs |
 | [minimal.yaml](tests/fixtures/scenarios/minimal.yaml) | 1 | 1 hour | Minimal baseline-only scenario |
 | [attack.yaml](tests/fixtures/scenarios/attack.yaml) | 2 | 4 hours | Lateral movement + exfiltration |
 | [retail-store-ftp-attack.yaml](tests/fixtures/scenarios/retail-store-ftp-attack.yaml) | 20+ | 24 hours | Retail store with FTP RCE attack, full network topology |
@@ -247,8 +255,8 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive in
 ## Development
 
 ```bash
-# Install dependencies
-uv sync
+# Install dependencies and development tools
+uv sync --all-extras
 
 # Run tests without coverage instrumentation (skips slow by default)
 uv run pytest --no-cov
@@ -258,6 +266,9 @@ uv run pytest --include-slow -m slow --no-cov --durations=20
 
 # Run the release coverage gate before a dev -> main PR
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+
+# Do not combine slow tests with coverage during release validation.
+# Slow tests are run with --no-cov; coverage is measured on the default non-slow suite.
 
 # Run specific test suite
 uv run pytest tests/unit/test_network_visibility.py -v
@@ -273,7 +284,7 @@ uv run ruff format --check .
 - Pydantic v2 for schema validation
 - Jinja2 for log format templates
 - Typer + Rich for CLI
-- pytest (1400+ tests)
+- pytest (3700+ tests)
 
 ## Documentation
 

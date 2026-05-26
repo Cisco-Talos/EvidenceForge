@@ -426,7 +426,15 @@ class TestPermitRecords:
         assert len(lines) == 2
         assert "%ASA-6-302020:" in lines[0]
         assert "Built outbound ICMP connection" in lines[0]
+        assert "faddr 203.0.113.50/8" in lines[0]
+        assert "gaddr 10.0.10.50/0" in lines[0]
+        assert "laddr 10.0.10.50/0" in lines[0]
+        assert "faddr outside:" not in lines[0]
         assert "%ASA-6-302021:" in lines[1]
+        assert "faddr 203.0.113.50/8" in lines[1]
+        assert "gaddr 10.0.10.50/0" in lines[1]
+        assert "laddr 10.0.10.50/0" in lines[1]
+        assert "faddr outside:" not in lines[1]
 
     def test_inbound_icmp_keeps_foreign_and_local_addresses_directional(
         self, asa_emitter, tmp_path
@@ -446,9 +454,12 @@ class TestPermitRecords:
         output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
         built_line = next(line for line in output.splitlines() if "%ASA-6-302020:" in line)
         assert "Built inbound ICMP connection" in built_line
-        assert "faddr outside:203.0.113.50/8" in built_line
-        assert "gaddr dmz:172.16.0.5/0" in built_line
-        assert "laddr dmz:172.16.0.5/0" in built_line
+        assert "faddr 203.0.113.50/8" in built_line
+        assert "gaddr 172.16.0.5/0" in built_line
+        assert "laddr 172.16.0.5/0" in built_line
+        assert "faddr outside:" not in built_line
+        assert "gaddr dmz:" not in built_line
+        assert "laddr dmz:" not in built_line
 
     def test_inbound_direction_for_external_source(self, asa_emitter, tmp_path):
         """External source -> internal destination should be 'inbound'."""

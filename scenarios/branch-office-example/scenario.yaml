@@ -1,0 +1,359 @@
+version: "1.0"
+name: branch-office-example
+description: |
+  Beginner-friendly branch office scenario with a small mixed Windows/Linux
+  environment, explicit forward proxy, perimeter firewall, network sensors, and
+  a compact attack storyline. The attack begins with public web reconnaissance,
+  pivots through a compromised admin account, and ends with outbound beaconing
+  from a workstation so new users can see several log families in one run.
+
+environment:
+  description: "Small insurance branch office with Active Directory, a file server, a DMZ web portal, and an explicit forward proxy"
+  domain: "northstar-branch.local"
+
+  timezone:
+    default: "America/New_York"
+
+  proxy:
+    mode: explicit
+    listener_port: 8080
+
+  users:
+    - username: maya.patel
+      full_name: "Maya Patel"
+      email: "maya.patel@northstarclaims.com"
+      persona: accountant
+      primary_system: WS-MPATEL-01
+      groups: ["finance"]
+      enabled: true
+      browsing_intensity: normal
+
+    - username: owen.reed
+      full_name: "Owen Reed"
+      email: "owen.reed@northstarclaims.com"
+      persona: sales
+      primary_system: WS-OREED-01
+      groups: ["sales"]
+      enabled: true
+      browsing_intensity: heavy
+
+    - username: lena.morris
+      full_name: "Lena Morris"
+      email: "lena.morris@northstarclaims.com"
+      persona: analyst
+      primary_system: WS-LMORRIS-01
+      groups: ["claims"]
+      enabled: true
+      browsing_intensity: normal
+
+    - username: nina.kapoor
+      full_name: "Nina Kapoor"
+      email: "nina.kapoor@northstarclaims.com"
+      persona: sysadmin
+      primary_system: WS-NKAPOOR-01
+      groups: ["it-admins", "domain-admins"]
+      enabled: true
+      browsing_intensity: light
+
+    - username: victor.hale
+      full_name: "Victor Hale"
+      email: "victor.hale@northstarclaims.com"
+      persona: executive
+      primary_system: WS-VHALE-01
+      groups: ["branch-leadership"]
+      enabled: true
+      browsing_intensity: normal
+
+  service_accounts:
+    - www-data
+    - svc-backup
+    - svc-proxy
+
+  stale_accounts:
+    - username: carla.nunez
+      last_active: "2023-11-17"
+      reason: "Former claims adjuster; cached credentials still referenced by an old laptop task"
+    - username: svc-print-old
+      last_active: "2023-08-02"
+      reason: "Retired print deployment account left in one legacy startup script"
+
+  systems:
+    - hostname: WS-MPATEL-01
+      ip: "10.44.10.21"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: maya.patel
+      services: ["dns-client"]
+
+    - hostname: WS-OREED-01
+      ip: "10.44.10.22"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: owen.reed
+      services: ["dns-client"]
+
+    - hostname: WS-LMORRIS-01
+      ip: "10.44.10.23"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: lena.morris
+      services: ["dns-client"]
+
+    - hostname: WS-NKAPOOR-01
+      ip: "10.44.10.24"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: nina.kapoor
+      services: ["dns-client"]
+
+    - hostname: WS-VHALE-01
+      ip: "10.44.10.25"
+      os: "Windows 11 Enterprise"
+      type: workstation
+      assigned_user: victor.hale
+      services: ["dns-client"]
+
+    - hostname: DC-BO-01
+      ip: "10.44.20.10"
+      os: "Windows Server 2022"
+      type: domain_controller
+      services: ["kerberos", "ldap", "dns"]
+      roles: ["domain_controller", "dns_server"]
+
+    - hostname: FILE-BO-01
+      ip: "10.44.20.20"
+      os: "Windows Server 2019"
+      type: server
+      services: ["smb", "dfs", "dns-client"]
+      roles: ["file_server"]
+
+    - hostname: PROXY-BO-01
+      ip: "10.44.20.30"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["squid", "dns-client"]
+      roles: ["forward_proxy"]
+
+    - hostname: WEB-BO-01
+      ip: "10.44.30.10"
+      os: "Ubuntu 22.04 LTS"
+      type: server
+      services: ["nginx", "php-fpm", "ssh", "dns-client"]
+      roles: ["web_server"]
+      public_hostnames: ["portal.northstarclaims.net"]
+
+  network:
+    public_cidrs:
+      - "45.83.220.0/28"
+
+    segments:
+      - name: workstations
+        cidr: "10.44.10.0/24"
+        description: "Branch office workstation VLAN"
+        exposure: internal
+        systems: [WS-MPATEL-01, WS-OREED-01, WS-LMORRIS-01, WS-NKAPOOR-01, WS-VHALE-01]
+
+      - name: servers
+        cidr: "10.44.20.0/24"
+        description: "Internal server VLAN"
+        exposure: internal
+        systems: [DC-BO-01, FILE-BO-01, PROXY-BO-01]
+
+      - name: dmz
+        cidr: "10.44.30.0/24"
+        description: "Small DMZ for the public claims portal"
+        exposure: both
+        external_ratio: 0.7
+        systems: [WEB-BO-01]
+
+    sensors:
+      - type: network
+        name: bo-core-span
+        hostname: ZEEK-BO-CORE
+        monitoring_segments: [workstations, servers, dmz]
+        direction: bidirectional
+        placement: span
+        log_formats: [zeek]
+        description: "Core switch SPAN for branch east-west and proxy traffic"
+
+      - type: ids
+        name: bo-perimeter-ids
+        hostname: IDS-BO-EDGE
+        monitoring_segments: [dmz]
+        direction: inbound
+        placement: tap
+        log_formats: [snort_alert]
+        description: "Perimeter IDS monitoring inbound DMZ traffic"
+
+      - type: firewall
+        name: bo-edge-fw
+        hostname: FW-BO-EDGE
+        monitoring_segments: [workstations, servers, dmz]
+        direction: bidirectional
+        placement: tap
+        log_formats: [cisco_asa]
+        interfaces:
+          workstations: inside
+          servers: inside
+          dmz: dmz
+        default_action: deny
+        deny_ratio: 2.0
+        threat_detection_rate: 10
+        nat_rules:
+          - type: dynamic_pat
+            src: [workstations, servers]
+            mapped_ip: "45.83.220.1"
+          - type: static
+            src: dmz
+            real_ip: "10.44.30.10"
+            mapped_ip: "45.83.220.5"
+        policy:
+          - {src: external, dst: dmz, ports: [80, 443], action: permit}
+          - {src: workstations, dst: servers, ports: [53, 88, 389, 445, 8080], action: permit}
+          - {src: workstations, dst: external, ports: [80, 443, 53], action: permit}
+          - {src: servers, dst: external, ports: [80, 443, 53, 123], action: permit}
+          - {src: dmz, dst: servers, ports: [53, 88, 389, 445, 3389], action: permit}
+          - {src: servers, dst: servers, ports: [53, 88, 389, 445], action: permit}
+
+time_window:
+  start: "2024-05-14T12:00:00Z"
+  duration: "6h"
+  warmup: "2h"
+
+baseline_activity:
+  description: "Normal branch office workday traffic with web browsing through the proxy, file share access, domain authentication, public web visitors, and modest suspicious background noise."
+  intensity: medium
+  variation: medium
+  suspicious_noise: medium
+  traffic_rates:
+    web: low
+    user_activity: low
+    persona_connections: low
+
+observation_profile: complete
+logon_grace_period: "45m"
+
+storyline:
+  - id: evt-001
+    time: "+55m"
+    actor: www-data
+    system: WEB-BO-01
+    activity: "External vulnerability scanner probes the public claims portal"
+    events:
+      - type: web_scan
+        technique: "T1595.002 - Active Scanning: Vulnerability Scanning"
+        description: "Scanner probes common web paths and triggers web, Zeek HTTP, firewall, and IDS evidence"
+        source_ip: "185.199.110.42"
+        dst_ip: "45.83.220.5"
+        dst_port: 80
+        hostname: "portal.northstarclaims.net"
+        preset: nikto
+        rate: 4.0
+        duration: "3m"
+
+  - id: evt-002
+    time: "+1h5m"
+    actor: www-data
+    system: WEB-BO-01
+    activity: "Attacker obtains a shell on the web server and checks process identity"
+    events:
+      - type: ssh_session
+        technique: "T1078.003 - Valid Accounts: Local Accounts"
+        description: "Interactive access lands on the public web server as the web service account"
+        source_ip: "185.199.110.42"
+      - type: process
+        technique: "T1033 - System Owner/User Discovery"
+        process_name: "/usr/bin/id"
+        command_line: "id"
+
+  - id: evt-003
+    time: "+1h10m"
+    actor: www-data
+    system: WEB-BO-01
+    activity: "Attacker performs light internal discovery from the DMZ host"
+    events:
+      - type: process
+        technique: "T1016 - System Network Configuration Discovery"
+        process_name: "/usr/sbin/ip"
+        command_line: "ip addr"
+      - type: process
+        technique: "T1049 - System Network Connections Discovery"
+        process_name: "/usr/sbin/ss"
+        command_line: "ss -tulpn"
+      - type: port_scan
+        technique: "T1046 - Network Service Discovery"
+        description: "Low-volume scan from the web server toward the internal server VLAN"
+        source_ip: "10.44.30.10"
+        target_segment: servers
+        target_count: 8
+        ports: [22, 80, 445, 3389]
+        scan_rate: 8.0
+
+  - id: evt-004
+    time: "+1h24m"
+    actor: nina.kapoor
+    system: FILE-BO-01
+    activity: "Attacker uses compromised admin credentials to RDP from the DMZ web server to the file server"
+    events:
+      - type: rdp_session
+        technique: "T1021.001 - Remote Services: Remote Desktop Protocol"
+        description: "Administrative RDP session creates Windows logon and network flow evidence"
+        source_ip: "10.44.30.10"
+
+  - id: evt-005
+    time: "+1h30m"
+    actor: nina.kapoor
+    system: FILE-BO-01
+    activity: "Attacker enumerates file shares and stages a small archive"
+    events:
+      - type: process
+        technique: "T1083 - File and Directory Discovery"
+        process_name: "C:\\Windows\\System32\\cmd.exe"
+        command_line: "cmd.exe /c dir \\\\FILE-BO-01\\Claims /s"
+      - type: process
+        technique: "T1560.001 - Archive Collected Data: Archive via Utility"
+        process_name: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        command_line: "powershell.exe -NoProfile -Command Compress-Archive -Path \\\\FILE-BO-01\\Claims\\Q2 -DestinationPath C:\\Windows\\Temp\\q2-rollup.zip -Force"
+
+  - id: evt-006
+    time: "+1h44m"
+    actor: nina.kapoor
+    system: WS-NKAPOOR-01
+    activity: "Compromised admin workstation beacons through the explicit proxy to attacker infrastructure"
+    events:
+      - type: beacon
+        technique: "T1071.001 - Application Layer Protocol: Web Protocols"
+        description: "Regular HTTPS beaconing through the branch proxy creates proxy, Zeek, firewall, and EDR flow evidence"
+        dst_ip: "45.83.221.30"
+        dst_port: 443
+        hostname: "northlakeportal.com"
+        service: ssl
+        interval: "5m"
+        duration: "35m"
+        action: allow
+
+red_herrings:
+  - id: rh-001
+    time: "+2h20m"
+    actor: victor.hale
+    system: WS-VHALE-01
+    activity: "Branch manager mistypes a password during a VPN reconnect"
+    explanation: "Benign user error that creates a small cluster of failed authentication evidence"
+    events:
+      - type: failed_logon
+        source_ip: "198.51.100.77"
+        logon_type: 3
+
+output:
+  logs:
+    - format: windows
+    - format: zeek
+    - format: ecar
+    - format: syslog
+    - format: bash_history
+    - format: snort_alert
+    - format: cisco_asa
+    - format: web_access
+    - format: proxy_access
+  destination: scenarios/branch-office-example
+  compression: false

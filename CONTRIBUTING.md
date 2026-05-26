@@ -18,7 +18,7 @@ in any real-time space e.g., Slack, Discord, etc.
 
 Before reporting a new issue, please ensure that the issue was not already
 reported or fixed by searching through our [issues
-list](https://github.com/cisco-foundation-ai/EvidenceForge/issues).
+list](https://github.com/Cisco-Talos/EvidenceForge/issues).
 
 When creating a new issue, please be sure to include a **title and clear
 description**, as much relevant information as possible, and, if possible, a
@@ -46,10 +46,12 @@ We expect new pull requests to include tests for any affected behavior, and, as
 we follow semantic versioning, we may reserve breaking changes until the next
 major version release.
 
-Before submitting a regular feature or fix pull request, run the normal suite
-without coverage instrumentation plus lint/format checks:
+Before submitting a regular feature or fix pull request, install development
+dependencies and run the normal suite without coverage instrumentation plus
+lint/format checks:
 
 ```bash
+uv sync --all-extras
 uv run pytest --no-cov
 uv run ruff check .
 uv run ruff format --check .
@@ -63,7 +65,9 @@ uv run pytest --include-slow -m slow --no-cov --durations=20
 ```
 
 Coverage is reserved for final readiness checks before opening a `dev` → `main`
-release PR:
+release PR. Do not combine slow tests with coverage during release validation:
+slow tests are intentionally run with `--no-cov`, and coverage is measured on
+the default non-slow suite.
 
 ```bash
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
@@ -99,11 +103,11 @@ a brief example of the before/after behavior.
 
 ```bash
 # Clone the repository
-git clone https://github.com/cisco-foundation-ai/EvidenceForge.git
+git clone https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 
-# Install dependencies (requires uv: https://docs.astral.sh/uv/)
-uv sync
+# Install dependencies and development tools (requires uv: https://docs.astral.sh/uv/)
+uv sync --all-extras
 
 # Run the test suite without coverage instrumentation (skips slow by default)
 uv run pytest --no-cov
@@ -125,7 +129,7 @@ uv run pytest --no-cov
 # Slow comprehensive run
 uv run pytest --include-slow -m slow --no-cov --durations=20
 
-# Release coverage gate
+# Release coverage gate; do not combine with --include-slow
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 ```
 
