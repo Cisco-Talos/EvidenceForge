@@ -46,6 +46,7 @@ from evidenceforge.generation.emitters.windows import (
     _auth_subject_domain,
     _normalize_windows_time_created,
     _special_privilege_fallback,
+    _windows_pid_hex,
 )
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.utils import generate_zeek_uid
@@ -101,6 +102,11 @@ class TestWindowsEventEmitter:
         assert re.search(r"2024-01-15T10:30:45\.123456\dZ", content)
         assert "<Computer>WIN-TEST-01.corp.local</Computer>" in content
         assert '<Data Name="TargetUserName">jsmith</Data>' in content
+
+    def test_windows_pid_hex_rejects_oversized_decimal_pid(self) -> None:
+        """Oversized decimal PID text should not raise and should remain unchanged."""
+        oversized_pid = "9" * 5000
+        assert _windows_pid_hex(oversized_pid) == oversized_pid
 
     @pytest.mark.parametrize(
         ("logon_type", "expected_role", "expected_process"),
