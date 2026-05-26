@@ -28,6 +28,7 @@ just formats the context fields into the syslog template.
 """
 
 import re
+from bisect import bisect_right
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -618,6 +619,9 @@ class SyslogEmitter(HostMultiplexEmitter):
                 _parse_rfc5424_timestamp(pam_match.group("timestamp"))
             )
 
+        for open_times in open_times_by_user.values():
+            open_times.sort()
+
         normalized: list[str] = []
         for index, line in enumerate(lines):
             new_match = _RFC5424_LOGIND_NEW_SESSION_RE.match(line)
@@ -630,9 +634,11 @@ class SyslogEmitter(HostMultiplexEmitter):
 
             user = new_match.group("user")
             new_time = _parse_rfc5424_timestamp(new_match.group("timestamp"))
-            has_recent_open = any(
-                open_time <= new_time and new_time - open_time <= _PAM_OPEN_VISIBLE_WINDOW
-                for open_time in open_times_by_user.get(user, [])
+            open_times = open_times_by_user.get(user, [])
+            newest_index = bisect_right(open_times, new_time) - 1
+            has_recent_open = (
+                newest_index >= 0
+                and new_time - open_times[newest_index] <= _PAM_OPEN_VISIBLE_WINDOW
             )
             if not has_recent_open:
                 normalized.append(
