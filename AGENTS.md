@@ -20,38 +20,54 @@ This architecture combines LLM flexibility/realism with deterministic speed, cos
 
 **Causal Expansion Engine:** The `CausalExpansionEngine` (`src/evidenceforge/generation/causal/`) auto-generates prerequisite and consequent events via composable rules. DNS lookups before TCP connections, Kerberos/DC-bundle TGT/TGS evidence before domain logons, ProcessAccess after lsass injection, and supplementary audit events from command-line patterns are all handled automatically — scenario authors should NOT manually specify these as prerequisites. Authors CAN still specify these event types when they are part of the attack narrative itself (e.g., DNS tunneling, golden ticket forging). The validator warns on potentially redundant manual specifications. See `docs/ARCHITECTURE.md` § Causal Expansion Engine for implementation details.
 
-## MANDATORY: Implementation State Tracking
+## MANDATORY: Project Memory Workflow
 
 **CRITICAL: Read this section first before doing ANY work on this project.**
 
-This project uses `TODO.md` as the **persistent implementation plan and progress tracker**. This is NOT optional.
+This project uses `TODO.md` as the durable roadmap and backlog. It also uses
+tracked worklogs under `docs/worklog/` for multi-session effort memory. This is
+designed to preserve agent continuity without forcing every branch to edit the
+same high-conflict roadmap file.
 
 ### Required Workflow for Every Session
 
 1. **START OF SESSION (BEFORE ANY WORK):**
    - **ALWAYS read `TODO.md` first** to understand:
      - What phase/milestone the project is in
-     - What's been completed
-     - What's in progress
-     - What's next to work on
-   - If `TODO.md` doesn't exist, create it with the initial implementation plan based on the PRD
+     - What durable backlog items remain
+     - Which worklogs contain active handoff context
+   - If `TODO.md` references a relevant worklog, read that worklog before
+     changing code.
+   - If `TODO.md` doesn't exist, create it with the initial durable roadmap
+     based on the PRD.
 
-2. **BEFORE STARTING ANY TASK:**
-   - Update the task status to `- [ ] **IN PROGRESS**` in `TODO.md`
-   - This marks your claim on the work and provides visibility
+2. **DURING NORMAL TASK WORK:**
+   - Do **not** edit `TODO.md` just to mark a task as started, in progress, or
+     completed.
+   - For one-shot fixes, use commits, PR descriptions, and final response notes
+     as the task record.
+   - For multi-session efforts, assessment loops, investigations, or branch-local
+     progress that future agents need, create or update one focused worklog under
+     `docs/worklog/`.
+   - Use one worklog per effort, named `YYYY-MM-DD-<effort-slug>.md`.
 
-3. **WHEN COMPLETING TASKS:**
-   - **IMMEDIATELY** update `TODO.md` to mark the task as `- [x]` completed
-   - Do NOT batch updates - update as soon as each item is done
-   - Add notes if the implementation deviated from the plan
+3. **WHEN TO UPDATE `TODO.md`:**
+   - Add, remove, or reprioritize durable backlog items.
+   - Record a milestone-level completion or major roadmap pivot.
+   - Reconcile roadmap state during release/integration work.
+   - Replace detailed progress history with a short pointer to a worklog or
+     changelog entry.
 
-4. **WHEN ADDING NEW TASKS:**
-   - Add them to `TODO.md` in the appropriate phase/section
-   - Use `- [ ]` for pending tasks
+4. **WHEN ADDING NEW WORK:**
+   - If it is durable product/project work, add it to `TODO.md`.
+   - If it is branch-local execution detail, loop history, command output,
+     review notes, or handoff context, add it to a worklog instead.
 
 ### Changelog Workflow
 
-When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line summary and move the detailed task history to `CHANGELOG.md`. This keeps `TODO.md` focused on active/future work while preserving the full development record.
+When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line
+summary and move the detailed release history to `CHANGELOG.md`. Keep ongoing
+handoff details in `docs/worklog/` until they are no longer useful.
 
 ## Tech Stack
 
