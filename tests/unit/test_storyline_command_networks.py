@@ -344,6 +344,40 @@ class TestStorylineCommandNetworks:
         assert engine._storyline_authored_ip_for_hostname("two.example") == "192.0.2.20"
         assert field_reads == 12
 
+    def test_dns_query_event_marks_explicit_ttl_preserved(self):
+        engine = object.__new__(StorylineMixin)
+        captured: dict[str, Any] = {}
+
+        class FakeActivityGenerator:
+            _dns_server_ips = ["10.0.0.1"]
+
+            @staticmethod
+            def generate_connection(**kwargs: Any) -> None:
+                captured.update(kwargs)
+
+        engine.activity_generator = FakeActivityGenerator()
+        spec = SimpleNamespace(
+            type="dns_query",
+            query="cache-poison.example",
+            qtype="A",
+            rcode="NOERROR",
+            answer="203.0.113.77",
+            ttl=42,
+            source_ip=None,
+        )
+
+        engine._execute_typed_event(
+            spec,
+            actor=SimpleNamespace(username="alice"),
+            system=SimpleNamespace(hostname="WS-01", ip="10.0.1.20"),
+            time=datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            activity="authored DNS TTL",
+            explicit_types={"dns_query"},
+        )
+
+        assert captured["dns"].preserve_ttls is True
+        assert captured["dns"].TTLs == [42.0]
+
     def test_activity_generator_remembers_rendered_process_create_time(self):
         class _ProcessTimingEmitter:
             render_time: datetime | None = None

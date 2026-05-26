@@ -1335,6 +1335,24 @@ class TestDnsSupportQueryTypes:
         assert second.TTLs[0] < first.TTLs[0]
         assert second.TTLs[0] <= first.TTLs[0] - 50
 
+    def test_authored_dns_context_ttls_are_preserved(self, activity_gen, timestamp):
+        """Explicit scenario DNS TTL overrides should bypass resolver normalization."""
+        authored = DnsContext(
+            query="cache-poison.example",
+            query_type="A",
+            qtype=1,
+            answers=["203.0.113.77"],
+            TTLs=[42.0],
+            preserve_ttls=True,
+        )
+        activity_gen._normalize_dns_context_for_resolver(
+            authored,
+            resolver_ip="10.0.0.1",
+            time=timestamp,
+        )
+
+        assert authored.TTLs == [42.0]
+
     def test_external_rrset_ttl_countdown_is_generation_order_independent(
         self, activity_gen, timestamp
     ):

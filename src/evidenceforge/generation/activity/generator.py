@@ -12087,6 +12087,8 @@ class ActivityGenerator:
 
         if dns.rcode != "NOERROR" or not dns.answers:
             return
+        if dns.preserve_ttls and len(dns.TTLs) == len(dns.answers):
+            return
         if not is_internal and qtype_name == "TXT" and len(dns.TTLs) == len(dns.answers):
             base_ttl = max(1, int(min(dns.TTLs)))
         else:

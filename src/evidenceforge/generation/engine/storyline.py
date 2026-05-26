@@ -3408,6 +3408,7 @@ class StorylineMixin:
                 rcode_num=rcode_num,
                 answers=answers,
                 TTLs=ttls,
+                preserve_ttls=spec.ttl is not None,
                 trans_id=rng.randint(1, 65535),
                 AA=False,
                 RD=True,
