@@ -2728,6 +2728,31 @@ class TestHttpContextPopulation:
         assert net.resp_pkts > math.ceil((net.resp_bytes or 0) / 1460)
         assert net.resp_ip_bytes != (net.resp_bytes or 0) + (net.resp_pkts * 52)
 
+    def test_tcp_payload_segment_count_handles_huge_payload_without_float_overflow(self):
+        """Huge payload sizes should use integer-only ceiling division."""
+        huge_payload = 10**400
+        expected_segments = (huge_payload + generator_module._TCP_MSS_BYTES - 1) // (
+            generator_module._TCP_MSS_BYTES
+        )
+
+        segments = generator_module._tcp_payload_segment_count(huge_payload)
+
+        assert segments == expected_segments
+
+    def test_tcp_ack_packet_floor_handles_huge_payload_without_float_overflow(self, monkeypatch):
+        """ACK packet floor should stay integer-only for huge payload segment counts."""
+        rng = random.Random(7)
+        monkeypatch.setattr(rng, "choices", lambda *_args, **_kwargs: [2])
+        huge_payload = 10**400
+        expected_segments = (huge_payload + generator_module._TCP_MSS_BYTES - 1) // (
+            generator_module._TCP_MSS_BYTES
+        )
+        expected_floor = max(16, (expected_segments + 1) // 2)
+
+        ack_floor = generator_module._tcp_ack_packet_floor(huge_payload, rng)
+
+        assert ack_floor == expected_floor
+
     def test_icmp_accounting_is_echo_like(self, activity_gen):
         """ICMP echo-style flows should not inherit bulk TCP byte/packet accounting."""
         gen, events = activity_gen
