@@ -712,6 +712,8 @@ class SyslogEmitter(HostMultiplexEmitter):
                 bucket["close"].append(index)
 
         normalized = list(lines)
+        if not parsed:
+            return normalized
         min_gap = timedelta(milliseconds=1)
         max_repair_gap = timedelta(seconds=2)
         for bucket in rows_by_pid.values():

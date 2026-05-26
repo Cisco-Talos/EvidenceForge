@@ -171,6 +171,17 @@ def test_backfill_missing_logind_pam_openers_preserves_existing_opener() -> None
     assert normalized == lines
 
 
+def test_normalize_sudo_session_lifecycles_preserves_non_rfc5424_order() -> None:
+    lines = [
+        "<86>Nov  1 00:00:00 host sudo[2001]: 2023-NOV sentinel",
+        "<86>Apr  1 00:00:00 host sudo[2002]: 2024-APR sentinel",
+    ]
+
+    normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
+
+    assert normalized == lines
+
+
 def test_normalize_sshd_child_pids_skips_oversized_pid_without_crashing() -> None:
     huge_pid = "9" * 5000
     lines = [
