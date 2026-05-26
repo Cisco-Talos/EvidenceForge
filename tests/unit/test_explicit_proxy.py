@@ -698,6 +698,21 @@ class TestExplicitProxyVisibility:
 
         assert upstream_event.timestamp > client_event.timestamp + timedelta(milliseconds=451)
 
+    def test_browser_http_client_process_hint_handles_malformed_absolute_uri(self):
+        generator = ActivityGenerator(StateManager(), {})
+
+        hint = generator._browser_http_client_process_hint(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0"
+            ),
+            hostname="example.com",
+            uri="http://[:::",
+            dst_port=80,
+        )
+
+        assert hint is not None
+
     def test_connect_target_browser_hint_uses_origin_https_url(self):
         generator = ActivityGenerator(StateManager(), {})
 
