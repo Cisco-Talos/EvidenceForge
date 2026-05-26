@@ -11,6 +11,7 @@ from evidenceforge.utils.rng import _stable_seed
 _EXTENSION_MIME_TYPES: dict[str, str] = {
     ".cab": "application/vnd.ms-cab-compressed",
     ".css": "text/css",
+    ".exe": "application/x-msdownload",
     ".gif": "image/gif",
     ".gz": "application/x-gzip",
     ".ico": "image/x-icon",
@@ -37,6 +38,7 @@ _RESPONSE_SIZE_RANGES: dict[str, tuple[int, int]] = {
     "application/pdf": (20_000, 2_000_000),
     "application/pkix-crl": (2_000, 200_000),
     "application/vnd.ms-cab-compressed": (50_000, 5_000_000),
+    "application/x-msdownload": (5_000_000, 150_000_000),
     "application/x-gzip": (10_000, 5_000_000),
     "font/woff": (20_000, 100_000),
     "font/woff2": (20_000, 100_000),
@@ -115,6 +117,30 @@ def response_size_for_mime(rng: random.Random, content_type: str) -> int:
     return rng.randint(lo, hi)
 
 
+def response_size_floor_for_mime(content_type: str) -> int:
+    """Return the configured minimum body size for a MIME type."""
+    lo, _hi = _RESPONSE_SIZE_RANGES.get(content_type, (500, 50_000))
+    return lo
+
+
+def is_download_scale_mime(content_type: str) -> bool:
+    """Return whether a MIME type should use download-scale body sizes."""
+    return response_size_floor_for_mime(content_type) >= 1_000_000
+
+
+def coerce_response_size_for_mime(
+    rng: random.Random,
+    content_type: str,
+    preferred_size: int | None,
+) -> int:
+    """Return a source-native body size, replacing tiny download bodies."""
+    preferred = max(0, preferred_size or 0)
+    floor = response_size_floor_for_mime(content_type)
+    if preferred and (not is_download_scale_mime(content_type) or preferred >= floor):
+        return preferred
+    return response_size_for_mime(rng, content_type)
+
+
 def apply_transfer_size_variance(
     body_size: int,
     *,
@@ -141,6 +167,9 @@ def apply_transfer_size_variance(
         return body_size
 
     mime_type = content_type or normalize_mime_type_for_path(uri, "text/html")
+    if is_download_scale_mime(mime_type):
+        return body_size
+
     rng = random.Random(
         _stable_seed(f"web_transfer_variant:{status_code}:{host}:{uri}:{mime_type}:{variant_key}")
     )
@@ -226,20 +255,25 @@ def is_stable_resource_path(uri: str) -> bool:
     if clean_path in {"/", "/index.html", "/robots.txt", "/sitemap.xml", "/favicon.ico"}:
         return True
     return suffix in {
+        ".cab",
         ".css",
+        ".exe",
         ".gif",
+        ".gz",
         ".ico",
         ".jpeg",
         ".jpg",
         ".js",
         ".map",
         ".png",
+        ".pdf",
         ".svg",
         ".txt",
         ".webp",
         ".woff",
         ".woff2",
         ".xml",
+        ".zip",
     }
 
 

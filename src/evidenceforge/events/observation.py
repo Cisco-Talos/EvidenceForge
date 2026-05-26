@@ -258,6 +258,20 @@ class ObservationPolicy:
     @staticmethod
     def _uses_coherent_source_identity(source: str, group: str) -> bool:
         """Return whether observation delay/drop should be shared within a source group."""
+        if group.startswith("process:") and source in {"windows_security", "sysmon", "ecar"}:
+            return True
+        if group.startswith("session:") and source in {"windows_security", "ecar", "syslog"}:
+            return True
+        if group.startswith("uid:") and source in {
+            "zeek",
+            "ecar",
+            "sysmon",
+            "windows_security",
+            "proxy",
+            "asa",
+            "ids",
+        }:
+            return True
         if source == "syslog" and group.startswith("sshd:"):
             return True
         if source == "ecar" and group.startswith("storyline-process:"):

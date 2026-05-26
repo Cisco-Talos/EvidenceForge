@@ -32,6 +32,7 @@ import pytest
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
+    HostContext,
     HttpContext,
     NetworkContext,
     OcspContext,
@@ -39,17 +40,35 @@ from evidenceforge.events.contexts import (
     X509Context,
 )
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions import (
+    ProxyTransactionActionBundle,
+    ProxyTransactionRequest,
+    SshSessionActionBundle,
+    SshSessionRequest,
+)
+from evidenceforge.generation.actions import (
+    ssh_session as ssh_session_module,
+)
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
+from evidenceforge.utils.rng import _stable_seed, _thread_local
 
 
-@pytest.fixture
-def activity_gen():
+def _reset_thread_rng() -> None:
+    """Reset the test thread RNG so identical-input bundle probes are stable."""
+
+    if hasattr(_thread_local, "rng"):
+        delattr(_thread_local, "rng")
+
+
+def _make_activity_gen() -> tuple[ActivityGenerator, list[SecurityEvent]]:
     """Create ActivityGenerator with mock dependencies that capture dispatched events."""
+
     state_manager = StateManager()
     state_manager.set_current_time(datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC))
 
@@ -73,7 +92,7 @@ def activity_gen():
         mock_emitters[name] = m
     # conn emitter accepts connection events
     mock_emitters["zeek_conn"].can_handle.side_effect = lambda e: (
-        e.event_type in {"connection", "ssh_session"} and e.network is not None
+        e.event_type == "connection" and e.network is not None
     )
 
     dispatcher = EventDispatcher(state_manager, mock_emitters)
@@ -91,8 +110,666 @@ def activity_gen():
     return gen, captured_events
 
 
+def _event_signature(event: SecurityEvent) -> tuple:
+    """Return a deterministic signature for SSH bundle evidence events."""
+
+    return (
+        event.event_type,
+        event.timestamp.isoformat(),
+        event.src_host.hostname if event.src_host else "",
+        event.dst_host.hostname if event.dst_host else "",
+        (
+            event.auth.username,
+            event.auth.source_ip,
+            event.auth.source_port,
+            event.auth.logon_id,
+            event.auth.logon_type,
+        )
+        if event.auth
+        else None,
+        (
+            event.network.src_ip,
+            event.network.src_port,
+            event.network.dst_ip,
+            event.network.dst_port,
+            event.network.protocol,
+            event.network.service,
+            event.network.zeek_uid,
+            event.network.conn_id,
+            event.network.duration,
+            event.network.orig_bytes,
+            event.network.resp_bytes,
+            event.network.orig_pkts,
+            event.network.resp_pkts,
+            event.network.orig_ip_bytes,
+            event.network.resp_ip_bytes,
+            event.network.conn_state,
+            event.network.history,
+            event.network.initiating_pid,
+            event.network.responding_pid,
+        )
+        if event.network
+        else None,
+        (
+            event.process.pid,
+            event.process.parent_pid,
+            event.process.image,
+            event.process.command_line,
+            event.process.username,
+            event.process.logon_id,
+            event.process.start_time.isoformat() if event.process.start_time else "",
+        )
+        if event.process
+        else None,
+        (
+            event.dns.query,
+            event.dns.query_type,
+            event.dns.response_ip,
+            tuple(event.dns.answers),
+            tuple(event.dns.TTLs),
+        )
+        if event.dns
+        else None,
+        (
+            event.syslog.app_name,
+            event.syslog.pid,
+            event.syslog.facility,
+            event.syslog.severity,
+            event.syslog.message,
+        )
+        if event.syslog
+        else None,
+        (
+            event.edr.object_id,
+            event.edr.actor_id,
+            event.edr.tid,
+        )
+        if event.edr
+        else None,
+    )
+
+
+def _ssh_transport_event(events: list[SecurityEvent]) -> SecurityEvent:
+    """Return the canonical connection event that owns an SSH session transport."""
+
+    return next(
+        event
+        for event in events
+        if event.event_type == "connection"
+        and event.network is not None
+        and event.network.service == "ssh"
+    )
+
+
+@pytest.fixture
+def activity_gen():
+    """Create ActivityGenerator with mock dependencies that capture dispatched events."""
+
+    return _make_activity_gen()
+
+
+def test_direct_http_infrastructure_domain_uses_source_native_user_agent(activity_gen):
+    """Direct HTTP auto-generation should honor domain-specific client contracts."""
+    gen, events = activity_gen
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="142.250.80.46",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=2000,
+        source_system=source,
+        hostname="clients4.google.com",
+        conn_state="SF",
+    )
+
+    http_event = next(event for event in events if event.http is not None)
+    assert http_event.http.host == "clients4.google.com"
+    assert http_event.http.user_agent == "GoogleDriveFS/97.0.1.0 Windows"
+
+
+def test_direct_http_https_first_domain_redirects_instead_of_success_page(activity_gen):
+    """Direct HTTP auto-generation should not serve plaintext login pages for HTTPS-first sites."""
+    gen, events = activity_gen
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="142.250.80.46",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=20_000,
+        source_system=source,
+        hostname="accounts.google.com",
+        conn_state="SF",
+    )
+
+    http_event = next(event for event in events if event.http is not None)
+    assert http_event.http.status_code in {301, 302}
+    assert 120 <= http_event.http.response_body_len <= 480
+
+
+def test_direct_http_public_browser_domain_redirects_by_default(activity_gen):
+    """Public browser-like domains should redirect on port 80 without exact policy entries."""
+    gen, events = activity_gen
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="13.107.42.14",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=20_000,
+        source_system=source,
+        hostname="www.office.com",
+        conn_state="SF",
+    )
+
+    http_event = next(event for event in events if event.http is not None)
+    assert http_event.http.status_code in {301, 302}
+
+
+def test_direct_http_download_path_replaces_tiny_caller_response_bytes(activity_gen, monkeypatch):
+    """HTTP download semantics should not inherit tiny generic flow byte counts."""
+    gen, events = activity_gen
+    monkeypatch.setattr(generator_module, "_get_rng", lambda: random.Random(0))
+    monkeypatch.setattr(generator_module, "_get_http_status", lambda _dst_ip, _uri: (200, "OK"))
+    source = System(
+        hostname="WKS-01",
+        ip="10.0.10.50",
+        os="Windows 11",
+        type="workstation",
+    )
+    gen._ip_to_system = {source.ip: source}
+
+    gen.generate_connection(
+        src_ip=source.ip,
+        dst_ip="104.21.73.124",
+        time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+        dst_port=80,
+        proto="tcp",
+        service="http",
+        duration=1.0,
+        orig_bytes=500,
+        resp_bytes=32_000,
+        source_system=source,
+        hostname="update.dbeaver.io",
+        conn_state="SF",
+    )
+
+    http_event = next(
+        event for event in events if event.http is not None and event.http.uri.endswith(".exe")
+    )
+    assert http_event.http.resp_mime_types == ["application/x-msdownload"]
+    assert http_event.http.response_body_len >= 5_000_000
+    assert http_event.network is not None
+    assert http_event.network.resp_bytes >= http_event.http.response_body_len
+
+
 class TestSslContextPopulation:
     """Verify SSL context is attached to connection events for port 443."""
+
+    def test_ssh_session_request_has_stable_action_anchor(self):
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        source = System(
+            hostname="wks01",
+            ip="10.0.10.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip=source.ip,
+            source_system=source,
+            source_port=51111,
+            logon_id="0xabc",
+        )
+        same_request = replace(request)
+        bundle = SshSessionActionBundle(request=request, executor=MagicMock())
+
+        assert request.stable_id == same_request.stable_id
+        assert bundle.anchor.family == "ssh_session"
+        assert bundle.anchor.stable_id == request.stable_id
+
+    def test_ssh_session_request_execution_anchor_uses_resolved_source_port(self):
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+        )
+
+        assert request.execution_stable_id(51111) == request.execution_stable_id(51111)
+        assert request.execution_stable_id(51111) != request.execution_stable_id(51112)
+
+    def test_generate_ssh_session_routes_through_action_bundle_adapter(
+        self,
+        activity_gen,
+        monkeypatch,
+    ):
+        gen, _events = activity_gen
+        captured = {}
+
+        def execute_bundle(bundle):
+            captured["request"] = bundle.request
+            captured["executor"] = bundle.executor
+            return "CsshBundleUid"
+
+        monkeypatch.setattr(SshSessionActionBundle, "execute", execute_bundle)
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+
+        uid = gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id="0xabc",
+            auth_method="publickey",
+            public_key_type="ED25519",
+            public_key_hash="SHA256:test",
+            source="unit_test",
+        )
+
+        request = captured["request"]
+        assert uid == "CsshBundleUid"
+        assert isinstance(request, SshSessionRequest)
+        assert request.user is user
+        assert request.target_system is target
+        assert request.source_ip == "10.0.10.50"
+        assert request.source_port == 51111
+        assert request.logon_id == "0xabc"
+        assert request.auth_method == "publickey"
+        assert request.public_key_type == "ED25519"
+        assert request.public_key_hash == "SHA256:test"
+        assert request.source == "unit_test"
+        assert captured["executor"] is gen
+
+    def test_ssh_session_bundle_execute_expands_lifecycle_events(self, activity_gen):
+        gen, events = activity_gen
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id="0xabc",
+        )
+
+        uid = SshSessionActionBundle(request=request, executor=gen).execute()
+
+        assert uid
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_event = _ssh_transport_event(events)
+        assert ssh_event.network is None
+        assert transport_event.network.src_port == 51111
+        assert transport_event.network.responding_pid is not None
+
+        syslog_events = [
+            event for event in events if event.event_type == "syslog" and event.syslog is not None
+        ]
+        connection_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("Connection from")
+        )
+        accepted_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("Accepted password")
+        )
+        pam_event = next(
+            event
+            for event in syslog_events
+            if event.syslog.message.startswith("pam_unix(sshd:session)")
+        )
+        logind_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("New session")
+        )
+
+        assert connection_event.timestamp < accepted_event.timestamp
+        assert accepted_event.timestamp < pam_event.timestamp
+        assert pam_event.timestamp < logind_event.timestamp
+        assert transport_event.timestamp < connection_event.timestamp
+        assert connection_event.syslog.pid == transport_event.network.responding_pid
+        assert accepted_event.syslog.pid == transport_event.network.responding_pid
+        assert pam_event.syslog.pid == transport_event.network.responding_pid
+
+    def test_ssh_session_bundle_graph_orders_collapsed_auth_timestamps(
+        self,
+        activity_gen,
+        monkeypatch,
+    ):
+        gen, events = activity_gen
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+
+        monkeypatch.setattr(
+            ssh_session_module,
+            "_ssh_syslog_time",
+            lambda base_time, label, milliseconds, *seed_parts, before=False: base_time,
+        )
+
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id="0xabc",
+        )
+
+        SshSessionActionBundle(request=request, executor=gen).execute()
+
+        syslog_events = [
+            event for event in events if event.event_type == "syslog" and event.syslog is not None
+        ]
+        connection_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("Connection from")
+        )
+        accepted_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("Accepted password")
+        )
+        pam_event = next(
+            event
+            for event in syslog_events
+            if event.syslog.message.startswith("pam_unix(sshd:session)")
+        )
+        logind_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("New session")
+        )
+        transport_event = _ssh_transport_event(events)
+
+        assert transport_event.timestamp < connection_event.timestamp
+        assert connection_event.timestamp < accepted_event.timestamp
+        assert accepted_event.timestamp < pam_event.timestamp
+        assert pam_event.timestamp < logind_event.timestamp
+
+    def test_ssh_session_auth_graph_accounts_for_ecar_flow_offset(self):
+        """SSH syslog auth should wait for source-timed eCAR FLOW visibility."""
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+        )
+        event = SecurityEvent(
+            timestamp=base_time + timedelta(milliseconds=600),
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.20.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.10.50",
+                src_port=51111,
+                dst_ip="10.0.20.10",
+                dst_port=22,
+                protocol="tcp",
+                duration=60.0,
+            ),
+        )
+
+        resolved = SshSessionActionBundle(
+            request=request,
+            executor=MagicMock(),
+        )._resolve_linux_auth_lifecycle(
+            event=event,
+            syslog_seed=("linux01", "10.0.10.50", 51111, 4242, base_time.isoformat()),
+            conn_delay_ms=35,
+            accepted_gap_ms=90,
+            pam_gap_ms=45,
+            logind_gap_ms=420,
+            transport_open_time=base_time,
+        )
+
+        assert resolved["accepted"] > EcarEmitter._flow_identity_deadline(event)
+
+    def test_ssh_session_bundle_renders_publickey_and_optional_close(self, activity_gen):
+        gen, events = activity_gen
+        user = User(username="deploy", full_name="Deploy User", email="deploy@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            duration=120.0,
+            orig_bytes=12_000,
+            resp_bytes=44_000,
+            auth_method="publickey",
+            public_key_type="ED25519",
+            public_key_hash="SHA256:abc",
+            emit_session_close=True,
+        )
+
+        SshSessionActionBundle(request=request, executor=gen).execute()
+
+        transport_event = _ssh_transport_event(events)
+        assert transport_event.network.duration == 120.0
+        assert transport_event.network.orig_bytes == 12_000
+        assert transport_event.network.resp_bytes == 44_000
+
+        syslog_messages = [event.syslog.message for event in events if event.syslog is not None]
+        assert any(
+            message.startswith(
+                "Accepted publickey for deploy from 10.0.10.50 port 51111 ssh2: ED25519 SHA256:abc"
+            )
+            for message in syslog_messages
+        )
+        close_event = next(
+            event
+            for event in events
+            if event.syslog is not None and "session closed for user deploy" in event.syslog.message
+        )
+        transport_close = transport_event.timestamp + timedelta(seconds=120)
+        assert transport_close < close_event.timestamp
+        assert close_event.timestamp <= transport_close + timedelta(seconds=3)
+
+    def test_ssh_session_bundle_identical_input_regenerates_same_event_signature(self):
+        def run_bundle_once() -> list[tuple]:
+            _reset_thread_rng()
+            gen, events = _make_activity_gen()
+            user = User(username="admin", full_name="Admin User", email="admin@example.com")
+            target = System(
+                hostname="linux01",
+                ip="10.0.20.10",
+                os="Ubuntu 24.04",
+                type="server",
+                roles=["web_server"],
+            )
+            base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+            gen.state_manager.set_current_time(base_time - timedelta(seconds=5))
+            sshd_pid = gen.state_manager.create_process(
+                system=target.hostname,
+                parent_pid=0,
+                image="/usr/sbin/sshd",
+                command_line="sshd: [accepted]",
+                username="admin",
+                integrity_level="Medium",
+            )
+            gen.state_manager.set_current_time(base_time)
+
+            request = SshSessionRequest(
+                user=user,
+                target_system=target,
+                time=base_time,
+                source_ip="10.0.10.50",
+                source_port=51111,
+                sshd_pid=sshd_pid,
+                logon_id="0xabc",
+                session_obj_id="session-obj-stable",
+            )
+
+            SshSessionActionBundle(request=request, executor=gen).execute()
+
+            return [
+                _event_signature(event)
+                for event in events
+                if event.event_type in {"dns", "ssh_session", "syslog"}
+            ]
+
+        assert run_bundle_once() == run_bundle_once()
+
+    def test_ssh_session_bundle_records_session_lifecycle_bounds(self, activity_gen):
+        gen, events = activity_gen
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+            start_time=base_time,
+        )
+
+        request = SshSessionRequest(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+            min_duration=300.0,
+        )
+
+        SshSessionActionBundle(request=request, executor=gen).execute()
+
+        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_event = _ssh_transport_event(events)
+        assert ssh_event.network is None
+        session = gen.state_manager.get_session(logon_id)
+        assert session is not None
+        close_time = transport_event.timestamp + timedelta(seconds=transport_event.network.duration)
+        assert session.network_close_time == close_time
+        assert session.transport_pid == transport_event.network.responding_pid
+        assert session.source_ready_time is not None
+        assert session.source_ready_time < close_time
+
+        responder = gen.state_manager.get_process(target.hostname, session.transport_pid)
+        assert responder is not None
+        assert responder.image == "/usr/sbin/sshd"
+
+        syslog_events = [
+            event for event in events if event.event_type == "syslog" and event.syslog is not None
+        ]
+        connection_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("Connection from")
+        )
+        accepted_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("Accepted password")
+        )
+        pam_event = next(
+            event
+            for event in syslog_events
+            if event.syslog.message.startswith("pam_unix(sshd:session)")
+        )
+        logind_event = next(
+            event for event in syslog_events if event.syslog.message.startswith("New session")
+        )
+
+        assert connection_event.timestamp < accepted_event.timestamp
+        assert accepted_event.timestamp < pam_event.timestamp
+        assert pam_event.timestamp < logind_event.timestamp
+        assert pam_event.timestamp < session.source_ready_time
+        assert all(event.timestamp < close_time for event in syslog_events)
 
     def test_ssl_service_gets_ssl_context(self, activity_gen):
         gen, events = activity_gen
@@ -366,6 +1043,276 @@ class TestSslContextPopulation:
         assert egress.http.status_code == client.http.status_code == 200
         assert egress.http.response_body_len == client.http.response_body_len == 4000
 
+    def test_explicit_proxy_http_origin_leg_uses_corrected_domain_user_agent(self, activity_gen):
+        """Proxy egress HTTP should not keep stale browser UAs after domain correction."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        proxy_context = ProxyContext(
+            client_ip=source.ip,
+            method="POST",
+            url="http://settings-win.data.microsoft.com/settings/v2.0/global",
+            host="settings-win.data.microsoft.com",
+            status_code=200,
+            tunnel_status_code=200,
+            sc_bytes=1800,
+            cs_bytes=800,
+            time_taken=450,
+            user_agent="Windows-Device-Management/10.0",
+            content_type="application/json",
+            cache_result="MISS",
+            referrer="",
+            proxy_fqdn=gen._proxy_fqdn(proxy),
+        )
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="13.107.4.50",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=3.0,
+            orig_bytes=600,
+            resp_bytes=1600,
+            conn_state="SF",
+            source_system=source,
+            hostname="settings-win.data.microsoft.com",
+            proxy=proxy_context,
+            http=HttpContext(
+                method="POST",
+                host="settings-win.data.microsoft.com",
+                uri="/settings/v2.0/global",
+                version="1.1",
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+                request_body_len=300,
+                response_body_len=1600,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/json"],
+            ),
+        )
+
+        egress = next(
+            event
+            for event in events
+            if event.http is not None and event.network and event.network.src_ip == proxy.ip
+        )
+        assert egress.http.user_agent == "Windows-Device-Management/10.0"
+
+    def test_proxy_transaction_request_has_stable_action_anchor(self):
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        request = ProxyTransactionRequest(
+            src_ip="10.0.10.50",
+            dst_ip="142.250.80.46",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=180,
+            resp_bytes=4000,
+            src_port=52800,
+            pid=-1,
+            source_system=None,
+            conn_state="SF",
+            dns=None,
+            ids=None,
+            http=None,
+            file_transfer=None,
+            ocsp=None,
+            proxy=None,
+            firewall=None,
+            hostname="www.google.com",
+            process_image=None,
+            proxy_chain=[proxy],
+            preserve_explicit_proxy_dst_ip=False,
+            caller_provided_conn_state=True,
+            ad_domain="corp.local",
+        )
+        same_request = replace(request)
+        bundle = ProxyTransactionActionBundle(request=request, executor=MagicMock())
+
+        assert request.stable_id == same_request.stable_id
+        assert bundle.anchor.family == "proxy_transaction"
+        assert bundle.anchor.stable_id == request.stable_id
+
+    def test_generate_connection_routes_explicit_proxy_through_transaction_bundle(
+        self,
+        activity_gen,
+        monkeypatch,
+    ):
+        gen, _events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        captured = {}
+
+        def execute_bundle(bundle):
+            captured["request"] = bundle.request
+            captured["executor"] = bundle.executor
+            return "CproxyBundleUid"
+
+        monkeypatch.setattr(ProxyTransactionActionBundle, "execute", execute_bundle)
+
+        uid = gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="142.250.80.46",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=180,
+            resp_bytes=4000,
+            conn_state="SF",
+            source_system=source,
+            hostname="www.google.com",
+        )
+
+        request = captured["request"]
+        assert uid == "CproxyBundleUid"
+        assert isinstance(request, ProxyTransactionRequest)
+        assert request.src_ip == source.ip
+        assert request.dst_ip == "142.250.80.46"
+        assert request.dst_port == 80
+        assert request.service == "http"
+        assert request.proxy_chain == [proxy]
+        assert captured["executor"] is gen
+
+    def test_explicit_proxy_egress_waits_for_client_proxy_request_graph(
+        self,
+        activity_gen,
+        monkeypatch,
+    ):
+        """Origin egress should wait for the client-side proxy request observation window."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        egress_ip = resolve_domain_ip("www.google.com", src_host=proxy.hostname)
+        proxy_context = ProxyContext(
+            client_ip=source.ip,
+            method="GET",
+            url="http://www.google.com/search?q=vpn",
+            host="www.google.com",
+            status_code=200,
+            tunnel_status_code=200,
+            sc_bytes=4250,
+            cs_bytes=620,
+            time_taken=1400,
+            user_agent="Mozilla/5.0",
+            content_type="text/html",
+            cache_result="MISS",
+            proxy_fqdn=gen._proxy_fqdn(proxy),
+        )
+
+        def skew_client_observation(
+            observed_base_time,
+            observed_src_ip,
+            _observed_src_port,
+            observed_dst_ip,
+            _observed_dst_port,
+            _observed_proto,
+            _observed_service,
+        ):
+            if observed_src_ip == source.ip and observed_dst_ip == proxy.ip:
+                return base_time - timedelta(seconds=5)
+            return observed_base_time
+
+        monkeypatch.setattr(
+            generator_module, "_zeek_conn_observation_time", skew_client_observation
+        )
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="142.250.80.46",
+            time=base_time,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=180,
+            resp_bytes=4000,
+            conn_state="SF",
+            source_system=source,
+            hostname="www.google.com",
+            proxy=proxy_context,
+        )
+
+        client = next(
+            event
+            for event in events
+            if event.network
+            and event.network.src_ip == source.ip
+            and event.network.dst_ip == proxy.ip
+        )
+        egress = next(
+            event
+            for event in events
+            if event.network
+            and event.network.src_ip == proxy.ip
+            and event.network.dst_ip == egress_ip
+        )
+        delay_window = generator_module.get_timing_window(
+            "network.proxy_upstream_after_client",
+            default_min_ms=950,
+            default_max_ms=1800,
+            default_position="after",
+            default_class="causal_prerequisite",
+        )
+        egress_delay = timedelta(
+            milliseconds=random.Random(
+                _stable_seed(f"proxy_egress_delay:{source.ip}:{egress_ip}:{base_time.timestamp()}")
+            ).randint(delay_window.min_ms, delay_window.max_ms)
+        )
+        request_window = generator_module.get_timing_window(
+            "source.zeek_http_request",
+            default_min_ms=1,
+            default_max_ms=450,
+            default_position="after",
+            default_class="same_observation",
+        )
+        required_gap = egress_delay + timedelta(milliseconds=request_window.max_ms + 1)
+
+        assert client.timestamp < base_time
+        assert egress.timestamp >= base_time + required_gap
+
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""
         gen, events = activity_gen
@@ -478,7 +1425,7 @@ class TestSslContextPopulation:
             source_port=51111,
         )
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_event = _ssh_transport_event(events)
         transport_events = [
             event
             for event in events
@@ -487,13 +1434,13 @@ class TestSslContextPopulation:
             and event.process.command_line == "sshd: [accepted]"
         ]
         assert transport_events
-        assert ssh_event.network.responding_pid == transport_events[0].process.pid
+        assert transport_event.network.responding_pid == transport_events[0].process.pid
         syslog_pids = {
             event.syslog.pid
             for event in events
             if event.syslog is not None and event.syslog.app_name == "sshd"
         }
-        assert syslog_pids == {ssh_event.network.responding_pid}
+        assert syslog_pids == {transport_event.network.responding_pid}
 
     def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
         gen, events = activity_gen
@@ -609,15 +1556,15 @@ class TestSslContextPopulation:
             source_port=51111,
         )
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
-        assert ssh_event.network.src_port != first_conn.network.src_port
-        assert ssh_event.network.responding_pid != first_conn.network.responding_pid
+        ssh_transport = [event for event in events if event.event_type == "connection"][-1]
+        assert ssh_transport.network.src_port != first_conn.network.src_port
+        assert ssh_transport.network.responding_pid != first_conn.network.responding_pid
         syslog_pids = {
             event.syslog.pid
             for event in events
             if event.syslog is not None and event.syslog.app_name == "sshd"
         }
-        assert syslog_pids == {ssh_event.network.responding_pid}
+        assert syslog_pids == {ssh_transport.network.responding_pid}
 
     def test_sshd_syslog_reuses_existing_destination_responder_pid_for_tuple(self, activity_gen):
         gen, events = activity_gen
@@ -756,11 +1703,12 @@ class TestSslContextPopulation:
             source_port=51111,
         )
 
-        ssh_event = next(event for event in events if event.event_type == "ssh_session")
+        transport_event = _ssh_transport_event(events)
         syslog_events = [
             event
             for event in events
-            if event.syslog is not None and event.syslog.pid == ssh_event.network.responding_pid
+            if event.syslog is not None
+            and event.syslog.pid == transport_event.network.responding_pid
         ]
         messages = [event.syslog.message for event in syslog_events]
         times = [event.timestamp for event in syslog_events]
@@ -769,8 +1717,8 @@ class TestSslContextPopulation:
             "Accepted password for admin from 10.0.10.50 port 51111 ssh2",
             "pam_unix(sshd:session): session opened for user admin(uid=1001) by (uid=0)",
         ]
-        assert base_time < times[0] < times[1] < times[2]
-        assert timedelta(milliseconds=35) <= times[0] - base_time <= timedelta(milliseconds=160)
+        assert base_time < transport_event.timestamp < times[0] < times[1] < times[2]
+        assert times[0] - transport_event.timestamp >= timedelta(milliseconds=300)
         assert timedelta(milliseconds=450) <= times[1] - times[0] <= timedelta(milliseconds=3501)
         assert timedelta(milliseconds=45) <= times[2] - times[1] <= timedelta(milliseconds=181)
         assert times[2] - times[0] != timedelta(seconds=1)
@@ -1038,15 +1986,11 @@ class TestSslContextPopulation:
             logon_id=logon_id,
         )
 
-        ssh_event = next(
-            event
-            for event in events
-            if event.network is not None and event.network.service == "ssh"
-        )
+        transport_event = _ssh_transport_event(events)
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        assert session.network_close_time == base_time + timedelta(
-            seconds=ssh_event.network.duration
+        assert session.network_close_time == transport_event.timestamp + timedelta(
+            seconds=transport_event.network.duration
         )
 
     def test_ssh_session_records_transport_close_time_with_existing_object_id(self, activity_gen):
@@ -1081,16 +2025,64 @@ class TestSslContextPopulation:
             session_obj_id=session_obj_id,
         )
 
-        ssh_event = next(
-            event
-            for event in events
-            if event.network is not None and event.network.service == "ssh"
-        )
+        transport_event = _ssh_transport_event(events)
         session = gen.state_manager.get_session(logon_id)
         assert session is not None
-        assert session.network_close_time == base_time + timedelta(
-            seconds=ssh_event.network.duration
+        assert session.network_close_time == transport_event.timestamp + timedelta(
+            seconds=transport_event.network.duration
         )
+
+    def test_ssh_logoff_after_transport_close_is_bounded_to_close(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+        )
+        base_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_id = gen.state_manager.create_session(
+            username=user.username,
+            system=target.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+        )
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=base_time,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            logon_id=logon_id,
+            duration=120.0,
+        )
+        transport_event = _ssh_transport_event(events)
+        transport_close = transport_event.timestamp + timedelta(
+            seconds=transport_event.network.duration
+        )
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(target.hostname, logon_id, transport_close),
+        )
+
+        gen.generate_logoff(
+            user=user,
+            system=target,
+            time=base_time + timedelta(hours=4),
+            logon_id=logon_id,
+            logon_type=10,
+        )
+
+        logoff_event = next(event for event in events if event.event_type == "logoff")
+        assert logoff_event.timestamp == transport_close + expected_delta
+        assert logoff_event.auth.source_ip == "10.0.10.50"
+        assert logoff_event.auth.source_port == 51111
 
     def test_ssh_session_honors_min_duration(self, activity_gen):
         gen, events = activity_gen
@@ -1112,12 +2104,8 @@ class TestSslContextPopulation:
             min_duration=7200.0,
         )
 
-        ssh_event = next(
-            event
-            for event in events
-            if event.network is not None and event.network.service == "ssh"
-        )
-        assert ssh_event.network.duration >= 7200.0
+        transport_event = _ssh_transport_event(events)
+        assert transport_event.network.duration >= 7200.0
 
     def test_ssh_source_ports_are_unique_per_endpoint_tuple(self, activity_gen):
         gen, events = activity_gen
@@ -1848,6 +2836,44 @@ class TestFileTransferContext:
         assert event.http.status_code == 301
         assert event.http.resp_mime_types == ["text/html"]
         assert event.file_transfer is None
+
+    def test_large_http_file_transfer_extends_parent_connection_duration(self, activity_gen):
+        """Large HTTP files.log rows should have plausible duration inside the parent flow."""
+        gen, events = activity_gen
+        response_body_len = 78_306_264
+
+        gen.generate_connection(
+            src_ip="10.0.10.50",
+            dst_ip="93.184.216.34",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.05,
+            orig_bytes=200,
+            resp_bytes=response_body_len,
+            conn_state="SF",
+            http=HttpContext(
+                method="GET",
+                host="downloads.example.test",
+                uri="/installer.exe",
+                response_body_len=response_body_len,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/x-msdownload"],
+            ),
+        )
+
+        event = events[-1]
+        assert event.file_transfer is not None
+        assert event.network is not None
+        assert event.file_transfer.duration > 1.0
+        assert event.network.duration is not None
+        assert event.network.duration > 4.5
+        assert event.network.duration > event.file_transfer.duration
+        assert event.file_transfer.duration > 0.5
+        assert event.network.duration is not None
+        assert event.network.duration > event.file_transfer.duration
 
     def test_file_transfer_sometimes_populated(self, activity_gen):
         """Over many HTTP connections, some should have FileTransferContext."""

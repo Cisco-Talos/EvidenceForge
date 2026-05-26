@@ -423,6 +423,47 @@ class WindowsEventEmitter(LogEmitter):
             normalized[field] = normalize_windows_id_value(value)
         return normalized
 
+    def _event_rng(self, event: SecurityEvent, salt: str = "") -> random.Random:
+        """Return a deterministic renderer-local RNG for incidental Windows fields."""
+        host = event.src_host or event.dst_host
+        parts: list[object] = [
+            salt or event.event_type,
+            event.event_type,
+            event.timestamp.isoformat(),
+        ]
+        if host is not None:
+            parts.extend((host.hostname, host.fqdn, host.ip))
+        if event.auth is not None:
+            parts.extend(
+                (
+                    event.auth.username,
+                    event.auth.logon_id,
+                    event.auth.source_ip,
+                    event.auth.source_port,
+                    event.auth.logon_type,
+                )
+            )
+        if event.process is not None:
+            parts.extend(
+                (
+                    event.process.pid,
+                    event.process.parent_pid,
+                    event.process.image,
+                    event.process.command_line,
+                )
+            )
+        if event.network is not None:
+            parts.extend(
+                (
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.network.protocol,
+                )
+            )
+        return random.Random(_stable_seed("|".join(str(part) for part in parts)))
+
     # Event types where the Windows host is dst_host (target of the action)
     _DST_HOST_TYPES: set[str] = {
         "logon",
@@ -516,7 +557,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         workstation_name = _logon_workstation_name(auth, host, event)
@@ -601,7 +642,7 @@ class WindowsEventEmitter(LogEmitter):
         4672 from _render_logon() so the privilege event shares the target
         host and LogonID with its 4624.
         """
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -625,7 +666,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_workstation_lock(self, event: SecurityEvent) -> None:
         """Render Windows 4800 (workstation locked)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
@@ -647,7 +688,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_workstation_unlock(self, event: SecurityEvent) -> None:
         """Render Windows 4801 (workstation unlocked)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
@@ -669,7 +710,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_logoff(self, event: SecurityEvent) -> None:
         """Render Windows 4634 (logoff)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -693,7 +734,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4625 (failed logon)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         ip_address = self._ipv6_mapped(auth.source_ip)
@@ -736,7 +777,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_process_create(self, event: SecurityEvent) -> None:
         """Render Windows 4688 (new process created)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
@@ -776,7 +817,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
         """Render Windows 4689 (process exited)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
@@ -810,7 +851,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_system_process_create(self, event: SecurityEvent) -> None:
         """Render Windows 4688 for system-account process (SYSTEM, LOCAL SERVICE, etc.)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
@@ -850,7 +891,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_machine_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 for machine account logon (type 3 on DC)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
@@ -883,7 +924,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": "0x0",
             "ProcessName": "-",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": str(rng.randint(49152, 65535)),
+            "IpPort": auth.source_port,
             "ImpersonationLevel": "%%1833",
             "RestrictedAdminMode": "-",
             "TargetOutboundUserName": "-",
@@ -920,7 +961,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_tgt(self, event: SecurityEvent) -> None:
         """Render Windows 4768 (Kerberos TGT request)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
         is_failure = krb.ticket_status != "0x0"
@@ -953,7 +994,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_service(self, event: SecurityEvent) -> None:
         """Render Windows 4769 (Kerberos service ticket request)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
         is_failure = krb.ticket_status != "0x0"
@@ -983,7 +1024,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_tgt_renewal(self, event: SecurityEvent) -> None:
         """Render Windows 4770 (Kerberos TGT renewal)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
 
@@ -1009,7 +1050,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_ntlm_validation(self, event: SecurityEvent) -> None:
         """Render Windows 4776 (NTLM credential validation)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -1030,7 +1071,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_explicit_credentials(self, event: SecurityEvent) -> None:
         """Render Windows 4648 (explicit credentials logon)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -1062,7 +1103,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_wfp_connection(self, event: SecurityEvent) -> None:
         """Render Windows 5156 (WFP connection permitted)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         net = event.network
         host = self._get_host(event)
         proc = event.process
@@ -1188,7 +1229,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_preauth_failed(self, event: SecurityEvent) -> None:
         """Render Windows 4771 (Kerberos pre-authentication failed)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
         source_ip = krb.source_ip or "-"
@@ -1218,7 +1259,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_log_cleared(self, event: SecurityEvent) -> None:
         """Render Windows 1102 (security log cleared)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -1242,7 +1283,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_service_installed(self, event: SecurityEvent) -> None:
         """Render Windows 4697 (service installed in the system)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         svc = event.service
@@ -1278,7 +1319,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_scheduled_task(self, event: SecurityEvent) -> None:
         """Render Windows 4698/4699/4700/4701 (scheduled task operations)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         task = event.scheduled_task
@@ -1313,7 +1354,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_group_membership_change(self, event: SecurityEvent) -> None:
         """Render Windows 4728/4729/4732/4733/4756/4757 (group membership change)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         grp = event.group_membership
@@ -1351,7 +1392,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_account_full(self, event: SecurityEvent, event_id: int) -> None:
         """Render 4720/4738 with full account property fields."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         acct = event.account_management
@@ -1396,7 +1437,7 @@ class WindowsEventEmitter(LogEmitter):
         self, event: SecurityEvent, event_id: int, include_privs: bool
     ) -> None:
         """Render 4723/4724/4726 with minimal account fields."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         acct = event.account_management

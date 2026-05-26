@@ -715,6 +715,22 @@ class TestExplicitProxyVisibility:
         assert command_line.endswith("https://r.bing.com/")
         assert ":8080/" not in command_line
 
+    def test_opera_user_agent_does_not_map_to_chrome_process(self):
+        generator = ActivityGenerator(StateManager(), {})
+
+        image, command_line = generator._browser_http_client_process_hint(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0"
+            ),
+            hostname="www.example.com",
+            uri="/",
+            dst_port=80,
+        )
+
+        assert image.endswith(r"\Opera\opera.exe")
+        assert "chrome.exe" not in command_line.lower()
+
     def test_browser_proxy_user_agent_replaces_mismatched_browser_pid(self):
         generator, emitters = _generator(
             [
