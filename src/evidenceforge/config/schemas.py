@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from evidenceforge.config.public_dns_templates import validate_public_dns_answer_template
 
 TLS_SERIAL_LENGTH_MAX_WEIGHT = 1_000_000
+KERBEROS_TRANSPORT_MAX_WEIGHT = 1_000_000
 
 # --- DNS Registry ---
 
@@ -844,6 +845,7 @@ class KerberosCertificateProfile(BaseModel, extra="forbid"):
 class KerberosTransportProfile(BaseModel, extra="forbid"):
     """TCP/UDP transport weights for Kerberos network exchanges."""
 
+    _MAX_TRANSPORT_WEIGHT: ClassVar[int] = KERBEROS_TRANSPORT_MAX_WEIGHT
     udp: int = 0
     tcp: int = 0
 
@@ -852,6 +854,10 @@ class KerberosTransportProfile(BaseModel, extra="forbid"):
     def weight_non_negative(cls, v: int) -> int:
         if v < 0:
             raise ValueError("transport weights must be non-negative")
+        if v > cls._MAX_TRANSPORT_WEIGHT:
+            raise ValueError(
+                f"transport weights must be less than or equal to {cls._MAX_TRANSPORT_WEIGHT}"
+            )
         return v
 
     @model_validator(mode="after")

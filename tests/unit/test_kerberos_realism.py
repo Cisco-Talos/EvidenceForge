@@ -140,6 +140,60 @@ def test_kerberos_transport_profile_falls_back_to_tcp(monkeypatch):
     assert kerberos_realism.pick_kerberos_transport(random.Random(1)) == "tcp"
 
 
+def test_kerberos_transport_profile_clamps_huge_weights(monkeypatch):
+    def load_transport_config():
+        return {
+            "transport_profiles": {
+                "default": {
+                    "udp": 10**1000,
+                    "tcp": 1,
+                }
+            }
+        }
+
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", load_transport_config)
+
+    assert kerberos_realism.pick_kerberos_transport(random.Random(1)) in {"udp", "tcp"}
+
+
+def test_kerberos_transport_profile_skips_non_finite_weights(monkeypatch):
+    def load_transport_config():
+        return {
+            "transport_profiles": {
+                "default": {
+                    "udp": float("inf"),
+                    "tcp": "bad",
+                }
+            }
+        }
+
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", load_transport_config)
+
+    assert kerberos_realism.pick_kerberos_transport(random.Random(1)) == "tcp"
+
+
+def test_kerberos_weighted_profile_skips_malformed_weights(monkeypatch):
+    def load_config():
+        return {
+            "tgt_success": {
+                "pre_auth_types": {
+                    "bad": {"value": 15, "weight": float("inf")},
+                    "good": {"value": 2, "weight": 1},
+                },
+                "ticket_options": {"default": {"value": "0x40810010", "weight": 1}},
+                "encryption_types": {"aes256": {"value": "0x12", "weight": 10**500}},
+            },
+            "certificate_profiles": {},
+        }
+
+    monkeypatch.setattr(kerberos_realism, "load_kerberos_realism", load_config)
+
+    fields = kerberos_realism.pick_tgt_success_fields(random.Random(1))
+
+    assert fields["pre_auth_type"] == 2
+    assert fields["encryption_type"] == "0x12"
+
+
 def test_kerberos_realism_overlay_overrides_nested_weight(tmp_path, monkeypatch):
     overlay_dir = tmp_path / ".eforge" / "config" / "activity"
     overlay_dir.mkdir(parents=True)
