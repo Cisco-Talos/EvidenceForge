@@ -22,7 +22,10 @@ from evidenceforge.generation.activity.http_content import (
     response_size_for_mime,
     response_size_for_status,
 )
-from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+from evidenceforge.generation.activity.proxy_uri import (
+    is_browser_like_proxy_domain,
+    plaintext_http_redirect_status,
+)
 from evidenceforge.generation.activity.site_maps import (
     PageDef,
     SiteMap,
@@ -233,6 +236,13 @@ def _make_referrer(hostname: str, path: str, port: int = 443) -> str:
     return f"{scheme}://{hostname}{path}"
 
 
+def _source_native_browser_referrer(referrer: str, *, port: int) -> str:
+    """Apply browser default referrer policy for plaintext downgrades."""
+    if port == 80 and referrer.startswith("https://"):
+        return ""
+    return referrer
+
+
 def _pick_subresources(
     rng: random.Random,
     page: PageDef,
@@ -365,6 +375,9 @@ def generate_browsing_session(
             method="GET",
             content_type=page_content_type,
         )
+        redirect_status = plaintext_http_redirect_status(hostname, port=port, path=page.path)
+        if redirect_status is not None:
+            page_status = redirect_status
         visited_indices.append(current_page_idx)
         page_url = _make_referrer(hostname, page.path, port)
 
@@ -376,7 +389,7 @@ def generate_browsing_session(
                 path=page.path,
                 method="GET",
                 content_type=page_content_type,
-                referrer=previous_page_url,
+                referrer=_source_native_browser_referrer(previous_page_url, port=port),
                 trans_depth=1,
                 is_page_load=True,
                 response_body_len=_response_size_for_status_code(
@@ -391,6 +404,9 @@ def generate_browsing_session(
                 status_code=page_status,
             )
         )
+
+        if redirect_status is not None:
+            break
 
         # Emit subresource requests
         sub_lo, sub_hi = params["subresources_per_page"]
@@ -418,7 +434,7 @@ def generate_browsing_session(
                     path=sub.path,
                     method=sub.method,
                     content_type=sub_content_type,
-                    referrer=page_url,
+                    referrer=_source_native_browser_referrer(page_url, port=port),
                     trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
                     is_page_load=False,
                     response_body_len=_response_size_for_status_code(

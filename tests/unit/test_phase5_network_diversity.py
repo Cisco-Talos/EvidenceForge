@@ -29,6 +29,7 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.formats.loader import load_format
+from evidenceforge.generation.actions import DnsLookupActionBundle, DnsLookupRequest
 from evidenceforge.generation.activity import (
     EXTERNAL_IPS,
     REVERSE_DNS,
@@ -136,6 +137,36 @@ class TestProviderDetection:
 
 class TestDnsLookupEmission:
     """Test DNS lookup generation preceding TCP connections."""
+
+    def test_dns_lookup_bundle_anchor_is_stable(self, timestamp):
+        """DNS lookup requests should expose durable deterministic anchors."""
+        request = DnsLookupRequest(
+            src_ip="10.0.10.1",
+            dst_ip="172.217.14.206",
+            time=timestamp,
+            hostname="www.google.com",
+            force_address=True,
+        )
+
+        first = DnsLookupActionBundle(Mock(), request).anchor
+        second = DnsLookupActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "dns_lookup"
+        assert first.stable_id.startswith("dns-lookup-")
+
+    def test_dns_lookup_bundle_delegates_to_adapter(self, timestamp):
+        """The bundle should preserve the current generator adapter contract."""
+        request = DnsLookupRequest(
+            src_ip="10.0.10.1",
+            dst_ip="172.217.14.206",
+            time=timestamp,
+        )
+        executor = Mock()
+
+        DnsLookupActionBundle(executor, request).execute()
+
+        executor._execute_dns_lookup_bundle.assert_called_once_with(request)
 
     def test_dns_lookup_emits_zeek_dns(
         self, activity_gen, win_system, timestamp, state_manager, mock_emitters

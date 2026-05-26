@@ -800,3 +800,29 @@ def test_find_user_session_ignores_sessions_starting_after_activity_time(
     )
 
     assert selected is None
+
+
+def test_align_rdp_source_after_future_session_preserves_naive_time_awareness(
+    planner: WorldPlanner,
+    state_manager: StateManager,
+    systems: dict[str, System],
+) -> None:
+    """RDP source alignment should keep naive caller datetimes naive."""
+    state_manager.set_current_time(datetime(2024, 1, 1, 10, 0, 30, tzinfo=UTC))
+    state_manager.create_session(
+        username="alice.admin",
+        system=systems["WKS-01"].hostname,
+        logon_type=2,
+        source_ip=systems["WKS-01"].ip,
+        session_kind="interactive",
+    )
+    source_process_time = datetime(2024, 1, 1, 10, 0, 8)
+
+    aligned = planner._align_rdp_source_after_future_workstation_session(
+        username="alice.admin",
+        source_system=systems["WKS-01"],
+        source_process_time=source_process_time,
+        rng=random.Random(0),
+    )
+
+    assert aligned.tzinfo is None

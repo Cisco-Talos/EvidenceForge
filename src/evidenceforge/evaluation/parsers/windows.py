@@ -56,6 +56,23 @@ class _WindowsXmlParser(LogParser):
 
     xml_filename = ""
 
+    _INTEGER_EVENT_DATA_FIELDS = frozenset(
+        {
+            "LogonType",
+            "IpPort",
+            "KeyLength",
+            "PreAuthType",
+            "NetworkPort",
+            "SessionId",
+            "SourcePort",
+            "DestPort",
+            "Protocol",
+            "FilterRTID",
+            "LayerRTID",
+            "ProcessID",
+        }
+    )
+
     def can_parse(self, path: Path) -> bool:
         return path.name == self.xml_filename
 
@@ -143,27 +160,7 @@ class _WindowsXmlParser(LogParser):
                     name = data_el.get("Name", "")
                     value = data_el.text or ""
                     if name:
-                        # Try to coerce known integer fields
-                        if name in (
-                            "LogonType",
-                            "IpPort",
-                            "KeyLength",
-                            "PreAuthType",
-                            "NetworkPort",
-                            "SessionId",
-                            "SourcePort",
-                            "DestPort",
-                            "Protocol",
-                            "FilterRTID",
-                            "LayerRTID",
-                            "ProcessID",
-                        ):
-                            try:
-                                fields[name] = int(value)
-                            except ValueError:
-                                fields[name] = value
-                        else:
-                            fields[name] = value
+                        fields[name] = self._coerce_event_data_field(name, value)
 
             # UserData fields (1102 LogFileCleared and similar)
             user_data = root.find(f"{{{NS}}}UserData")
@@ -188,6 +185,15 @@ class _WindowsXmlParser(LogParser):
             parse_errors=errors,
             line_number=index,
         )
+
+    def _coerce_event_data_field(self, name: str, value: str) -> str | int:
+        """Coerce source-native integer EventData fields for validation."""
+        if name in self._INTEGER_EVENT_DATA_FIELDS:
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        return value
 
 
 class _WindowsSnareParser(_WindowsXmlParser):
@@ -299,7 +305,12 @@ class _WindowsSnareParser(_WindowsXmlParser):
                 except ValueError:
                     fields[key] = value
                     errors.append(f"Invalid integer field {key}: {value}")
-            fields.update(_parse_expanded_snare_fields(full_data))
+            fields.update(
+                {
+                    name: self._coerce_event_data_field(name, value)
+                    for name, value in _parse_expanded_snare_fields(full_data).items()
+                }
+            )
 
         return ParsedRecord(
             source_format=self.format_name,
@@ -349,3 +360,16 @@ class SysmonEventParser(_WindowsSnareParser):
     format_name = "windows_event_sysmon"
     xml_filename = "windows_event_sysmon.xml"
     snare_filename = WINDOWS_SYSMON_SNARE_FILENAME
+    _INTEGER_EVENT_DATA_FIELDS = _WindowsXmlParser._INTEGER_EVENT_DATA_FIELDS | frozenset(
+        {
+            "DestinationPort",
+            "NewThreadId",
+            "ParentProcessId",
+            "ProcessId",
+            "SourceProcessId",
+            "SourceThreadId",
+            "SourcePort",
+            "TargetProcessId",
+            "TerminalSessionId",
+        }
+    )

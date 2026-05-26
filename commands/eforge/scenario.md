@@ -77,7 +77,7 @@ Multiple attackers and parallel attack paths are supported — for example, an e
 
 **Scale and duration** — How many users and systems? What time window? If the user is aiming for something very large, you can advise them if you think the scale might make the exercise unwieldy, but it's ultimately their call. Every user must have a `primary_system` assigned — ensure there are enough workstations for all users (users can share systems, but each user needs a designated primary).
 
-**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add eCAR format for EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
+**Log formats** — Which formats should be generated? Windows Event Security and Zeek are the most common pair. Add the `ecar` output format for simulated EDR visibility, syslog + bash_history for Linux systems, Snort for IDS alerts, web_access for web server logs, proxy_access for forward proxy logs (captures outbound HTTP/HTTPS with cache status, CONNECT tunnels, and full URLs).
 
 **System roles** — Assign `roles` to systems in the environment to drive both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives). Roles like `web_server`, `database`, `mail_server`, `file_server`, `domain_controller` each have specific traffic profiles. For example, a `web_server` generates outbound database queries AND receives inbound HTTPS from external clients and internal users. A `database` generates outbound replication AND receives inbound SQL queries from web/app servers.
 
@@ -89,7 +89,7 @@ Inbound traffic respects network topology: DMZ-placed `web_server` hosts attract
 
 **Red herrings** — Should the dataset include explicit suspicious-but-benign events beyond automatic ambient noise? These are events with innocent explanations that create false leads for analysts: after-hours admin sessions, failed logon bursts from fat-fingered passwords, large outbound transfers that are actually backup sync, service accounts authenticating from unusual hosts. Define these in the `red_herrings:` section — they use the same event types as the storyline but include an `explanation` field for the instructor ground truth. Note: ambient suspicious noise (controlled by `baseline_activity.suspicious_noise`, default "high") is separate and always active.
 
-**Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls proxy session depth — how many pages and subresources each browsing session produces. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
+**Browsing patterns** — How much web browsing does each user role generate? Personas have a default `browsing_intensity` (light/normal/heavy) that controls browser/proxy session depth — how many pages and subresources each browsing session produces. Plaintext HTTP sessions may render multiple `http.log` rows on one Zeek UID with increasing `trans_depth`, and large download-scale responses produce matching `files.log` metadata. Ask whether any user roles are heavier or lighter web users than their persona default suggests, and set per-user `browsing_intensity` overrides where appropriate.
 
 **Traffic volume** — For scenarios that output server-side logs (especially `web_access`), the `intensity` setting controls how many top-level visitor actions web servers receive (low: ~20/hr, medium: ~1000/hr, high: ~5000/hr). Human page views automatically fan out into required page assets (JS, CSS, images, fonts, same-origin API calls) without consuming additional `web` budget. If the scenario focuses on server-side analysis (web scanners, access log anomalies), you likely need `intensity: high` or explicit `traffic_rates: {web: [5000, 12000]}` overrides to ensure attackers are buried in realistic background noise. Ask about expected noise-to-signal ratios for server-focused scenarios.
 
@@ -389,17 +389,27 @@ When building storyline events, each entry needs an `events` list with typed dec
 
 **Available event types:** `process`, `logon`, `failed_logon`, `logoff`, `connection`, `ssh_session`, `rdp_session`, `account_created`, `account_deleted`, `group_member_added`, `service_installed`, `scheduled_task_created`, `log_cleared`, `create_remote_thread`, `dhcp_lease`, `port_scan`, `beacon`, `dns_query`, `web_scan`, `credential_spray`, `dga_queries`, `dns_tunnel`, `explicit_credentials`, `workstation_lock`, `workstation_unlock`, `raw`
 
+Correlated multi-event activities such as `ssh_session`, auth/session lifecycle
+(including workstation lock/unlock, service/machine/anonymous logons, and DC
+validation), DC-side Kerberos ticket evidence, canonical network connections,
+scanner/probe activity, Windows audit/account-management evidence, and
+process-owned endpoint side effects are modeled internally as action bundles. Authors should
+still write the same typed event, not duplicate Zeek connections,
+DNS/TLS/HTTP/proxy/firewall rows, scanner IDS rows, syslog auth rows, DC
+validation rows, EDR/eCAR session/process/FLOW rows, shell process setup, or
+process-owned file/module/registry/audit evidence by hand.
+
 **Firewall/network event types:**
-- `port_scan` — Bulk denied connections for recon/scanning. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies + correlated Zeek conn entries.
+- `port_scan` — Bulk recon/scanning modeled as a scanner/probe action bundle. Fields: `target_ips` or `target_segment`+`target_count`, `ports`, `protocol`, `scan_rate`. Produces ASA 106023 denies/open-service connections + correlated Zeek conn entries.
 - `beacon` — Periodic connections (allowed or denied). Fields: `dst_ip`, `dst_port`, `interval`, one of `end_time`/`duration`/`count`, `action` (allow/deny, default: allow), `jitter` (default: 0.15), `referrer` (optional HTTP Referer, auto-generated if omitted), plus all `connection` fields. In explicit proxy mode, HTTP/S beacons from proxied hosts traverse the proxy; use `action: deny` for proxy- or firewall-blocked beaconing.
-- `web_scan` — Bulk HTTP scanning from presets. Fields: `dst_ip`, `rate` (average requests/second; exact only when `count` is set), `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
+- `web_scan` — Bulk HTTP scanning from presets modeled as a scanner/probe action bundle. Fields: `dst_ip`, `rate` (average requests/second; exact only when `count` is set), `preset` (nikto/dirb/gobuster/sqlmap/nmap_http) or `paths`, `hostname`, `user_agent`, `jitter` (default: 0.4). Automatically generates Snort IDS alerts: scanner UA detection (Layer 1, non-TLS only), per-path content alerts for probe-specific SIDs (Layer 2, non-TLS only), and connection-rate threshold alerts (Layer 3, both TLS and non-TLS). Referer headers are generated per-preset according to real scanner behavior (Nikto: partial-crawl same-origin ~30%; others: none). Per-request UA token substitution produces varied values for templated scanner UAs (e.g., Nikto's Test: ID). IDS alert definitions and `send_referrer` config are in `web_scan_presets.yaml`.
 - `credential_spray` — Bulk auth attacks. Fields: `target_accounts`, `interval`, `pattern` (spray/brute_force/stuffing), `success` ({account, after}), `jitter` (default: 0.5). OS-aware: Windows 4625/4776 or Linux syslog.
 - `dns_query` — Standalone DNS query. Fields: `query`, `qtype`, `rcode`, `ttl`, `answer` (required for NOERROR).
 - `dga_queries` — Bulk DGA domain lookups. Fields: `interval`, `length_range`, `charset`, `tld`, `seed`, `rcode_distribution`, `answer_ip`.
 - `dns_tunnel` — DNS exfiltration via encoded subdomains. Fields: `base_domain`, `encoding` (base32/base64/hex), `qtype` (TXT/NULL/CNAME), `label_length`, `payload`/`payload_size`.
 - `explicit_credentials` — RunAs / pass-the-hash / service account delegation (4648). Fields: `target_username`, `target_server`, `process_name`, `source_ip`.
 - `workstation_lock` — Lock workstation (4800). No additional fields.
-- `workstation_unlock` — Unlock workstation (4801 + 4624 type 7 re-auth). No additional fields.
+- `workstation_unlock` — Unlock workstation (4624 type 7 re-auth followed by 4801). No additional fields.
 
 The `raw` type targets a specific output format with arbitrary fields — use it for events without a dedicated type. Requires `target_format` and `fields` dict. Raw events bypass cross-format correlation, so prefer typed events when available.
 
@@ -413,7 +423,7 @@ The `raw` type targets a specific output format with arbitrary fields — use it
 - **Linux commands:** Use `type: process` with Linux binary paths (`/usr/bin/cat`, `/bin/bash`).
 - **Web attacks:** Use `connection` with `service: http`, not `raw` with `target_format: web_access` — the latter bypasses cross-source correlation.
 
-**Causal expansion — auto-generated prerequisite events:** The engine automatically emits DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass `create_remote_thread`, audit events from admin command patterns, and RSAT session evidence for DC admin activity. Only specify these manually when they are the attack narrative itself (DNS tunneling, golden ticket forging). The validator warns on redundant manual specifications.
+**Causal expansion — auto-generated prerequisite events:** The engine automatically emits DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass `create_remote_thread`, audit events from admin command patterns, and RSAT session evidence for DC admin activity. Automatic connection-prerequisite DNS, DC-side Kerberos ticket evidence, auxiliary auth/session validation, and Windows audit/process-access companions are bundle-owned, so do not duplicate those resolver, ticket, validation, or audit rows unless DNS, Kerberos, or Windows audit manipulation itself is the attack narrative (DNS tunneling, golden ticket forging, explicit reconnaissance, deliberate log clearing). The validator warns on redundant manual specifications.
 
 For realism-bound scenarios, do not use RFC 5737 TEST-NET ranges (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`) for public NATs, C2, scanners, or attacker infrastructure. Those ranges are safe for documentation snippets, but they are an obvious synthetic-data tell in generated logs. Use private ranges (10.x, 172.16-31.x, 192.168.x) for internal systems, and use a scenario-owned lab public allocation or generated non-reserved public-looking addresses for external infrastructure.
 
@@ -555,6 +565,7 @@ After the interview, generate both files:
    - **Sensor coverage** (see next section): Can the attack actually be discovered given the declared sensor topology and log formats?
    - **Engine-aware realism**:
      - Do NOT specify explicit `mac_address` in `dhcp_lease` events — the engine auto-generates diverse OUI prefixes from `network_params.yaml`
+     - DHCP lease acquisition/renewal is bundle-owned; do not duplicate Zeek DHCP/conn or `dhclient` syslog rows by hand for the same lease transaction
      - DHCP broadcast evidence is link-local. If the scenario expects `dhcp.log`, include a SPAN-style Zeek sensor on the client segment; TAP/firewall sensors on other segments will not see it.
      - Storyline `connection` events to raw C2 IPs will skip DNS emission (realistic for direct-IP beaconing, but means no DNS trail for hunters). If you want DNS evidence, use a domain name as the C2 destination and add it to the scenario narrative
      - Assign role-appropriate `services` to Linux servers (e.g., `mysql` on DB servers, `apache`/`nginx` on web servers) — this drives per-server bash history RBAC (sysadmins on all servers, DBAs only on DB servers, etc.)

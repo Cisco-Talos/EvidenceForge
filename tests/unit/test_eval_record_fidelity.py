@@ -223,9 +223,9 @@ class TestOverallDimension:
 
 
 class TestWindowsVariantMapCoverage:
-    """Every entry in WINDOWS_VARIANT_MAP must resolve to a real variant in the format YAML."""
+    """Every Windows event variant map entry must resolve to a real format YAML variant."""
 
-    def test_all_mapped_variants_exist(self):
+    def test_all_security_mapped_variants_exist(self):
         from evidenceforge.evaluation.pillars.parseability import WINDOWS_VARIANT_MAP
         from evidenceforge.formats import load_format
 
@@ -237,12 +237,47 @@ class TestWindowsVariantMapCoverage:
                 "but no such variant exists in windows_event_security.yaml"
             )
 
+    def test_all_sysmon_mapped_variants_exist(self):
+        from evidenceforge.evaluation.pillars.parseability import SYSMON_VARIANT_MAP
+        from evidenceforge.formats import load_format
+
+        fmt = load_format("windows_event_sysmon")
+        variant_names = {v.name for v in (fmt.variants or [])}
+        for event_id, variant_name in SYSMON_VARIANT_MAP.items():
+            assert variant_name in variant_names, (
+                f"SYSMON_VARIANT_MAP[{event_id}] = {variant_name!r} "
+                "but no such variant exists in windows_event_sysmon.yaml"
+            )
+
     def test_lock_unlock_variants_mapped(self):
         """EventIDs 4800/4801 must be in the variant map so validation sees variant fields."""
         from evidenceforge.evaluation.pillars.parseability import WINDOWS_VARIANT_MAP
 
         assert WINDOWS_VARIANT_MAP[4800] == "workstation_locked"
         assert WINDOWS_VARIANT_MAP[4801] == "workstation_unlocked"
+
+    def test_sysmon_event_data_variant_resolves(self):
+        """Sysmon EventID 3 must validate against its event-specific fields."""
+        from evidenceforge.evaluation.parsers import ParsedRecord
+        from evidenceforge.evaluation.pillars.parseability import _get_variant
+
+        record = ParsedRecord(
+            source_format="windows_event_sysmon",
+            raw="",
+            fields={
+                "EventID": 3,
+                "EventRecordID": 1,
+                "TimeCreated": "2024-01-01T00:00:00Z",
+                "Computer": "WS-01",
+                "ProcessGuid": "{11111111-1111-1111-1111-111111111111}",
+                "ProcessId": 1234,
+                "Image": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "DestinationIp": "203.0.113.10",
+                "DestinationPort": 443,
+            },
+        )
+
+        assert _get_variant("windows_event_sysmon", record) == "sysmon_network_connect"
 
 
 class TestJensenShannonDivergence:
