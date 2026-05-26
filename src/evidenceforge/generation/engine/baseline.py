@@ -939,6 +939,30 @@ def _cron_shell_command_line(command: str) -> str:
     return f"/bin/sh -c {shlex.quote(command)}"
 
 
+def _resolve_cron_command(
+    cron_commands: Any,
+    *,
+    is_rhel_like: bool,
+) -> str | None:
+    """Return the selected cron command when it is a non-empty string."""
+    if not isinstance(cron_commands, dict):
+        return None
+
+    if is_rhel_like:
+        command = cron_commands.get("rhel", cron_commands.get("all", ""))
+    else:
+        command = cron_commands.get("debian", cron_commands.get("all", ""))
+
+    if not isinstance(command, str):
+        return None
+
+    stripped_command = command.strip()
+    if not stripped_command:
+        return None
+
+    return stripped_command
+
+
 def _cron_workload_process(
     command: str,
     is_rhel_like: bool,
@@ -1726,12 +1750,8 @@ class BaselineMixin:
         elif sched_type == "cron":
             cron_user = sched.get("cron_user", "root")
             cron_commands = sched.get("cron_commands", {})
-            # Pick the right command for this distro
-            if is_rhel_like:
-                cmd = cron_commands.get("rhel", cron_commands.get("all", ""))
-            else:
-                cmd = cron_commands.get("debian", cron_commands.get("all", ""))
-            if not cmd:
+            cmd = _resolve_cron_command(cron_commands, is_rhel_like=is_rhel_like)
+            if cmd is None:
                 return
 
             cron_parent_pid = sys_pids.get("cron", 0)
