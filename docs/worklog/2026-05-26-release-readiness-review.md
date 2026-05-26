@@ -37,7 +37,7 @@ Explicitly out of scope by user request:
 
 ## Current Handoff
 
-Next review item: CLI and package surface consistency.
+Next review item: example and scenario hygiene beyond the new beginner scenario.
 
 ## Decisions
 
@@ -110,6 +110,18 @@ Implemented during CI/test posture cleanup:
   `uv run pytest --collect-only -q` collected `3775` tests.
 - Added the Talos announcement blog link near the top of README.
 
+Implemented during CLI/package surface cleanup:
+
+- Added `-h` as an alias for `--help` on the root `eforge` command and all
+  current subcommands through Typer `help_option_names`.
+- Added focused CLI tests covering `-h` on root, `generate`, `validate`, `eval`,
+  `install-skills`, `info`, `validate-config`, and `version`.
+- Documented the `-h` alias in README's CLI reference.
+- Aligned public evidence-format docs with the generated `data/` output tree.
+- Updated `eforge eval` help text from "multiple dimensions" to "four pillars".
+- Reworded README CLI flag guidance so generate-only flags are not described as
+  common to all commands.
+
 ## Validation
 
 Validated before committing `fe5d4785`:
@@ -139,9 +151,21 @@ CI/test posture cleanup validation:
 - `uv run ruff check .` passed.
 - `uv run ruff format --check .` passed.
 
+CLI/package surface cleanup validation:
+
+- `uv run pytest tests/unit/test_cli.py::TestHelpAliases -q` passed.
+- `uv run pytest tests/unit/test_cli.py -q` passed.
+- `uv run eforge -h` and `uv run eforge generate -h` both showed `--help`
+  and `-h` in help output.
+- `uv run eforge --help` and `uv run eforge eval -h` showed updated
+  four-pillar eval help text.
+- `uv run pytest tests/unit/test_install_skills.py -q` passed.
+- `git diff --check` passed.
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` passed.
+
 ## Open Review Items
 
-- CLI and package surface consistency.
 - Example and scenario hygiene beyond the new beginner scenario.
 - Security/legal hygiene.
 - Release operations checklist and accepted-limitations wording.

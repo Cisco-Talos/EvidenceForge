@@ -82,12 +82,16 @@ For scripted or non-interactive use:
 | `eforge install-skills [--agent claude\|codex] [--global]` | Install agent skills (`--global` is Claude-only) |
 | `eforge version` | Show version |
 
-Common flags: `--verbose` / `--debug` for logging, `--output` / `-o` for output
-directory, `--force` / `-f` to overwrite existing output without prompting,
-and `--target default|sof-elk` to choose the generated file layout. The
-`default` target is SIEM-neutral; `sof-elk` emits target-specific variants such
-as Snare Windows events and year-partitioned RFC3164 syslog for parser
-validation.
+Useful command flags: `generate` accepts `--verbose` / `--debug` for logging,
+`--output` / `-o` for output directory overrides, `--force` / `-f` to overwrite
+existing output without prompting, and `--target default|sof-elk` to choose the
+generated file layout. The `default` target is SIEM-neutral; `sof-elk` emits
+target-specific variants such as Snare Windows events and year-partitioned
+RFC3164 syslog for parser validation. `eval` uses `--scenario` / `-s` and
+`--format text|json`; `info` and `validate-config` support `--json` for machine
+output.
+
+All commands accept `--help` and `-h` for usage information.
 
 ## Customizing Configuration
 
