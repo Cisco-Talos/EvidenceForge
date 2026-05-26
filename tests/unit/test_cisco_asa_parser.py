@@ -90,6 +90,7 @@ class TestParseBuiltRecords:
         assert records[0].fields["msg_id"] == 302020
         assert records[0].fields["dst_ip"] == "203.0.113.50"
         assert records[0].fields["icmp_type"] == 8
+        assert "dst_interface" not in records[0].fields
 
     def test_parse_302020_icmp_built_accepts_legacy_interface_prefix(self, tmp_path):
         log = tmp_path / "cisco_asa.log"
@@ -125,6 +126,21 @@ class TestParseTeardownRecords:
         assert rec.fields["bytes"] == 5120
         assert rec.fields["src_ip"] == "10.0.10.50"
         assert rec.fields["dst_ip"] == "203.0.113.50"
+
+    def test_parse_302021_icmp_teardown(self, tmp_path):
+        log = tmp_path / "cisco_asa.log"
+        log.write_text(
+            "<166>Jun 15 14:24:28 fw01 %ASA-6-302021: Teardown ICMP connection "
+            "for faddr 203.0.113.50/8 gaddr 10.0.10.50/0 laddr 10.0.10.50/0\n"
+        )
+        parser = CiscoAsaParser()
+        records = list(parser.parse_file(log))
+        assert len(records) == 1
+        rec = records[0]
+        assert rec.fields["msg_id"] == 302021
+        assert rec.fields["dst_ip"] == "203.0.113.50"
+        assert rec.fields["icmp_type"] == 8
+        assert "dst_interface" not in rec.fields
 
 
 class TestParseDenyRecords:
