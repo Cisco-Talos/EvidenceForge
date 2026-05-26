@@ -32,12 +32,13 @@ Contains the StorylineMixin with methods for:
 
 import base64
 import binascii
+import itertools
 import logging
 import math
 import random
 import re
 import shlex
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import replace
 from datetime import datetime, timedelta
 from types import SimpleNamespace
@@ -1056,7 +1057,7 @@ class StorylineMixin:
     @staticmethod
     def _process_has_following_same_host_connection(
         system: System,
-        future_specs: Sequence[Any],
+        future_specs: Iterable[Any],
     ) -> bool:
         """Return whether a just-created process owns a later same-host connection."""
         for future in future_specs:
@@ -1674,7 +1675,7 @@ class StorylineMixin:
                         time=event_t,
                         activity=storyline_event.activity,
                         explicit_types=explicit_types,
-                        future_specs=storyline_event.events[i + 1 :],
+                        future_specs=itertools.islice(storyline_event.events, i + 1, None),
                     )
                     if malicious_event:
                         self.malicious_events.append(malicious_event)
@@ -1740,7 +1741,7 @@ class StorylineMixin:
                     time=event_t,
                     activity=storyline_event.activity,
                     explicit_types=explicit_types,
-                    future_specs=storyline_event.events[i + 1 :],
+                    future_specs=itertools.islice(storyline_event.events, i + 1, None),
                 )
                 if malicious_event:
                     self.malicious_events.append(malicious_event)
@@ -1803,7 +1804,7 @@ class StorylineMixin:
                     time=event_t,
                     activity=rh_event.activity,
                     explicit_types=explicit_types,
-                    future_specs=rh_event.events[i + 1 :],
+                    future_specs=itertools.islice(rh_event.events, i + 1, None),
                 )
                 if result:
                     # Track as red herring, not malicious
