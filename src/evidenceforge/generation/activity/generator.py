@@ -4717,18 +4717,35 @@ class ActivityGenerator:
     @staticmethod
     def _http_target_url(*, hostname: str, uri: str, dst_port: int) -> str:
         """Build the URL used in source-native client process command lines."""
+        return ActivityGenerator._http_target_url_with_scheme(
+            hostname=hostname,
+            uri=uri,
+            dst_port=dst_port,
+            scheme=None,
+        )
+
+    @staticmethod
+    def _http_target_url_with_scheme(
+        *,
+        hostname: str,
+        uri: str,
+        dst_port: int,
+        scheme: str | None,
+    ) -> str:
+        """Build a URL while allowing CONNECT callers to preserve HTTPS semantics."""
         path = uri or "/"
         if path.startswith(("http://", "https://")):
             return path
         if not path.startswith("/"):
             path = f"/{path}"
-        scheme = "https" if dst_port == 443 else "http"
+        resolved_scheme = scheme or ("https" if dst_port == 443 else "http")
         if not hostname:
-            return f"{scheme}://"
+            return f"{resolved_scheme}://"
         host = hostname
-        if dst_port not in (80, 443) and ":" not in host:
+        default_port = 443 if resolved_scheme == "https" else 80
+        if dst_port != default_port and ":" not in host:
             host = f"{host}:{dst_port}"
-        return f"{scheme}://{host}{path}"
+        return f"{resolved_scheme}://{host}{path}"
 
     @staticmethod
     def _browser_launch_uri(uri: str) -> str:
@@ -4787,7 +4804,7 @@ class ActivityGenerator:
         hostname: str,
         uri: str,
         dst_port: int,
-    ) -> tuple[str, int]:
+    ) -> tuple[str, int, bool]:
         """Normalize proxy CONNECT targets into a browser-visible navigation target."""
         max_port_digits = 5
         raw_uri = (uri or "").strip()
@@ -4796,11 +4813,12 @@ class ActivityGenerator:
             target, separator, port = raw_uri.rpartition(":")
             if separator and port.isdigit() and target.strip().lower().rstrip(".") == host:
                 if len(port) > max_port_digits:
-                    return uri, dst_port
+                    return "/", dst_port, True
                 parsed_port = int(port)
                 if 1 <= parsed_port <= 65535:
-                    return "/", parsed_port
-        return uri, dst_port
+                    return "/", parsed_port, True
+                return "/", dst_port, True
+        return uri, dst_port, False
 
     @staticmethod
     def _browser_target_allows_top_level_launch(hostname: str, uri: str = "/") -> bool:
@@ -4845,16 +4863,17 @@ class ActivityGenerator:
         if not ua:
             return None
 
-        target_uri, target_port = self._browser_navigation_target(
+        target_uri, target_port, is_connect_target = self._browser_navigation_target(
             hostname=hostname,
             uri=uri,
             dst_port=dst_port,
         )
         launch_uri = self._browser_launch_uri(target_uri)
-        target_url = self._http_target_url(
+        target_url = self._http_target_url_with_scheme(
             hostname=hostname,
             uri=launch_uri,
             dst_port=target_port,
+            scheme="https" if is_connect_target and target_port != 80 else None,
         )
         if "firefox/" in ua:
             image = r"C:\Program Files\Mozilla Firefox\firefox.exe"

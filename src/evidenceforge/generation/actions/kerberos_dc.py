@@ -66,9 +66,9 @@ class KerberosConnectionAuditRequest:
     time: datetime
     dst_port: int
     proto: str
-    conn_state: str
     service: str
     source_system: System | None
+    conn_state: str = "SF"
     source: str = "network_connection"
 
     @property
