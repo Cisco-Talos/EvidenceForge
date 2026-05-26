@@ -108,6 +108,7 @@ Implemented during CI/test posture cleanup:
   while 95%+ remains aspirational for overall and core generation coverage.
 - Updated README's approximate pytest suite size from `1400+` to `3700+` after
   `uv run pytest --collect-only -q` collected `3775` tests.
+- Added the Talos announcement blog link near the top of README.
 
 ## Validation
 

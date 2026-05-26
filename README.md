@@ -6,6 +6,9 @@
 
 Generate realistic synthetic security logs for cybersecurity threat hunting training and research.
 
+For background on the project and why we built it, read our announcement:
+[Introducing EvidenceForge: synthetic security logs that don't look as fake](https://blog.talosintelligence.com/introducing-evidenceforge-synthetic-security-logs-that-dont-look-as-fake).
+
 ## What Makes EvidenceForge Different
 
 Most synthetic log generators produce isolated, single-format data that experienced analysts identify as fake within seconds. EvidenceForge takes a fundamentally different approach:
