@@ -26,7 +26,6 @@ Flags events that are anomalous-but-benign (realistic noise for hunters).
 Used by Dimension 3 (Background Noise Realism) to score Organic Anomaly Rate.
 """
 
-import random
 from collections import Counter
 from datetime import UTC
 from zoneinfo import ZoneInfo
@@ -34,6 +33,7 @@ from zoneinfo import ZoneInfo
 from evidenceforge.evaluation._shared import _extract_username
 from evidenceforge.evaluation.parsers import ParsedRecord
 from evidenceforge.models.scenario import Scenario
+from evidenceforge.utils.rng import _stable_seed
 
 # Failed operation indicators
 _FAILED_EVENT_IDS = {4625}  # Failed logon (flagged only in burst context)
@@ -141,7 +141,7 @@ def detect_anomalies(
     # Sample up to 5,000 records (statistically sufficient for rate estimation)
     max_sample = 5000
     if len(all_valid) > max_sample:
-        sample = random.sample(all_valid, max_sample)
+        sample = _stable_record_sample(all_valid, max_sample)
     else:
         sample = all_valid
 
@@ -159,6 +159,27 @@ def detect_anomalies(
             anomalous += 1
 
     return anomalous, total
+
+
+def _stable_record_sample(
+    records: list[tuple[str, ParsedRecord]],
+    max_sample: int,
+) -> list[tuple[str, ParsedRecord]]:
+    """Return a deterministic pseudo-random sample independent of input ordering."""
+
+    def _sample_key(item: tuple[str, ParsedRecord]) -> tuple[int, str, str, int, str]:
+        format_name, record = item
+        timestamp = record.timestamp.isoformat() if record.timestamp is not None else ""
+        line_number = record.line_number if record.line_number is not None else -1
+        host = record.source_host or str(
+            record.fields.get("hostname") or record.fields.get("Computer") or ""
+        )
+        seed = _stable_seed(
+            f"eval_anomaly_sample:{format_name}:{timestamp}:{line_number}:{host}:{record.raw}"
+        )
+        return (seed, format_name, timestamp, line_number, record.raw)
+
+    return sorted(records, key=_sample_key)[:max_sample]
 
 
 def _build_persona_hours(scenario: Scenario) -> dict[str, list[int]]:

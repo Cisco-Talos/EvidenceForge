@@ -357,10 +357,10 @@ class TestGenerateFailedLogonBurst:
         assert "num_failures" in result
 
     def test_failure_count_range(self, rng, users, systems, current_hour):
-        """Number of failures should be 2-5."""
+        """Number of failures should be enough to be recognizable as a burst."""
         for seed in range(50):
             result = generate_failed_logon_burst(random.Random(seed), users, systems, current_hour)
-            assert 2 <= result["num_failures"] <= 5
+            assert 3 <= result["num_failures"] <= 6
 
 
 class TestGenerateServiceAccountAnomaly:

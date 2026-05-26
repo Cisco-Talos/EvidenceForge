@@ -35,13 +35,32 @@ from evidenceforge.events.contexts import (
     FileTransferContext,
     HttpContext,
     NetworkContext,
+    PeContext,
     SslContext,
     X509Context,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions.file_transfer import (
+    HttpResponseFileTransferActionBundle,
+    HttpResponseFileTransferRequest,
+)
 from evidenceforge.generation.emitters.zeek_files import ZeekFilesEmitter
 from evidenceforge.generation.emitters.zeek_http import ZeekHttpEmitter
+from evidenceforge.generation.emitters.zeek_pe import ZeekPeEmitter
 from evidenceforge.generation.emitters.zeek_ssl import ZeekSslEmitter
+
+
+class _AlwaysPeRandom(random.Random):
+    """Deterministic RNG that forces optional PE metadata in file-transfer tests."""
+
+    def random(self) -> float:
+        return 0.0
+
+    def uniform(self, a: float, b: float) -> float:
+        return (a + b) / 2
+
+    def randint(self, a: int, b: int) -> int:
+        return a
 
 
 class TestFilesFormatAccuracy:
@@ -338,6 +357,7 @@ class TestFilesUidCorrelation:
             file_row = json.loads(files_output.read_text().splitlines()[0])
 
         assert file_row["ts"] > http_row["ts"]
+        assert file_row["ts"] - http_row["ts"] > 0.005
 
     def test_http_file_timestamp_uses_final_monotonic_http_timestamp(self):
         """files.log should follow http.log after same-UID timestamp repairs."""
@@ -399,6 +419,81 @@ class TestFilesUidCorrelation:
         assert len(http_rows) == 2
         assert http_rows[1]["ts"] > http_rows[0]["ts"]
         assert file_row["ts"] > http_rows[1]["ts"]
+
+    def test_pe_timestamp_follows_parent_http_file_timestamp(self):
+        """pe.log analysis should not predate the owning HTTP/files.log artifact."""
+        files_fmt = load_format("zeek_files")
+        http_fmt = load_format("zeek_http")
+        pe_fmt = load_format("zeek_pe")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            http_output = Path(tmpdir) / "http.json"
+            files_output = Path(tmpdir) / "files.json"
+            pe_output = Path(tmpdir) / "pe.json"
+            http_emitter = ZeekHttpEmitter(http_fmt, http_output)
+            files_emitter = ZeekFilesEmitter(files_fmt, files_output)
+            pe_emitter = ZeekPeEmitter(pe_fmt, pe_output)
+            event = SecurityEvent(
+                timestamp=datetime(2024, 1, 15, 10, 0, 0, 138017, tzinfo=UTC),
+                event_type="connection",
+                network=NetworkContext(
+                    src_ip="10.0.0.1",
+                    src_port=50000,
+                    dst_ip="10.0.0.10",
+                    dst_port=80,
+                    protocol="tcp",
+                    service="http",
+                    zeek_uid="CPeFileUID123456",
+                    duration=2.0,
+                ),
+                http=HttpContext(
+                    host="updates.example.test",
+                    uri="/agent.exe",
+                    resp_fuids=["FPeFile123456789"],
+                    resp_mime_types=["application/x-msdownload"],
+                ),
+                file_transfer=FileTransferContext(
+                    fuid="FPeFile123456789",
+                    source="HTTP",
+                    duration=0.04,
+                    mime_type="application/x-msdownload",
+                    seen_bytes=8192,
+                    total_bytes=8192,
+                ),
+                pe=PeContext(id="FPeFile123456789", compile_ts=1_700_000_000),
+            )
+
+            http_emitter.emit(event)
+            files_emitter.emit(event)
+            pe_emitter.emit(event)
+            http_emitter.close()
+            files_emitter.close()
+            pe_emitter.close()
+
+            http_row = json.loads(http_output.read_text().splitlines()[0])
+            file_row = json.loads(files_output.read_text().splitlines()[0])
+            pe_row = json.loads(pe_output.read_text().splitlines()[0])
+
+        assert file_row["ts"] > http_row["ts"]
+        assert pe_row["ts"] > file_row["ts"]
+        assert isinstance(pe_row["compile_ts"], int)
+
+    def test_http_pe_compile_timestamp_is_second_granularity(self):
+        """PE compile timestamps should render as integer COFF metadata."""
+        request = HttpResponseFileTransferRequest(
+            host="updates.example.test",
+            uri="/agent.exe",
+            dst_ip="10.0.0.10",
+            response_body_len=8_192,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2024, 1, 15, 10, 0, 0, 138017, tzinfo=UTC),
+            parent_duration=1.0,
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, _AlwaysPeRandom()).execute()
+
+        assert result.pe is not None
+        assert isinstance(result.pe.compile_ts, int)
+        assert result.pe.compile_ts <= int(request.timestamp.timestamp()) - (30 * 24 * 60 * 60)
 
     def test_certificate_file_timestamp_follows_parent_ssl_record(self):
         """Certificate files should not predate the owning ssl.log row."""

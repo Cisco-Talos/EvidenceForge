@@ -69,6 +69,28 @@ def timestamp():
 class TestEmitterSetupProcessTree:
     """Test that process tree seeding creates the right entries per distro."""
 
+    def test_domain_controller_gets_dns_service_process(self, state_manager, timestamp):
+        """Windows domain controllers should seed DNS Server ownership."""
+        from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.3.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        mixin = EmitterSetupMixin.__new__(EmitterSetupMixin)
+        mixin.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        mixin._seed_windows_process_tree(dc, pids)
+        dns_pid = pids.get("dns")
+        assert dns_pid is not None
+        proc = state_manager.get_process(dc.hostname, dns_pid)
+        assert proc is not None
+        assert proc.image.endswith(r"\dns.exe")
+
     def test_ubuntu_gets_systemd_resolved(self, state_manager, timestamp):
         """Ubuntu should have systemd_resolved in _system_pids."""
         from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin

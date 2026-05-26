@@ -28,6 +28,7 @@ just formats the context fields into the syslog template.
 """
 
 import re
+from bisect import bisect_right
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -90,6 +91,7 @@ _SSHD_PID_RFC5424_RE = re.compile(
     r"(?P<suffix>\s+-\s+-\s+)"
 )
 _MAX_LOGIND_SESSION_ID_DIGITS = 18
+_MAX_SSHD_PID_DIGITS = 18
 _PAM_OPEN_VISIBLE_WINDOW = timedelta(seconds=20)
 
 
@@ -117,6 +119,16 @@ def _fallback_linux_uid(user: str) -> int:
 def _parse_logind_session_id(value: str) -> int | None:
     """Parse bounded systemd-logind session IDs without triggering huge-int failures."""
     if len(value) > _MAX_LOGIND_SESSION_ID_DIGITS:
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _parse_sshd_pid(value: str) -> int | None:
+    """Parse bounded sshd PID strings without triggering huge-int failures."""
+    if len(value) > _MAX_SSHD_PID_DIGITS:
         return None
     try:
         return int(value)
@@ -483,7 +495,10 @@ class SyslogEmitter(HostMultiplexEmitter):
             old_pid = match.group("pid")
             new_pid = pid_map.get(old_pid)
             if new_pid is None:
-                parsed_old_pid = int(old_pid)
+                parsed_old_pid = _parse_sshd_pid(old_pid)
+                if parsed_old_pid is None:
+                    normalized.append(line)
+                    continue
                 opens_visible_session = (
                     "Connection from " in line
                     or "Accepted " in line
@@ -604,6 +619,9 @@ class SyslogEmitter(HostMultiplexEmitter):
                 _parse_rfc5424_timestamp(pam_match.group("timestamp"))
             )
 
+        for open_times in open_times_by_user.values():
+            open_times.sort()
+
         normalized: list[str] = []
         for index, line in enumerate(lines):
             new_match = _RFC5424_LOGIND_NEW_SESSION_RE.match(line)
@@ -616,9 +634,11 @@ class SyslogEmitter(HostMultiplexEmitter):
 
             user = new_match.group("user")
             new_time = _parse_rfc5424_timestamp(new_match.group("timestamp"))
-            has_recent_open = any(
-                open_time <= new_time and new_time - open_time <= _PAM_OPEN_VISIBLE_WINDOW
-                for open_time in open_times_by_user.get(user, [])
+            open_times = open_times_by_user.get(user, [])
+            newest_index = bisect_right(open_times, new_time) - 1
+            has_recent_open = (
+                newest_index >= 0
+                and new_time - open_times[newest_index] <= _PAM_OPEN_VISIBLE_WINDOW
             )
             if not has_recent_open:
                 normalized.append(

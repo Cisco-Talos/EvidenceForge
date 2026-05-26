@@ -302,6 +302,28 @@ class TestAnomalyRate:
         # Should score 0 — organic anomaly rate is 0%, not inflated by red herrings
         assert result.score == 0.0
 
+    def test_large_sample_is_deterministic_and_order_independent(self):
+        """Large anomaly samples should not depend on global RNG or traversal order."""
+        from evidenceforge.evaluation.anomaly import detect_anomalies
+
+        scenario = _make_scenario()
+        web_records = [
+            ParsedRecord(
+                source_format="web_access",
+                raw=f"request-{i}",
+                fields={"status_code": 500 if i % 17 == 0 else 200},
+                timestamp=T0 + timedelta(seconds=i),
+                line_number=i + 1,
+            )
+            for i in range(6000)
+        ]
+
+        first = detect_anomalies({"web_access": web_records}, scenario)
+        second = detect_anomalies({"web_access": list(reversed(web_records))}, scenario)
+
+        assert first == second
+        assert first[1] == 5000
+
 
 class TestEventTypeExtraction:
     def test_windows(self):

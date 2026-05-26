@@ -2138,7 +2138,13 @@ def validate_config() -> ValidationResult:
                 messages = []
             params = entry.get("params")
             param_strings = (
-                [value for values in params.values() for value in values if isinstance(value, str)]
+                [
+                    value
+                    for values in params.values()
+                    if isinstance(values, list)
+                    for value in values
+                    if isinstance(value, str)
+                ]
                 if isinstance(params, dict)
                 else []
             )
@@ -2322,6 +2328,47 @@ def validate_config() -> ValidationResult:
                     "network_params.yaml (external_scanner_port_profiles)",
                 )
             )
+            total_profile_weight = 0.0
+            for profile in scanner_profiles:
+                if not isinstance(profile, dict):
+                    continue
+                weight = profile.get("weight", 1.0)
+                if not isinstance(weight, int | float):
+                    continue
+                total_profile_weight += float(weight)
+            if not math.isfinite(total_profile_weight):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "network_params.yaml (external_scanner_port_profiles)",
+                        "total external_scanner_port_profiles weight must be finite",
+                    )
+                )
+            for idx, profile in enumerate(scanner_profiles):
+                if not isinstance(profile, dict):
+                    continue
+                ports = profile.get("ports", [])
+                if not isinstance(ports, list):
+                    continue
+                total_port_weight = 0.0
+                for port_entry in ports:
+                    if not isinstance(port_entry, dict):
+                        continue
+                    weight = port_entry.get("weight", 1.0)
+                    if not isinstance(weight, int | float):
+                        continue
+                    total_port_weight += float(weight)
+                if not math.isfinite(total_port_weight):
+                    result.issues.append(
+                        Issue(
+                            "ERROR",
+                            "network_params.yaml (external_scanner_port_profiles)",
+                            (
+                                f"entry {idx} has non-finite cumulative port weight; "
+                                "total per-profile port weight must be finite"
+                            ),
+                        )
+                    )
         rcode_weights = net_params.get("dns_tunnel_rcode_weights", {})
         allowed_rcodes = {"NOERROR", "NXDOMAIN", "SERVFAIL", "REFUSED"}
         if not isinstance(rcode_weights, dict) or not rcode_weights:

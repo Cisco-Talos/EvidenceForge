@@ -18,6 +18,7 @@ from evidenceforge.events.contexts import (
     ProcessContext,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
 from evidenceforge.generation.emitters.sysmon import SysmonEventEmitter
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
@@ -130,6 +131,39 @@ def test_equal_canonical_timestamps_can_be_ordered_by_causal_edge() -> None:
     assert before_ts < after_ts
 
 
+def test_source_time_after_source_uses_temporal_constraint_graph() -> None:
+    """Cross-source dependencies should resolve through a shared graph path."""
+    planner = SourceTimingPlanner()
+    event = SecurityEvent(
+        timestamp=_base_time(),
+        event_type="process",
+        src_host=_host_context(),
+        process=_process_context(_base_time()),
+    )
+    anchor_seed = ("sysmon", event.timestamp)
+    dependent_seed = ("ecar", event.timestamp)
+
+    dependent_time = planner.source_time_after_source(
+        event,
+        "source.ecar_process_create",
+        after_source_key="source.windows_security_process_create",
+        gap_key="source.ecar_after_sysmon_process_create_gap",
+        seed_parts=dependent_seed,
+        after_seed_parts=anchor_seed,
+    )
+    anchor_time = planner.source_time(
+        event,
+        "source.windows_security_process_create",
+        seed_parts=anchor_seed,
+    )
+    expected_gap = sample_timing_delta(
+        "source.ecar_after_sysmon_process_create_gap",
+        seed_parts=dependent_seed,
+    )
+
+    assert dependent_time >= anchor_time + expected_gap
+
+
 def test_independent_equal_canonical_timestamps_may_share_source_time() -> None:
     """Independent events are not forced into a global total order."""
     planner = SourceTimingPlanner()
@@ -188,12 +222,39 @@ def test_ecar_dependent_timestamp_follows_process_create(tmp_path: Path) -> None
     assert dependent_time > process_time
 
 
+def test_ecar_dependent_timestamp_for_long_running_process_uses_event_time(
+    tmp_path: Path,
+) -> None:
+    """Later eCAR dependent rows for long-running processes should not backdate to startup."""
+    emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
+    base = _base_time()
+    event_time = base + timedelta(minutes=10)
+    host = _host_context()
+    proc = _process_context(base)
+    dependent_event = SecurityEvent(
+        timestamp=event_time,
+        event_type="registry_modify",
+        src_host=host,
+        process=proc,
+    )
+
+    dependent_time = emitter._after_process_create_timestamp(dependent_event, proc)
+
+    assert event_time <= dependent_time < event_time + timedelta(milliseconds=40)
+
+
 def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> None:
     """eCAR process-create latency should not collapse visible command duration."""
     emitter = EcarEmitter(load_format("ecar"), tmp_path, threaded=False)
     base = _base_time()
     host = _host_context()
     proc = _process_context(base)
+    create_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+    )
     terminate_event = SecurityEvent(
         timestamp=base + timedelta(seconds=6),
         event_type="process_terminate",
@@ -201,10 +262,11 @@ def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> N
         process=proc,
     )
 
-    process_time = emitter._process_create_timestamp(terminate_event, proc)
+    process_time = emitter._process_create_timestamp(create_event, proc)
     terminate_time = emitter._process_terminate_timestamp(terminate_event, proc)
 
     assert terminate_time >= process_time + timedelta(seconds=6)
+    assert terminate_time < process_time + timedelta(seconds=12)
 
 
 def test_ecar_process_create_normalization_preserves_canonical_order() -> None:

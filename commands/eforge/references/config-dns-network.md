@@ -189,11 +189,14 @@ Per-domain and per-tag URI path templates for realistic proxy log generation. Lo
 ### Structure
 
 ```yaml
+default_http_policy: https_redirect_public  # Optional fallback for public browser-like domains
+
 domains:
   domain.example.com:
     user_agent: "Mozilla/5.0 ..."     # Optional, overrides default
     os: windows                        # Optional, restricts to OS
     domain_class: browser              # Optional: browser, ocsp, crl, windows_update, etc.
+    http_policy: https_redirect         # Optional exact-domain port-80 behavior
     referrer_policy: normal            # Optional: normal or none
     paths:                             # Required, list of URI path templates
       - "/api/v2/endpoint/{guid}"
@@ -206,9 +209,11 @@ domains:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `default_http_policy` | string | no | Top-level fallback. `https_redirect_public` makes public browser-like domains redirect plaintext port-80 requests unless an exact domain policy or non-browser `domain_class` overrides it. |
 | `user_agent` | string | no | Custom User-Agent header (overrides browser default) |
 | `os` | string | no | Restrict to `windows` or `linux` |
 | `domain_class` | string | no | Domain behavior class. Certificate and update infrastructure should use classes such as `ocsp`, `crl`, or `windows_update` rather than browser-like defaults. |
+| `http_policy` | string | no | Exact-domain plaintext HTTP policy. `https_redirect`/`https_only` emit 301/302 redirects for port 80; omit it to use the top-level fallback. |
 | `referrer_policy` | string | no | `normal` emits realistic browser referrers where appropriate; `none` suppresses referrers for certificate/update infrastructure. |
 | `paths` | list[string] | yes | URI path templates with optional `{placeholder}` variables |
 | `content_type` | string | no | MIME type for responses |

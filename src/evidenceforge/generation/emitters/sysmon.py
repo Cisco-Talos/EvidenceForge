@@ -149,6 +149,46 @@ class SysmonEventEmitter(LogEmitter):
     # are fixed. All Event 10 events on the same host share the same offsets.
     _call_trace_cache: dict[str, list[str]] = {}
 
+    def _event_rng(self, event: SecurityEvent, salt: str = "") -> random.Random:
+        """Return a deterministic renderer-local RNG for incidental Sysmon fields."""
+        host = event.src_host or event.dst_host
+        parts: list[object] = [
+            salt or event.event_type,
+            event.event_type,
+            event.timestamp.isoformat(),
+        ]
+        if host is not None:
+            parts.extend((host.hostname, host.fqdn, host.ip))
+        if event.auth is not None:
+            parts.extend(
+                (
+                    event.auth.username,
+                    event.auth.logon_id,
+                    event.auth.source_ip,
+                    event.auth.source_port,
+                )
+            )
+        if event.process is not None:
+            parts.extend(
+                (
+                    event.process.pid,
+                    event.process.parent_pid,
+                    event.process.image,
+                    event.process.command_line,
+                )
+            )
+        if event.network is not None:
+            parts.extend(
+                (
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.network.protocol,
+                )
+            )
+        return random.Random(_stable_seed("|".join(str(part) for part in parts)))
+
     # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
     _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
         "cmd.exe": (
@@ -662,7 +702,13 @@ class SysmonEventEmitter(LogEmitter):
                     parts.append(f"C:\\Windows\\SYSTEM32\\{mod}+{off:X}")
                 rendered.append("|".join(parts))
             self._call_trace_cache[hostname] = rendered
-        return random.choice(self._call_trace_cache[hostname])
+        counters = getattr(self, "_call_trace_counters", None)
+        if counters is None:
+            counters = self._call_trace_counters = {}
+        counter = counters.get(hostname, 0)
+        counters[hostname] = counter + 1
+        rng = random.Random(_stable_seed(f"calltrace_choice:{hostname}:{counter}"))
+        return rng.choice(self._call_trace_cache[hostname])
 
     def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
         """Look up process image from StateManager by PID.
@@ -700,6 +746,10 @@ class SysmonEventEmitter(LogEmitter):
         deterministic process-create source offset so Event 1 and all follow-on
         events share the same source-native identifier.
         """
+        cached_guid = self._final_process_guids.get((hostname, pid))
+        if cached_guid is not None:
+            return cached_guid
+
         ts = fallback_timestamp
         sm = getattr(self, "_state_manager", None)
         if sm and pid > 0:
@@ -878,7 +928,6 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
-        random.Random()
         proc = event.process
         auth = event.auth
         host = event.src_host
@@ -991,7 +1040,6 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""
-        random.Random()
         proc = event.process
         auth = event.auth
         host = event.src_host
@@ -1117,7 +1165,7 @@ class SysmonEventEmitter(LogEmitter):
         Primary detection for credential dumping (e.g., mimikatz accessing lsass.exe).
         Source process reads target process memory with specific access rights.
         """
-        rng = random.Random()
+        rng = self._event_rng(event)
         host = event.src_host
         proc = event.process  # Source process
         access = event.process_access
@@ -1349,7 +1397,6 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_network_connect(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 3 (NetworkConnect)."""
-        random.Random()
         host = event.src_host
         net = event.network
         proc = event.process
@@ -1436,7 +1483,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_image_loaded(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 7 (ImageLoaded)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         host = event.src_host
         proc = event.process
         il = event.image_load
@@ -1495,7 +1542,6 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_file_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 11 (FileCreate)."""
-        random.Random()
         host = event.src_host
         proc = event.process
         fc = event.file
@@ -1540,8 +1586,6 @@ class SysmonEventEmitter(LogEmitter):
         reg = event.registry
         if not self._passes_event12_13_filter(event):
             return
-
-        random.Random()
         host = event.src_host
         proc = event.process
 
@@ -1603,7 +1647,6 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_dns_query(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 22 (DNSQuery)."""
-        random.Random()
         host = event.src_host
         dns = event.dns
 
@@ -1699,6 +1742,7 @@ class SysmonEventEmitter(LogEmitter):
         self._erid_rngs: dict[str, random.Random] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
+        self._final_process_guids: dict[tuple[str, int], str] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1932,6 +1976,7 @@ class SysmonEventEmitter(LogEmitter):
             hostname = computer.split(".", 1)[0] if computer else ""
             new_guid = self._generate_process_guid(hostname, pid_int, ts)
             old_guid = str(guid)
+            self._final_process_guids[(hostname, pid_int)] = new_guid
             if new_guid != old_guid:
                 replacements[(computer, old_guid)] = new_guid
                 event["ProcessGuid"] = new_guid
