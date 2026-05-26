@@ -28,7 +28,7 @@ Most synthetic log generators produce isolated, single-format data that experien
 
 ```bash
 # Install
-git clone https://github.com/cisco-foundation-ai/EvidenceForge.git
+git clone https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 uv sync
 
@@ -42,13 +42,13 @@ uv run eforge install-skills --agent codex
 # /eforge scenario
 
 # Or generate from an existing scenario
-uv run eforge generate scenarios/retail-store-ftp-attack.yaml -o ./output
+uv run eforge generate scenarios/branch-office-example/scenario.yaml -o ./output
 
 # Validate a scenario file
-uv run eforge validate scenarios/retail-store-ftp-attack.yaml
+uv run eforge validate scenarios/branch-office-example/scenario.yaml
 
 # Evaluate generated data quality
-uv run eforge eval ./output --scenario scenarios/retail-store-ftp-attack.yaml
+uv run eforge eval ./output/data --scenario scenarios/branch-office-example/scenario.yaml
 ```
 
 ## Agent Skills (Recommended)
@@ -184,6 +184,7 @@ See [Scenario Reference](docs/reference/scenario-reference.md) for complete sche
 
 | Scenario | Users | Duration | Description |
 |----------|-------|----------|-------------|
+| [branch-office-example](scenarios/branch-office-example/scenario.yaml) | 5 | 6 hours | Beginner branch office scenario with Windows, Zeek, eCAR, syslog, bash history, Snort, ASA, web, and proxy logs |
 | [minimal.yaml](tests/fixtures/scenarios/minimal.yaml) | 1 | 1 hour | Minimal baseline-only scenario |
 | [attack.yaml](tests/fixtures/scenarios/attack.yaml) | 2 | 4 hours | Lateral movement + exfiltration |
 | [retail-store-ftp-attack.yaml](tests/fixtures/scenarios/retail-store-ftp-attack.yaml) | 20+ | 24 hours | Retail store with FTP RCE attack, full network topology |
