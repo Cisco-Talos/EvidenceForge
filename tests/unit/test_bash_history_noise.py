@@ -522,6 +522,108 @@ class TestBaselineLinuxBashHistory:
             "pwd",
         }
 
+    def test_bash_session_picker_ignores_invalid_selection_probability(self, monkeypatch):
+        """Invalid workflow probability in overlays should safely fall back."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = {
+            "common": ["pwd"],
+            "sysadmin": ["echo fallback"],
+            "params": {},
+            "typo_model": {"max_rate": 0},
+            "workflow_model": {"selection_probability": float("inf")},
+            "workflows": {
+                "sysadmin": [
+                    {
+                        "name": "workflow",
+                        "weight": 1,
+                        "steps": [["hostname -f"]],
+                    }
+                ]
+            },
+        }
+        monkeypatch.setattr(bash_commands, "load_bash_commands", lambda: commands)
+        bash_commands.reset_bash_command_memory()
+
+        picked = bash_commands.pick_bash_session_commands(
+            random.Random(7),
+            "sysadmin",
+            "APP-INT-01",
+            ["gunicorn"],
+            username="deploy",
+            command_count=3,
+        )
+
+        assert len(picked) == 3
+
+    def test_bash_session_picker_ignores_invalid_workflow_weight(self, monkeypatch):
+        """Invalid workflow weight in overlays should not crash selection."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = {
+            "common": ["pwd"],
+            "sysadmin": ["echo fallback"],
+            "params": {},
+            "typo_model": {"max_rate": 0},
+            "workflow_model": {"selection_probability": 1.0},
+            "workflows": {
+                "sysadmin": [
+                    {
+                        "name": "workflow",
+                        "weight": 10**500,
+                        "steps": [["hostname -f"]],
+                    }
+                ]
+            },
+        }
+        monkeypatch.setattr(bash_commands, "load_bash_commands", lambda: commands)
+        bash_commands.reset_bash_command_memory()
+
+        picked = bash_commands.pick_bash_session_commands(
+            random.Random(8),
+            "sysadmin",
+            "APP-INT-01",
+            ["gunicorn"],
+            username="deploy",
+            command_count=2,
+        )
+
+        assert picked[0] == ("hostname -f", False)
+
+    def test_bash_session_picker_ignores_scalar_workflow_model(self, monkeypatch):
+        """Malformed workflow_model overlays should fall back instead of crashing."""
+        from evidenceforge.generation.activity import bash_commands
+
+        commands = {
+            "common": ["pwd"],
+            "sysadmin": ["echo fallback"],
+            "params": {},
+            "typo_model": {"max_rate": 0},
+            "workflow_model": "not-a-dict",
+            "workflows": {
+                "sysadmin": [
+                    {
+                        "name": "workflow",
+                        "weight": 1,
+                        "steps": [["hostname -f"]],
+                    }
+                ]
+            },
+        }
+        monkeypatch.setattr(bash_commands, "load_bash_commands", lambda: commands)
+        bash_commands.reset_bash_command_memory()
+
+        picked = bash_commands.pick_bash_session_commands(
+            random.Random(9),
+            "sysadmin",
+            "APP-INT-01",
+            ["gunicorn"],
+            username="deploy",
+            command_count=2,
+        )
+
+        assert len(picked) == 2
+
     def test_bash_session_workflow_steps_do_not_force_exhausted_repeats(self, monkeypatch):
         """Small workflow pools should fall back instead of becoming exact-repeat fingerprints."""
         from evidenceforge.generation.activity import bash_commands
