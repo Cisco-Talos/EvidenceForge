@@ -25,8 +25,10 @@ name = "evidence-forge"
 version = "1.0.0"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-    { name = "David J. Bianco", email = "davidjbianco@gmail.com" }
+    { name = "Cisco Talos" }
 ]
 requires-python = ">=3.11"
 dependencies = [

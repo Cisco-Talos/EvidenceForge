@@ -60,6 +60,9 @@ Next review item: security/legal hygiene.
 - Other prompt/review artifacts under `scenarios/`, including iteration-test
   blind-review loop outputs, should not be tracked for the public source
   release.
+- Realistic public IP addresses and domains in public scenario/docs examples are
+  intentional; do not replace them with obvious documentation-only ranges/names
+  as part of this release-readiness cleanup.
 
 ## Completed Work
 
@@ -138,6 +141,16 @@ Implemented during example/scenario hygiene cleanup:
   `scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md`, and
   `scenarios/branch-office-example/scenario.yaml` tracked.
 
+Implemented during security/legal hygiene cleanup:
+
+- Confirmed GitHub private vulnerability reporting is enabled for the public
+  repository.
+- Added MIT package license metadata and license-file inclusion to
+  `pyproject.toml`.
+- Added Dependabot coverage for GitHub Actions workflows, targeting `dev`.
+- Switched package author metadata to `Cisco Talos` without a public email
+  address.
+
 ## Validation
 
 Validated before committing `fe5d4785`:
@@ -186,6 +199,14 @@ Example/scenario hygiene validation:
   `scenarios/COVERAGE-TEST-PROMPT.md`,
   `scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md`, and
   `scenarios/branch-office-example/scenario.yaml`.
+
+Security/legal hygiene validation:
+
+- Targeted secret scans did not find live-looking AWS, GitHub, Slack, bearer
+  token, or private-key material in tracked files.
+- Generated-output/artifact scan found only expected test fixtures under
+  `tests/fixtures`.
+- `uv lock --check` passed.
 
 ## Open Review Items
 
