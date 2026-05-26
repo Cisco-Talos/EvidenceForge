@@ -41,6 +41,14 @@ from typing import Any
 
 from evidenceforge.config import get_activity_directory
 from evidenceforge.config.overlay import load_with_overlay, merge_keyed_list
+from evidenceforge.generation.actions import (
+    BrowserSessionActionBundle,
+    BrowserSessionRequest,
+    IdsAlertActionBundle,
+    IdsAlertRequest,
+    ScheduledScanOverlapActionBundle,
+    ScheduledScanOverlapRequest,
+)
 from evidenceforge.generation.activity.auth_noise import scheduled_stale_credentials_config
 from evidenceforge.generation.activity.create_remote_thread_patterns import (
     load_create_remote_thread_noise_config,
@@ -53,9 +61,8 @@ from evidenceforge.generation.activity.generator import (
     _dns_rtt,
     _linux_foreground_lifetime,
     _linux_uid_for_user,
-    _ssh_syslog_time,
+    _ntp_association_poll_seconds,
     _windows_foreground_lifetime,
-    _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.host_activity_profiles import (
@@ -95,10 +102,6 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed
 logger = logging.getLogger(__name__)
 
 
-_HttpGroupKey = tuple[str, int]
-_HttpPlanValue = tuple[_HttpGroupKey, int, bool, int]
-
-
 def _ufw_block_syn_packet_len(src_ip: str) -> int:
     """Return a stable valid IP total length for a header-only blocked TCP SYN."""
     rng = random.Random(_stable_seed(f"ufw_syn_packet_len:{src_ip}"))
@@ -115,6 +118,87 @@ def _ufw_block_ttl(src_ip: str) -> int:
         initial = rng.choices((64, 128, 255), weights=(58, 36, 6), k=1)[0]
         hops = rng.randint(7, 30) if initial == 255 else rng.randint(5, 24)
     return max(32, initial - hops)
+
+
+def _ntp_sync_interval_seconds(
+    hostname: str,
+    ntp_ip: str,
+    sequence: int,
+    poll_seconds: int,
+) -> float:
+    """Return the next observed NTP sync interval for a client/server association."""
+    poll = max(300, poll_seconds)
+    rng = random.Random(_stable_seed(f"ntp_interval:{hostname}:{ntp_ip}:{sequence}"))
+    interval = poll * rng.uniform(0.82, 1.18)
+    if rng.random() < 0.10:
+        interval += poll * rng.uniform(0.35, 1.25)
+    if rng.random() < 0.05:
+        interval = max(300.0, poll * rng.uniform(0.45, 0.80))
+    return max(300.0, interval)
+
+
+def _ntp_observed_second(
+    hostname: str,
+    ntp_ip: str,
+    sequence: int,
+    scheduled_second: float,
+) -> float:
+    """Return a small source-observation offset for an NTP sync."""
+    rng = random.Random(_stable_seed(f"ntp_observed:{hostname}:{ntp_ip}:{sequence}"))
+    return scheduled_second + rng.uniform(-1.5, 2.5)
+
+
+def _ntp_sync_seconds_for_hour(
+    hostname: str,
+    ntp_ip: str,
+    generation_epoch: datetime,
+    current_hour: datetime,
+    poll_seconds: int,
+) -> list[float]:
+    """Return observed NTP sync seconds from generation epoch for one hour."""
+    hour_start_sec = (current_hour - generation_epoch).total_seconds()
+    hour_end_sec = hour_start_sec + 3600
+    phase_rng = random.Random(_stable_seed(f"ntp_phase:{hostname}:{ntp_ip}:{poll_seconds}"))
+    scheduled_second = phase_rng.uniform(0, min(3600, poll_seconds))
+    sequence = 0
+    max_interval = poll_seconds * 2.45
+    if scheduled_second < hour_start_sec:
+        skip_count = max(0, int((hour_start_sec - scheduled_second) // max_interval) - 2)
+        for _ in range(skip_count):
+            scheduled_second += _ntp_sync_interval_seconds(
+                hostname,
+                ntp_ip,
+                sequence,
+                poll_seconds,
+            )
+            sequence += 1
+    while scheduled_second < hour_start_sec:
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+
+    observed_seconds: list[float] = []
+    while scheduled_second < hour_end_sec:
+        observed_second = _ntp_observed_second(
+            hostname,
+            ntp_ip,
+            sequence,
+            scheduled_second,
+        )
+        if hour_start_sec <= observed_second < hour_end_sec:
+            observed_seconds.append(observed_second)
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+    return observed_seconds
 
 
 def _linux_baseline_session_initiator(
@@ -255,54 +339,6 @@ def _networkmanager_message_timestamp(ts: datetime) -> str:
     return f"{timestamp.timestamp():.4f}"
 
 
-def _plan_http_request_groups(
-    requests: list[Any],
-    *,
-    request_body_floor: int = 0,
-) -> tuple[dict[int, _HttpPlanValue], dict[_HttpGroupKey, dict[str, int]]]:
-    """Plan source-native HTTP transaction depth and parent flow accounting."""
-    group_counters: dict[str, int] = {}
-    active_group: dict[str, _HttpGroupKey] = {}
-    depths: dict[_HttpGroupKey, int] = {}
-    last_emit_offset: dict[_HttpGroupKey, int] = {}
-    plan: dict[int, _HttpPlanValue] = {}
-    groups: dict[_HttpGroupKey, dict[str, int]] = {}
-
-    for index, req in enumerate(requests):
-        hostname = str(req.hostname)
-        if req.is_page_load or hostname not in active_group:
-            group_counters[hostname] = group_counters.get(hostname, 0) + 1
-            active_group[hostname] = (hostname, group_counters[hostname])
-            depths[active_group[hostname]] = 0
-
-        group_key = active_group[hostname]
-        depths[group_key] += 1
-        trans_depth = depths[group_key]
-        emit_offset_ms = req.time_offset_ms
-        if group_key in last_emit_offset:
-            emit_offset_ms = max(emit_offset_ms, last_emit_offset[group_key] + 600)
-        last_emit_offset[group_key] = emit_offset_ms
-        plan[index] = (group_key, trans_depth, trans_depth == 1, emit_offset_ms)
-
-        group = groups.setdefault(
-            group_key,
-            {
-                "first_offset_ms": emit_offset_ms,
-                "last_offset_ms": emit_offset_ms,
-                "request_body_len": 0,
-                "response_body_len": 0,
-                "request_count": 0,
-            },
-        )
-        group["first_offset_ms"] = min(group["first_offset_ms"], emit_offset_ms)
-        group["last_offset_ms"] = max(group["last_offset_ms"], emit_offset_ms)
-        group["request_body_len"] += max(request_body_floor, req.request_body_len)
-        group["response_body_len"] += req.response_body_len
-        group["request_count"] += 1
-
-    return plan, groups
-
-
 def _session_started_by(session: Any, time: datetime) -> bool:
     """Return whether a session exists at the given activity time."""
     session_start = session.start_time
@@ -358,6 +394,16 @@ def _session_active_at(
     """Return whether a session should be used for activity at ``time``."""
     if not _session_started_by(session, time):
         return False
+    network_close_time = getattr(session, "network_close_time", None)
+    if network_close_time is not None:
+        network_close_time = (
+            network_close_time.replace(tzinfo=UTC)
+            if network_close_time.tzinfo is None
+            else network_close_time.astimezone(UTC)
+        )
+        activity_time = time.replace(tzinfo=UTC) if time.tzinfo is None else time.astimezone(UTC)
+        if activity_time >= network_close_time:
+            return False
     logoff_time = _session_logoff_time(session, current_hour, planned_logoffs)
     return logoff_time is None or time < logoff_time
 
@@ -893,6 +939,30 @@ def _cron_shell_command_line(command: str) -> str:
     return f"/bin/sh -c {shlex.quote(command)}"
 
 
+def _resolve_cron_command(
+    cron_commands: Any,
+    *,
+    is_rhel_like: bool,
+) -> str | None:
+    """Return the selected cron command when it is a non-empty string."""
+    if not isinstance(cron_commands, dict):
+        return None
+
+    if is_rhel_like:
+        command = cron_commands.get("rhel", cron_commands.get("all", ""))
+    else:
+        command = cron_commands.get("debian", cron_commands.get("all", ""))
+
+    if not isinstance(command, str):
+        return None
+
+    stripped_command = command.strip()
+    if not stripped_command:
+        return None
+
+    return stripped_command
+
+
 def _cron_workload_process(
     command: str,
     is_rhel_like: bool,
@@ -1255,7 +1325,7 @@ class BaselineMixin:
                 host_agents.append(agent)
 
         process_id = self.state_manager.allocate_transient_linux_pid(
-            hostname, timestamp, os_category=system.os_category
+            hostname, timestamp, os_category=_get_os_category(system.os)
         )
         action_id, action_process_path = self._polkit_action_profile(entry, rng)
         values = {
@@ -1653,7 +1723,7 @@ class BaselineMixin:
                         else self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             detail_ts,
-                            os_category=system.os_category,
+                            os_category=_get_os_category(system.os),
                         )
                     )
                     self.activity_generator.generate_syslog_event(
@@ -1683,12 +1753,8 @@ class BaselineMixin:
         elif sched_type == "cron":
             cron_user = sched.get("cron_user", "root")
             cron_commands = sched.get("cron_commands", {})
-            # Pick the right command for this distro
-            if is_rhel_like:
-                cmd = cron_commands.get("rhel", cron_commands.get("all", ""))
-            else:
-                cmd = cron_commands.get("debian", cron_commands.get("all", ""))
-            if not cmd:
+            cmd = _resolve_cron_command(cron_commands, is_rhel_like=is_rhel_like)
+            if cmd is None:
                 return
 
             cron_parent_pid = sys_pids.get("cron", 0)
@@ -2763,22 +2829,15 @@ class BaselineMixin:
             elif pattern_type == "scheduled_scan_overlap":
                 result = generate_scheduled_scan_overlap(rng, enabled_users, systems, current_hour)
                 if result:
-                    scanner = result["scanner"]
-                    scan_ports = [22, 80, 135, 443, 445, 3389, 8080, 8443]
-                    for target in result["targets"]:
-                        for port in rng.sample(scan_ports, rng.randint(2, 4)):
-                            scan_time = result["time"] + timedelta(seconds=rng.uniform(0, 30))
-                            self.state_manager.set_current_time(scan_time)
-                            self.activity_generator.generate_connection(
-                                src_ip=scanner.ip,
-                                dst_ip=target.ip,
-                                time=scan_time,
-                                dst_port=port,
-                                proto="tcp",
-                                duration=rng.uniform(0.01, 0.5),
-                                orig_bytes=rng.randint(50, 200),
-                                resp_bytes=rng.randint(50, 500),
-                            )
+                    ScheduledScanOverlapActionBundle(
+                        executor=self,
+                        request=ScheduledScanOverlapRequest(
+                            scanner=result["scanner"],
+                            targets=tuple(result["targets"]),
+                            time=result["time"],
+                            rng=rng,
+                        ),
+                    ).execute()
 
             elif pattern_type in ("temp_dir_execution", "unusual_powershell"):
                 gen_fn = (
@@ -2819,6 +2878,26 @@ class BaselineMixin:
                         logon_id=logon_id,
                         rng=rng,
                     )
+
+    def _execute_scheduled_scan_overlap_bundle(self, request: ScheduledScanOverlapRequest) -> None:
+        """Expand a suspicious-but-benign scheduled scanner overlap."""
+
+        scan_ports = [22, 80, 135, 443, 445, 3389, 8080, 8443]
+        rng = request.rng
+        for target in request.targets:
+            for port in rng.sample(scan_ports, rng.randint(2, 4)):
+                scan_time = request.time + timedelta(seconds=rng.uniform(0, 30))
+                self.state_manager.set_current_time(scan_time)
+                self.activity_generator.generate_connection(
+                    src_ip=request.scanner.ip,
+                    dst_ip=target.ip,
+                    time=scan_time,
+                    dst_port=port,
+                    proto="tcp",
+                    duration=rng.uniform(0.01, 0.5),
+                    orig_bytes=rng.randint(50, 200),
+                    resp_bytes=rng.randint(50, 500),
+                )
 
     def _terminate_stale_processes(self, current_hour: datetime) -> None:
         """Terminate processes that have exceeded their expected lifetime.
@@ -3274,6 +3353,30 @@ class BaselineMixin:
                 # storyline controls when these sessions end.
                 if session.storyline_protected:
                     continue
+                network_close_time = getattr(session, "network_close_time", None)
+                if session.session_kind == "ssh" and network_close_time is not None:
+                    network_close_time = (
+                        network_close_time.replace(tzinfo=UTC)
+                        if network_close_time.tzinfo is None
+                        else network_close_time.astimezone(UTC)
+                    )
+                    hour_end = current_hour + timedelta(hours=1)
+                    if network_close_time < hour_end:
+                        close_seed = _stable_seed(
+                            "baseline_ssh_logoff_after_transport:"
+                            f"{session.system}:{session.logon_id}:"
+                            f"{network_close_time.isoformat()}"
+                        )
+                        close_offset = (
+                            network_close_time
+                            - current_hour
+                            + timedelta(milliseconds=80 + (close_seed % 1420))
+                        ).total_seconds()
+                        planned[(session.system, session.logon_id)] = min(
+                            max(0.0, close_offset),
+                            3599.0,
+                        )
+                        continue
                 session_age_hours = (current_hour - session.start_time).total_seconds() / 3600
                 if session_age_hours < 0.5:
                     continue
@@ -4784,16 +4887,7 @@ class BaselineMixin:
         that produces a landing page, subresource cascade, navigation, and
         referrer chains.
         """
-        from evidenceforge.events.contexts import HttpContext
-        from evidenceforge.generation.activity.browsing_session import (
-            generate_browsing_session,
-        )
-        from evidenceforge.generation.activity.dns_registry import (
-            get_domain_tags,
-            pick_domain_and_ip,
-            resolve_domain_ip,
-        )
-        from evidenceforge.generation.activity.http_content import response_mime_types_for_status
+        from evidenceforge.generation.activity.dns_registry import get_domain_tags
         from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
 
         domain_tags = get_domain_tags(hostname) if hostname else []
@@ -4826,35 +4920,6 @@ class BaselineMixin:
                     intensity = getattr(p, "browsing_intensity", "normal")
                     break
 
-        session_requests = generate_browsing_session(
-            rng=rng,
-            hostname=hostname,
-            domain_tags=domain_tags,
-            source_os=os_cat,
-            browsing_intensity=intensity,
-            port=conn.get("port", 443),
-            transfer_variant_key=f"{system.ip}:{hostname}:{os_cat}",
-        )
-
-        if not session_requests:
-            return
-
-        def _http_status_message(status: int) -> str:
-            return {
-                200: "OK",
-                204: "No Content",
-                206: "Partial Content",
-                301: "Moved Permanently",
-                302: "Found",
-                304: "Not Modified",
-                400: "Bad Request",
-                401: "Unauthorized",
-                403: "Forbidden",
-                404: "Not Found",
-                500: "Internal Server Error",
-                503: "Service Unavailable",
-            }.get(status, "OK")
-
         # Pick a consistent UA for the entire session
         if os_cat == "linux":
             _session_uas = [
@@ -4869,93 +4934,29 @@ class BaselineMixin:
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
             ]
         session_ua = rng.choice(_session_uas)
-        request_plan, request_groups = _plan_http_request_groups(session_requests)
 
-        planned_requests = sorted(
-            enumerate(session_requests),
-            key=lambda item: (request_plan[item[0]][3], item[0]),
-        )
-        for req_index, req in planned_requests:
-            group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
-            req_ts = base_ts + timedelta(milliseconds=emit_offset_ms)
-            self.state_manager.set_current_time(req_ts)
-            group = request_groups[group_key]
-            conn_duration = rng.uniform(0.05, 2.0)
-            conn_orig_bytes = req.request_body_len
-            conn_resp_bytes = req.response_body_len
-            if first_in_group:
-                remaining_ms = max(0, group["last_offset_ms"] - emit_offset_ms)
-                conn_duration = (remaining_ms / 1000) + rng.uniform(1.25, 3.0)
-                request_overhead = 120 * group["request_count"]
-                response_overhead = 160 * group["request_count"]
-                conn_orig_bytes = max(
-                    req.request_body_len,
-                    group["request_body_len"] + request_overhead,
-                )
-                conn_resp_bytes = max(
-                    req.response_body_len,
-                    group["response_body_len"] + response_overhead,
-                )
-
-            # Resolve destination IP for CDN subresources
-            req_dst_ip = dst_ip
-            req_hostname = hostname
-            if req.hostname != hostname:
-                app_specific_tags = [
-                    tag for tag in ("outlook", "teams", "onedrive") if tag in domain_tags
-                ]
-                if app_specific_tags:
-                    # App clients fetch supporting resources from their own
-                    # SaaS endpoint family, not arbitrary web/CDN domains.
-                    req_hostname, req_dst_ip = pick_domain_and_ip(
-                        rng,
-                        rng.choice(app_specific_tags),
-                        src_host=system.hostname,
-                    )
-                else:
-                    req_hostname = req.hostname
-                    req_dst_ip = resolve_domain_ip(req_hostname, src_host=system.hostname)
-
-            http_ctx = HttpContext(
-                method=req.method,
-                host=req_hostname,
-                uri=req.path,
-                version="1.1",
-                user_agent=session_ua,
-                request_body_len=req.request_body_len,
-                response_body_len=req.response_body_len,
-                flow_request_body_len=group["request_body_len"] if first_in_group else None,
-                flow_response_body_len=group["response_body_len"] if first_in_group else None,
-                flow_transaction_count=group["request_count"] if first_in_group else 1,
-                status_code=req.status_code,
-                status_msg=_http_status_message(req.status_code),
-                referrer=req.referrer,
-                trans_depth=trans_depth,
-                resp_mime_types=response_mime_types_for_status(
-                    req.status_code,
-                    req.content_type,
-                    req.response_body_len,
-                    method=req.method,
-                ),
-                tags=[],
-            )
-
-            self.activity_generator.generate_connection(
+        BrowserSessionActionBundle(
+            request=BrowserSessionRequest(
                 src_ip=system.ip,
-                dst_ip=req_dst_ip,
-                time=req_ts,
+                dst_ip=dst_ip,
+                time=base_ts,
+                hostname=hostname,
                 dst_port=conn.get("port", 443),
                 proto=conn.get("proto", "tcp"),
                 service=conn.get("service"),
-                duration=conn_duration,
-                orig_bytes=conn_orig_bytes,
-                resp_bytes=conn_resp_bytes,
-                emit_dns=req.is_page_load or req_hostname != hostname,
                 source_system=system,
-                hostname=req_hostname,
                 pid=persona_pid,
-                http=http_ctx,
-            )
+                domain_tags=tuple(domain_tags),
+                source_os=os_cat,
+                browsing_intensity=intensity,
+                require_browser_like_domain=True,
+                transfer_variant_key=f"{system.ip}:{hostname}:{os_cat}",
+                user_agent=session_ua,
+                source="baseline_persona_browsing",
+            ),
+            executor=self.activity_generator,
+            rng=rng,
+        ).execute()
 
     def _generate_system_traffic(
         self,
@@ -5002,6 +5003,8 @@ class BaselineMixin:
                         return _pids[k]
                 return -1
 
+            hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
+
             # DNS lookups: truly periodic with small jitter, using global schedule
             if "dns-client" in services:
                 _dns_lo, _dns_hi = self._resolve_traffic_rate("dns_interval")
@@ -5011,7 +5014,6 @@ class BaselineMixin:
                 _dns_range = max(1, _dns_hi - _dns_lo)
                 dns_interval = _dns_lo + (_stable_seed(f"dns_iv_{system.hostname}") % _dns_range)
                 dns_phase = _stable_seed(f"dns_ph_{system.hostname}") % dns_interval
-                hour_start_sec = (current_hour - self._generation_epoch).total_seconds()
                 t = dns_phase
                 while t < hour_start_sec:
                     t += dns_interval
@@ -5041,12 +5043,9 @@ class BaselineMixin:
                     )
                     t += dns_interval
 
-            # NTP sync: 1 per hour
+            # NTP syncs follow a stable per-association poll schedule rather
+            # than a fixed hourly tick.
             if "ntp-client" in services:
-                offset = (_stable_seed(f"ntp_phase_{system.hostname}") % 3600) + rng.gauss(0, 5)
-                offset = max(0, min(3599, offset))
-                ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
                 # Deterministic NTP source per host (stable across hours)
                 # Exclude the host's own IP — DCs don't NTP-sync to themselves
                 ntp_candidates = [ip for ip in ntp_ips if ip != system.ip]
@@ -5056,24 +5055,37 @@ class BaselineMixin:
                     else None  # This host IS the NTP server; skip NTP client traffic only
                 )
                 if ntp_ip:
+                    poll_seconds = _ntp_association_poll_seconds(
+                        system.ip,
+                        ntp_ip,
+                    )
                     ntp_pid = (
                         _svc_pid("svchost_local_svc")
                         if os_cat == "windows"
                         else _svc_pid("chronyd", "timesyncd")
                     )
-                    self.activity_generator.generate_connection(
-                        src_ip=system.ip,
-                        dst_ip=ntp_ip,
-                        time=ts,
-                        dst_port=123,
-                        proto="udp",
-                        service="ntp",
-                        duration=rng.uniform(0.01, 0.1),
-                        orig_bytes=48,
-                        resp_bytes=48,
-                        source_system=system,
-                        pid=ntp_pid,
-                    )
+                    for observed_second in _ntp_sync_seconds_for_hour(
+                        system.hostname,
+                        ntp_ip,
+                        self._generation_epoch,
+                        current_hour,
+                        poll_seconds,
+                    ):
+                        ts = self._generation_epoch + timedelta(seconds=observed_second)
+                        self.state_manager.set_current_time(ts)
+                        self.activity_generator.generate_connection(
+                            src_ip=system.ip,
+                            dst_ip=ntp_ip,
+                            time=ts,
+                            dst_port=123,
+                            proto="udp",
+                            service="ntp",
+                            duration=rng.uniform(0.01, 0.1),
+                            orig_bytes=48,
+                            resp_bytes=48,
+                            source_system=system,
+                            pid=ntp_pid,
+                        )
 
             # DHCP lease renewal at T/2 with RFC 2131 jitter
             dhcp_state = getattr(self, "_dhcp_lease_state", {}).get(system.hostname)
@@ -6299,49 +6311,6 @@ class BaselineMixin:
                         time=ts,
                     )
                     ssh_duration = rng.uniform(30.0, 1800.0)
-                    sshd_parent_pid = sys_pids.get("sshd", 0)
-                    if (
-                        sshd_parent_pid
-                        and self.state_manager.get_process(system.hostname, sshd_parent_pid) is None
-                    ):
-                        sshd_parent_pid = 0
-                    sshd_seed = _stable_seed(
-                        "baseline_ssh_responding_pid:"
-                        f"{system.hostname}:{ip}:{port}:{ts.isoformat()}"
-                    )
-                    sshd_pid = self.activity_generator.generate_system_process(
-                        system=system,
-                        time=ts + timedelta(milliseconds=8 + (sshd_seed % 72)),
-                        process_name="/usr/sbin/sshd",
-                        command_line="sshd: [accepted]",
-                        parent_pid=sshd_parent_pid,
-                        username="root",
-                        emit_linux_syslog=False,
-                    )
-                    self.activity_generator.generate_connection(
-                        src_ip=ip,
-                        dst_ip=system.ip,
-                        time=ts,
-                        dst_port=22,
-                        proto="tcp",
-                        service="ssh",
-                        duration=ssh_duration,
-                        orig_bytes=rng.randint(2000, 50000),
-                        resp_bytes=rng.randint(5000, 200000),
-                        src_port=port,
-                        source_system=src_sys_obj,
-                        conn_state="SF",
-                        responding_pid=sshd_pid,
-                    )
-                    observed_ssh_time = _zeek_conn_observation_time(
-                        ts,
-                        ip,
-                        port,
-                        system.ip,
-                        22,
-                        "tcp",
-                        "ssh",
-                    )
                     ssh_roster = self._get_server_ssh_users(system)
                     ssh_usernames = [user.username for user in ssh_roster]
                     if ssh_usernames:
@@ -6355,107 +6324,38 @@ class BaselineMixin:
                         )[0]
                     else:
                         ssh_user = rng.choice(["admin", "root"] if is_rhel_like else ["admin"])
-                    # Generate a stateful SSH lifecycle. Real sshd logs keep
-                    # connection, auth, pam open, and pam close on the same
-                    # per-session sshd[pid]; bounded-window orphan records are
-                    # modeled by occasional missing closes near the window edge,
-                    # not by inventing unrelated close PIDs.
+                    ssh_user_model = next(
+                        (user for user in ssh_roster if user.username == ssh_user),
+                        self.activity_generator._user_model_for_username(ssh_user),
+                    )
                     _key_rng = random.Random(
                         _stable_seed(f"ssh_client_key:{ip}:{system.hostname}:{ssh_user}")
                     )
                     key_type = _key_rng.choice(["RSA", "ED25519", "ECDSA"])
                     key_hash = f"SHA256:{''.join(_key_rng.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/', k=43))}"
-                    if rng.random() < 0.7:
-                        auth_msg = (
-                            f"Accepted publickey for {ssh_user} from {ip} port {port} ssh2: "
-                            f"{key_type} {key_hash}"
-                        )
-                    else:
-                        auth_msg = f"Accepted password for {ssh_user} from {ip} port {port} ssh2"
-                    _msg_offset = rng.randint(35, 160)
-                    ssh_syslog_seed = (
-                        system.hostname,
-                        ip,
-                        port,
-                        sshd_pid,
-                        observed_ssh_time.isoformat(),
-                    )
-                    login_times: list[datetime] = []
-                    for _label in ("connection", "accepted", "pam"):
-                        login_times.append(
-                            _ssh_syslog_time(
-                                observed_ssh_time,
-                                _label,
-                                _msg_offset,
-                                *ssh_syslog_seed,
-                            )
-                        )
-                        if _label == "connection":
-                            if auth_msg.startswith("Accepted password"):
-                                _msg_offset += rng.randint(450, 3500)
-                            else:
-                                _msg_offset += rng.randint(90, 550)
-                        else:
-                            _msg_offset += rng.randint(45, 180)
-                    # systemd-logind is observed as a different process from
-                    # sshd, so source-observation delay can be independent.
-                    # Keep enough visible margin that New-session rows cannot
-                    # sort before auth/PAM under the default syslog delay profile.
-                    _msg_offset += rng.randint(420, 760)
-                    login_times.append(
-                        _ssh_syslog_time(
-                            observed_ssh_time,
-                            "logind",
-                            _msg_offset,
-                            *ssh_syslog_seed,
-                        )
-                    )
-                    ssh_sid = self.state_manager.next_linux_logind_session_id(
-                        system.hostname,
-                        rng,
-                        login_times[-1],
-                    )
-                    login_msgs = [
-                        (
-                            "sshd",
-                            sshd_pid,
-                            f"Connection from {ip} port {port} on {system.ip} port 22",
-                        ),
-                        ("sshd", sshd_pid, auth_msg),
-                        (
-                            "sshd",
-                            sshd_pid,
-                            f"pam_unix(sshd:session): session opened for user {ssh_user}(uid={_linux_uid_for_user(ssh_user)}) by (uid=0)",
-                        ),
-                        (
-                            "systemd-logind",
-                            sys_pids.get("logind", 456),
-                            f"New session {ssh_sid} of user {ssh_user}.",
-                        ),
-                    ]
-                    for (app, pid_val, lm), login_time in zip(
-                        login_msgs,
-                        login_times,
-                        strict=True,
-                    ):
-                        self.activity_generator.generate_syslog_event(
-                            system=system,
-                            time=login_time,
-                            app_name=app,
-                            message=lm,
-                            pid=pid_val,
-                            facility=10,
-                        )
+                    auth_method = "publickey" if rng.random() < 0.7 else "password"
                     disconnect_time = ts + timedelta(seconds=max(1.0, ssh_duration))
-                    if disconnect_time < self.end_time and rng.random() < 0.92:
-                        self.activity_generator.generate_syslog_event(
-                            system=system,
-                            time=disconnect_time,
-                            app_name="sshd",
-                            message=f"pam_unix(sshd:session): session closed for user {ssh_user}",
-                            pid=sshd_pid,
-                            facility=10,
-                        )
+                    # Baseline remote-admin SSH is a modeled session, not loose
+                    # syslog churn. The bundle owns transport, auth/PAM/logind,
+                    # endpoint session evidence, and optional close ordering.
+                    self.activity_generator.generate_ssh_session(
+                        user=ssh_user_model,
+                        target_system=system,
+                        time=ts,
+                        source_ip=ip,
+                        source_system=src_sys_obj,
+                        source_port=port,
+                        duration=ssh_duration,
+                        orig_bytes=rng.randint(2000, 50000),
+                        resp_bytes=rng.randint(5000, 200000),
+                        auth_method=auth_method,
+                        public_key_type=key_type if auth_method == "publickey" else "",
+                        public_key_hash=key_hash if auth_method == "publickey" else "",
+                        emit_session_close=(
+                            disconnect_time < self.end_time and rng.random() < 0.92
+                        ),
+                        source="baseline_ssh_noise",
+                    )
                 elif source_roll < 0.35:
                     if is_rhel_like:
                         continue  # RHEL doesn't have snapd
@@ -6503,21 +6403,64 @@ class BaselineMixin:
                     ]
                     if not hasattr(self, "_timesyncd_first_seen"):
                         self._timesyncd_first_seen = set()
+                    if not hasattr(self, "_timesyncd_last_state"):
+                        self._timesyncd_last_state = {}
+                    previous_timesync_state = self._timesyncd_last_state.get(system.hostname)
+                    if previous_timesync_state is not None and ts - previous_timesync_state[
+                        1
+                    ] < timedelta(minutes=5):
+                        continue
                     if system.hostname not in self._timesyncd_first_seen:
                         msg = f"Synchronized to time server for the first time {ntp_ip}:123."
+                        timesync_state = "sync"
                         self._timesyncd_first_seen.add(system.hostname)
                     else:
-                        msg = rng.choices(
-                            [
+                        step = f"{-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d}"
+                        candidates = [
+                            (
+                                "config",
                                 f"Network configuration changed, trying to establish synchronization with {ntp_ip}:123.",
-                                f"System clock synchronized to {ntp_ip}:123.",
-                                f"Time has been changed by {-1 if rng.random() < 0.5 else 1}.{rng.randint(1, 999999):06d} seconds.",
-                                f"Timed out waiting for reply from {ntp_ip}:123.",
-                                f"Selected time server {ntp_ip}:123.",
-                            ],
-                            weights=[8, 45, 8, 4, 35],
+                                8,
+                            ),
+                            ("sync", f"System clock synchronized to {ntp_ip}:123.", 45),
+                            ("step", f"Time has been changed by {step} seconds.", 8),
+                            ("timeout", f"Timed out waiting for reply from {ntp_ip}:123.", 4),
+                            ("selected", f"Selected time server {ntp_ip}:123.", 35),
+                        ]
+                        weighted: list[tuple[str, str, float]] = []
+                        for candidate_state, candidate_msg, weight in candidates:
+                            adjusted_weight = float(weight)
+                            if previous_timesync_state is not None:
+                                previous_state, previous_time = previous_timesync_state
+                                recent = ts - previous_time
+                                if recent < timedelta(minutes=10):
+                                    if (
+                                        previous_state in {"sync", "step"}
+                                        and candidate_state == "timeout"
+                                    ):
+                                        adjusted_weight = 0.0
+                                    elif previous_state == "timeout" and candidate_state in {
+                                        "sync",
+                                        "step",
+                                    }:
+                                        adjusted_weight = 0.0
+                                if (
+                                    recent < timedelta(minutes=2)
+                                    and candidate_state == previous_state
+                                ):
+                                    adjusted_weight *= 0.15
+                            weighted.append((candidate_state, candidate_msg, adjusted_weight))
+                        if not any(weight for _state, _msg, weight in weighted):
+                            weighted = [
+                                ("selected", f"Selected time server {ntp_ip}:123.", 1.0),
+                            ]
+                        selected_idx = rng.choices(
+                            range(len(weighted)),
+                            weights=[weight for _state, _msg, weight in weighted],
                             k=1,
                         )[0]
+                        timesync_state, msg, _weight = weighted[selected_idx]
+                    self._timesyncd_last_state[system.hostname] = (timesync_state, ts)
                     self.activity_generator.generate_syslog_event(
                         system=system,
                         time=ts,
@@ -6680,7 +6623,7 @@ class BaselineMixin:
                         pid = self.state_manager.allocate_transient_linux_pid(
                             system.hostname,
                             ts,
-                            os_category=system.os_category,
+                            os_category=_get_os_category(system.os),
                         )
                     else:
                         pid_key = _APP_TO_PID_KEY.get(app)
@@ -6737,7 +6680,7 @@ class BaselineMixin:
                             facility=10,
                             severity=6,
                         )
-                    if limit_key:
+                    if limit_key and ts >= self.start_time:
                         self._extra_syslog_entry_counts[limit_key] = (
                             self._extra_syslog_entry_counts.get(limit_key, 0) + 1
                         )
@@ -6867,8 +6810,6 @@ class BaselineMixin:
                         ext_ip = rng.choices(_EXTERNAL_SCAN_IPS, weights=_weights, k=1)[0]
                     else:
                         ext_ip = rng.choice(_EXTERNAL_SCAN_IPS)
-                    from evidenceforge.events.contexts import IdsContext
-
                     if sig_direction == "out":
                         src_ip = local_sys.ip
                         if alert_proto in {"udp", "tcp"} and alert_dst_port == 53:
@@ -6895,18 +6836,27 @@ class BaselineMixin:
                         src_ip = ext_ip
                         dst_ip = public_target
                         source_system = None
-                    dns_ctx = None
-                    if (
-                        alert_proto in {"udp", "tcp"}
-                        and alert_dst_port == 53
-                        and sig_direction == "out"
-                    ):
-                        dns_ctx = _dns_context_for_ids_signature(
-                            sig,
-                            rng,
+                    ids_result = IdsAlertActionBundle(
+                        IdsAlertRequest(
+                            signature=sig,
+                            time=ts,
+                            src_ip=src_ip,
+                            dst_ip=dst_ip,
+                            dst_port=alert_dst_port,
+                            proto=alert_proto,
+                            rng=rng,
+                            source="baseline_ids_false_positive",
+                            direction=sig_direction,
                             ad_domain=self.scenario.environment.domain or "corp.local",
                             dns_server_ip=dst_ip,
+                            include_dns_payload=(
+                                alert_proto in {"udp", "tcp"}
+                                and alert_dst_port == 53
+                                and sig_direction == "out"
+                            ),
+                            dns_context_factory=_dns_context_for_ids_signature,
                         )
+                    ).execute_with_result()
 
                     self.activity_generator.generate_connection(
                         src_ip=src_ip,
@@ -6921,14 +6871,8 @@ class BaselineMixin:
                         orig_bytes=rng.randint(40, 2000),
                         resp_bytes=rng.randint(0, 1000),
                         source_system=source_system,
-                        dns=dns_ctx,
-                        ids=IdsContext(
-                            sid=sig["sid"],
-                            rev=sig.get("rev", 1),
-                            message=sig["message"],
-                            classification=sig["classification"],
-                            priority=sig["priority"],
-                        ),
+                        dns=ids_result.dns,
+                        ids=ids_result.ids,
                     )
 
         # Web access logs
@@ -6948,7 +6892,6 @@ class BaselineMixin:
             return
 
         from evidenceforge.events.contexts import HttpContext
-        from evidenceforge.generation.activity.browsing_session import generate_browsing_session
         from evidenceforge.generation.activity.http_content import (
             apply_transfer_size_variance,
             is_stable_resource_path,
@@ -7113,103 +7056,37 @@ class BaselineMixin:
             effective_dst_ip = _effective_dst_ip(is_external_client)
 
             if profile.get("kind") == "session":
-                session_requests = generate_browsing_session(
-                    rng=rng,
-                    hostname=http_host,
-                    domain_tags=["web"],
-                    source_os=source_os or "windows",
-                    browsing_intensity=str(profile.get("browsing_intensity", "normal")),
-                    port=dst_port,
-                    require_browser_like_domain=False,
-                    transfer_variant_key=f"{client_ip}:{chosen_ua}",
-                )
-                current_page_allowed = False
-                visible_requests = []
-                for req in session_requests:
-                    if req.is_page_load:
-                        if top_level_emitted >= top_level_budget:
-                            break
-                        top_level_emitted += 1
-                        current_page_allowed = True
-                    elif not current_page_allowed:
-                        continue
-                    if req.hostname != http_host:
-                        continue
-                    if is_stable_resource_path(req.path) and not req.is_page_load:
-                        cache_seen = getattr(self, "_web_static_cache_seen", None)
-                        if not isinstance(cache_seen, dict):
-                            cache_seen = self._web_static_cache_seen = {}
-                        cache_key = (client_ip, http_host, req.path)
-                        if cache_key in cache_seen:
-                            cache_seen[cache_key] += 1
-                            continue
-                        cache_seen[cache_key] = 1
-                    visible_requests.append(req)
-
-                request_plan, request_groups = _plan_http_request_groups(
-                    visible_requests,
-                    request_body_floor=200,
-                )
-
-                planned_requests = sorted(
-                    enumerate(visible_requests),
-                    key=lambda item: (request_plan[item[0]][3], item[0]),
-                )
-                for req_index, req in planned_requests:
-                    group_key, trans_depth, first_in_group, emit_offset_ms = request_plan[req_index]
-                    req_ts = base_ts + timedelta(milliseconds=emit_offset_ms)
-                    group = request_groups[group_key]
-                    request_overhead = 120 * group["request_count"]
-                    response_overhead = 160 * group["request_count"]
-                    self.activity_generator.generate_connection(
+                cache_seen = getattr(self, "_web_static_cache_seen", None)
+                if not isinstance(cache_seen, dict):
+                    cache_seen = self._web_static_cache_seen = {}
+                result = BrowserSessionActionBundle(
+                    request=BrowserSessionRequest(
                         src_ip=client_ip,
                         dst_ip=effective_dst_ip,
-                        time=req_ts,
+                        time=base_ts,
+                        hostname=http_host,
                         dst_port=dst_port,
                         proto="tcp",
                         service=dst_service,
-                        duration=(
-                            (max(0, group["last_offset_ms"] - emit_offset_ms) / 1000)
-                            + rng.uniform(1.25, 3.0)
-                            if first_in_group
-                            else rng.uniform(0.03, 2.0)
-                        ),
-                        orig_bytes=(
-                            group["request_body_len"] + request_overhead
-                            if first_in_group
-                            else max(200, req.request_body_len)
-                        ),
-                        resp_bytes=(
-                            max(
-                                req.response_body_len,
-                                group["response_body_len"] + response_overhead,
-                            )
-                            if first_in_group
-                            else req.response_body_len
-                        ),
                         source_system=client_sys,
-                        http=HttpContext(
-                            method=req.method,
-                            host=http_host,
-                            uri=req.path,
-                            version="1.1",
-                            user_agent=chosen_ua,
-                            request_body_len=req.request_body_len,
-                            response_body_len=req.response_body_len,
-                            status_code=req.status_code,
-                            status_msg=_status_message(req.status_code),
-                            referrer=req.referrer,
-                            trans_depth=trans_depth,
-                            resp_mime_types=response_mime_types_for_status(
-                                req.status_code,
-                                req.content_type,
-                                req.response_body_len,
-                                method=req.method,
-                            ),
-                            tags=[],
-                        ),
-                        hostname=http_host,
-                    )
+                        domain_tags=("web",),
+                        source_os=source_os or "windows",
+                        browsing_intensity=str(profile.get("browsing_intensity", "normal")),
+                        require_browser_like_domain=False,
+                        transfer_variant_key=f"{client_ip}:{chosen_ua}",
+                        user_agent=chosen_ua,
+                        same_host_only=True,
+                        page_load_budget=top_level_budget - top_level_emitted,
+                        request_body_floor=200,
+                        secondary_duration_min=0.03,
+                        set_current_time=False,
+                        source="baseline_web_server_access",
+                    ),
+                    executor=self.activity_generator,
+                    rng=rng,
+                    static_cache_seen=cache_seen,
+                ).execute_with_result()
+                top_level_emitted += result.page_load_count
                 continue
 
             lo, hi = request_count_bounds(profile)

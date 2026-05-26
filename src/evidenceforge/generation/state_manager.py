@@ -29,7 +29,6 @@ log generation, ensuring consistency across log formats.
 import hashlib
 import logging
 import random
-import uuid
 from datetime import datetime, timedelta
 from threading import RLock
 
@@ -42,7 +41,7 @@ from evidenceforge.models.state import (
     RunningProcess,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -342,7 +341,18 @@ class StateManager:
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=stable_uuid(
+                    "session",
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                    source_ip,
+                    source_port,
+                    session_start_time.isoformat(),
+                    logon_id,
+                    windows_session_id,
+                ),
                 logon_guid=logon_guid,
             )
 
@@ -459,7 +469,18 @@ class StateManager:
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=stable_uuid(
+                    "registered-session",
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                    source_ip,
+                    source_port,
+                    ensure_utc(start_time).isoformat(),
+                    logon_id,
+                    windows_session_id,
+                ),
                 logon_guid=logon_guid,
             )
             self.state.active_sessions[logon_id] = session
@@ -853,7 +874,13 @@ class StateManager:
             if bounded is not None:
                 pid = bounded
         collision_salt = 0
+        max_retries = 8_192
         while not is_available(pid):
+            if collision_salt >= max_retries:
+                raise StateError(
+                    "Unable to allocate Linux PID after bounded retries; "
+                    "adjust scenario timing or reduce process contention."
+                )
             bounded = bounded_candidate(collision_salt + 1)
             if bounded is not None:
                 pid = bounded
@@ -874,30 +901,24 @@ class StateManager:
         event_time: datetime,
         os_category: str = "linux",
     ) -> int:
-        """Allocate a transient PID for syslog-only process observations.
+        """Allocate a Linux PID for syslog-only transient process observations.
 
         Syslog records such as ``sudo[pid]`` and per-session ``sshd[pid]`` can
         describe short-lived processes that are not emitted as canonical eCAR
         process-create events. They still belong to the same host PID namespace
-        as canonical process evidence, so this method shares the per-host allocator
+        as canonical process evidence, so this method shares the Linux allocator
         and used-ID ledger without registering a durable RunningProcess.
         """
         with self._lock:
-            allocator_os = "windows" if os_category == "windows" else "linux"
-            self._initialize_pid_allocator(system, allocator_os)
+            if os_category != "linux":
+                raise StateError(f"Cannot allocate Linux transient PID for non-Linux host {system}")
+            if self._pid_os.get(system) not in {None, "linux"}:
+                raise StateError(
+                    f"Cannot allocate Linux transient PID in {self._pid_os[system]} "
+                    f"PID namespace for {system}"
+                )
+            self._initialize_pid_allocator(system, "linux")
             pid_rng = self._pid_rngs[system]
-            if self._pid_os.get(system) == "windows":
-                pid = self._pid_counters[system]
-                gap = max(1, int(pid_rng.lognormvariate(1.2, 0.8)))
-                self._pid_counters[system] += 4 * gap
-                if self._pid_counters[system] > 65536:
-                    self._pid_counters[system] = 4000
-                    running = {
-                        p.pid for (s, _), p in self.state.running_processes.items() if s == system
-                    }
-                    while self._pid_counters[system] in running:
-                        self._pid_counters[system] += 4
-                return pid
             return self._allocate_linux_pid(system, pid_rng, event_time)
 
     def create_process(
@@ -984,7 +1005,17 @@ class StateManager:
                 )
 
             # Create process
-            ecar_object_id = str(uuid.uuid4())
+            ecar_object_id = stable_uuid(
+                "process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                self.state.current_time.isoformat(),
+                logon_id,
+            )
             process = RunningProcess(
                 pid=pid,
                 parent_pid=parent_pid,
@@ -1042,6 +1073,17 @@ class StateManager:
             activity_time = ensure_utc(activity_time)
             if proc.last_activity_time is None or activity_time > proc.last_activity_time:
                 proc.last_activity_time = activity_time
+            return True
+
+    def update_session_activity_time(self, logon_id: str, activity_time: datetime) -> bool:
+        """Record the latest dependent activity timestamp for an active session."""
+        with self._lock:
+            session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
+            if session is None:
+                return False
+            activity_time = ensure_utc(activity_time)
+            if session.last_activity_time is None or activity_time > session.last_activity_time:
+                session.last_activity_time = activity_time
             return True
 
     def get_processes_for_user(self, username: str) -> list[RunningProcess]:
@@ -1207,6 +1249,21 @@ class StateManager:
         """
         with self._lock:
             return self.state.open_connections.get(conn_id)
+
+    def update_connection_interval(
+        self,
+        conn_id: str,
+        start_time: datetime,
+        close_time: datetime | None,
+    ) -> bool:
+        """Update the canonical source-visible interval for an open connection."""
+        with self._lock:
+            conn = self.state.open_connections.get(conn_id)
+            if conn is None:
+                return False
+            conn.start_time = ensure_utc(start_time)
+            conn.close_time = ensure_utc(close_time) if close_time is not None else None
+            return True
 
     def update_connection_bytes(self, conn_id: str, bytes_sent: int, bytes_received: int) -> bool:
         """Update cumulative byte counts for a connection.

@@ -347,6 +347,167 @@ class TestObservationProfiles:
             < terminate.timestamp + terminate_decision.delay
         )
 
+    def test_endpoint_process_observation_delay_is_coherent_per_source(self, monkeypatch):
+        """Endpoint process lifecycle rows should share one source-local collection decision."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "sysmon": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    },
+                    "windows_security": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    },
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    },
+                },
+            },
+        )
+        policy = ObservationPolicy("endpoint_process_delay_test")
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+        )
+        process = ProcessContext(
+            pid=4242,
+            parent_pid=101,
+            image=r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            command_line="powershell.exe -NoProfile",
+            username=r"CORP\alice",
+            start_time=_make_ts(),
+        )
+        create = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="process_create",
+            src_host=host,
+            process=process,
+        )
+        terminate = SecurityEvent(
+            timestamp=_make_ts() + timedelta(seconds=8),
+            event_type="process_terminate",
+            src_host=host,
+            process=process,
+        )
+
+        for format_name in ("windows_event_sysmon", "windows_event_security", "ecar"):
+            assert (
+                policy.decide(format_name, create).delay
+                == policy.decide(format_name, terminate).delay
+            )
+
+    def test_session_observation_delay_is_coherent_per_source(self, monkeypatch):
+        """Logon/logoff rows for one source session should share source-local delay."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "windows_security": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 20, "max_ms": 2000},
+                    },
+                },
+            },
+        )
+        policy = ObservationPolicy("session_delay_test")
+        host = HostContext(
+            hostname="WS-01",
+            ip="10.0.1.10",
+            os="Windows 11",
+            os_category="windows",
+            system_type="workstation",
+        )
+        auth = AuthContext(
+            username="alice",
+            logon_id="0x123456",
+            logon_type=2,
+        )
+        logon = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="logon",
+            dst_host=host,
+            auth=auth,
+        )
+        logoff = SecurityEvent(
+            timestamp=_make_ts() + timedelta(hours=1),
+            event_type="logoff",
+            dst_host=host,
+            auth=auth,
+        )
+
+        for format_name in ("windows_event_security", "ecar"):
+            assert (
+                policy.decide(format_name, logon).delay == policy.decide(format_name, logoff).delay
+            )
+
+    def test_network_observation_delay_is_coherent_per_uid_source(self, monkeypatch):
+        """Network tuple companions should share source-local delay for one UID."""
+        monkeypatch.setattr(
+            "evidenceforge.events.observation.get_observation_profile",
+            lambda _name: {
+                "default": {
+                    "missingness": 0.0,
+                    "delay_ms": {"min_ms": 0, "max_ms": 0},
+                    "host_missingness_multiplier": {"min": 1.0, "max": 1.0},
+                },
+                "sources": {
+                    "ecar": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    },
+                    "ids": {
+                        "missingness": 0.0,
+                        "delay_ms": {"min_ms": 5, "max_ms": 1000},
+                    },
+                },
+            },
+        )
+        policy = ObservationPolicy("network_uid_delay_test")
+        network = NetworkContext(
+            src_ip="10.0.1.10",
+            src_port=51111,
+            dst_ip="203.0.113.20",
+            dst_port=443,
+            protocol="tcp",
+            zeek_uid="CsharedUID123",
+        )
+        first = SecurityEvent(
+            timestamp=_make_ts(),
+            event_type="connection",
+            network=network,
+        )
+        second = SecurityEvent(
+            timestamp=_make_ts() + timedelta(milliseconds=250),
+            event_type="ids_alert",
+            network=network,
+        )
+
+        assert policy.decide("ecar", first).delay == policy.decide("ecar", second).delay
+        assert (
+            policy.decide("snort_alert", first).delay == policy.decide("snort_alert", second).delay
+        )
+
     def test_syslog_ssh_lifecycle_delay_preserves_session_order(self, monkeypatch):
         """SSH lifecycle syslog rows with one sshd PID should share collection delay."""
         monkeypatch.setattr(

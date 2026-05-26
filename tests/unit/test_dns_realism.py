@@ -373,6 +373,34 @@ class TestHostnameConsistency:
         second_ttl = dns_events[1].dns.TTLs[0]
         assert 0 <= first_ttl - second_ttl <= 15
 
+    def test_registered_a_rrset_is_stable_across_cache_expirations(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Repeated registered A lookups should not redraw answer shape per call."""
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        state_manager.set_current_time(timestamp)
+        expected_answers = get_domain_ips("postman.com")
+
+        for offset in (0, 7200):
+            activity_gen._emit_dns_lookup(
+                src_ip="10.0.1.50",
+                dst_ip=expected_answers[0],
+                time=timestamp + timedelta(seconds=offset),
+                hostname="postman.com",
+                force_address=True,
+            )
+
+        dns_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "postman.com"
+            and call.args[0].dns.query_type == "A"
+        ]
+        assert len(dns_events) == 2
+        assert [event.dns.answers for event in dns_events] == [expected_answers, expected_answers]
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""

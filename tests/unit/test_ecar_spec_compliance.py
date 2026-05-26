@@ -402,6 +402,55 @@ class TestSessionOutcomeRendering:
 
         assert logon_row["timestamp"] < process_row["timestamp"]
 
+    def test_ssh_session_login_renders_after_matching_inbound_flow(self, emitter, ts):
+        """eCAR SSH LOGIN should not appear before the same tuple's FLOW."""
+        host = HostContext(
+            hostname="LINUX-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+            fqdn="linux-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        flow_event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=host,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=55222,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                service="ssh",
+                duration=120.0,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            edr=EdrContext(object_id="flow-1"),
+        )
+        session_event = SecurityEvent(
+            timestamp=ts,
+            event_type="ssh_session",
+            dst_host=host,
+            auth=AuthContext(
+                username="alice",
+                source_ip="10.0.0.10",
+                source_port=55222,
+                logon_id="0x123",
+                logon_type=10,
+            ),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter._render_connection(flow_event)
+        flow_row = emitter.emit_event.call_args.args[0]
+        emitter._render_logon(session_event)
+        login_row = emitter.emit_event.call_args.args[0]
+
+        assert login_row["timestamp"] > flow_row["timestamp"]
+
     def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
         """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
         host = HostContext(
@@ -746,6 +795,88 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
+    def test_short_flow_stays_inside_canonical_connection_interval(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """FLOW rows should not be source-timed after the canonical transport close."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=1234,
+            parent_pid=4,
+            image=r"C:\Windows\System32\curl.exe",
+            command_line="curl.exe https://example.org",
+            username="alice",
+            start_time=ts,
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                duration=0.05,
+                initiating_pid=1234,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id="process-1"),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=50)
+        assert emitted[0]["pid"] == -1
+        assert "actorID" not in emitted[0]
+
+    def test_incomplete_flow_without_duration_stays_at_canonical_attempt_time(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """FLOW rows without a duration should not drift after a zero-duration Zeek row."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=135,
+                protocol="tcp",
+                conn_state="S0",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] == ts
+
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
         emitted: list[dict] = []
@@ -784,6 +915,183 @@ class TestChronologicalOutput:
         emitter._render_connection(event)
 
         assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
+
+    def test_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Inbound FLOW observations should not wait for late listener PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state_manager = StateManager()
+        state_manager.set_current_time(ts + timedelta(seconds=2))
+        listener_pid = state_manager.create_process(
+            "linux01",
+            parent_pid=0,
+            image="/usr/sbin/sshd",
+            command_line="sshd: admin [priv]",
+            username="root",
+            integrity_level="System",
+        )
+        emitter._state_manager = state_manager
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.0.20",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                duration=None,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=-1,
+                responding_pid=listener_pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        inbound = next(row for row in emitted if row["direction"] == "INBOUND")
+        assert inbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert inbound["pid"] == -1
+        assert "principal" not in inbound
+
+    def test_rdp_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """RDP FLOW observations should not wait for late TermService PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state_manager = StateManager()
+        state_manager.set_current_time(ts + timedelta(seconds=2))
+        listener_pid = state_manager.create_process(
+            "win01",
+            parent_pid=4,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line=r"C:\Windows\System32\svchost.exe -k termsvcs",
+            username="NETWORK SERVICE",
+            integrity_level="System",
+        )
+        emitter._state_manager = state_manager
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="win01",
+                ip="10.0.0.20",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+                fqdn="win01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=3389,
+                protocol="tcp",
+                duration=60.0,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=-1,
+                responding_pid=listener_pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        inbound = next(row for row in emitted if row["direction"] == "INBOUND")
+        assert inbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert inbound["pid"] == -1
+        assert "principal" not in inbound
+
+    def test_outbound_remote_session_flow_drops_late_process_identity(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Remote-session FLOW observations should not wait for late client PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=4321,
+            parent_pid=1000,
+            image="/usr/bin/ssh",
+            command_line="ssh admin@linux01",
+            username="alice",
+            start_time=ts + timedelta(seconds=2),
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="linux02",
+                ip="10.0.0.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux02.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.0.20",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                duration=60.0,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=process.pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        outbound = next(row for row in emitted if row["direction"] == "OUTBOUND")
+        assert outbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert outbound["pid"] == -1
+        assert "principal" not in outbound
 
     def test_outbound_flow_can_render_user_principal(self, emitter, monkeypatch, ts):
         """User-owned FLOW records should be able to carry mixed principal attribution."""
@@ -911,22 +1219,124 @@ class TestChronologicalOutput:
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
 
-    def test_inbound_flow_prefers_canonical_destination_pid(self, emitter, monkeypatch, ts):
-        """Session-owned inbound flows should not fall back to the generic listener PID."""
+    @pytest.mark.parametrize(
+        ("dst_port", "proto", "system_pids", "expected_pid"),
+        [
+            (53, "udp", {"dns": 5300, "lsass": 700}, 5300),
+            (88, "udp", {"dns": 5300, "lsass": 700}, 700),
+            (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
+            (445, "tcp", {"system": 4, "lsass": 700}, 4),
+        ],
+    )
+    def test_inbound_infrastructure_flow_uses_destination_service_pid(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+        dst_port,
+        proto,
+        system_pids,
+        expected_pid,
+    ):
+        """DC DNS/auth/SMB listener FLOW rows should use destination-local owners."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        emitter._system_pids = {"DC-01": system_pids}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.3.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.7",
+                src_port=49152,
+                dst_ip="10.0.3.10",
+                dst_port=dst_port,
+                protocol=proto,
+                conn_state="SF",
+                history="ShADadF" if proto == "tcp" else "Dd",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == expected_pid
+
+    def test_short_inbound_service_flow_keeps_preexisting_listener_pid(
+        self, emitter, monkeypatch, ts
+    ):
+        """Long-running service PIDs should survive tiny source-native flow windows."""
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
         state = StateManager()
-        state.set_current_time(ts)
-        ssh_child_pid = state.create_process(
-            "APP-INT-01",
+        state.set_current_time(ts - timedelta(minutes=10))
+        dns_pid = state.create_process(
+            "DC-01",
             0,
-            "/usr/sbin/sshd",
-            "sshd: [accepted]",
-            "root",
+            r"C:\Windows\System32\dns.exe",
+            "dns.exe",
+            "SYSTEM",
             "System",
         )
         emitter._state_manager = state
-        emitter._system_pids = {"APP-INT-01": {"sshd": 36148}}
+        emitter._system_pids = {"DC-01": {"dns": dns_pid}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.3.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.7",
+                src_port=49152,
+                dst_ip="10.0.3.10",
+                dst_port=53,
+                protocol="udp",
+                duration=0.0002,
+                conn_state="SF",
+                history="Dd",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == dns_pid
+
+    def test_inbound_flow_prefers_canonical_destination_pid_for_non_remote_session(
+        self, emitter, monkeypatch, ts
+    ):
+        """Non-remote-session inbound flows should prefer a canonical listener PID."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts - timedelta(seconds=2))
+        listener_pid = state.create_process(
+            "APP-INT-01",
+            0,
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"APP-INT-01": {"apache2": 36148}}
         event = SecurityEvent(
             timestamp=ts,
             event_type="connection",
@@ -942,9 +1352,9 @@ class TestChronologicalOutput:
                 src_ip="10.10.1.31",
                 src_port=50049,
                 dst_ip="10.10.2.30",
-                dst_port=22,
+                dst_port=443,
                 protocol="tcp",
-                responding_pid=ssh_child_pid,
+                responding_pid=listener_pid,
             ),
             edr=EdrContext(object_id="flow-1", actor_id=""),
         )
@@ -952,7 +1362,7 @@ class TestChronologicalOutput:
         emitter._render_connection(event)
 
         assert emitted[0]["direction"] == "INBOUND"
-        assert emitted[0]["pid"] == ssh_child_pid
+        assert emitted[0]["pid"] == listener_pid
         assert emitted[0]["pid"] != 36148
 
     def test_inbound_listener_flow_can_render_principal(self, emitter, monkeypatch, ts):
@@ -1442,6 +1852,64 @@ class TestChronologicalOutput:
         assert file_row["pid"] == shell["pid"]
         assert child["pid"] > shell["pid"]
         assert child["ppid"] == shell["pid"]
+
+    def test_linux_pid_morphology_preserves_process_open_actor_pid(self):
+        """PROCESS/OPEN top-level pid should track actorID (source), not objectID target."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "source",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/usr/bin/bash"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "target",
+                    "pid": 400,
+                    "tid": 400,
+                    "properties": {"image_path": "/usr/bin/ssh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target",
+                    "actorID": "source",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"target_pid": 400, "target_process_uuid": "target"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        source_create = next(row for row in normalized if row.get("objectID") == "source")
+        target_create = next(row for row in normalized if row.get("objectID") == "target")
+        process_open = next(
+            row
+            for row in normalized
+            if row.get("object") == "PROCESS" and row.get("action") == "OPEN"
+        )
+
+        assert target_create["pid"] > source_create["pid"]
+        assert process_open["pid"] == source_create["pid"]
+        assert process_open["properties"]["target_pid"] == target_create["pid"]
 
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""

@@ -9,8 +9,17 @@ from types import SimpleNamespace
 from typing import Any
 
 from evidenceforge.events.contexts import FileTransferContext, HostContext
+from evidenceforge.generation.actions import (
+    HttpResponseFileTransferActionBundle,
+    HttpResponseFileTransferRequest,
+    ScpReceiverFileActionBundle,
+    ScpReceiverFileRequest,
+    SmbFileTransferMetadataActionBundle,
+    SmbFileTransferMetadataRequest,
+    StagedArchiveSmbReadActionBundle,
+    StagedArchiveSmbReadRequest,
+)
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.activity.generator import _zeek_conn_observation_time
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
     _linux_shell_process_command_line,
@@ -197,6 +206,15 @@ class TestStorylineCommandNetworks:
                 SimpleNamespace(type="process"),
                 SimpleNamespace(type="connection", source_ip=""),
             ],
+        )
+        assert StorylineMixin._process_has_following_same_host_connection(
+            web_system,
+            iter(
+                [
+                    SimpleNamespace(type="raw"),
+                    SimpleNamespace(type="connection", source_ip=""),
+                ],
+            ),
         )
 
     def test_apache_raw_syslog_uses_canonical_vip_tuple_and_listener_pid(self):
@@ -494,6 +512,7 @@ class _FakeActivityGenerator:
     def __init__(self) -> None:
         self.reserved_ports: list[int] = []
         self.connections: list[dict] = []
+        self.ssh_sessions: list[dict] = []
         self.explicit_credentials: list[dict] = []
         self.processes: list[dict] = []
         self.process_terminations: list[dict] = []
@@ -614,6 +633,17 @@ class _FakeActivityGenerator:
         self.connections.append(kwargs)
         return "Cscptransfer00001"
 
+    def generate_ssh_session(self, **kwargs: Any) -> str:
+        self.ssh_sessions.append(kwargs)
+        return "Cscptransfer00001"
+
+    def _user_model_for_username(self, username: str) -> User:
+        return User(
+            username=username,
+            full_name=username,
+            email=f"{username}@example.local",
+        )
+
     def process_source_create_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_times.get((hostname, pid))
 
@@ -690,6 +720,223 @@ class _FakeStateManager:
 
     def mark_story_process(self, hostname: str, pid: int) -> None:
         return None
+
+
+class TestFileTransferActionBundles:
+    def test_http_file_transfer_bundle_anchor_is_stable(self):
+        """Identical HTTP file-transfer requests should have stable action anchors."""
+        request = HttpResponseFileTransferRequest(
+            host="cdn.example.test",
+            uri="/payload.bin",
+            dst_ip="93.184.216.34",
+            response_body_len=4096,
+            response_mime_types=["application/octet-stream"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+        )
+
+        first = HttpResponseFileTransferActionBundle(request, random.Random(1)).anchor
+        second = HttpResponseFileTransferActionBundle(request, random.Random(99)).anchor
+
+        assert first == second
+
+    def test_http_file_transfer_bundle_builds_source_native_context(self):
+        """HTTP response file transfers should carry Zeek files.log metadata."""
+        request = HttpResponseFileTransferRequest(
+            host="cdn.example.test",
+            uri="/payload.bin",
+            dst_ip="93.184.216.34",
+            response_body_len=4096,
+            response_mime_types=["application/octet-stream"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+
+        assert result.file_transfer.source == "HTTP"
+        assert result.file_transfer.fuid.startswith("F")
+        assert result.file_transfer.total_bytes == 4096
+        assert result.file_transfer.sha1
+
+    def test_http_file_transfer_bundle_uses_payload_scale_duration(self):
+        """Large HTTP response files should not get analyzer-jitter transfer durations."""
+        request = HttpResponseFileTransferRequest(
+            host="cdn.example.test",
+            uri="/installer.exe",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        result = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+
+        assert result.file_transfer.duration > 1.0
+        assert result.file_transfer.duration < request.parent_duration
+        assert result.file_transfer.seen_bytes == request.response_body_len
+
+    def test_http_file_transfer_hashes_follow_static_object_identity(self):
+        """Identical HTTP response objects should not get new hashes per FUID."""
+        request = HttpResponseFileTransferRequest(
+            host="dbeaver.io",
+            uri="/files/dbeaver-ce-latest-x86_64-setup.exe",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        first = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+        second = HttpResponseFileTransferActionBundle(request, random.Random(9)).execute()
+
+        assert first.file_transfer.fuid != second.file_transfer.fuid
+        assert first.file_transfer.sha1 == second.file_transfer.sha1
+
+    def test_http_file_transfer_pe_metadata_follows_content_identity(self):
+        """Identical HTTP response objects should not get new PE metadata per FUID."""
+        request = HttpResponseFileTransferRequest(
+            host="dbeaver.io",
+            uri="/files/dbeaver-ce-latest-x86_64-setup.exe",
+            dst_ip="93.184.216.34",
+            response_body_len=78_306_264,
+            response_mime_types=["application/x-msdownload"],
+            timestamp=datetime(2026, 5, 18, 12, 0, tzinfo=UTC),
+            parent_duration=6.0,
+        )
+
+        first = HttpResponseFileTransferActionBundle(request, random.Random(4)).execute()
+        second = HttpResponseFileTransferActionBundle(request, random.Random(9)).execute()
+        later_request = HttpResponseFileTransferRequest(
+            host=request.host,
+            uri=request.uri,
+            dst_ip=request.dst_ip,
+            response_body_len=request.response_body_len,
+            response_mime_types=request.response_mime_types,
+            timestamp=request.timestamp + timedelta(hours=2),
+            parent_duration=request.parent_duration,
+        )
+        later = HttpResponseFileTransferActionBundle(later_request, random.Random(12)).execute()
+
+        assert first.pe is not None
+        assert second.pe is not None
+        assert later.pe is not None
+        assert first.pe.id == first.file_transfer.fuid
+        assert second.pe.id == second.file_transfer.fuid
+        assert later.pe.id == later.file_transfer.fuid
+        assert first.pe.id != second.pe.id
+        assert first.pe.machine == second.pe.machine == "AMD64"
+        assert later.pe.machine == "AMD64"
+        assert first.pe.is_64bit is True
+        assert second.pe.is_64bit is True
+        assert later.pe.is_64bit is True
+        assert first.pe.compile_ts == second.pe.compile_ts
+        assert later.pe.compile_ts == first.pe.compile_ts
+        assert first.pe.section_names == second.pe.section_names
+        assert later.pe.section_names == first.pe.section_names
+        assert first.pe.uses_aslr == second.pe.uses_aslr
+        assert later.pe.uses_aslr == first.pe.uses_aslr
+        assert first.pe.has_cert_table == second.pe.has_cert_table
+        assert later.pe.has_cert_table == first.pe.has_cert_table
+
+    def test_smb_file_transfer_metadata_bundle_preserves_direction(self):
+        """SMB files.log metadata should preserve caller-owned transfer direction."""
+        request = SmbFileTransferMetadataRequest(
+            src_ip="10.10.1.35",
+            dst_ip="10.10.2.20",
+            transfer_bytes=65_536,
+            duration=4.2,
+            server="FILE-SRV-01",
+            user="aisha.johnson",
+            is_orig=True,
+        )
+        smb_config = {
+            "min_transfer_bytes": 1024,
+            "mime_types": [{"mime_type": "application/pdf", "weight": 1}],
+            "analyzer_sets": [{"analyzers": ["MD5"], "weight": 1}],
+            "filename_templates": [
+                {
+                    "mime_types": ["application/pdf"],
+                    "templates": [r"\\{server}\Projects\{basename}.pdf"],
+                    "weight": 1,
+                }
+            ],
+            "missing_bytes_probability": 0.0,
+            "timeout_probability": 0.0,
+        }
+
+        context = SmbFileTransferMetadataActionBundle(
+            request,
+            random.Random(8),
+            smb_config=smb_config,
+        ).execute()
+
+        assert context is not None
+        assert context.source == "SMB"
+        assert context.is_orig is True
+        assert context.total_bytes == 65_536
+        assert context.md5
+        assert context.filename.startswith(r"\\FILE-SRV-01\Projects")
+
+    def test_staged_archive_smb_read_bundle_anchor_is_stable(self):
+        """Identical staged-archive transfer requests should have stable anchors."""
+        source = System(hostname="SRC", ip="10.10.1.35", os="Windows 11", type="workstation")
+        target = System(
+            hostname="FILE-SRV-01",
+            ip="10.10.2.20",
+            os="Windows Server 2019",
+            type="server",
+            roles=["file_server"],
+        )
+        actor = User(username="aisha.johnson", full_name="Aisha", email="aisha@example.com")
+        request = StagedArchiveSmbReadRequest(
+            actor=actor,
+            source_ip=source.ip,
+            staging_ip=target.ip,
+            archive_path=r"C:\ProgramData\cache.zip",
+            smb_filename=r"\\FILE-SRV-01\C$\ProgramData\cache.zip",
+            staged_at=datetime(2026, 5, 18, 14, 1, tzinfo=UTC),
+            exfil_time=datetime(2026, 5, 18, 14, 25, tzinfo=UTC),
+            upload_bytes=4_000_000,
+            source_system=source,
+            target_system=target,
+        )
+
+        first = StagedArchiveSmbReadActionBundle(
+            SimpleNamespace(),
+            request,
+            random.Random(1),
+        ).anchor
+        second = StagedArchiveSmbReadActionBundle(
+            SimpleNamespace(),
+            request,
+            random.Random(99),
+        ).anchor
+
+        assert first == second
+
+    def test_scp_receiver_file_bundle_anchor_is_stable(self):
+        """Identical SCP receiver requests should have stable anchors."""
+        source = System(hostname="SRC", ip="10.10.0.10", os="Ubuntu 22.04", type="workstation")
+        target = System(hostname="DST", ip="10.10.0.20", os="Ubuntu 22.04", type="server")
+        actor = User(username="alice", full_name="Alice", email="alice@example.com")
+        request = ScpReceiverFileRequest(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command="scp /tmp/a root@DST:/var/tmp/a",
+            target_user="root",
+            target_path="/var/tmp/a",
+            transfer_time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            source_port=45678,
+        )
+
+        first = ScpReceiverFileActionBundle(SimpleNamespace(), request, random.Random(1)).anchor
+        second = ScpReceiverFileActionBundle(SimpleNamespace(), request, random.Random(99)).anchor
+
+        assert first == second
 
 
 class TestStorylineScpCorrelation:
@@ -788,7 +1035,9 @@ class TestStorylineScpCorrelation:
         )
 
         assert engine.activity_generator.reserved_ports == [45678]
-        assert engine.activity_generator.connections[0]["src_port"] == 45678
+        assert engine.activity_generator.connections == []
+        assert engine.activity_generator.ssh_sessions[0]["source_port"] == 45678
+        assert engine.activity_generator.ssh_sessions[0]["source"] == "storyline_scp"
         assert receiver_ports == [45678]
 
     def test_scp_network_and_receiver_artifacts_wait_for_visible_source_process_create(self):
@@ -842,9 +1091,9 @@ class TestStorylineScpCorrelation:
             explicit_types={"process"},
         )
 
-        conn = engine.activity_generator.connections[0]
-        assert conn["time"] > visible_process_time
-        assert receiver_transfer_times == [conn["time"]]
+        ssh_session = engine.activity_generator.ssh_sessions[0]
+        assert ssh_session["time"] > visible_process_time
+        assert receiver_transfer_times == [ssh_session["time"]]
 
     def test_sqlcmd_remote_private_ip_generates_failed_tcp_attempt(self):
         source = System(
@@ -940,6 +1189,59 @@ class TestStorylineScpCorrelation:
         assert conn["dst_port"] == 1433
         assert conn["conn_state"] == "S0"
         assert conn["firewall"].action == "deny"
+
+    def test_sqlcmd_unresolved_host_collision_still_generates_failed_tcp_attempt(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.1.31",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        colliding_target_ip = StorylineMixin._unresolved_database_target_ip("sqlprod01")
+        unrelated = System(
+            hostname="UNRELATED-FILESERVER",
+            ip=colliding_target_ip,
+            os="Windows Server 2022",
+            type="server",
+        )
+        actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine._ad_domain = "example.com"
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(
+                systems=[source, unrelated],
+                service_accounts=[],
+                network=None,
+            )
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="sqlcmd.exe",
+            command_line='sqlcmd.exe -S sqlprod01 -d hr_records -Q "SELECT 1"',
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="check remote sql host",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[0]
+        assert conn["dst_ip"] == colliding_target_ip
+        assert conn["hostname"] == "sqlprod01.example.com"
+        assert conn["conn_state"] == "S0"
+        assert conn["firewall"].action == "deny"
+        assert conn["service"] is None
 
     def test_sqlcmd_local_instance_does_not_generate_network_attempt(self):
         source = System(
@@ -1137,7 +1439,7 @@ class TestStorylineCommandSideEffects:
             {"actor": actor.username, "dst": file_server.hostname, "src_ip": source.ip}
         ]
 
-    def test_scp_receiver_ssh_syslog_uses_distinct_submillisecond_suffixes(self):
+    def test_scp_receiver_file_artifacts_leave_ssh_syslog_to_bundle(self):
         source = System(
             hostname="SRC",
             ip="10.10.4.10",
@@ -1158,7 +1460,12 @@ class TestStorylineCommandSideEffects:
         engine = object.__new__(StorylineMixin)
         engine.state_manager = _FakeStateManager()
         engine.activity_generator = _FakeActivityGenerator()
-        engine.dispatcher = SimpleNamespace(dispatch=lambda event: None)
+        file_events: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            dispatch=lambda event: (
+                file_events.append(event) if event.event_type == "file_create" else None
+            )
+        )
         transfer_time = datetime(2024, 3, 18, 17, 15, 2, 638000, tzinfo=UTC)
 
         engine._emit_scp_receiver_artifacts(
@@ -1175,34 +1482,9 @@ class TestStorylineCommandSideEffects:
             rng=random.Random(7),
         )
 
-        syslog_times = [event["time"] for event in engine.activity_generator.syslog_events]
-        observed_transfer_time = _zeek_conn_observation_time(
-            transfer_time,
-            source.ip,
-            40117,
-            target.ip,
-            22,
-            "tcp",
-            "ssh",
-        )
-        assert len(syslog_times) == 3
-        assert syslog_times[0] < syslog_times[1] < syslog_times[2]
-        assert (
-            timedelta(milliseconds=80)
-            < syslog_times[0] - observed_transfer_time
-            < timedelta(milliseconds=81)
-        )
-        assert (
-            timedelta(milliseconds=350)
-            < syslog_times[1] - observed_transfer_time
-            < timedelta(milliseconds=351)
-        )
-        assert (
-            timedelta(milliseconds=900)
-            < syslog_times[2] - observed_transfer_time
-            < timedelta(milliseconds=901)
-        )
-        assert len({timestamp.microsecond % 1000 for timestamp in syslog_times}) == 3
+        assert engine.activity_generator.syslog_events == []
+        assert file_events
+        assert file_events[0].event_type == "file_create"
 
     def test_scp_receiver_file_waits_for_visible_source_process_create(self):
         source = System(
@@ -1368,8 +1650,8 @@ class TestStorylineCommandSideEffects:
         assert termination_times[0] < process_times[1]
         assert termination_times[1] < process_times[2]
         assert source_termination_times[(source.hostname, 4243)] < process_times[2]
-        assert engine.activity_generator.connections
-        assert engine.activity_generator.connections[0]["time"] > process_times[2]
+        assert engine.activity_generator.ssh_sessions
+        assert engine.activity_generator.ssh_sessions[0]["time"] > process_times[2]
 
     def test_net_domain_queries_do_not_auto_emit_4648(self):
         source = System(

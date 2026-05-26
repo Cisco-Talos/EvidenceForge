@@ -142,6 +142,21 @@ def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
     assert pam_index < logind_index
 
 
+def test_backfill_missing_logind_pam_openers_ignores_future_openers() -> None:
+    lines = [
+        "<86>1 2024-03-18T12:00:45.000000Z app sudo 1234 - - pam_unix(sudo:session): session opened for user admin(uid=1001) by (uid=0)",
+        "<86>1 2024-03-18T12:00:10.000000Z app systemd-logind 456 - - New session 42 of user admin.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "app.example",
+    )
+
+    pam_openers = [line for line in normalized if "session opened for user admin(uid=1001)" in line]
+    assert len(pam_openers) == 2
+
+
 def test_backfill_missing_logind_pam_openers_preserves_existing_opener() -> None:
     lines = [
         "<86>1 2024-03-18T12:00:05.000000Z app login 1234 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)",
@@ -154,3 +169,27 @@ def test_backfill_missing_logind_pam_openers_preserves_existing_opener() -> None
     )
 
     assert normalized == lines
+
+
+def test_normalize_sudo_session_lifecycles_preserves_non_rfc5424_order() -> None:
+    lines = [
+        "<86>Nov  1 00:00:00 host sudo[2001]: 2023-NOV sentinel",
+        "<86>Apr  1 00:00:00 host sudo[2002]: 2024-APR sentinel",
+    ]
+
+    normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
+
+    assert normalized == lines
+
+
+def test_normalize_sshd_child_pids_skips_oversized_pid_without_crashing() -> None:
+    huge_pid = "9" * 5000
+    lines = [
+        f"<86>1 2024-03-18T12:37:10.283139Z app sshd {huge_pid} - - Connection from 10.0.1.10 port 50000 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T12:37:11.001000Z app sshd 100 - - Accepted password for admin from 10.0.1.10 port 50000 ssh2",
+    ]
+
+    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
+
+    assert normalized[0] == lines[0]
+    assert " sshd 100 " in normalized[1]

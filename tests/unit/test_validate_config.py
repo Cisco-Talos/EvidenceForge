@@ -621,6 +621,30 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_oversized_kerberos_transport_weight(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        real_loader = kerberos_realism.load_kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            data = real_loader()
+            transport_profiles = dict(data["transport_profiles"])
+            transport_profiles["default"] = {"udp": 1_000_001, "tcp": 1}
+            return {**data, "transport_profiles": transport_profiles}
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "transport weights must be less than or equal to 1000000" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_browser_like_proxy_infra_template(self, monkeypatch):
         from evidenceforge.generation.activity import proxy_uri
 
@@ -987,6 +1011,66 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
             and "total" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_external_scanner_profile_weights(
+        self, monkeypatch
+    ):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {"name": "a", "weight": 1e308, "ports": [{"port": 443, "weight": 1}]},
+                    {"name": "b", "weight": 1e308, "ports": [{"port": 8443, "weight": 1}]},
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "total external_scanner_port_profiles weight must be finite" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_external_scanner_port_weights(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {
+                        "name": "bad_ports",
+                        "weight": 1.0,
+                        "ports": [
+                            {"port": 443, "weight": 1e308},
+                            {"port": 8443, "weight": 1e308},
+                        ],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "entry 0 has non-finite cumulative port weight" in issue.message
             for issue in result.issues
         )
 
@@ -1448,6 +1532,34 @@ class TestValidateConfig:
             and issue.file == "extra_syslog_messages.yaml"
             and 'Entry "attacker-controlled-scalar-app"' in issue.message
             and "messages" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_reports_extra_syslog_params_type_errors_without_crashing(
+        self, monkeypatch
+    ):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "attacker-controlled-bad-params",
+                    "messages": ["ordinary message"],
+                    "params": {"bad": 1},
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-bad-params"' in issue.message
+            and "params" in issue.message
             for issue in result.issues
         )
 
