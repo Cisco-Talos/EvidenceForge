@@ -1181,6 +1181,59 @@ class TestStorylineScpCorrelation:
         assert conn["conn_state"] == "S0"
         assert conn["firewall"].action == "deny"
 
+    def test_sqlcmd_unresolved_host_collision_still_generates_failed_tcp_attempt(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.1.31",
+            os="Windows 11 Enterprise",
+            type="workstation",
+        )
+        colliding_target_ip = StorylineMixin._unresolved_database_target_ip("sqlprod01")
+        unrelated = System(
+            hostname="UNRELATED-FILESERVER",
+            ip=colliding_target_ip,
+            os="Windows Server 2022",
+            type="server",
+        )
+        actor = User(
+            username="marcus.chen",
+            full_name="Marcus Chen",
+            email="marcus.chen@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine._ad_domain = "example.com"
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(
+                systems=[source, unrelated],
+                service_accounts=[],
+                network=None,
+            )
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        spec = SimpleNamespace(
+            type="process",
+            process_name="sqlcmd.exe",
+            command_line='sqlcmd.exe -S sqlprod01 -d hr_records -Q "SELECT 1"',
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=datetime(2026, 5, 11, 12, 0, tzinfo=UTC),
+            activity="check remote sql host",
+            explicit_types={"process"},
+        )
+
+        conn = engine.activity_generator.connections[0]
+        assert conn["dst_ip"] == colliding_target_ip
+        assert conn["hostname"] == "sqlprod01.example.com"
+        assert conn["conn_state"] == "S0"
+        assert conn["firewall"].action == "deny"
+        assert conn["service"] is None
+
     def test_sqlcmd_local_instance_does_not_generate_network_attempt(self):
         source = System(
             hostname="SRC",
