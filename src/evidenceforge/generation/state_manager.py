@@ -874,7 +874,13 @@ class StateManager:
             if bounded is not None:
                 pid = bounded
         collision_salt = 0
+        max_retries = 8_192
         while not is_available(pid):
+            if collision_salt >= max_retries:
+                raise StateError(
+                    "Unable to allocate Linux PID after bounded retries; "
+                    "adjust scenario timing or reduce process contention."
+                )
             bounded = bounded_candidate(collision_salt + 1)
             if bounded is not None:
                 pid = bounded
