@@ -66,6 +66,7 @@ class KerberosConnectionAuditRequest:
     time: datetime
     dst_port: int
     proto: str
+    conn_state: str
     service: str
     source_system: System | None
     source: str = "network_connection"
@@ -78,7 +79,8 @@ class KerberosConnectionAuditRequest:
         seed = _stable_seed(
             "action_bundle:kerberos_connection_audit:"
             f"{self.src_ip}:{self.src_port}:{self.dst_ip}:{self.dst_port}:"
-            f"{self.proto}:{self.service}:{self.time.isoformat()}:{hostname}:{self.source}"
+            f"{self.proto}:{self.conn_state}:{self.service}:"
+            f"{self.time.isoformat()}:{hostname}:{self.source}"
         )
         return f"kerberos-connection-audit-{seed:016x}"
 
