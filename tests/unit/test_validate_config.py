@@ -1451,6 +1451,34 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_reports_extra_syslog_params_type_errors_without_crashing(
+        self, monkeypatch
+    ):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "attacker-controlled-bad-params",
+                    "messages": ["ordinary message"],
+                    "params": {"bad": 1},
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-bad-params"' in issue.message
+            and "params" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_cron_hourly_in_extra_syslog_noise(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 

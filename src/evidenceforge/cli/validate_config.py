@@ -2138,7 +2138,13 @@ def validate_config() -> ValidationResult:
                 messages = []
             params = entry.get("params")
             param_strings = (
-                [value for values in params.values() for value in values if isinstance(value, str)]
+                [
+                    value
+                    for values in params.values()
+                    if isinstance(values, list)
+                    for value in values
+                    if isinstance(value, str)
+                ]
                 if isinstance(params, dict)
                 else []
             )
