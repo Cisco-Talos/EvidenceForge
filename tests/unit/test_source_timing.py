@@ -249,6 +249,12 @@ def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> N
     base = _base_time()
     host = _host_context()
     proc = _process_context(base)
+    create_event = SecurityEvent(
+        timestamp=base,
+        event_type="process_create",
+        src_host=host,
+        process=proc,
+    )
     terminate_event = SecurityEvent(
         timestamp=base + timedelta(seconds=6),
         event_type="process_terminate",
@@ -256,10 +262,11 @@ def test_ecar_process_terminate_preserves_rendered_lifetime(tmp_path: Path) -> N
         process=proc,
     )
 
-    process_time = emitter._process_create_timestamp(terminate_event, proc)
+    process_time = emitter._process_create_timestamp(create_event, proc)
     terminate_time = emitter._process_terminate_timestamp(terminate_event, proc)
 
     assert terminate_time >= process_time + timedelta(seconds=6)
+    assert terminate_time < process_time + timedelta(seconds=12)
 
 
 def test_ecar_process_create_normalization_preserves_canonical_order() -> None:
