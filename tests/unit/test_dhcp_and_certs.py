@@ -232,6 +232,39 @@ class TestTlsIssuers:
         assert len(path) >= 73
         assert not re.fullmatch(r"/[0-9a-f]{12}", path)
 
+    def test_ocsp_request_path_ignores_non_finite_bound_overrides(self, tmp_path, monkeypatch):
+        """Non-finite request-path bounds from overlay should fall back safely."""
+        overlay_dir = tmp_path / ".eforge" / "config" / "activity"
+        overlay_dir.mkdir(parents=True)
+        (overlay_dir / "tls_realism.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "ocsp": {
+                        "request_path": {
+                            "min_encoded_chars": float("inf"),
+                            "max_encoded_chars": 96,
+                        }
+                    }
+                }
+            )
+        )
+        monkeypatch.chdir(tmp_path)
+        reset_tls_realism_cache()
+
+        try:
+            path = ocsp_request_path(
+                responder="ocsp.digicert.com",
+                issuer_name="CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US",
+                cert_name="ctldl.windowsupdate.com",
+                serial_number="ABCDEF0123456789",
+                this_update=1710763200,
+            )
+        finally:
+            reset_tls_realism_cache()
+
+        assert path.startswith("/")
+        assert len(path) >= 33
+
     def test_tls_certificate_serial_lengths_vary_but_remain_stable(self):
         """Certificate serials should not all look like fixed 128-bit generated values."""
         serials = [_tls_certificate_serial(f"cert-{idx}") for idx in range(120)]
