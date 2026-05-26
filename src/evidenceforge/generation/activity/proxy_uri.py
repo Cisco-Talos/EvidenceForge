@@ -10,6 +10,7 @@ provides pick_proxy_uri() for context-appropriate path selection.
 import random
 import re
 import uuid
+from ipaddress import ip_address
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
@@ -18,6 +19,7 @@ from evidenceforge.generation.activity.http_content import (
     is_stable_resource_path,
     normalize_mime_type_for_path,
 )
+from evidenceforge.utils.rng import _stable_seed
 
 _TEMPLATES_PATH = get_activity_directory() / "proxy_uri_templates.yaml"
 _CACHED_DATA: dict[str, Any] | None = None
@@ -39,6 +41,13 @@ _SLUGS = [
     "changelog",
     "faq",
 ]
+_INTERNAL_HOST_SUFFIXES = (
+    ".corp",
+    ".corp.com",
+    ".internal",
+    ".lan",
+    ".local",
+)
 
 
 def _merge_proxy_uri_templates(default: dict, overlay: dict) -> dict:
@@ -73,6 +82,66 @@ def get_proxy_domain_class(hostname: str) -> str | None:
         return None
     domain_class = entry.get("domain_class")
     return str(domain_class) if domain_class else None
+
+
+def get_proxy_domain_http_policy(hostname: str) -> str:
+    """Return the configured plaintext HTTP policy for an exact hostname."""
+    entry = load_proxy_uri_templates().get("domains", {}).get(hostname, {})
+    if not isinstance(entry, dict):
+        return ""
+    policy = entry.get("http_policy")
+    return str(policy).strip().lower() if policy else ""
+
+
+def _is_public_hostname(hostname: str) -> bool:
+    """Return whether a hostname should use public-web plaintext defaults."""
+    normalized = hostname.strip().lower().rstrip(".")
+    if not normalized or "." not in normalized:
+        return False
+    if normalized.endswith(_INTERNAL_HOST_SUFFIXES):
+        return False
+    try:
+        ip_address(normalized.strip("[]"))
+    except ValueError:
+        return True
+    return False
+
+
+def _default_plaintext_http_policy(hostname: str) -> str:
+    """Return the configured fallback HTTP policy for public browser-like hosts."""
+    default_policy = str(load_proxy_uri_templates().get("default_http_policy", "")).lower()
+    if default_policy != "https_redirect_public":
+        return ""
+    if not is_browser_like_proxy_domain(hostname):
+        return ""
+    if not _is_public_hostname(hostname):
+        return ""
+    return "https_redirect"
+
+
+def plaintext_http_redirect_status(
+    hostname: str,
+    *,
+    port: int,
+    path: str = "/",
+    dst_ip: str | None = None,
+) -> int | None:
+    """Return redirect status when plaintext HTTP should not serve content."""
+    if port != 80:
+        return None
+    if dst_ip:
+        try:
+            if ip_address(dst_ip.strip("[]")).is_private:
+                return None
+        except ValueError:
+            pass
+    policy = get_proxy_domain_http_policy(hostname)
+    if not policy:
+        policy = _default_plaintext_http_policy(hostname)
+    if policy not in {"https_redirect", "https_only"}:
+        return None
+    seed = f"http_plaintext_redirect:{hostname.lower().rstrip('.')}:{path}"
+    return 301 if _stable_seed(seed) % 4 else 302
 
 
 def is_browser_like_proxy_domain(hostname: str) -> bool:

@@ -323,6 +323,49 @@ class TestStateManagerInit:
         assert len({sudo_pid, ecar_pid, sshd_pid}) == 3
         assert max(sudo_pid, ecar_pid, sshd_pid) - min(sudo_pid, ecar_pid, sshd_pid) < 15_000
 
+    def test_linux_transient_pid_rejects_non_linux_hosts_before_allocator_init(self):
+        """Transient Linux PIDs should not initialize a Windows host namespace."""
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+
+        with pytest.raises(StateError, match="non-Linux host"):
+            sm.allocate_transient_linux_pid("win01", event_time, os_category="windows")
+
+        assert "win01" not in sm._pid_os
+
+    def test_linux_transient_pid_rejects_existing_windows_namespace(self):
+        """Transient Linux PID calls should not poison an established Windows allocator."""
+        sm = StateManager()
+        event_time = datetime(2024, 1, 15, 8, 0, 0, tzinfo=UTC)
+        sm.set_current_time(event_time)
+        win_pid = sm.create_process(
+            system="win01",
+            parent_pid=0,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line="svchost.exe",
+            username="SYSTEM",
+            integrity_level="System",
+        )
+
+        with pytest.raises(StateError, match="non-Linux host"):
+            sm.allocate_transient_linux_pid("win01", event_time, os_category="windows")
+
+        with pytest.raises(StateError, match="PID namespace"):
+            sm.allocate_transient_linux_pid("win01", event_time)
+
+        next_pid = sm.create_process(
+            system="win01",
+            parent_pid=0,
+            image=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe",
+            username="SYSTEM",
+            integrity_level="System",
+        )
+
+        assert win_pid % 4 == 0
+        assert next_pid % 4 == 0
+        assert sm._pid_os["win01"] == "windows"
+
 
 class TestSessionManagement:
     """Tests for session lifecycle."""
@@ -833,6 +876,25 @@ class TestProcessManagement:
 
         assert proc is not None
         assert proc.last_activity_time == start + timedelta(minutes=5)
+
+    def test_update_session_activity_time_keeps_latest(self):
+        """Session activity marker should track the latest dependent event."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        sm.set_current_time(start)
+        logon_id = sm.create_session(
+            username="jdoe",
+            system="WS-01",
+            logon_type=2,
+            source_ip="-",
+        )
+
+        assert sm.update_session_activity_time(logon_id, start + timedelta(minutes=5))
+        assert sm.update_session_activity_time(logon_id, start + timedelta(minutes=2))
+        session = sm.get_session(logon_id)
+
+        assert session is not None
+        assert session.last_activity_time == start + timedelta(minutes=5)
 
     def test_apply_tracks_process_dependent_activity_time(self):
         """Any process-owned event should extend the process lifecycle marker."""

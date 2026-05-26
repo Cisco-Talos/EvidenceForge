@@ -32,6 +32,74 @@ import pytest
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import FirewallContext, HttpContext, NetworkContext
 from evidenceforge.events.dispatcher import EventDispatcher
+from evidenceforge.generation.actions import (
+    AccountChangedActionBundle,
+    AccountChangedRequest,
+    AccountCreatedActionBundle,
+    AccountCreatedRequest,
+    AccountDeletedActionBundle,
+    AccountDeletedRequest,
+    AnonymousLogonActionBundle,
+    AnonymousLogonRequest,
+    CreateRemoteThreadActionBundle,
+    CreateRemoteThreadRequest,
+    ExplicitCredentialUseActionBundle,
+    ExplicitCredentialUseRequest,
+    FailedLogonActionBundle,
+    FailedLogonRequest,
+    GroupMembershipChangeActionBundle,
+    GroupMembershipChangeRequest,
+    KerberosConnectionAuditActionBundle,
+    KerberosConnectionAuditRequest,
+    KerberosLogonTicketsActionBundle,
+    KerberosLogonTicketsRequest,
+    KerberosPreauthFailureActionBundle,
+    KerberosPreauthFailureRequest,
+    KerberosServiceTicketActionBundle,
+    KerberosServiceTicketRequest,
+    KerberosTgtActionBundle,
+    KerberosTgtRenewalActionBundle,
+    KerberosTgtRenewalRequest,
+    KerberosTgtRequest,
+    LinuxShellCommandActionBundle,
+    LinuxShellCommandRequest,
+    LogClearedActionBundle,
+    LogClearedRequest,
+    LogoffActionBundle,
+    LogoffRequest,
+    LogonActionBundle,
+    LogonRequest,
+    MachineAccountLogonActionBundle,
+    MachineAccountLogonRequest,
+    NetworkConnectionActionBundle,
+    NetworkConnectionRequest,
+    NmapCommandProbeActionBundle,
+    NmapCommandProbeRequest,
+    NtlmValidationActionBundle,
+    NtlmValidationRequest,
+    PasswordChangeActionBundle,
+    PasswordChangeRequest,
+    PasswordResetActionBundle,
+    PasswordResetRequest,
+    ProcessAccessActionBundle,
+    ProcessAccessRequest,
+    ProcessExecutionActionBundle,
+    ProcessExecutionRequest,
+    ProcessTerminationActionBundle,
+    ProcessTerminationRequest,
+    RdpSessionActionBundle,
+    RdpSessionRequest,
+    ScheduledTaskActionBundle,
+    ScheduledTaskRequest,
+    ServiceLogonActionBundle,
+    ServiceLogonRequest,
+    WindowsServiceInstallActionBundle,
+    WindowsServiceInstallRequest,
+    WorkstationLockActionBundle,
+    WorkstationLockRequest,
+    WorkstationUnlockActionBundle,
+    WorkstationUnlockRequest,
+)
 from evidenceforge.generation.activity import (
     BASELINE_PATTERNS,
     EXTERNAL_IPS,
@@ -47,6 +115,7 @@ from evidenceforge.generation.activity.generator import (
     _linux_foreground_lifetime,
     _network_effect_context_for_process,
     _normalize_http_context_for_source_native_response,
+    _source_native_http_referrer,
     _zeek_conn_observation_time,
 )
 from evidenceforge.generation.activity.http_content import response_size_for_status
@@ -251,6 +320,41 @@ class TestProcessHttpCommandCorrelation:
         assert proxy_context.url == "https://api.github.com/rate_limit"
         assert proxy_context.user_agent == "curl/7.88.1"
 
+    def test_tool_http_referrer_drops_browser_navigation_context(self):
+        """Command-line HTTP clients should not inherit browser search referrers."""
+        assert (
+            _source_native_http_referrer(
+                "curl/7.88.1",
+                "https://www.google.com/search?q=www+office+com",
+            )
+            == ""
+        )
+        assert _source_native_http_referrer(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "https://www.google.com/search?q=www+office+com",
+        ).startswith("https://www.google.com/")
+
+    def test_plaintext_http_referrer_drops_https_downgrade(self):
+        """Browser HTTP requests should follow no-referrer-when-downgrade defaults."""
+        assert (
+            _source_native_http_referrer(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+                "https://www.bing.com/search?q=www+office+com",
+                request_scheme="http",
+                request_port=80,
+            )
+            == ""
+        )
+        assert _source_native_http_referrer(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "http://www.office.com/",
+            request_scheme="http",
+            request_port=80,
+        ).startswith("http://www.office.com/")
+
     def test_network_effect_context_keeps_rendered_cli_http_command(self):
         """A stale process-state lookup should not retarget a rendered curl command."""
         process_name, command_line = _network_effect_context_for_process(
@@ -332,6 +436,60 @@ class TestProcessHttpCommandCorrelation:
         assert isinstance(http, HttpContext)
         assert http.user_agent == "curl/7.88.1"
         assert http.uri == "/methods/api.test"
+
+
+class TestNetworkConnectionActionBundle:
+    """Tests for the internal network connection bundle boundary."""
+
+    def test_network_connection_bundle_anchor_is_stable(self):
+        """Network connection requests should expose durable deterministic anchors."""
+        source_system = System(
+            hostname="APP-01",
+            ip="10.0.0.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        request = NetworkConnectionRequest(
+            src_ip=source_system.ip,
+            dst_ip="203.0.113.10",
+            time=datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            dst_port=443,
+            proto="tcp",
+            service="ssl",
+            duration=1.25,
+            orig_bytes=512,
+            resp_bytes=4096,
+            src_port=49152,
+            emit_dns=True,
+            pid=1234,
+            source_system=source_system,
+            hostname="api.example.com",
+        )
+
+        first = NetworkConnectionActionBundle(Mock(), request).anchor
+        second = NetworkConnectionActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "network_connection"
+        assert first.stable_id.startswith("network-connection-")
+
+    def test_network_connection_bundle_delegates_to_adapter(self):
+        """The bundle should preserve the current generator adapter contract."""
+        request = NetworkConnectionRequest(
+            src_ip="10.0.0.10",
+            dst_ip="203.0.113.10",
+            time=datetime(2024, 3, 18, 12, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+        )
+        executor = Mock()
+        executor._execute_network_connection_bundle.return_value = "Cabc123"
+
+        uid = NetworkConnectionActionBundle(executor, request).execute()
+
+        assert uid == "Cabc123"
+        executor._execute_network_connection_bundle.assert_called_once_with(request)
 
 
 class TestNetworkValidation:
@@ -442,6 +600,523 @@ class TestActivityGenerator:
         assert event.auth.username == test_user.username
         assert event.auth.logon_id == logon_id
         assert event.dst_host.os_category == "windows"
+
+    def test_auth_session_bundle_anchors_are_stable(self, test_user, test_system):
+        """Auth/session requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = LogonRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.0.44",
+            source_port=51234,
+        )
+        logoff_request = LogoffRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(minutes=5),
+            logon_id="0x12345",
+            logon_type=3,
+        )
+        failed_request = FailedLogonRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_type=3,
+            source_ip="10.0.0.44",
+        )
+
+        assert (
+            LogonActionBundle(Mock(), logon_request).anchor
+            == LogonActionBundle(
+                Mock(),
+                logon_request,
+            ).anchor
+        )
+        assert (
+            LogoffActionBundle(Mock(), logoff_request).anchor
+            == LogoffActionBundle(
+                Mock(),
+                logoff_request,
+            ).anchor
+        )
+        assert (
+            FailedLogonActionBundle(
+                Mock(),
+                failed_request,
+            ).anchor
+            == FailedLogonActionBundle(Mock(), failed_request).anchor
+        )
+
+    def test_auth_session_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Auth/session bundles should preserve the current generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = LogonRequest(user=test_user, system=test_system, time=timestamp)
+        logoff_request = LogoffRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp + timedelta(minutes=5),
+            logon_id="0x12345",
+        )
+        failed_request = FailedLogonRequest(user=test_user, system=test_system, time=timestamp)
+        executor = Mock()
+        executor._execute_logon_bundle.return_value = "0x12345"
+
+        assert LogonActionBundle(executor, logon_request).execute() == "0x12345"
+        LogoffActionBundle(executor, logoff_request).execute()
+        FailedLogonActionBundle(executor, failed_request).execute()
+
+        executor._execute_logon_bundle.assert_called_once_with(logon_request)
+        executor._execute_logoff_bundle.assert_called_once_with(logoff_request)
+        executor._execute_failed_logon_bundle.assert_called_once_with(failed_request)
+
+    def test_auxiliary_auth_session_bundle_anchors_are_stable(self, test_user, test_system):
+        """Auxiliary auth/session requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        requests_and_bundles = [
+            (
+                ServiceLogonRequest(system=test_system, time=timestamp, service_account="SYSTEM"),
+                ServiceLogonActionBundle,
+            ),
+            (
+                MachineAccountLogonRequest(
+                    hostname=test_system.hostname,
+                    machine_username=f"{test_system.hostname}$",
+                    dc_hostname="DC-01",
+                    source_ip=test_system.ip,
+                    dc_ip="10.0.0.10",
+                    time=timestamp,
+                ),
+                MachineAccountLogonActionBundle,
+            ),
+            (
+                NtlmValidationRequest(
+                    username=test_user.username,
+                    workstation=test_system.hostname,
+                    dc_hostname="DC-01",
+                    time=timestamp,
+                ),
+                NtlmValidationActionBundle,
+            ),
+            (
+                AnonymousLogonRequest(system=test_system, time=timestamp),
+                AnonymousLogonActionBundle,
+            ),
+            (
+                WorkstationLockRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    logon_id="0x12345",
+                ),
+                WorkstationLockActionBundle,
+            ),
+            (
+                WorkstationUnlockRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    logon_id="0x12345",
+                ),
+                WorkstationUnlockActionBundle,
+            ),
+        ]
+
+        for request, bundle_cls in requests_and_bundles:
+            assert bundle_cls(Mock(), request).anchor == bundle_cls(Mock(), request).anchor
+
+    def test_auxiliary_auth_session_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Auxiliary auth/session bundles should preserve the generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        service_request = ServiceLogonRequest(
+            system=test_system,
+            time=timestamp,
+            service_account="SYSTEM",
+        )
+        machine_request = MachineAccountLogonRequest(
+            hostname=test_system.hostname,
+            machine_username=f"{test_system.hostname}$",
+            dc_hostname="DC-01",
+            source_ip=test_system.ip,
+            dc_ip="10.0.0.10",
+            time=timestamp,
+        )
+        ntlm_request = NtlmValidationRequest(
+            username=test_user.username,
+            workstation=test_system.hostname,
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        anonymous_request = AnonymousLogonRequest(system=test_system, time=timestamp)
+        lock_request = WorkstationLockRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+        )
+        unlock_request = WorkstationUnlockRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+        )
+        executor = Mock()
+        executor._execute_service_logon_bundle.return_value = "0x3e7"
+
+        assert ServiceLogonActionBundle(executor, service_request).execute() == "0x3e7"
+        MachineAccountLogonActionBundle(executor, machine_request).execute()
+        NtlmValidationActionBundle(executor, ntlm_request).execute()
+        AnonymousLogonActionBundle(executor, anonymous_request).execute()
+        WorkstationLockActionBundle(executor, lock_request).execute()
+        WorkstationUnlockActionBundle(executor, unlock_request).execute()
+
+        executor._execute_service_logon_bundle.assert_called_once_with(service_request)
+        executor._execute_machine_account_logon_bundle.assert_called_once_with(machine_request)
+        executor._execute_ntlm_validation_bundle.assert_called_once_with(ntlm_request)
+        executor._execute_anonymous_logon_bundle.assert_called_once_with(anonymous_request)
+        executor._execute_workstation_lock_bundle.assert_called_once_with(lock_request)
+        executor._execute_workstation_unlock_bundle.assert_called_once_with(unlock_request)
+
+    def test_kerberos_dc_bundle_anchors_are_stable(self, test_user, test_system):
+        """Kerberos/DC requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = KerberosLogonTicketsRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            auth_package="Kerberos",
+            source_ip="10.0.0.44",
+        )
+        connection_request = KerberosConnectionAuditRequest(
+            src_ip="10.0.0.44",
+            src_port=51234,
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            source_system=test_system,
+        )
+        tgt_request = KerberosTgtRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        renewal_request = KerberosTgtRenewalRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        service_request = KerberosServiceTicketRequest(
+            username=test_user.username,
+            service_name="cifs/FILE-01",
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        failure_request = KerberosPreauthFailureRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+            status="0x18",
+        )
+
+        assert (
+            KerberosLogonTicketsActionBundle(Mock(), logon_request).anchor
+            == KerberosLogonTicketsActionBundle(Mock(), logon_request).anchor
+        )
+        assert (
+            KerberosConnectionAuditActionBundle(Mock(), connection_request).anchor
+            == KerberosConnectionAuditActionBundle(Mock(), connection_request).anchor
+        )
+        assert (
+            KerberosTgtActionBundle(Mock(), tgt_request).anchor
+            == KerberosTgtActionBundle(Mock(), tgt_request).anchor
+        )
+        assert (
+            KerberosTgtRenewalActionBundle(Mock(), renewal_request).anchor
+            == KerberosTgtRenewalActionBundle(Mock(), renewal_request).anchor
+        )
+        assert (
+            KerberosServiceTicketActionBundle(Mock(), service_request).anchor
+            == KerberosServiceTicketActionBundle(Mock(), service_request).anchor
+        )
+        assert (
+            KerberosPreauthFailureActionBundle(Mock(), failure_request).anchor
+            == KerberosPreauthFailureActionBundle(Mock(), failure_request).anchor
+        )
+
+    def test_kerberos_dc_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Kerberos/DC bundles should preserve the current generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        logon_request = KerberosLogonTicketsRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            auth_package="Kerberos",
+            source_ip="10.0.0.44",
+        )
+        connection_request = KerberosConnectionAuditRequest(
+            src_ip="10.0.0.44",
+            src_port=51234,
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=88,
+            proto="tcp",
+            service="kerberos",
+            source_system=test_system,
+        )
+        tgt_request = KerberosTgtRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        renewal_request = KerberosTgtRenewalRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        service_request = KerberosServiceTicketRequest(
+            username=test_user.username,
+            service_name="cifs/FILE-01",
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        failure_request = KerberosPreauthFailureRequest(
+            username=test_user.username,
+            source_ip="10.0.0.44",
+            dc_hostname="DC-01",
+            time=timestamp,
+        )
+        executor = Mock()
+
+        KerberosLogonTicketsActionBundle(executor, logon_request).execute()
+        KerberosConnectionAuditActionBundle(executor, connection_request).execute()
+        KerberosTgtActionBundle(executor, tgt_request).execute()
+        KerberosTgtRenewalActionBundle(executor, renewal_request).execute()
+        KerberosServiceTicketActionBundle(executor, service_request).execute()
+        KerberosPreauthFailureActionBundle(executor, failure_request).execute()
+
+        executor._execute_kerberos_logon_tickets_bundle.assert_called_once_with(logon_request)
+        executor._execute_kerberos_connection_audit_bundle.assert_called_once_with(
+            connection_request
+        )
+        executor._execute_kerberos_tgt_bundle.assert_called_once_with(tgt_request)
+        executor._execute_kerberos_tgt_renewal_bundle.assert_called_once_with(renewal_request)
+        executor._execute_kerberos_service_ticket_bundle.assert_called_once_with(service_request)
+        executor._execute_kerberos_preauth_failure_bundle.assert_called_once_with(failure_request)
+
+    def test_windows_audit_bundle_anchors_are_stable(self, test_user, test_system):
+        """Windows audit requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        requests_and_bundles = [
+            (
+                LogClearedRequest(user=test_user, system=test_system, time=timestamp),
+                LogClearedActionBundle,
+            ),
+            (
+                ScheduledTaskRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    task_name="Updater",
+                    source_command_line="schtasks /create /tn Updater /tr calc.exe",
+                ),
+                ScheduledTaskActionBundle,
+            ),
+            (
+                GroupMembershipChangeRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    action="add",
+                    scope="global",
+                    group_name="Domain Admins",
+                    group_sid="S-1-5-21-1-2-3-512",
+                    member_username="svc_sqlreader",
+                    member_sid="S-1-5-21-1-2-3-1105",
+                ),
+                GroupMembershipChangeActionBundle,
+            ),
+            (
+                AccountCreatedRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                ),
+                AccountCreatedActionBundle,
+            ),
+            (
+                AccountDeletedRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                ),
+                AccountDeletedActionBundle,
+            ),
+            (
+                PasswordResetRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                ),
+                PasswordResetActionBundle,
+            ),
+            (
+                PasswordChangeRequest(user=test_user, system=test_system, time=timestamp),
+                PasswordChangeActionBundle,
+            ),
+            (
+                AccountChangedRequest(
+                    actor=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    target_username="svc_sqlreader",
+                    target_sid="S-1-5-21-1-2-3-1105",
+                    password_last_set_to_event_time=True,
+                ),
+                AccountChangedActionBundle,
+            ),
+            (
+                CreateRemoteThreadRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    source_pid=4242,
+                    source_image=r"C:\Windows\System32\rundll32.exe",
+                    target_pid=636,
+                    target_image=r"C:\Windows\System32\lsass.exe",
+                ),
+                CreateRemoteThreadActionBundle,
+            ),
+            (
+                ProcessAccessRequest(
+                    user=test_user,
+                    system=test_system,
+                    time=timestamp,
+                    source_pid=4242,
+                    source_image=r"C:\Windows\System32\rundll32.exe",
+                    target_pid=636,
+                    target_image=r"C:\Windows\System32\lsass.exe",
+                    granted_access="0x1FFFFF",
+                ),
+                ProcessAccessActionBundle,
+            ),
+        ]
+
+        for request, bundle_cls in requests_and_bundles:
+            assert bundle_cls(Mock(), request).anchor == bundle_cls(Mock(), request).anchor
+
+    def test_windows_audit_bundles_delegate_to_adapter(self, test_user, test_system):
+        """Windows audit bundles should preserve the current generator adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        log_cleared = LogClearedRequest(user=test_user, system=test_system, time=timestamp)
+        scheduled_task = ScheduledTaskRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            task_name="Updater",
+        )
+        group_change = GroupMembershipChangeRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            action="add",
+            scope="global",
+            group_name="Domain Admins",
+            group_sid="S-1-5-21-1-2-3-512",
+            member_username="svc_sqlreader",
+            member_sid="S-1-5-21-1-2-3-1105",
+        )
+        account_created = AccountCreatedRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        account_deleted = AccountDeletedRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        password_reset = PasswordResetRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        password_change = PasswordChangeRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+        )
+        account_changed = AccountChangedRequest(
+            actor=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="svc_sqlreader",
+            target_sid="S-1-5-21-1-2-3-1105",
+        )
+        remote_thread = CreateRemoteThreadRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            source_pid=4242,
+            source_image=r"C:\Windows\System32\rundll32.exe",
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+        process_access = ProcessAccessRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            source_pid=4242,
+            source_image=r"C:\Windows\System32\rundll32.exe",
+            target_pid=636,
+            target_image=r"C:\Windows\System32\lsass.exe",
+        )
+        executor = Mock()
+        executor._execute_create_remote_thread_bundle.return_value = True
+        executor._execute_process_access_bundle.return_value = True
+
+        LogClearedActionBundle(executor, log_cleared).execute()
+        ScheduledTaskActionBundle(executor, scheduled_task).execute()
+        GroupMembershipChangeActionBundle(executor, group_change).execute()
+        AccountCreatedActionBundle(executor, account_created).execute()
+        AccountDeletedActionBundle(executor, account_deleted).execute()
+        PasswordResetActionBundle(executor, password_reset).execute()
+        PasswordChangeActionBundle(executor, password_change).execute()
+        AccountChangedActionBundle(executor, account_changed).execute()
+        assert CreateRemoteThreadActionBundle(executor, remote_thread).execute() is True
+        assert ProcessAccessActionBundle(executor, process_access).execute() is True
+
+        executor._execute_log_cleared_bundle.assert_called_once_with(log_cleared)
+        executor._execute_scheduled_task_bundle.assert_called_once_with(scheduled_task)
+        executor._execute_group_membership_change_bundle.assert_called_once_with(group_change)
+        executor._execute_account_created_bundle.assert_called_once_with(account_created)
+        executor._execute_account_deleted_bundle.assert_called_once_with(account_deleted)
+        executor._execute_password_reset_bundle.assert_called_once_with(password_reset)
+        executor._execute_password_change_bundle.assert_called_once_with(password_change)
+        executor._execute_account_changed_bundle.assert_called_once_with(account_changed)
+        executor._execute_create_remote_thread_bundle.assert_called_once_with(remote_thread)
+        executor._execute_process_access_bundle.assert_called_once_with(process_access)
 
     def test_generate_logon_reuses_active_workstation_session_over_long_window(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1107,6 +1782,19 @@ class TestActivityGenerator:
         assert event.auth.auth_package in {"Negotiate", "Kerberos", "NTLM"}
         assert event.auth.auth_package != "CredSSP"
 
+    def test_generate_logon_rdp_without_remote_source_downgrades_to_interactive(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Direct Type 10 compatibility calls should not fabricate self-sourced RDP."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(test_user, test_system, timestamp, logon_type=10)
+
+        event = mock_emitters["windows_event_security"].emit.call_args[0][0]
+        assert event.auth.logon_type == 2
+        assert event.auth.source_ip == "-"
+
     def test_generate_rdp_session_reuses_source_port_across_network_and_logon(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -1135,8 +1823,137 @@ class TestActivityGenerator:
         )
         assert network_event.network.dst_port == 3389
         assert network_event.network.src_port > 0
+        assert network_event.network.conn_state == "SF"
+        assert network_event.network.duration is not None
+        assert network_event.network.orig_bytes > 0
+        assert network_event.network.resp_bytes > 0
         assert logon_event.auth.source_port == network_event.network.src_port
         assert logon_event.timestamp > network_event.timestamp
+        connection = next(
+            conn
+            for conn in state_manager.list_open_connections()
+            if conn.zeek_uid == network_event.network.zeek_uid
+        )
+        assert connection.start_time == network_event.timestamp
+        assert connection.close_time == network_event.timestamp + timedelta(
+            seconds=network_event.network.duration
+        )
+        assert logon_event.timestamp < connection.close_time
+
+    def test_rdp_session_bundle_anchor_is_stable(self, test_user, test_system):
+        """Identical RDP bundle requests should have stable action anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = RdpSessionRequest(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+        )
+        second = RdpSessionRequest(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip="10.0.99.50",
+        )
+
+        assert (
+            RdpSessionActionBundle(Mock(), first).anchor
+            == RdpSessionActionBundle(Mock(), second).anchor
+        )
+
+    def test_rdp_session_bundle_materializes_source_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP bundle should own source mstsc materialization before target logon."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_process_time = timestamp - timedelta(seconds=3)
+        source_system = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        state_manager.set_current_time(timestamp)
+        calls = []
+
+        def source_process_factory(
+            *,
+            user: User,
+            source_system: System,
+            target_system: System,
+            time: datetime,
+        ) -> int:
+            calls.append((user, source_system, target_system, time))
+            state_manager.set_current_time(time - timedelta(seconds=10))
+            logon_id = state_manager.create_session(
+                username=user.username,
+                system=source_system.hostname,
+                logon_type=2,
+                source_ip="-",
+                start_time=time - timedelta(seconds=10),
+                session_kind="interactive",
+            )
+            return activity_gen.generate_process(
+                user=user,
+                system=source_system,
+                time=time,
+                logon_id=logon_id,
+                process_name=r"C:\Windows\System32\mstsc.exe",
+                command_line=f"mstsc.exe /v:{target_system.hostname}",
+                parent_pid=4,
+            )
+
+        bundle = RdpSessionActionBundle(
+            activity_gen,
+            RdpSessionRequest(
+                user=test_user,
+                target_system=test_system,
+                time=timestamp,
+                source_ip=source_system.ip,
+                source_system=source_system,
+                source_process_time=source_process_time,
+            ),
+            source_process_factory=source_process_factory,
+        )
+
+        bundle.execute()
+
+        assert calls == [(test_user, source_system, test_system, source_process_time)]
+        network_event = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection" and call.args[0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
+        )
+        source_process = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("mstsc.exe")
+        )
+        assert network_event.network.conn_state == "SF"
+        assert network_event.network.initiating_pid == source_process.process.pid
+        assert logon_event.auth.source_port == network_event.network.src_port
+        assert logon_event.timestamp > network_event.timestamp
+        network_close_time = network_event.timestamp + timedelta(
+            seconds=network_event.network.duration
+        )
+        running_source_process = state_manager.get_process(
+            source_system.hostname,
+            source_process.process.pid,
+        )
+        assert running_source_process is not None
+        assert running_source_process.last_activity_time is not None
+        assert running_source_process.last_activity_time > network_close_time
+        source_session = state_manager.get_session(running_source_process.logon_id)
+        assert source_session is not None
+        assert source_session.last_activity_time == running_source_process.last_activity_time
 
     def test_generate_rdp_session_does_not_self_source_target(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1173,6 +1990,105 @@ class TestActivityGenerator:
         assert network_event.network.src_ip == source_system.ip
         assert logon_event.auth.source_ip == source_system.ip
         assert logon_event.src_host.hostname == source_system.hostname
+
+    def test_generate_rdp_session_replaces_linux_source_with_windows_client(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """RDP bundles should not model Linux hosts as mstsc-capable Windows clients."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_source = System(
+            hostname="SRV-LIN-01",
+            ip="10.0.0.20",
+            os="Ubuntu Server 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        windows_source = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            linux_source.ip: linux_source,
+            windows_source.ip: windows_source,
+        }
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_rdp_session(
+            user=test_user,
+            target_system=test_system,
+            time=timestamp,
+            source_ip=linux_source.ip,
+        )
+
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection" and call[0][0].network.dst_port == 3389
+        )
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon" and call[0][0].auth.logon_type == 10
+        )
+
+        assert network_event.network.src_ip == windows_source.ip
+        assert logon_event.auth.source_ip == windows_source.ip
+        assert logon_event.src_host.hostname == windows_source.hostname
+
+    def test_direct_rdp_source_factory_materializes_mstsc_process(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Direct Type 10 adapters should route source process ownership through RDP."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        linux_source = System(
+            hostname="SRV-LIN-01",
+            ip="10.0.0.20",
+            os="Ubuntu Server 22.04",
+            type="server",
+            assigned_user=test_user.username,
+        )
+        windows_source = System(
+            hostname="WS-SOURCE-01",
+            ip="10.0.0.2",
+            os="Windows 10",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            linux_source.ip: linux_source,
+            windows_source.ip: windows_source,
+        }
+        chosen = activity_gen._resolve_direct_rdp_source_system(
+            test_user,
+            test_system,
+            linux_source.ip,
+            random.Random(7),
+        )
+        assert chosen == windows_source
+
+        factory = activity_gen._direct_rdp_source_process_factory(random.Random(11))
+        pid = factory(
+            user=test_user,
+            source_system=windows_source,
+            target_system=test_system,
+            time=timestamp,
+        )
+
+        process_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "process_create"
+            and call.args[0].process is not None
+            and call.args[0].process.image.endswith("mstsc.exe")
+        )
+        assert pid == process_event.process.pid
+        assert process_event.src_host.hostname == windows_source.hostname
+        assert process_event.process.command_line == f"mstsc.exe /v:{test_system.hostname}"
 
     def test_generate_rdp_session_updates_preallocated_session_time(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1393,6 +2309,53 @@ class TestActivityGenerator:
             "mysql",
         }
 
+    def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
+        """Nmap command probe bundles should expose deterministic anchors."""
+        system = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 22,80 10.10.2.0/24",
+        )
+
+        first = NmapCommandProbeActionBundle(Mock(), request).anchor
+        second = NmapCommandProbeActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "nmap_command_probe"
+        assert first.stable_id.startswith("nmap-command-probe-")
+
+    def test_nmap_command_probe_bundle_delegates_to_adapter(self, test_user):
+        """Nmap command probe bundles should delegate expansion to the adapter."""
+        system = System(
+            hostname="WEB-01",
+            ip="10.10.3.10",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        request = NmapCommandProbeRequest(
+            user=test_user,
+            system=system,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            pid=4242,
+            process_name="/usr/bin/nmap",
+            command_line="nmap -p 22,80 10.10.2.0/24",
+        )
+
+        executor = Mock()
+
+        NmapCommandProbeActionBundle(executor, request).execute()
+
+        executor._execute_nmap_command_probe_bundle.assert_called_once_with(request)
+
     def test_resolve_nmap_targets_limits_fallback_cidr_expansion(self, activity_gen):
         """CIDR fallback expansion should cap to eight hosts without materializing whole ranges."""
         source = System(
@@ -1460,6 +2423,67 @@ class TestActivityGenerator:
         assert network_event.network.dst_ip == test_system.ip
         assert network_event.network.conn_state == "SF"
 
+    def test_internal_remote_successful_logon_emits_matching_network_evidence(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Internal Type 3 logon IpPort should be owned by matching network evidence."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        source_ip = "10.0.0.50"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=source_ip,
+            source_port=52595,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert logon_event.auth.source_ip == source_ip
+        assert logon_event.auth.source_port == network_event.network.src_port == 52595
+        assert network_event.network.src_ip == source_ip
+        assert network_event.network.dst_ip == test_system.ip
+
+    def test_same_host_network_logon_does_not_claim_unowned_source_port(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Same-host Type 3 logons should not invent a source port without a flow."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_logon(
+            test_user,
+            test_system,
+            timestamp,
+            logon_type=3,
+            source_ip=test_system.ip,
+        )
+
+        logon_event = next(
+            call[0][0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call[0][0].event_type == "logon"
+        )
+        network_events = [
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        ]
+        assert logon_event.auth.source_ip == test_system.ip
+        assert logon_event.auth.source_port == 0
+        assert network_events == []
+
     def test_elevated_logon_carries_configured_privilege_profile(
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
@@ -1511,9 +2535,57 @@ class TestActivityGenerator:
         unlock_logon = next(
             event for event in events if event.event_type == "logon" and event.auth.logon_type == 7
         )
-        assert unlock.timestamp == lock_time + timedelta(seconds=127)
-        assert unlock_logon.timestamp == unlock.timestamp + timedelta(milliseconds=50)
+        assert unlock.timestamp >= lock_time + timedelta(seconds=127)
+        assert unlock_logon.timestamp < unlock.timestamp
+        assert (
+            timedelta(milliseconds=80)
+            <= (unlock.timestamp - unlock_logon.timestamp)
+            <= timedelta(milliseconds=650)
+        )
         assert unlock_logon.auth.source_ip == "-"
+
+    def test_workstation_unlock_reauth_precedes_4801_with_varied_gap(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Type 7 re-auth should precede 4801 without a fleet-wide fixed delta."""
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        gaps: set[timedelta] = set()
+
+        for index in range(4):
+            mock_emitters["windows_event_security"].reset_mock()
+            logon_id = f"0x4f2a1{index}"
+            lock_time = start + timedelta(hours=index)
+            state_manager.register_session(
+                logon_id=logon_id,
+                username=test_user.username,
+                system=test_system.hostname,
+                logon_type=2,
+                source_ip="-",
+                start_time=lock_time - timedelta(minutes=5),
+                session_id=10 + index,
+            )
+            activity_gen.generate_workstation_lock(test_user, test_system, lock_time, logon_id)
+            activity_gen.generate_workstation_unlock(
+                test_user,
+                test_system,
+                lock_time + timedelta(minutes=10),
+                logon_id,
+            )
+            events = [
+                call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+            ]
+            unlock = next(event for event in events if event.event_type == "workstation_unlocked")
+            unlock_logon = next(
+                event
+                for event in events
+                if event.event_type == "logon" and event.auth.logon_type == 7
+            )
+
+            assert unlock_logon.timestamp < unlock.timestamp
+            gaps.add(unlock.timestamp - unlock_logon.timestamp)
+
+        assert len(gaps) > 1
+        assert timedelta(milliseconds=50) not in gaps
 
     def test_workstation_lock_unlock_carry_state_session_id(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -1818,6 +2890,19 @@ class TestActivityGenerator:
         assert all(
             abs((event.timestamp - timestamp).total_seconds()) < 1.0 for event in kerberos_events
         )
+        machine_logon = next(
+            event for event in security_events if event.event_type == "machine_logon"
+        )
+        kerberos_connection = next(
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].event_type == "connection"
+        )
+        assert machine_logon.auth.source_port == kerberos_connection.network.src_port
+        assert all(
+            event.kerberos.source_port == machine_logon.auth.source_port
+            for event in kerberos_events
+        )
 
     def test_bash_history_preserves_blocking_command_dwell(
         self, activity_gen, state_manager, mock_emitters
@@ -1886,6 +2971,24 @@ class TestActivityGenerator:
 
         assert len(events) == 2
         assert len(set(event_seconds)) == 2
+
+    def test_linux_shell_command_bundle_anchor_is_stable(self):
+        """Identical shell command requests should have stable action anchors."""
+        linux = System(hostname="LNX-01", ip="10.0.0.2", os="Ubuntu 22.04", type="workstation")
+        user = User(username="alice", full_name="Alice Example", email="alice@example.com")
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = LinuxShellCommandRequest(
+            user=user,
+            system=linux,
+            time=timestamp,
+            activity_type_or_command="whoami",
+            emit_process_telemetry=False,
+        )
+
+        assert (
+            LinuxShellCommandActionBundle(Mock(), request).anchor
+            == LinuxShellCommandActionBundle(Mock(), request).anchor
+        )
 
     def test_linux_process_activity_uses_scheduled_bash_time(
         self, activity_gen, state_manager, mock_emitters, monkeypatch
@@ -2225,6 +3328,64 @@ class TestActivityGenerator:
         assert event.process.image == process_name
         assert event.process.command_line == command_line
 
+    def test_process_execution_bundle_anchor_is_stable(self, test_user, test_system):
+        """Process execution requests should expose durable deterministic anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+
+        first = ProcessExecutionActionBundle(Mock(), request).anchor
+        second = ProcessExecutionActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "process_execution"
+        assert first.stable_id.startswith("process-execution-")
+
+    def test_process_execution_bundle_delegates_to_adapter(self, test_user, test_system):
+        """The bundle should own the entrypoint while preserving the adapter contract."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        request = ProcessExecutionRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            logon_id="0x12345",
+            process_name=r"C:\Windows\System32\cmd.exe",
+            command_line="cmd.exe /c dir",
+        )
+        executor = Mock()
+        executor._execute_process_create_bundle.return_value = 4242
+
+        pid = ProcessExecutionActionBundle(executor, request).execute()
+
+        assert pid == 4242
+        executor._execute_process_create_bundle.assert_called_once_with(request)
+
+    def test_process_termination_bundle_delegates_to_adapter(self, test_user, test_system):
+        """Termination should share the process action-bundle boundary."""
+        timestamp = datetime(2024, 1, 15, 10, 5, 0, tzinfo=UTC)
+        request = ProcessTerminationRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            pid=4242,
+            process_name=r"C:\Windows\System32\cmd.exe",
+            logon_id="0x12345",
+        )
+        executor = Mock()
+
+        ProcessTerminationActionBundle(executor, request).execute()
+
+        anchor = ProcessTerminationActionBundle(Mock(), request).anchor
+        assert anchor.family == "process_termination"
+        assert anchor.stable_id.startswith("process-termination-")
+        executor._execute_process_termination_bundle.assert_called_once_with(request)
+
     def test_generate_process_hosts_windows_batch_scripts_under_cmd(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -2527,6 +3688,29 @@ class TestActivityGenerator:
             and event.file.path == r"C:\Windows\PSEXESVC.exe"
         )
         assert file_event.timestamp < service_event.timestamp
+
+    def test_windows_service_install_bundle_anchor_is_stable(self, test_user, test_system):
+        """Identical service-install bundle requests should have stable action anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = WindowsServiceInstallRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+        second = WindowsServiceInstallRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+        )
+
+        assert (
+            WindowsServiceInstallActionBundle(Mock(), first).anchor
+            == WindowsServiceInstallActionBundle(Mock(), second).anchor
+        )
 
     def test_remote_service_install_emits_smb_and_rpc_network_evidence(
         self, activity_gen, state_manager, mock_emitters
@@ -4067,21 +5251,31 @@ class TestActivityGenerator:
         self, activity_gen, test_system, state_manager, mock_emitters
     ):
         """Port-53 scan traffic to non-resolvers should not become dns.log evidence."""
+        from evidenceforge.generation.activity.network import REVERSE_DNS
+
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
         activity_gen._dns_server_ips = ["10.0.0.53"]
+        previous = REVERSE_DNS.get(test_system.ip)
+        REVERSE_DNS[test_system.ip] = f"{test_system.hostname}.example.com"
 
-        activity_gen.generate_connection(
-            src_ip="198.51.100.25",
-            dst_ip=test_system.ip,
-            time=timestamp,
-            dst_port=53,
-            proto="tcp",
-            service="dns",
-            duration=0.1,
-            orig_bytes=80,
-            resp_bytes=0,
-        )
+        try:
+            activity_gen.generate_connection(
+                src_ip="198.51.100.25",
+                dst_ip=test_system.ip,
+                time=timestamp,
+                dst_port=53,
+                proto="tcp",
+                service="dns",
+                duration=0.1,
+                orig_bytes=80,
+                resp_bytes=0,
+            )
+        finally:
+            if previous is None:
+                REVERSE_DNS.pop(test_system.ip, None)
+            else:
+                REVERSE_DNS[test_system.ip] = previous
 
         dns_events = []
         for emitter in mock_emitters.values():
@@ -4267,6 +5461,37 @@ class TestActivityGenerator:
         event = mock_emitters["windows_event_security"].emit.call_args[0][0]
         assert event.event_type == "explicit_credentials"
         assert event.auth.process_pid == 4242
+
+    def test_explicit_credential_bundle_anchor_is_stable(self, test_user, test_system):
+        """Identical explicit-credential bundle requests should have stable action anchors."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = ExplicitCredentialUseRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.50",
+            source_port=50123,
+        )
+        second = ExplicitCredentialUseRequest(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip="10.0.0.50",
+            source_port=50123,
+        )
+
+        assert (
+            ExplicitCredentialUseActionBundle(Mock(), first).anchor
+            == ExplicitCredentialUseActionBundle(Mock(), second).anchor
+        )
 
     def test_generate_explicit_credentials_creates_named_caller_process(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
@@ -5469,6 +6694,58 @@ class TestActivityGenerator:
         elif net.conn_state in ("RSTO", "RSTR"):
             assert net.duration is not None and net.duration <= duration
 
+    def test_tcp_handshake_only_history_does_not_claim_payload_bytes(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """TCP conn.log byte counts must agree with source-native history markers."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            duration=2.5,
+            orig_bytes=1000,
+            resp_bytes=2000,
+            conn_state="S1",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        net = event.network
+        assert net.history == "ShR"
+        assert "D" not in net.history
+        assert "d" not in net.history
+        assert net.orig_bytes == 0
+        assert net.resp_bytes == 0
+        assert net.orig_ip_bytes >= net.orig_pkts * 40
+        assert net.resp_ip_bytes >= net.resp_pkts * 40
+
+    def test_tcp_one_sided_history_zeroes_unmarked_payload_side(
+        self, activity_gen, state_manager, mock_emitters
+    ):
+        """One-sided TCP history may only claim payload bytes for the marked side."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            "10.0.0.1",
+            "93.184.216.34",
+            timestamp,
+            duration=2.5,
+            orig_bytes=1000,
+            resp_bytes=2000,
+            conn_state="RSTO",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        net = event.network
+        assert net.history == "ShADaR"
+        assert "D" in net.history
+        assert "d" not in net.history
+        assert net.orig_bytes > 0
+        assert net.resp_bytes == 0
+
     def test_generate_connection_without_duration(self, activity_gen, state_manager, mock_emitters):
         """generate_connection without duration should set conn_state to S0."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -6549,6 +7826,30 @@ class TestActivityGenerator:
         assert "dc=corp,dc=local" not in command
         assert "{ldap_base_dn}" not in command
 
+    def test_parameterize_command_internal_url_placeholder_is_bounded(
+        self, activity_gen, test_user
+    ):
+        """Internal URL replacement should terminate even with placeholder-tainted domains."""
+        activity_gen._ad_domain = "{internal_url}"
+        linux = System(
+            hostname="APP-INT-01",
+            ip="10.0.0.2",
+            os="Ubuntu 22.04",
+            type="server",
+            services=["ssh", "gunicorn"],
+        )
+
+        command = activity_gen._parameterize_command_for_system(
+            random.Random(7),
+            "curl {internal_url} && curl {internal_url}",
+            username=test_user.username,
+            system=linux,
+        )
+
+        assert "{internal_url}" not in command
+        assert command.count("https://") == 2
+        assert "corp.local" in command
+
     def test_generate_bash_command_can_skip_process_telemetry(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):
@@ -6954,7 +8255,7 @@ def test_tcp_success_history_uses_varied_completed_flow_shapes():
 
 
 def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch):
-    """Failed TLS handshakes should not retain full response-byte accounting."""
+    """Failed TLS handshakes should keep byte counts aligned with Zeek history."""
     monkeypatch.setattr(generator_module, "_SSL_FAILURE_RATE", 1.0)
     timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
     event = SecurityEvent(
@@ -6991,8 +8292,12 @@ def test_failed_tls_context_rewrites_packet_accounting(activity_gen, monkeypatch
 
     assert event.ssl is not None
     assert event.ssl.established is False
-    assert event.network.conn_state in {"S1", "SH"}
+    assert event.network.conn_state == "S1"
+    assert event.network.history in {"ShAD", "ShADd"}
+    assert "D" in event.network.history
+    if event.network.resp_bytes:
+        assert "d" in event.network.history
     assert 0 < event.network.orig_bytes < 1200
     assert 0 <= event.network.resp_bytes < 55000
-    assert event.network.orig_pkts <= 2
-    assert event.network.resp_pkts <= 2
+    assert event.network.orig_pkts >= 1
+    assert event.network.resp_pkts >= 0

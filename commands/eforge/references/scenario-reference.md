@@ -116,7 +116,7 @@ If `proxy_access` is requested and `environment.proxy` is omitted, validation wa
 
 The `roles` field declares a system's function in the network. The engine uses roles to generate both **outbound** traffic (connections the host initiates) and **inbound** traffic (connections the host receives):
 
-- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users. Human inbound traffic is generated as browsing sessions: top-level page views consume the `web` traffic-rate budget, and required assets/API calls fan out from each page load.
+- `web_server` — outbound: database queries, LDAP auth, API calls; inbound: HTTPS/HTTP from external clients and internal users. Human inbound traffic is generated as browsing sessions: top-level page views consume the `web` traffic-rate budget, and required assets/API calls fan out from each page load with shared HTTP transaction-depth and file-analysis semantics where applicable.
 - `database` — outbound: replication, updates; inbound: SQL queries from web/app servers
 - `mail_server` — outbound: SMTP relay, LDAP lookups; inbound: SMTP from internet, webmail from users
 - `file_server` — outbound: Kerberos/LDAP auth; inbound: SMB file access from workstations. File-server roles also increase baseline SMB target selection beyond normal DC SYSVOL/GPO traffic.
@@ -257,6 +257,21 @@ The engine manages user sessions with exact transport-type matching. When a stor
 1. Checks for an existing session with the **exact** `session_kind` (interactive, network, ssh, rdp)
 2. If no match, creates a new session with the appropriate transport evidence (SSH syslog, RDP 4624 type 10, etc.)
 
+Multi-phase remote activities use action-bundle semantics internally. For example,
+an SSH request is modeled as one SSH session action that coordinates transport,
+auth, session, process, bash-history, endpoint/EDR, and teardown evidence before
+the engine dispatches individual canonical `SecurityEvent`s. An RDP request is
+modeled as one remote interactive session action that coordinates source-side
+`mstsc.exe`, TCP/3389 transport, target Type 10 logon/session metadata, and
+source-visible ordering before dispatch. Windows remote-admin events such as
+`explicit_credentials` and `service_installed` likewise use bundle-owned evidence
+paths for caller-process timing, source endpoint semantics, service-control
+transport, dropped service binaries, and target service records.
+Canonical `connection` and `beacon` evidence routes through the network-connection
+bundle so tuple identity, source ports, DNS/TLS/HTTP/file metadata, proxy and
+firewall visibility, IDS/EDR FLOW correlation, and Windows WFP companions stay
+consistent across output formats.
+
 Built-in accounts (SYSTEM, LOCAL SERVICE, NETWORK SERVICE) and service accounts always use local system sessions — they never fabricate remote logon evidence.
 
 Sessions marked as `storyline_protected` (by storyline events that depend on them) are immune to baseline logoff, even if logoff was already planned for the same hour.
@@ -307,7 +322,7 @@ Work hours are automatically parsed into a `work_hours_parsed` dict containing:
 
 ### Browsing Intensity
 
-The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity. Inbound `web_server` background traffic uses the separate `web_session_profiles.yaml` visitor mix: `traffic_rates.web` counts top-level visitor actions, then page assets and same-origin API calls fan out automatically.
+The `browsing_intensity` field controls how much HTTP traffic a persona generates per browsing session. It affects proxy log depth (number of page loads and subresource cascades) for baseline web activity. Inbound `web_server` background traffic uses the separate `web_session_profiles.yaml` visitor mix: `traffic_rates.web` counts top-level visitor actions, then page assets and same-origin API calls fan out automatically. Plaintext HTTP browser sessions can produce multiple Zeek `http.log` rows on one connection UID with increasing `trans_depth`; large download-scale responses attach matching `files.log` metadata.
 
 ```yaml
 personas:
@@ -407,6 +422,9 @@ they can make evidence `visible`, `delayed`, `dropped`, `filtered`, or `out_of_w
 must not create contradictory users, PIDs, ports, hashes, UIDs, or session identifiers across
 sources. `GROUND_TRUTH.md` records source evidence status for instructors, and
 `OBSERVATION_MANIFEST.json` records the same source-observation contract for automated eval.
+Observation decisions are coherent inside source-local lifecycle groups, so a single source does
+not drop or delay process create/dependent/terminate rows, logon/logoff rows, or same-UID network
+companions independently in a way that would orphan its own evidence.
 
 ## Storyline
 
@@ -441,7 +459,7 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `failed_logon` | 4625, eCAR LOGIN failure | | `source_ip`, `logon_type` (default 3) |
 | `logoff` | 4634, eCAR LOGOUT | | |
 | `connection` | Zeek conn, eCAR FLOW, + web_access/zeek_http when `service: http` | `dst_ip` | `dst_port` (default 443), `hostname` (domain for DNS/SSL SNI), `service`, `source_ip`, `method`, `uri`, `status_code`, `user_agent` |
-| `ssh_session` | Zeek conn + syslog sshd + eCAR | | `source_ip` |
+| `ssh_session` | canonical SSH connection (Zeek conn) + syslog sshd + EDR/eCAR | | `source_ip` |
 | `rdp_session` | Zeek conn + 4624 type 10 + eCAR | | `source_ip` |
 | `account_created` | 4720 (on DC) | `target_username` | `target_sid` |
 | `account_deleted` | 4726 (on DC) | `target_username` | `target_sid` |
@@ -460,10 +478,10 @@ Each event in the `events` list has a `type` field that selects a validated sche
 | `dns_tunnel` | Zeek dns.log + conn.log (encoded exfil) | `base_domain`, `interval`, one of `end_time`/`duration`/`count` | `encoding` (base32/base64/hex), `qtype` (TXT/NULL/CNAME), `label_length`, `payload`, `payload_size`, `source_ip`, `jitter` (default: 0.25) |
 | `explicit_credentials` | Windows 4648 (explicit credential usage) | `target_username` | `target_server`, `process_name`, `source_ip` |
 | `workstation_lock` | Windows 4800 (workstation locked) | | |
-| `workstation_unlock` | Windows 4801 + 4624 type 7 (unlock + re-auth) | | |
+| `workstation_unlock` | Windows 4624 type 7 re-auth followed by 4801 unlock | | |
 | `raw` | Any single format | `target_format`, `fields` | |
 
-For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event.
+For `process` events, prefer full process image paths when you know them. Bare executable names are accepted and are normalized through the configured application/process catalog during generation. If a scenario needs a custom install path, add or update the relevant configuration overlay rather than putting an ad hoc path in one storyline event. The generator routes process create/terminate lifecycle and process-owned endpoint side effects through an internal process-execution bundle; scenario authors still describe normal `process` events and do not model the bundle directly.
 
 All event types also accept optional `technique` (MITRE ATT&CK ID) and `description` (human-readable detail) fields for GROUND_TRUTH.md enrichment.
 
@@ -505,10 +523,10 @@ The generation engine automatically emits prerequisite events for certain event 
 
 | Trigger Event | Auto-Generated Prerequisites | Timing |
 |---|---|---|
-| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname | `network.dns_before_tcp` profile before |
+| `connection` (TCP, not port 53) | DNS query (UDP/53) for destination hostname through the DNS lookup bundle; may include source-native resolver companion questions | `network.dns_before_tcp` profile before |
 | `logon` (Kerberos auth, Windows, not on DC) | Kerberos TGT (4768) + TGS (4769) on DC | `auth.kerberos_before_logon` profile before. Elevated-session 4672 is emitted with the target-host 4624. |
-| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, logon 50-200ms after |
-| `ssh_session` | DNS query + connection (port 22) + syslog auth | Connection at event time |
+| `rdp_session` | DNS query + connection (port 3389) + logon (type 10) | Connection at event time, target logon after source-visible transport evidence |
+| `ssh_session` | DNS query + canonical connection (port 22) + syslog auth | Connection at event time |
 | `process` (with admin commands) | Supplementary audit events (4720, 4726, 4728, 4697, 4698, 1102) inferred from command-line patterns | `windows.audit_from_admin_command` profile after |
 | `create_remote_thread` (targeting lsass) | Process access (Sysmon Event 10) | `process.remote_thread_lsass_access` profile after |
 
@@ -528,7 +546,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **Legitimate lateral movement:** 26 patterns of inter-server traffic are auto-generated based on the environment topology. These include backup agents, monitoring, AD replication, application-to-database connections, config management, and more. Patterns are conditional on having the required infrastructure (assign `roles` like `file_server`, `database`, `web_server`, `mail_server`, `print_server`, `dns_server`, `nfs_server` on systems to enable specific patterns).
 
-**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned.
+**Compiled world model:** Before generation starts, the engine compiles authoritative host and user capabilities from `primary_system`, `assigned_user`, `roles`, and `services`. That model is then used to place user activity, choose realistic SSH/RDP/network session types, and keep baseline/storyline session bootstrap behavior aligned. Correlated multi-event activities route through action bundles so storyline, baseline, red-herring, and scanner/noise intent share the same lifecycle and evidence semantics. Successful logons, failed logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM validation, and workstation lock/unlock evidence use internal auth/session bundles so scenario authors can describe normal typed auth events while the generator owns session IDs, lock state, source endpoints, validation evidence, and termination ordering. DC-side Kerberos ticket evidence uses the internal Kerberos/DC bundle so TGT/TGS timing, source IP/port, TGT cache behavior, and service-principal identity stay aligned. Windows audit/account-management events use internal Windows audit bundles so subject session ownership, target identity, source timing, and Sysmon/eCAR process-access context stay aligned. Connections use the internal network-connection bundle so `connection`, `beacon`, scanner/probe, proxy, firewall, IDS, EDR/eCAR FLOW, DNS, TLS, HTTP, and Windows WFP evidence share one source/destination tuple and visibility decision.
 
 **Network-level red herrings:** The suspicious noise generator includes network-layer patterns: high-entropy DNS queries (CDN subdomains, DoH providers), unusual outbound connections (cloud backup sync, dev tool endpoints), and scheduled vulnerability scan overlaps. Controlled by `baseline_activity.suspicious_noise` level.
 
@@ -550,7 +568,7 @@ The generation engine automatically provides several layers of realism in baseli
 
 **PID allocation:** Windows PIDs use a lognormal distribution for gap sizes (mu=1.2, sigma=0.8), producing mostly small gaps with an occasional heavy tail — simulating background process churn consuming PIDs between emitted events. Linux PIDs use a similar but tighter distribution (mu=0.5, sigma=0.6). No fixed choice-set fingerprint.
 
-**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving.
+**Per-user bash history:** Baseline SSH sessions to Linux servers generate organic admin commands (ls, df -h, ps aux, systemctl status, etc.) for realistic admin users, creating per-user `<username>.bash_history` files on all Linux hosts. Storyline process events on Linux inject 0-3 organic noise commands around each attack command for realistic interleaving. The generator coordinates bash-history timing with foreground process telemetry through an internal Linux shell-command bundle; scenario authors still use normal `process` events and do not need to model the bundle directly.
 
 ### DHCP Lease Events
 
@@ -568,11 +586,11 @@ Use `dhcp_lease` for rogue or new devices appearing on the network (e.g., attack
       technique: "T1200 - Hardware Additions"
 ```
 
-Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP events include NetworkContext for proper sensor routing. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
+Both `mac_address` and `requested_ip` are optional — the engine auto-generates a MAC (using diversified OUI prefixes from `network_params.yaml`) from the system IP and uses the system's configured IP if omitted. DHCP acquisition and renewal are modeled internally as a DHCP lease action bundle: one lease identity drives Zeek DHCP/conn fan-out, lease metadata, link-local visibility, and Linux `dhclient` syslog companions. DHCP broadcast is link-local in the generator: it appears on SPAN-style Zeek sensors monitoring the client's segment and does not traverse unrelated TAP/firewall boundaries unless a separate relay/server transaction is modeled.
 
 ### Port Scan Events
 
-Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-like propagation. Generates many firewall deny records (ASA 106023) from a single storyline step.
+Use `port_scan` for network reconnaissance, host sweeps, lateral scans, or worm-like propagation. It is modeled internally as a scanner/probe action bundle that expands one storyline step into many canonical connection attempts plus firewall deny/open-service evidence.
 
 ```yaml
 - time: "+1h"
@@ -634,7 +652,7 @@ Timing fields: `start_time` (optional, defaults to parent event time), `interval
 
 ### DNS Query Events
 
-Use `dns_query` for standalone DNS lookups with full control over query parameters. Unlike the automatic DNS expansion on `connection` events, this type lets you specify exact query type, response code, TTL, and answer. Useful for DNS-based reconnaissance, cache poisoning indicators, or any scenario where the DNS query itself is the story.
+Use `dns_query` for standalone DNS lookups with full control over query parameters. Unlike the automatic DNS lookup bundle used for `connection` prerequisites, this type lets you specify exact query type, response code, TTL, and answer. Useful for DNS-based reconnaissance, cache poisoning indicators, or any scenario where the DNS query itself is the story.
 
 ```yaml
 - time: "+1h"
@@ -660,7 +678,7 @@ Fields:
 
 ### Web Scan Events
 
-Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, SQLMap, Nmap HTTP). Generates high-volume HTTP requests with scanner-realistic patterns, user agents, and status code distributions. Each request produces correlated web_access + Zeek HTTP + Zeek conn records.
+Use `web_scan` for automated web scanning attacks (Nikto, DirBuster, Gobuster, SQLMap, Nmap HTTP). It is modeled internally as a scanner/probe action bundle that expands one storyline step into scanner-realistic HTTP requests, user agents, status distributions, IDS alerts, and correlated web_access + Zeek HTTP + Zeek conn records.
 
 ```yaml
 - time: "+3h"
@@ -956,7 +974,7 @@ output:
   compression: false           # Optional (default: false)
 ```
 
-Supported formats: `windows`, `zeek`, `ecar`, `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
+Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
 Use `scenarios/<slug>/` as the standard scenario bundle root. `scenario.yaml` and
 `ENVIRONMENT.md` live directly in that directory, optional authored collateral such as

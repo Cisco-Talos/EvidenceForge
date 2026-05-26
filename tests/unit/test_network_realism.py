@@ -94,6 +94,50 @@ class TestExternalScannerProfiles:
 
         assert len(observed) >= 4
 
+    def test_external_scanner_profiles_fall_back_when_profile_weights_overflow(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {
+                "external_scanner_port_profiles": [
+                    {"name": "p1", "weight": 1e308, "ports": [{"port": 443, "weight": 1.0}]},
+                    {"name": "p2", "weight": 1e308, "ports": [{"port": 8443, "weight": 1.0}]},
+                ]
+            },
+        )
+
+        profiles = external_scanner_port_profiles()
+
+        assert any(profile["name"] == "web_recon" for profile in profiles)
+
+    def test_external_scanner_profiles_drop_port_weight_overflow_entries(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        monkeypatch.setattr(
+            network_params,
+            "load_network_params",
+            lambda: {
+                "external_scanner_port_profiles": [
+                    {
+                        "name": "bad_ports",
+                        "weight": 1.0,
+                        "ports": [
+                            {"port": 443, "weight": 1e308},
+                            {"port": 8443, "weight": 1e308},
+                        ],
+                    },
+                    {"name": "good_ports", "weight": 1.0, "ports": [{"port": 22, "weight": 1.0}]},
+                ]
+            },
+        )
+
+        profiles = external_scanner_port_profiles()
+
+        assert len(profiles) == 1
+        assert profiles[0]["name"] == "good_ports"
+
 
 class TestNtpTiming:
     """Bug #2: NTP timing varies by stratum."""

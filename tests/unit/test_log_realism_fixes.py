@@ -14,11 +14,13 @@ from unittest.mock import MagicMock
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
+    DnsContext,
     IdsContext,
     NatContext,
     NetworkContext,
 )
 from evidenceforge.formats import load_format
+from evidenceforge.generation.actions import IdsAlertActionBundle, IdsAlertRequest
 from evidenceforge.generation.activity.generator import _TLS_VERSION_VALUES, _TLS_VERSION_WEIGHTS
 from evidenceforge.generation.emitters.snort import SnortEmitter
 from evidenceforge.utils.rng import _stable_seed
@@ -102,6 +104,106 @@ class TestSnortRevField:
 
         output = (tmp_path / "ids-01" / "snort_alert.log").read_text()
         assert "[1:384:1]" in output
+
+
+class TestIdsAlertActionBundle:
+    def test_ids_alert_bundle_anchor_is_stable(self):
+        request = IdsAlertRequest(
+            signature={
+                "sid": 2002677,
+                "rev": 14,
+                "message": "ET SCAN Nikto Web App Scan in Progress",
+                "classification": "web-application-attack",
+                "priority": 2,
+            },
+            time=T0,
+            src_ip="185.70.41.45",
+            dst_ip="10.10.3.10",
+            dst_port=80,
+            proto="tcp",
+            rng=random.Random(7),
+            source="web_scan",
+            direction="in",
+        )
+
+        first = IdsAlertActionBundle(request).anchor
+        second = IdsAlertActionBundle(request).anchor
+
+        assert first == second
+        assert first.family == "ids_alert"
+        assert first.stable_id.startswith("ids-alert-")
+
+    def test_ids_alert_bundle_builds_ids_context(self):
+        request = IdsAlertRequest(
+            signature={
+                "gid": 1,
+                "sid": 2010935,
+                "rev": 3,
+                "message": "ET POLICY Suspicious inbound to mySQL port 3306",
+                "classification": "attempted-recon",
+                "priority": 2,
+            },
+            time=T0,
+            src_ip="185.70.41.45",
+            dst_ip="10.10.3.10",
+            dst_port=3306,
+            proto="tcp",
+            rng=random.Random(11),
+            source="baseline_ids_false_positive",
+            direction="in",
+        )
+
+        ids = IdsAlertActionBundle(request).execute()
+
+        assert ids.sid == 2010935
+        assert ids.rev == 3
+        assert ids.message.startswith("ET POLICY")
+        assert ids.classification == "attempted-recon"
+
+    def test_ids_alert_bundle_can_attach_dns_payload(self):
+        def dns_factory(signature, rng, *, ad_domain, dns_server_ip):
+            assert signature["sid"] == 2027758
+            assert ad_domain == "corp.example"
+            assert dns_server_ip == "10.0.0.10"
+            return DnsContext(
+                query="host-abcd.corp.example",
+                trans_id=rng.randint(1, 65535),
+                qtype=1,
+                query_type="A",
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=["203.0.113.10"],
+                TTLs=[300.0],
+                rtt=0.012,
+            )
+
+        request = IdsAlertRequest(
+            signature={
+                "sid": 2027758,
+                "rev": 1,
+                "message": "ET DNS Query to suspicious domain",
+                "classification": "trojan-activity",
+                "priority": 2,
+            },
+            time=T0,
+            src_ip="10.10.1.20",
+            dst_ip="10.0.0.10",
+            dst_port=53,
+            proto="udp",
+            rng=random.Random(13),
+            source="baseline_ids_false_positive",
+            direction="out",
+            ad_domain="corp.example",
+            dns_server_ip="10.0.0.10",
+            include_dns_payload=True,
+            dns_context_factory=dns_factory,
+        )
+
+        result = IdsAlertActionBundle(request).execute_with_result()
+
+        assert result.ids.sid == 2027758
+        assert result.dns is not None
+        assert result.dns.query == "host-abcd.corp.example"
 
 
 # ── Web scan preset IDS config ───────────────────────────────────────────

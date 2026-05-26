@@ -22,10 +22,16 @@
 
 """Zeek pe.log emitter."""
 
+from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.emitters.zeek_files import (
+    _bounded_file_transfer_observation,
+    _related_http_analyzer_timestamp,
+)
+from evidenceforge.utils.rng import _stable_seed
 
 
 class ZeekPeEmitter(SensorMultiplexEmitter):
@@ -45,7 +51,7 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         pe = event.pe
         event_data: dict[str, Any] = {
-            "ts": event.timestamp,
+            "ts": _pe_analyzer_timestamp(event),
             "id": pe.id,
             "machine": pe.machine,
             "compile_ts": pe.compile_ts,
@@ -76,3 +82,24 @@ class ZeekPeEmitter(SensorMultiplexEmitter):
             if f not in event_data:
                 event_data[f] = None
         return self._render_zeek_json(event_data)
+
+
+def _pe_analyzer_timestamp(event: SecurityEvent) -> datetime:
+    """Return a PE analyzer time after the owning files.log artifact."""
+    pe = event.pe
+    if pe is None:
+        return event.timestamp
+    if event.network is not None and event.file_transfer is not None:
+        file_ts, file_duration = _bounded_file_transfer_observation(
+            event,
+            min_start=_related_http_analyzer_timestamp(event),
+        )
+        duration_us = max(0, int(file_duration * 1_000_000))
+        if duration_us <= 1:
+            return file_ts
+        max_offset_us = min(duration_us - 1, 250_000)
+        offset_us = 1 + (
+            _stable_seed(f"zeek_pe_ts:{pe.id}:{event.network.zeek_uid}") % max_offset_us
+        )
+        return file_ts + timedelta(microseconds=offset_us)
+    return event.timestamp + timedelta(milliseconds=1)
