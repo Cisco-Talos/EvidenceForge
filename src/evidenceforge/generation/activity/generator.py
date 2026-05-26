@@ -6068,6 +6068,7 @@ class ActivityGenerator:
         rng = _get_rng()
         self._expanding_types.add(event_type)
         try:
+            previous_after_time: datetime | None = None
             for ev in expanded:
                 offset_ms = rng.randint(ev.timing.min_ms, ev.timing.max_ms)
                 offset = timedelta(milliseconds=offset_ms)
@@ -6085,6 +6086,9 @@ class ActivityGenerator:
                                 ev.kwargs["time"],
                                 "windows.audit_after_visible_admin_command",
                             )
+                    if previous_after_time is not None and ev.kwargs["time"] <= previous_after_time:
+                        ev.kwargs["time"] = previous_after_time + timedelta(milliseconds=1)
+                    previous_after_time = ev.kwargs["time"]
 
                 method = getattr(self, ev.method)
                 method(**ev.kwargs)
