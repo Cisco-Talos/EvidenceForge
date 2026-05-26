@@ -37,7 +37,7 @@ Explicitly out of scope by user request:
 
 ## Current Handoff
 
-Next review item: CI and test posture.
+Next review item: CLI and package surface consistency.
 
 ## Decisions
 
@@ -98,6 +98,17 @@ Implemented during release metadata cleanup:
 - Updated the Code of Conduct enforcement contact to Talos branding and
   `talos-external@cisco.com`.
 
+Implemented during CI/test posture cleanup:
+
+- Updated README and contributing setup commands to use `uv sync --all-extras`
+  so local environments include pytest, Ruff, and other dev tools.
+- Documented that slow tests should run with `--no-cov` and release coverage
+  should run on the default non-slow suite.
+- Clarified `AGENTS.md` coverage guidance: 70% is the enforced release gate,
+  while 95%+ remains aspirational for overall and core generation coverage.
+- Updated README's approximate pytest suite size from `1400+` to `3700+` after
+  `uv run pytest --collect-only -q` collected `3775` tests.
+
 ## Validation
 
 Validated before committing `fe5d4785`:
@@ -120,9 +131,15 @@ Command-doc cleanup validation:
 - Spot checks confirmed the stale generate `--config` option and obsolete
   literal `"attacker"` actor guidance are gone from command docs.
 
+CI/test posture cleanup validation:
+
+- `uv run pytest --collect-only -q` collected `3775` tests.
+- `git diff --check` passed.
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` passed.
+
 ## Open Review Items
 
-- CI and test posture, including exact release gate commands/status checks.
 - CLI and package surface consistency.
 - Example and scenario hygiene beyond the new beginner scenario.
 - Security/legal hygiene.

@@ -248,8 +248,8 @@ See [Architecture Documentation](docs/ARCHITECTURE.md) for the full deep dive in
 ## Development
 
 ```bash
-# Install dependencies
-uv sync
+# Install dependencies and development tools
+uv sync --all-extras
 
 # Run tests without coverage instrumentation (skips slow by default)
 uv run pytest --no-cov
@@ -259,6 +259,9 @@ uv run pytest --include-slow -m slow --no-cov --durations=20
 
 # Run the release coverage gate before a dev -> main PR
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
+
+# Do not combine slow tests with coverage during release validation.
+# Slow tests are run with --no-cov; coverage is measured on the default non-slow suite.
 
 # Run specific test suite
 uv run pytest tests/unit/test_network_visibility.py -v
@@ -274,7 +277,7 @@ uv run ruff format --check .
 - Pydantic v2 for schema validation
 - Jinja2 for log format templates
 - Typer + Rich for CLI
-- pytest (1400+ tests)
+- pytest (3700+ tests)
 
 ## Documentation
 
