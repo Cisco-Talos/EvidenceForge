@@ -24,8 +24,11 @@ scenarios/<slug>/
     <hostname.domain>/                     # Per-host directories (FQDN)
       windows_event_security.xml           # Windows Security channel events
       windows_event_sysmon.xml             # Sysmon operational channel events
+      ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
       syslog.log                           # Linux syslog (default target; RFC5424)
       bash_history/<username>.bash_history # Per-user bash history (Linux only)
+      web_access.log                       # Web server access log on web_server hosts
+      proxy_access.log                     # Forward proxy access log on forward_proxy hosts
       <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
       <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 (sof-elk target)
       <year>/syslog.log                    # Linux syslog (sof-elk target; RFC3164)
@@ -36,14 +39,11 @@ scenarios/<slug>/
       ssl.json                             # Zeek ssl.log
       files.json                           # Zeek files.log
       ...                                  # Other Zeek logs
-    ecar.json                              # Simulated EDR telemetry in eCAR format (NDJSON)
-    snort_alert.log                        # Snort/Suricata IDS alerts
-    <fw-hostname>/                         # Per-firewall directories
+    <ids-sensor-name>/                     # Per-IDS-sensor directories
+      snort_alert.log                      # Snort/Suricata IDS alerts
+    <fw-hostname>/                         # Per-firewall-sensor directories
       cisco_asa.log                        # Cisco ASA firewall syslog (default target)
       <year>/cisco_asa.log                 # Cisco ASA firewall syslog (sof-elk target)
-    web_access.log                         # Apache/Nginx access log
-    <proxy-hostname.domain>/               # Per-proxy-host directories
-      proxy_access.log                     # HTTP forward proxy access log (W3C Extended)
 ```
 
 ## Output Targets

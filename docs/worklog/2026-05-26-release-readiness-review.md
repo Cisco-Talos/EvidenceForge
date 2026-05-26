@@ -37,18 +37,10 @@ Explicitly out of scope by user request:
 
 ## Current Handoff
 
-Next review item proposed: packaged `/eforge` skill docs and onboarding
-consistency.
+Next review item: release metadata and changelog readiness.
 
-Restated task: review installed skill docs and reference docs so first-time
-users see the same workflow everywhere: install skills, create or validate a
-scenario, generate evidence, and evaluate output. Check command names,
-agent-specific language, scenario bundle expectations, and whether creating
-evidence is explained clearly.
-
-Pending user decision before that pass: whether the shipped beginner workflow
-should emphasize using `branch-office-example` first and then creating a custom
-scenario, or lead immediately with `/eforge scenario`.
+The command-doc onboarding pass is implemented in the working tree. Review the
+diff, then commit if accepted.
 
 ## Decisions
 
@@ -84,6 +76,21 @@ Committed in `fe5d4785 docs: add branch office example scenario`:
 Current branch state after that commit: `dev` is ahead of `origin/dev` by one
 commit.
 
+Implemented after `72e210dc` during command-doc onboarding cleanup:
+
+- Removed stale `--config` option from `commands/eforge/generate.md`.
+- Corrected undefined-storyline-actor guidance so it matches validator rules:
+  defined users, built-in accounts, or `environment.service_accounts`.
+- Fixed the `generate.md` log-format table so `web_access` and `proxy_access`
+  are normal rows.
+- Added source-checkout guidance to use `uv run eforge ...` while installed
+  package users can run `eforge` directly.
+- Corrected `create_remote_thread` causal reference timing from `after` to
+  `before`.
+- Corrected the command-copy evidence-format output tree so eCAR, web access,
+  proxy access, and Snort files are shown under their actual host/sensor
+  directories.
+
 ## Validation
 
 Validated before committing `fe5d4785`:
@@ -100,9 +107,14 @@ Validated before committing `fe5d4785`:
 - `uv run ruff check .` passed.
 - `uv run ruff format --check .` passed.
 
+Command-doc cleanup validation:
+
+- `git diff --check` passed.
+- Spot checks confirmed the stale generate `--config` option and obsolete
+  literal `"attacker"` actor guidance are gone from command docs.
+
 ## Open Review Items
 
-- Packaged skill docs and onboarding consistency.
 - Release metadata and changelog readiness.
 - CI and test posture, including exact release gate commands/status checks.
 - CLI and package surface consistency.

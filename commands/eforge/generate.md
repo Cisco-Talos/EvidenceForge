@@ -21,6 +21,10 @@ eforge validate scenarios/<slug>/scenario.yaml
 eforge generate scenarios/<slug>/scenario.yaml --verbose --force
 ```
 
+In a source checkout, prefix CLI commands with `uv run` (for example,
+`uv run eforge validate ...`). Installed package users can run `eforge`
+directly.
+
 If they don't have a scenario file yet, suggest using `/eforge scenario` to create one first.
 
 ## Command Reference
@@ -48,7 +52,6 @@ eforge generate <scenario.yaml> [options]
 Options:
   --output, -o <dir>     Override the bundle root for generated sidecars and data.
                          By default, current eforge writes beside the scenario file.
-  --config, -c <file>    Path to config.yaml
   --formats, -F <list>   Comma-separated format filter. Only generates formats present in both
                          this list and the scenario's output.logs. Supports group names (zeek,
                          windows) and individual format names (zeek_conn, cisco_asa). Use
@@ -145,7 +148,7 @@ Common simple fixes:
 - "references undefined system" → Check hostname spelling in user.primary_system or storyline.system
 - "references undefined user" → Check username spelling in system.assigned_user or group.members
 - "Duplicate username/hostname/IP" → Find and rename the duplicate
-- "references undefined actor" → Storyline actor must be a username or literal "attacker"
+- "references undefined actor" → Storyline actor must be a defined username, a well-known built-in account such as `SYSTEM`, `root`, or `www-data`, or a name listed in `environment.service_accounts`
 - "references undefined segment" → Check segment names in sensor.monitoring_segments
 
 For structural problems that require rethinking the scenario design — like a fundamentally broken network topology, missing personas that need custom definitions, or a storyline that references systems/users that don't exist and can't be trivially added — advise the user to revisit with `/eforge scenario` to rework that section.
@@ -182,12 +185,12 @@ After reviewing output, you can suggest:
 | bash_history | Bash command history | Linux systems |
 | snort_alert | Snort/Suricata alerts (fast format) | Network IDS via sensors |
 | cisco_asa | Cisco ASA firewall syslog — default target flat per-sensor, SOF-ELK target per-sensor/year | Firewall sensors |
+| web_access | Apache/Nginx combined access logs | Web servers |
+| proxy_access | HTTP forward proxy access logs (W3C Extended) | Forward proxy systems |
 
 When `nat_rules` are configured on the firewall sensor, `cisco_asa.log`
 also includes 305011/305012 NAT translation records alongside the normal
 Built/Teardown connection records.
-
-| web_access | Apache/Nginx combined access logs | Web servers |
 
 Use the `/eforge:references:evidence-formats` skill for detailed field documentation, output paths, and known limitations for each format.
 
