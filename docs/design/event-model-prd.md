@@ -6,6 +6,7 @@
 > **Results:** All 12 generate_* methods migrated. A/B eval: 82.3→83.7 (+1.4). Expert panel: 6 tells fixed, 0 regressions.
 > **2026-04 Addendum:** Phase 8.5 added `WorldModel` / `WorldPlanner` above `ActivityGenerator`. The canonical event model and dispatcher remain the rendering backbone, but planner-owned session bootstrap now means session IDs may be allocated before `ActivityGenerator.generate_logon()` emits the corresponding host/network evidence.
 > **2026-05 Addendum:** Source-native render timestamps are now planned by `SourceTimingPlanner`. `SecurityEvent.timestamp` remains canonical world time; emitters use planned source times with explicit causal bounds for migrated timing surfaces.
+> **2026-05 Architecture Reset Addendum:** Action bundles now sit above `SecurityEvent` for multi-phase activities. A bundle represents one real-world activity that may produce multiple canonical events; each `SecurityEvent` remains one logical evidence-producing occurrence with contexts for facets of that occurrence.
 
 ## 1. Overview
 

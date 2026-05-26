@@ -332,6 +332,26 @@ def _file_transfer_analyzer_timestamp(
     conn_ts: datetime,
 ) -> datetime:
     """Return a deterministic files.log analysis time after the conn start."""
+    net = event.network
+    if event.http is not None and net is not None:
+        http_seed_parts = (
+            zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        )
+        return _SOURCE_TIMING.source_time_after_source(
+            event,
+            "source.zeek_file_analyzer",
+            after_source_key="source.zeek_http_request",
+            gap_key="source.zeek_file_analyzer",
+            seed_parts=(zeek_uid, fuid, event.timestamp),
+            after_seed_parts=http_seed_parts,
+            after_not_before=conn_ts,
+            not_before=conn_ts + timedelta(milliseconds=1),
+        )
     return _SOURCE_TIMING.source_time(
         event,
         "source.zeek_file_analyzer",
