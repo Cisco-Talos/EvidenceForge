@@ -2,7 +2,7 @@
 
 **Status:** Phase 8.5 (Dual src/dst HostContext) COMPLETE; Pre-MVP quality fixes ongoing
 **Started:** 2026-03-11
-**Last Updated:** 2026-05-23
+**Last Updated:** 2026-05-26
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed development history of completed phases.
 
@@ -36,6 +36,7 @@ Replaced manual per-emitter field coordination with SecurityEvent intermediate r
 
 ## Pre-MVP: Consolidated Quality Fixes — IN PROGRESS
 
+- [x] Review and disposition open Codex fix-family PRs — confirmed local `dev` matched `origin/dev` before review, retargeted matching PRs to `dev`, closed rejected PRs #237, #233, #241, and #261 with rationale comments, merged all accept-as-is PRs with acceptance comments, and left only the accept-with-changes PRs open for rework (#245, #249, #253, #258).
 - [x] Architecture reset experiment requirements gate — reconstructed explicit and implicit requirements from repository instructions, docs, skills, tests, config references, and implementation history; produced a requirements baseline and an interactive requirements-review matrix before making rewrite-vs-greenfield recommendations.
 - [x] Architecture reset interactive requirements review — walked through the requirements review matrix with the user, resolved accepted/revised/deferred decisions, and updated the requirements baseline before architecture recommendations.
 - [x] Architecture reset recommendation phase — evaluated current architecture pressure points against the reviewed requirements, compared incremental evolution, partial rewrite, greenfield, and full in-place rewrite options, and recommended an evolutionary reset with partial rewrites behind stable interfaces before any implementation planning.

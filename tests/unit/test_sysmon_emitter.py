@@ -955,7 +955,9 @@ class TestSysmonEventEmitter:
         assert emitter._event_dicts[0]["ProcessGuid"] == new_guid
         assert emitter._event_dicts[1]["ProcessGuid"] == new_guid
 
-    def test_event1_time_shift_persists_process_guid_for_later_batches(self, format_def, temp_output):
+    def test_event1_time_shift_persists_process_guid_for_later_batches(
+        self, format_def, temp_output
+    ):
         """Event 1 GUID rewrites should persist for follow-on events in later flushes."""
         emitter = SysmonEventEmitter(format_def, temp_output)
         original = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
