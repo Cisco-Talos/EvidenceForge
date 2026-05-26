@@ -95,7 +95,7 @@ def _ocsp_request_path_config() -> dict[str, Any]:
 def _bounded_int(value: Any, fallback: int, *, minimum: int, maximum: int) -> int:
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         parsed = fallback
     return max(minimum, min(parsed, maximum))
 
@@ -103,7 +103,7 @@ def _bounded_int(value: Any, fallback: int, *, minimum: int, maximum: int) -> in
 def _bounded_probability(value: Any, fallback: float) -> float:
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         parsed = fallback
     return max(0.0, min(parsed, 1.0))
 

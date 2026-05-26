@@ -9,6 +9,7 @@ for role-aware command selection with template parameterization.
 Follows the same data-driven pattern as spawn_rules.py.
 """
 
+import math
 import random
 from collections import Counter, deque
 from typing import Any
@@ -269,6 +270,7 @@ _COMMAND_USER_RECENCY: dict[str, deque[str]] = {}
 _COMMAND_GLOBAL_COUNTS: Counter[str] = Counter()
 _COMMAND_GLOBAL_LOW_REPEAT_COUNTS: Counter[str] = Counter()
 _WORKFLOW_SELECTION_PROBABILITY = 0.65
+_MAX_WORKFLOW_WEIGHT = 1_000_000.0
 _LOW_REPEAT_EXACT_COMMANDS = {
     "cat /proc/cpuinfo | grep 'model name' | head -1",
     "df -h /tmp",
@@ -564,28 +566,34 @@ def _workflow_candidates(commands: dict[str, Any], pool_key: str) -> list[dict[s
 
 
 def _coerce_probability(value: Any, fallback: float) -> float:
-    """Convert a config value into a bounded probability with safe fallback."""
+    """Convert a config value into a finite bounded probability with safe fallback."""
     try:
         probability = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+    if not math.isfinite(probability):
         return fallback
     return min(1.0, max(0.0, probability))
 
 
-def _coerce_positive_float(value: Any, fallback: float) -> float:
-    """Convert a config value into a positive float with safe fallback."""
+def _coerce_workflow_weight(value: Any) -> float:
+    """Convert a workflow weight into a finite bounded selection weight."""
     try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return fallback
-    return numeric if numeric > 0 else fallback
+        weight = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 1.0
+    if not math.isfinite(weight):
+        return 1.0
+    if weight <= 0:
+        return 0.0
+    return min(weight, _MAX_WORKFLOW_WEIGHT)
 
 
 def _choose_workflow(rng: random.Random, workflows: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick one configured shell workflow by weight."""
     if not workflows:
         return None
-    weights = [_coerce_positive_float(workflow.get("weight", 1.0), 1.0) for workflow in workflows]
+    weights = [_coerce_workflow_weight(workflow.get("weight", 1.0)) for workflow in workflows]
     if not any(weights):
         return rng.choice(workflows)
     return rng.choices(workflows, weights=weights, k=1)[0]
@@ -656,10 +664,11 @@ def pick_bash_session_commands(
     selected: list[tuple[str, bool]] = []
 
     workflows = _workflow_candidates(commands, pool_key)
+    workflow_model = commands.get("workflow_model", {})
     selection_probability = _coerce_probability(
-        commands.get("workflow_model", {}).get(
-            "selection_probability", _WORKFLOW_SELECTION_PROBABILITY
-        ),
+        workflow_model.get("selection_probability", _WORKFLOW_SELECTION_PROBABILITY)
+        if isinstance(workflow_model, dict)
+        else _WORKFLOW_SELECTION_PROBABILITY,
         _WORKFLOW_SELECTION_PROBABILITY,
     )
     if command_count >= 2 and workflows and rng.random() < selection_probability:

@@ -254,7 +254,7 @@ def generate_failed_logon_burst(
 
     offset = timedelta(seconds=rng.randint(0, 3500))
     start_time = current_hour + offset
-    num_failures = rng.randint(2, 5)
+    num_failures = rng.randint(3, 6)
 
     return {
         "pattern": "failed_logon_burst",

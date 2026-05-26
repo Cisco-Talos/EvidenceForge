@@ -240,7 +240,9 @@ def _runmru_value_name(rng: random.Random) -> str:
 def _runmru_command(rng: random.Random, user: str) -> str:
     """Return a varied RunMRU command with the source-native terminator."""
     commands = load_edr_pools().get("runmru_commands", _DEFAULT_RUNMRU_COMMANDS)
-    command = str(rng.choice(commands)).format(user=user or "Default")
+    command_template = str(rng.choice(commands))
+    username = user or "Default"
+    command = re.sub(r"\{(user|username)\}", username, command_template)
     return command if command.endswith("\\1") else f"{command}\\1"
 
 
