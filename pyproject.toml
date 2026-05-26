@@ -43,6 +43,12 @@ dependencies = [
 [project.scripts]
 eforge = "evidenceforge.__main__:main"
 
+[project.urls]
+Homepage = "https://github.com/Cisco-Talos/EvidenceForge"
+Repository = "https://github.com/Cisco-Talos/EvidenceForge"
+Issues = "https://github.com/Cisco-Talos/EvidenceForge/issues"
+Changelog = "https://github.com/Cisco-Talos/EvidenceForge/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",

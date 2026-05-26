@@ -18,7 +18,7 @@ in any real-time space e.g., Slack, Discord, etc.
 
 Before reporting a new issue, please ensure that the issue was not already
 reported or fixed by searching through our [issues
-list](https://github.com/cisco-foundation-ai/EvidenceForge/issues).
+list](https://github.com/Cisco-Talos/EvidenceForge/issues).
 
 When creating a new issue, please be sure to include a **title and clear
 description**, as much relevant information as possible, and, if possible, a
@@ -99,7 +99,7 @@ a brief example of the before/after behavior.
 
 ```bash
 # Clone the repository
-git clone https://github.com/cisco-foundation-ai/EvidenceForge.git
+git clone https://github.com/Cisco-Talos/EvidenceForge.git
 cd EvidenceForge
 
 # Install dependencies (requires uv: https://docs.astral.sh/uv/)

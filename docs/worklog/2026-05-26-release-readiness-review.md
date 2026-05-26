@@ -37,10 +37,7 @@ Explicitly out of scope by user request:
 
 ## Current Handoff
 
-Next review item: release metadata and changelog readiness.
-
-The command-doc onboarding pass is implemented in the working tree. Review the
-diff, then commit if accepted.
+Next review item: CI and test posture.
 
 ## Decisions
 
@@ -91,6 +88,16 @@ Implemented after `72e210dc` during command-doc onboarding cleanup:
   proxy access, and Snort files are shown under their actual host/sensor
   directories.
 
+Implemented during release metadata cleanup:
+
+- Added package project URLs for Homepage, Repository, Issues, and Changelog.
+- Updated stale `cisco-foundation-ai` repo links in `CONTRIBUTING.md` to
+  `Cisco-Talos/EvidenceForge`.
+- Corrected README evaluation-summary text from the superseded
+  5-dimension/23-sub-score model to the active 4-pillar/20-sub-score model.
+- Updated the Code of Conduct enforcement contact to Talos branding and
+  `talos-external@cisco.com`.
+
 ## Validation
 
 Validated before committing `fe5d4785`:
@@ -115,7 +122,6 @@ Command-doc cleanup validation:
 
 ## Open Review Items
 
-- Release metadata and changelog readiness.
 - CI and test posture, including exact release gate commands/status checks.
 - CLI and package surface consistency.
 - Example and scenario hygiene beyond the new beginner scenario.
