@@ -37,7 +37,7 @@ Explicitly out of scope by user request:
 
 ## Current Handoff
 
-Next review item: example and scenario hygiene beyond the new beginner scenario.
+Next review item: security/legal hygiene.
 
 ## Decisions
 
@@ -54,6 +54,12 @@ Next review item: example and scenario hygiene beyond the new beginner scenario.
 - Only the beginner scenario YAML should ship from that scenario bundle; no
   generated `data/`, ground truth, manifest, output-target marker, or companion
   environment docs should be tracked for it.
+- The top-level `scenarios/COVERAGE-TEST-PROMPT.md` and
+  `scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md` files are intentionally
+  tracked and may remain in the public source release.
+- Other prompt/review artifacts under `scenarios/`, including iteration-test
+  blind-review loop outputs, should not be tracked for the public source
+  release.
 
 ## Completed Work
 
@@ -122,6 +128,16 @@ Implemented during CLI/package surface cleanup:
 - Reworded README CLI flag guidance so generate-only flags are not described as
   common to all commands.
 
+Implemented during example/scenario hygiene cleanup:
+
+- De-tracked `scenarios/ITERATION-LOOP-FAMILY-IMPROVEMENT-PROMPT.md` and
+  `scenarios/ITERATION-TEST-PROMPT.md`.
+- De-tracked generated blind-review loop artifacts under
+  `scenarios/iteration-test/blind-test/loop-132` through `loop-142`.
+- Kept `scenarios/COVERAGE-TEST-PROMPT.md`,
+  `scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md`, and
+  `scenarios/branch-office-example/scenario.yaml` tracked.
+
 ## Validation
 
 Validated before committing `fe5d4785`:
@@ -164,9 +180,15 @@ CLI/package surface cleanup validation:
 - `uv run ruff check .` passed.
 - `uv run ruff format --check .` passed.
 
+Example/scenario hygiene validation:
+
+- `git ls-files scenarios` now lists only
+  `scenarios/COVERAGE-TEST-PROMPT.md`,
+  `scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md`, and
+  `scenarios/branch-office-example/scenario.yaml`.
+
 ## Open Review Items
 
-- Example and scenario hygiene beyond the new beginner scenario.
 - Security/legal hygiene.
 - Release operations checklist and accepted-limitations wording.
 
