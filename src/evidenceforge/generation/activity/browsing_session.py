@@ -16,12 +16,16 @@ import random
 from dataclasses import dataclass
 
 from evidenceforge.generation.activity.http_content import (
+    apply_transfer_size_variance,
     is_stable_resource_path,
     normalize_mime_type_for_path,
     response_size_for_mime,
     response_size_for_status,
 )
-from evidenceforge.generation.activity.proxy_uri import is_browser_like_proxy_domain
+from evidenceforge.generation.activity.proxy_uri import (
+    is_browser_like_proxy_domain,
+    plaintext_http_redirect_status,
+)
 from evidenceforge.generation.activity.site_maps import (
     PageDef,
     SiteMap,
@@ -68,10 +72,24 @@ _INTENSITY_PARAMS: dict[str, dict[str, tuple[int, int]]] = {
 }
 
 
-def _response_size(rng: random.Random, hostname: str, path: str, content_type: str) -> int:
+def _response_size(
+    rng: random.Random,
+    hostname: str,
+    path: str,
+    content_type: str,
+    *,
+    transfer_variant_key: str | None = None,
+) -> int:
     """Generate a realistic response size for a given content type."""
     if is_stable_resource_path(path):
-        return response_size_for_status(200, hostname, path)
+        return apply_transfer_size_variance(
+            response_size_for_status(200, hostname, path),
+            status_code=200,
+            host=hostname,
+            uri=path,
+            content_type=content_type,
+            variant_key=transfer_variant_key,
+        )
     return response_size_for_mime(rng, content_type)
 
 
@@ -126,6 +144,8 @@ def _response_size_for_status_code(
     path: str,
     content_type: str,
     status_code: int,
+    *,
+    transfer_variant_key: str | None = None,
 ) -> int:
     """Generate a response body size consistent with the HTTP status."""
     if status_code in {204, 304}:
@@ -137,7 +157,13 @@ def _response_size_for_status_code(
         return max(128, int(full_size * rng.uniform(0.15, 0.65)))
     if status_code >= 400:
         return response_size_for_status(status_code, hostname, path)
-    return _response_size(rng, hostname, path, content_type)
+    return _response_size(
+        rng,
+        hostname,
+        path,
+        content_type,
+        transfer_variant_key=transfer_variant_key,
+    )
 
 
 def _sample_profile_timing_ms(
@@ -210,6 +236,13 @@ def _make_referrer(hostname: str, path: str, port: int = 443) -> str:
     return f"{scheme}://{hostname}{path}"
 
 
+def _source_native_browser_referrer(referrer: str, *, port: int) -> str:
+    """Apply browser default referrer policy for plaintext downgrades."""
+    if port == 80 and referrer.startswith("https://"):
+        return ""
+    return referrer
+
+
 def _pick_subresources(
     rng: random.Random,
     page: PageDef,
@@ -247,6 +280,7 @@ def generate_browsing_session(
     browsing_intensity: str = "normal",
     port: int = 443,
     require_browser_like_domain: bool = True,
+    transfer_variant_key: str | None = None,
 ) -> list[BrowsingRequest]:
     """Generate a complete browsing session as a list of HTTP requests.
 
@@ -264,6 +298,9 @@ def generate_browsing_session(
         require_browser_like_domain: When true, suppress sessions for
             certificate/update/telemetry domains. Set false for inbound
             web-server logs where the public host may not exist in dns_registry.
+        transfer_variant_key: Optional client/session key used to vary
+            source-visible bytes for cacheable resources while keeping origin
+            content stable.
 
     Returns:
         List of BrowsingRequest objects sorted by time_offset_ms.
@@ -338,6 +375,9 @@ def generate_browsing_session(
             method="GET",
             content_type=page_content_type,
         )
+        redirect_status = plaintext_http_redirect_status(hostname, port=port, path=page.path)
+        if redirect_status is not None:
+            page_status = redirect_status
         visited_indices.append(current_page_idx)
         page_url = _make_referrer(hostname, page.path, port)
 
@@ -349,7 +389,7 @@ def generate_browsing_session(
                 path=page.path,
                 method="GET",
                 content_type=page_content_type,
-                referrer=previous_page_url,
+                referrer=_source_native_browser_referrer(previous_page_url, port=port),
                 trans_depth=1,
                 is_page_load=True,
                 response_body_len=_response_size_for_status_code(
@@ -358,11 +398,15 @@ def generate_browsing_session(
                     page.path,
                     page_content_type,
                     page_status,
+                    transfer_variant_key=transfer_variant_key,
                 ),
                 request_body_len=_request_size(rng, "GET"),
                 status_code=page_status,
             )
         )
+
+        if redirect_status is not None:
+            break
 
         # Emit subresource requests
         sub_lo, sub_hi = params["subresources_per_page"]
@@ -390,7 +434,7 @@ def generate_browsing_session(
                     path=sub.path,
                     method=sub.method,
                     content_type=sub_content_type,
-                    referrer=page_url,
+                    referrer=_source_native_browser_referrer(page_url, port=port),
                     trans_depth=sub_idx + 2,  # Page is depth 1, subs start at 2
                     is_page_load=False,
                     response_body_len=_response_size_for_status_code(
@@ -399,6 +443,7 @@ def generate_browsing_session(
                         sub.path,
                         sub_content_type,
                         sub_status,
+                        transfer_variant_key=transfer_variant_key,
                     ),
                     request_body_len=_request_size(rng, sub.method),
                     status_code=sub_status,

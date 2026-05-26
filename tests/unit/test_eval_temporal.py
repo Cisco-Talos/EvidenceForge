@@ -251,6 +251,35 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score < 100.0
 
+    def test_process_before_later_unlock_is_not_logon_violation(self):
+        """A later 4624 type 7 unlock is not the original session-establishing logon."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4688,
+                        "SubjectLogonId": "0x1a2b3c",
+                    },
+                    ts=base,
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4624,
+                        "LogonType": 7,
+                        "TargetLogonId": "0x1a2b3c",
+                    },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ]
+        }
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
     def test_grace_period_skips_early_events(self):
         """Events within grace period are not checked for causal ordering."""
         records = {
@@ -396,6 +425,36 @@ class TestCausalOrdering:
         result = scorer._score_causal_ordering(records, scenario)
         assert result.score == 100.0
 
+    def test_kerberos_service_ticket_weak_rule_skips_later_matching_tgt(self):
+        """A cached-ticket 4769 is not inverted just because a matching 4768 appears later."""
+        base = T0 + self._AFTER_GRACE
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4769,
+                        "Computer": "DC-01",
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=base,
+                ),
+                _record(
+                    "windows_event_security",
+                    {
+                        "EventID": 4768,
+                        "Computer": "DC-01",
+                        "TargetUserName": "jsmith",
+                    },
+                    ts=base + timedelta(minutes=5),
+                ),
+            ]
+        }
+        scenario = _make_scenario()
+        scorer = CausalityScorer()
+        result = scorer._score_causal_ordering(records, scenario)
+        assert result.score == 100.0
+
     def test_causal_ordering_counts_failures_after_sample_cap(self):
         """Failures beyond the diagnostic sample cap still count against the score."""
         base = T0 + self._AFTER_GRACE
@@ -496,6 +555,42 @@ class TestTimingPlausibility:
         user_events = _group_by_user(records)
         result = scorer._score_rate_plausibility(user_events, records)
         assert result.score < 100.0
+
+    def test_lifecycle_teardown_fanout_not_user_action_rate(self):
+        """Many teardown records in a small window should not count as user actions."""
+        timestamps = [T0 + timedelta(milliseconds=i * 100) for i in range(25)]
+        records = {
+            "windows_event_security": [
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "jsmith", "EventID": 4689},
+                    ts=t,
+                )
+                for t in timestamps
+            ]
+            + [
+                _record(
+                    "windows_event_security",
+                    {"TargetUserName": "jsmith", "EventID": 4634},
+                    ts=T0 + timedelta(seconds=3),
+                )
+            ],
+            "ecar": [
+                _record(
+                    "ecar",
+                    {
+                        "principal": "jsmith",
+                        "object": "USER_SESSION",
+                        "action": "LOGOUT",
+                    },
+                    ts=T0 + timedelta(seconds=3, milliseconds=200),
+                )
+            ],
+        }
+        scorer = TemporalRealismScorer()
+        user_events = _group_by_user(records)
+        result = scorer._score_rate_plausibility(user_events, records)
+        assert result.score == 100.0
 
 
 class TestEndToEnd:

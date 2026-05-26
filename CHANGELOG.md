@@ -4,6 +4,202 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v1.0.0 (2026-05-26)
+
+This major release promotes the architecture-reset work and post-reset hardening
+from `dev` to `main`. The release includes public `feat:` commits for the action
+bundle architecture, so the project moves from `0.9.1` to `1.0.0`.
+
+**Action-bundle architecture reset**
+
+- Added the action-bundle foundation and routed major correlated-evidence families
+  through canonical bundle ownership: RDP, Windows remote admin, file transfer,
+  Linux shell command, process execution, auth/session, network connection, DHCP,
+  DNS lookup, scanner/probe, IDS alert, Kerberos/DC, Windows audit, and auxiliary
+  auth/session bundles (`5d2d3245`, `edd968c4`, `89b83c81`, `afabe54c`,
+  `81884ab1`, `c8364594`, `e88a33af`, `60461124`, `3b3ea66b`, `15e7f511`,
+  `400de49b`, `3fc7c370`, `732f2fc4`, `96cf1d5b`, `4428ef2c`).
+- Documented the reset requirements, A/B comparison, draft PR validation, blind
+  review findings, contract-loop results, and final bundle audit (`417d241d`,
+  `9fb11245`, `4897008b`, `eb00a7fc`, `f4766076`, `e5170757`, `2e809059`,
+  `ebe41126`, `40431b39`).
+
+**Cross-source timing, lifecycle, and source-native realism**
+
+- Hardened SSH/RDP/remote-session ordering, endpoint flow timing, NTP scheduling,
+  browser/proxy HTTP semantics, source observation groups, and eCAR/source timing
+  contracts (`83037da5`, `70b40bdb`, `93d8e2df`, `7873c51b`, `0e0caf82`,
+  `f3862eef`, `018440ba`, `e09d857d`, `6dceaede`, `7093eec5`, `ecb80405`,
+  `7202e4b9`, `61b805f7`, `a49c0027`, `d72e3eae`, `b9d5b696`, `0d24cd8c`,
+  `650d2f2f`, `3452d3d6`, `777c905d`, `644421d2`, `8c45320f`, `2603fa75`,
+  `3bcdd8d4`, `13cb08ed`, `0c9f3209`, `85ea4f2f`, `30a897ef`, `df9988f1`).
+- Stabilized generated-output repeatability while preserving realistic identity
+  morphology, then tightened HTTP file/PE duration and analysis ordering, Zeek TCP
+  byte/history semantics, TLS failure histories, HTTP transaction identity, NTP
+  server-owned response fields, workstation unlock ordering, and HTTP downgrade
+  behavior (`d8768a07`, `2bbe634a`, `6c526c54`, `5552af63`, `4e06e671`,
+  `5f49c401`, `4d97ea66`, `5eb404c7`, `e90c5a55`, `05a77536`, `1d305a1c`,
+  `7587cf57`, `3d49e31b`, `5ba27315`, `d7454333`).
+
+**Security and robustness fix-family batch**
+
+- Landed hardening for storyline slicing, syslog PAM backfill, Windows PID and
+  Sysmon GUID normalization, eCAR timing/PID attribution, SQL target handling,
+  placeholder expansion, Linux PID collision handling, Kerberos spool ordering,
+  OCSP path bounds, external scanner weights, bash workflow config coercion,
+  sshd PID normalization, runmru templating, TLS issuer selection, TCP packet
+  accounting, Kerberos transport weights, cron/syslog config validation, transient
+  PID scoping, proxy/browser URI handling, RDP source alignment, DNS TTL overrides,
+  causal ordering after process visibility clamps, and warm-up quota accounting
+  (`10191ec5`, `52b4037e`, `bc77f327`, `1f9ee143`, `fa15a10e`, `7cadbde8`,
+  `ab6d12f6`, `0a386ae3`, `12937456`, `8334f0f4`, `a40e1fe9`, `8320f0f4`,
+  `dc3e19f0`, `8546b41a`, `98de7cec`, `cad89ce8`, `544a4c0a`, `3514b968`,
+  `31cf96ff`, `f3ba8e9c`, `1cfa066b`, `1bbc108e`, `74c0f081`, `0a64f8dc`,
+  `f0c18942`, `7bfffac1`, `b33ca658`, `c1934477`, `0bb29e42`, `5061e57a`).
+- Repaired the final dev-to-main release check failures by adding a default
+  Kerberos connection audit state, preserving HTTPS semantics for malformed
+  CONNECT browser hints, and restoring rich external scanner fallback profiles
+  (`a7d3880d`).
+
+**CI, roadmap, and release hygiene**
+
+- Simplified GitHub Actions into stable required checks with release-only slow
+  tests, recorded fix-family PR dispositions, and kept repeated TODO alignment
+  commits out of the active roadmap surface (`ac811e4f`, `5feeeac0`, `9502eaaf`,
+  `7963dac9`, `93ab3908`, `997c1768`, `9fd42caf`, `188b8126`, `f38b652a`,
+  `23c18afe`, `046ca9fa`, `338b04d1`, `bf6998b1`, `f99803ab`, `81caf021`,
+  `70fd5abf`, `4ed42909`, `df4784fc`, `d2cecc93`, `3501c1ed`, `b0a0d8d5`,
+  `ee6046dd`, `ad9645e6`, `f23c37d5`, `6e242966`, `dfcbae68`, `416fa41a`,
+  `b76841a4`).
+- Reworked project memory so `TODO.md` is a durable roadmap and multi-session
+  agent handoff state lives in tracked `docs/worklog/` files (`6a2ef81a`).
+
+## v0.9.1 (2026-05-21)
+
+This patch release packages the loop 189-199 realism follow-up work after v0.9.0.
+The branch contains only `fix:`, `docs:`, and `chore:` commits since v0.9.0, so the
+version moves from `0.9.0` to `0.9.1` under the pre-1.0 semver policy.
+
+**Linux source timing and session lineage**
+
+- Aligned Linux cron, shell, eCAR source timing, Zeek TCP packet accounting, and Windows/Linux
+  session-lineage behavior across the loop 189-191 fixes (`b25412a3`, `b1fa742e`, `8477f079`,
+  `ace69242`, `6e4136c5`).
+- Materialized and guarded Linux shell parents for reused, local, loose, and visible session paths
+  so endpoint process trees preserve source-native lineage (`b1c4ebe0`, `02b7ac1b`, `174a86fb`,
+  `9c6c849e`, `21451a66`, `005766b1`).
+
+**DNS, SSH, and explicit-credential realism**
+
+- Rendered full Zeek SOA RDATA and carried SSH source-readiness, inbound-flow attribution,
+  responder PID assignment, tuple-scoped PID reuse, syslog PID normalization, and source-tuple
+  reservation through the Linux SSH family (`c6952e7e`, `2535ad69`, `252bac12`, `9b2a354c`,
+  `1a5f31a5`, `473b7fba`, `3ae36035`).
+- Ordered Windows explicit-credential audit events after their visible caller process evidence
+  (`a1fdb87f`).
+
+**Web, proxy, command, and eCAR timing texture**
+
+- Varied web and auto-HTTP transfer bytes by client/profile, ordered explicit proxy tunnel legs,
+  diversified Linux command/session texture, preserved Linux eCAR occurrence timing, aligned
+  foreground source-visible termination timing, and preserved canonical sshd PIDs for visible
+  syslog sessions (`a6a25651`, `559e7b69`, `3e208048`, `dcf26461`, `815f3827`, `226f1480`,
+  `7568ba52`).
+
+**Assessment records**
+
+- Recorded loop 191-194 and loop 199 assessment summaries for the follow-up realism batch
+  (`34f84a52`, `d96f238b`, `03e5fb7b`, `d132f43f`, `fe2bbf06`).
+
+**Validation**
+
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` passed.
+- `uv run pytest --no-cov` passed with `3592 passed`, `15 skipped`.
+
+## v0.9.0 (2026-05-21)
+
+This minor release packages the source-aware timing planner, expanded workstation-normal activity
+defaults, and the loop-driven realism hardening work through loop 188. The branch includes `feat:`
+commits since v0.8.1, so the version moves from `0.8.1` to `0.9.0` under the pre-1.0 semver
+policy.
+
+**Source-aware timing and activity expansion**
+
+- Added the source-aware timing planner and expanded workstation-normal activity defaults, then
+  carried that work through endpoint, Zeek, DNS, TLS, proxy, syslog, Kerberos, and shell-ordering
+  fixes (`4accda90`, `e6aa9fd1`, `b4ee3d7`, `19b7d317`, `1bc5f0ad`, `949108ea`, `1aacf04d`,
+  `7cfccdfc`, `8900bf5e`, `a4623f56`, `075a64cd`, `b7867189`, `a9d7fee5`, `249f3c09`,
+  `92a0ee2b`, `0658ec96`, `e6952094`, `32d37f96`, `c578091a`, `6fb809ec`, `bd13f72c`,
+  `c1330075`, `13b888b4`, `208694f9`, `d500c61a`, `b2168bc3`, `096d2141`, `d48c3877`,
+  `f36f8000`, `b14cf417`, `7e4b5424`, `dd7291c9`, `cc480317`, `77adcba5`, `923aaf6f`,
+  `635bdea4`, `ec3b409a`, `394f2c63`, `b286044f`, `7cb829d0`, `3aa98087`, `0f9c292f`,
+  `b3ea6ab9`, `05a1205f`, `3fae9806`, `faf55ab7`).
+
+**Loop-assessment realism fixes**
+
+- Preserved source-native event ordering and lifetimes across browser, proxy, Linux SSH, OCSP,
+  shell telemetry, eCAR, Kerberos, logind/PAM, source timing, DNS/TLS, Windows sessions, Bash
+  workflow texture, web exploit provenance, Zeek sensor observations, OCSP request paths,
+  infrastructure user agents, DNS tunnel morphology, scanner profiles, and proxy identities
+  (`6886df61`, `49bc37bb`, `ea6133fd`, `d9ee7de7`, `d1494cec`, `9d523c3a`, `a3fa233e`,
+  `84bb4126`, `73c3252c`, `6b95d76f`, `c613ac33`, `6e31ce16`, `75e4d5c5`, `b2e1e628`,
+  `cb920b33`, `0eddcdd0`, `74ae3c85`, `8e65458d`, `fad4bc09`, `c1bc96be`, `3de3d26c`,
+  `6a8b9b1b`, `b7b5009b`, `6e3c2241`, `0cf7f4b0`, `689e6e33`, `de0102db`, `e2ab1aa0`,
+  `72b7236c`, `4a276c8e`, `87b359fc`, `165275e2`, `67144f31`, `2b72678c`, `7d405429`,
+  `48d76342`, `9c3bf151`, `8a70d421`, `8f8d9987`, `3f4ced21`, `9601291f`, `898f8c68`,
+  `85cc4fc0`, `3895f80f`, `3b86aa5a`, `67acff74`, `f700d3bf`, `ecd01eb6`).
+
+**Assessment records and loop guidance**
+
+- Recorded blind-panel and loop-assessment findings from loops 134-188, added messy-attacker and
+  family-level iteration-loop guidance, strengthened the family-fix prompt, and tracked loop-178
+  through loop-188 completion and blind-panel score summaries (`81522de6`, `80b274e2`,
+  `edd38dec`, `1aff790a`, `4daf3e84`, `2d3fbd44`, `39f8495c`, `382cebf5`, `928643da`,
+  `08843d32`, `67bebd75`, `8dfe97e0`, `b778c385`, `ed75fbdd`, `809e9160`, `07ddd477`,
+  `c360e56a`, `385c500b`, `02ebb9f8`, `4ea58b96`, `6a2a620b`, `d57ce83f`, `be7d4a28`,
+  `307907a1`, `9ec16b09`, `c6ed04f8`, `dbf77589`, `fe319860`, `c8a8f8de`, `1ae5a093`,
+  `9cf2b14d`, `4d3fa6ef`, `0fd71ce6`, `d2b55174`, `9611bc2f`, `75447ca0`, `9dcb968d`,
+  `d98dedea`, `178c1542`, `59418af1`, `95f75c7a`, `f34ec469`, `c71e0e78`, `936358be`,
+  `333e31f8`, `418de425`, `905f4514`, `4c329877`).
+
+**Validation**
+
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` passed.
+- `uv run pytest --no-cov` passed with `3556 passed`, `15 skipped`.
+
+## v0.8.1 (2026-05-19)
+
+This patch release packages the post-v0.8.0 realism and skill-guidance fixes on `dev`.
+The branch contains only `fix:` and `docs:` commits since v0.8.0, so the version moves
+from `0.8.0` to `0.8.1` under the pre-1.0 semver policy.
+
+**Source-native host and network realism**
+
+- Improved Linux maintenance/syslog texture, RFC5424 eval compatibility, syslog kernel timing,
+  anacron lifecycle behavior, Zeek HTTP accounting, Zeek sensor accounting, and SSH/Zeek
+  observation timing (`8cd071b`, `74f6a29`, `db5d550`, `508cb3d`, `8a51954`, `c88a40a`,
+  `72b144a`).
+- Tightened Windows audit invariants, endpoint identifiers, browser launch URLs, session
+  normalization, non-Windows eCAR failed-session typing, Linux SSH evidence, transient PID
+  allocation, and Windows GUID rendering (`1862d37`, `15623a4`, `97969d0`, `698f921`,
+  `bc43b8c`, `20e26ca`, `3322297`, `2713026`).
+
+**Scenario and skill guidance**
+
+- Added staged archive provenance, sensor realism, web/proxy response stability, UFW block-flow
+  semantics, endpoint consistency, reduced high-signal realism fingerprints, assessment-loop
+  records, and clarified the eforge scenario bundle layout for Codex/Claude skills (`5ec52ef`,
+  `dc2cdc2`, `16114bc`, `56f6044`, `4064ba0`, `66e53c8`, `33c2624`).
+
+**Validation**
+
+- Full slow-enabled suite passed on current `dev`: `uv run pytest --include-slow --no-cov`
+  completed with `3369 passed`, `2 skipped`.
+- Skill installer/Codex skill validation passed for the scenario bundle layout update.
+- Ruff checks and format checks passed before release preparation.
+
 ## v0.8.0 (2026-05-19)
 
 This minor release adds target-aware output rendering so a single scenario can generate

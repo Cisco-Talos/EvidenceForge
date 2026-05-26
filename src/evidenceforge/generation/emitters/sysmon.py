@@ -39,7 +39,6 @@ from evidenceforge.config.sysmon_filters import load_sysmon_filters
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import ProcessContext
 from evidenceforge.formats.format_def import FormatDefinition
-from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.base import LogEmitter
 from evidenceforge.generation.emitters.host_base import _SingleHostWriter
 from evidenceforge.generation.emitters.syslog_family import (
@@ -56,6 +55,7 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -65,6 +65,8 @@ from evidenceforge.utils.windows_ids import (
     normalize_windows_id_value,
     windows_id_randint,
 )
+
+_SOURCE_TIMING = SourceTimingPlanner()
 
 # Well-known Windows port names for Sysmon Event 3
 _PORT_NAMES: dict[int, str] = {
@@ -146,6 +148,46 @@ class SysmonEventEmitter(LogEmitter):
     # addresses per boot, but intra-module offsets (function entry points)
     # are fixed. All Event 10 events on the same host share the same offsets.
     _call_trace_cache: dict[str, list[str]] = {}
+
+    def _event_rng(self, event: SecurityEvent, salt: str = "") -> random.Random:
+        """Return a deterministic renderer-local RNG for incidental Sysmon fields."""
+        host = event.src_host or event.dst_host
+        parts: list[object] = [
+            salt or event.event_type,
+            event.event_type,
+            event.timestamp.isoformat(),
+        ]
+        if host is not None:
+            parts.extend((host.hostname, host.fqdn, host.ip))
+        if event.auth is not None:
+            parts.extend(
+                (
+                    event.auth.username,
+                    event.auth.logon_id,
+                    event.auth.source_ip,
+                    event.auth.source_port,
+                )
+            )
+        if event.process is not None:
+            parts.extend(
+                (
+                    event.process.pid,
+                    event.process.parent_pid,
+                    event.process.image,
+                    event.process.command_line,
+                )
+            )
+        if event.network is not None:
+            parts.extend(
+                (
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.network.protocol,
+                )
+            )
+        return random.Random(_stable_seed("|".join(str(part) for part in parts)))
 
     # PE metadata for common Windows binaries (FileVersion, Description, Product, Company, OriginalFileName)
     _PE_METADATA: dict[str, tuple[str, str, str, str, str]] = {
@@ -239,6 +281,27 @@ class SysmonEventEmitter(LogEmitter):
             "Microsoft Windows Operating System",
             "Microsoft Corporation",
             "whoami.exe",
+        ),
+        "runas.exe": (
+            "10.0.19041.1",
+            "RunAs Command",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "runas.exe",
+        ),
+        "msra.exe": (
+            "10.0.19041.1",
+            "Windows Remote Assistance",
+            "Microsoft Windows Operating System",
+            "Microsoft Corporation",
+            "msra.exe",
+        ),
+        "curl.exe": (
+            "8.4.0",
+            "The curl executable",
+            "The curl executable",
+            "Microsoft Corporation",
+            "curl.exe",
         ),
         "notepad.exe": (
             "10.0.19041.1",
@@ -639,7 +702,13 @@ class SysmonEventEmitter(LogEmitter):
                     parts.append(f"C:\\Windows\\SYSTEM32\\{mod}+{off:X}")
                 rendered.append("|".join(parts))
             self._call_trace_cache[hostname] = rendered
-        return random.choice(self._call_trace_cache[hostname])
+        counters = getattr(self, "_call_trace_counters", None)
+        if counters is None:
+            counters = self._call_trace_counters = {}
+        counter = counters.get(hostname, 0)
+        counters[hostname] = counter + 1
+        rng = random.Random(_stable_seed(f"calltrace_choice:{hostname}:{counter}"))
+        return rng.choice(self._call_trace_cache[hostname])
 
     def _resolve_process_from_pid(self, hostname: str, pid: int) -> tuple[int, str]:
         """Look up process image from StateManager by PID.
@@ -677,19 +746,21 @@ class SysmonEventEmitter(LogEmitter):
         deterministic process-create source offset so Event 1 and all follow-on
         events share the same source-native identifier.
         """
+        cached_guid = self._final_process_guids.get((hostname, pid))
+        if cached_guid is not None:
+            return cached_guid
+
         ts = fallback_timestamp
         sm = getattr(self, "_state_manager", None)
         if sm and pid > 0:
             proc = sm.get_process(hostname, pid)
             if proc is not None and proc.start_time <= fallback_timestamp:
                 ts = proc.start_time
-        rendered_create_time = ts + self._source_offset(
-            "process_create",
-            hostname,
-            pid,
-            ts,
-            minimum_ms=3,
-            maximum_ms=85,
+        rendered_create_time = _SOURCE_TIMING.source_time(
+            SecurityEvent(timestamp=ts, event_type="process_create"),
+            "source.sysmon_process_create",
+            seed_parts=(hostname, pid, ts),
+            not_before=ts,
         )
         return self._generate_process_guid(hostname, pid, rendered_create_time)
 
@@ -794,10 +865,10 @@ class SysmonEventEmitter(LogEmitter):
 
         seed = f"{hostname}:{pid}:{timestamp.isoformat()}:{boot_seed}"
         h = hashlib.md5(seed.encode(), usedforsecurity=False).hexdigest()
-        token_noise = int(h[:2], 16) & 0xFC
-        token_id = (((pid & 0xFFFF) << 8) | token_noise) & 0xFFFFFFFFFFFF
-        token_word = token_id & 0xFFFF
-        token_tail = (token_id >> 16) & 0xFFFFFFFFFFFF
+        token_word = int(h[:4], 16)
+        if token_word == (pid & 0xFFFF):
+            token_word ^= 0x5A5A
+        token_tail = int(h[4:16], 16) | 0x100000000000
 
         return (
             f"{{{machine_prefix}-{time_low:04x}-{time_high:04x}-"
@@ -857,17 +928,15 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_process_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 1 (ProcessCreate)."""
-        random.Random()
         proc = event.process
         auth = event.auth
         host = event.src_host
-        render_time = event.timestamp + self._source_offset(
-            "process_create",
-            host.hostname,
-            proc.pid,
-            event.timestamp,
-            minimum_ms=3,
-            maximum_ms=85,
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.sysmon_process_create",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
         )
 
         utc_time = _format_sysmon_utc_time(render_time)
@@ -971,17 +1040,15 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_process_terminate(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 5 (ProcessTerminate)."""
-        random.Random()
         proc = event.process
         auth = event.auth
         host = event.src_host
-        render_time = event.timestamp + self._source_offset(
-            "process_terminate",
-            host.hostname,
-            proc.pid,
-            event.timestamp,
-            minimum_ms=12,
-            maximum_ms=180,
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.sysmon_process_terminate",
+            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
+            not_before=event.timestamp,
         )
 
         utc_time = _format_sysmon_utc_time(render_time)
@@ -1034,6 +1101,8 @@ class SysmonEventEmitter(LogEmitter):
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
+        if auth.session_id > 0:
+            return auth.session_id
         if auth.logon_type in {2, 7, 10, 11}:
             return 1 + (_stable_seed(f"sysmon_terminal_session:{logon_id or username}") % 8)
         return 0
@@ -1096,7 +1165,7 @@ class SysmonEventEmitter(LogEmitter):
         Primary detection for credential dumping (e.g., mimikatz accessing lsass.exe).
         Source process reads target process memory with specific access rights.
         """
-        rng = random.Random()
+        rng = self._event_rng(event)
         host = event.src_host
         proc = event.process  # Source process
         access = event.process_access
@@ -1328,12 +1397,12 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_network_connect(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 3 (NetworkConnect)."""
-        random.Random()
         host = event.src_host
         net = event.network
         proc = event.process
 
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.sysmon_network_connection",
             seed_parts=(
                 host.hostname,
@@ -1344,6 +1413,7 @@ class SysmonEventEmitter(LogEmitter):
                 net.dst_port if net else 0,
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -1413,7 +1483,7 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_image_loaded(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 7 (ImageLoaded)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         host = event.src_host
         proc = event.process
         il = event.image_load
@@ -1472,7 +1542,6 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_file_create(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 11 (FileCreate)."""
-        random.Random()
         host = event.src_host
         proc = event.process
         fc = event.file
@@ -1487,6 +1556,12 @@ class SysmonEventEmitter(LogEmitter):
         process_guid = self._get_stable_process_guid(
             host.hostname, pid, proc.start_time if proc and proc.start_time else event.timestamp
         )
+        if event.auth and event.auth.username:
+            user = self._format_user(event.auth.username, host.netbios_domain)
+        elif proc and proc.username:
+            user = self._format_user(proc.username, host.netbios_domain)
+        else:
+            user = "NT AUTHORITY\\SYSTEM"
 
         event_data = {
             "EventID": 11,
@@ -1500,6 +1575,7 @@ class SysmonEventEmitter(LogEmitter):
             "ProcessGuid": process_guid,
             "ProcessId": pid,
             "Image": image,
+            "User": user,
             "TargetFilename": fc.path,
             "CreationUtcTime": utc_time,
         }
@@ -1510,8 +1586,6 @@ class SysmonEventEmitter(LogEmitter):
         reg = event.registry
         if not self._passes_event12_13_filter(event):
             return
-
-        random.Random()
         host = event.src_host
         proc = event.process
 
@@ -1573,11 +1647,11 @@ class SysmonEventEmitter(LogEmitter):
 
     def _render_sysmon_dns_query(self, event: SecurityEvent) -> None:
         """Render Sysmon Event 22 (DNSQuery)."""
-        random.Random()
         host = event.src_host
         dns = event.dns
 
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.sysmon_dns_query",
             seed_parts=(
                 host.hostname,
@@ -1585,6 +1659,7 @@ class SysmonEventEmitter(LogEmitter):
                 dns.query_type if dns else "",
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
         utc_time = render_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
 
@@ -1667,6 +1742,7 @@ class SysmonEventEmitter(LogEmitter):
         self._erid_rngs: dict[str, random.Random] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
+        self._final_process_guids: dict[tuple[str, int], str] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1805,6 +1881,7 @@ class SysmonEventEmitter(LogEmitter):
             self._record_id_counters[counter_key] += gap
             event["EventRecordID"] = self._record_id_counters[counter_key]
 
+        self._sync_utc_time_fields()
         self._sync_process_guids_to_event1_times()
 
         for event in self._event_dicts:
@@ -1899,6 +1976,7 @@ class SysmonEventEmitter(LogEmitter):
             hostname = computer.split(".", 1)[0] if computer else ""
             new_guid = self._generate_process_guid(hostname, pid_int, ts)
             old_guid = str(guid)
+            self._final_process_guids[(hostname, pid_int)] = new_guid
             if new_guid != old_guid:
                 replacements[(computer, old_guid)] = new_guid
                 event["ProcessGuid"] = new_guid
@@ -1934,12 +2012,26 @@ class SysmonEventEmitter(LogEmitter):
                 continue
             ts = event.get("TimeCreated")
             computer = str(event.get("Computer", ""))
-            guid = event.get("ProcessGuid") or event.get("SourceProcessGuid")
+            guid = (
+                event.get("ProcessGuid")
+                or event.get("SourceProcessGuid")
+                or event.get("SourceProcessGUID")
+            )
             if not isinstance(ts, datetime) or not guid:
                 continue
             create_time = process_create_times.get((computer, str(guid)))
             if create_time is not None and ts <= create_time:
-                event["TimeCreated"] = create_time + timedelta(milliseconds=1)
+                shifted_time = create_time + timedelta(milliseconds=1)
+                event["TimeCreated"] = shifted_time
+                if event_id == 11:
+                    event["CreationUtcTime"] = _format_sysmon_utc_time(shifted_time)
+
+    def _sync_utc_time_fields(self) -> None:
+        """Keep Sysmon EventData UtcTime aligned with final TimeCreated values."""
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            if "UtcTime" in event and isinstance(ts, datetime):
+                event["UtcTime"] = _format_sysmon_utc_time(ts)
 
     def _shift_terminations_after_followons(self) -> None:
         """Prevent Event 5 from preceding visible same-process follow-on telemetry."""

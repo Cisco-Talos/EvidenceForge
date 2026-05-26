@@ -26,13 +26,13 @@ Verifies that systemd service start/stop generates paired eCAR
 PROCESS/CREATE and PROCESS/TERMINATE events alongside syslog messages.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
 
 from evidenceforge.generation.activity import ActivityGenerator
-from evidenceforge.generation.emitters.syslog import _syslog_sort_key
+from evidenceforge.generation.emitters.syslog import SyslogEmitter, _syslog_sort_key
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models import System
 
@@ -214,6 +214,66 @@ class TestSystemdProcessLifecycle:
         assert event.syslog.app_name == "CRON"
         assert "(root) CMD (test -x /usr/sbin/anacron)" in event.syslog.message
 
+    def test_system_parent_termination_follows_foreground_child_termination(
+        self, activity_gen, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Foreground cron shells should not terminate before visible child workloads."""
+        state_manager.set_current_time(timestamp)
+        cron_pid = state_manager.create_process(
+            "SRV-WEB-01", 0, "/usr/sbin/cron", "cron", "root", "System"
+        )
+
+        shell_pid = activity_gen.generate_system_process(
+            system=linux_system,
+            time=timestamp,
+            process_name="/bin/sh",
+            command_line="/bin/sh -c 'command -v debian-sa1 > /dev/null && debian-sa1 1 1'",
+            parent_pid=cron_pid,
+            username="sysstat",
+            emit_linux_syslog=False,
+        )
+        child_time = timestamp + timedelta(milliseconds=80)
+        child_pid = activity_gen.generate_system_process(
+            system=linux_system,
+            time=child_time,
+            process_name="/usr/lib/sysstat/debian-sa1",
+            command_line="debian-sa1 1 1",
+            parent_pid=shell_pid,
+            username="sysstat",
+            emit_linux_syslog=False,
+        )
+        child_end = child_time + timedelta(milliseconds=120)
+        activity_gen.generate_system_process_termination(
+            system=linux_system,
+            time=child_end,
+            pid=child_pid,
+            process_name="/usr/lib/sysstat/debian-sa1",
+            parent_pid=shell_pid,
+            username="sysstat",
+        )
+        activity_gen.generate_system_process_termination(
+            system=linux_system,
+            time=timestamp + timedelta(milliseconds=90),
+            pid=shell_pid,
+            process_name="/bin/sh",
+            parent_pid=cron_pid,
+            username="sysstat",
+        )
+
+        terminate_events = [
+            c.args[0]
+            for c in mock_emitters["ecar"].emit.call_args_list
+            if c.args[0].event_type == "process_terminate"
+        ]
+        shell_terminate = next(
+            event for event in terminate_events if event.process and event.process.pid == shell_pid
+        )
+        child_terminate = next(
+            event for event in terminate_events if event.process and event.process.pid == child_pid
+        )
+
+        assert shell_terminate.timestamp > child_terminate.timestamp
+
 
 def test_syslog_sort_orders_same_second_systemd_start_before_finish():
     """Second-precision syslog sorting should preserve systemd unit lifecycle order."""
@@ -225,3 +285,22 @@ def test_syslog_sort_orders_same_second_systemd_start_before_finish():
     assert sorted(lines, key=_syslog_sort_key)[0].endswith(
         "Starting phpsessionclean.service - Clean PHP session files."
     )
+
+
+def test_syslog_sudo_lifecycle_normalizer_orders_same_pid_pam_session():
+    """Sudo COMMAND rows should stay between same-PID PAM open and close rows."""
+    lines = [
+        "<85>1 2024-03-18T12:00:00.100000Z WEB-EXT-01 sudo 701258 - - "
+        "deploy : TTY=pts/1 ; PWD=/srv/app ; USER=root ; COMMAND=/usr/bin/id",
+        "<86>1 2024-03-18T12:00:00.140000Z WEB-EXT-01 sudo 701258 - - "
+        "pam_unix(sudo:session): session opened for user root(uid=0) by deploy(uid=1002)",
+        "<86>1 2024-03-18T12:00:00.450000Z WEB-EXT-01 sudo 701258 - - "
+        "pam_unix(sudo:session): session closed for user root",
+    ]
+
+    normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
+
+    assert "session opened" in normalized[0]
+    assert "COMMAND=/usr/bin/id" in normalized[1]
+    assert "session closed" in normalized[2]
+    assert "2024-03-18T12:00:00.099000Z" in normalized[0]

@@ -57,6 +57,7 @@ class AuthContext:
     full_name: str = ""
     user_sid: str = ""
     logon_id: str = ""  # Allocated by StateManager.create_session()
+    session_id: int = 0  # Windows terminal/session ID for interactive sources
     logon_type: int = 2
     auth_package: str = "Negotiate"
     result: str = "success"  # "success" | "failure"
@@ -163,6 +164,7 @@ class NetworkContext:
     ip_proto: int = 6  # TCP=6, UDP=17, ICMP=1
     missed_bytes: int = 0
     initiating_pid: int = -1  # PID of process that opened this connection (-1 = unknown)
+    responding_pid: int = -1  # Destination-side PID that accepted/owned the connection
     link_local: bool = False  # True for same-broadcast-domain traffic such as DHCP
     application_layer_only: bool = False  # Additional protocol transaction on an existing flow
 
@@ -184,6 +186,7 @@ class DnsContext:
     rcode_num: int = 0  # Numeric: 0=NOERROR, 2=SERVFAIL, 3=NXDOMAIN
     answers: list[str] = field(default_factory=list)
     TTLs: list[float] = field(default_factory=list)
+    preserve_ttls: bool = False
     AA: bool = False
     TC: bool = False
     RD: bool = True
@@ -348,7 +351,7 @@ class SslContext:
     server_name: str = ""  # SNI hostname
     resumed: bool = False
     established: bool = True
-    ssl_history: str = ""  # e.g., "CsiI"
+    ssl_history: str = ""  # e.g., "CSOXYFFD"
     cert_chain_fuids: list[str] = field(default_factory=list)
 
 

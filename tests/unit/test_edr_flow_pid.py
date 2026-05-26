@@ -69,6 +69,28 @@ def timestamp():
 class TestEmitterSetupProcessTree:
     """Test that process tree seeding creates the right entries per distro."""
 
+    def test_domain_controller_gets_dns_service_process(self, state_manager, timestamp):
+        """Windows domain controllers should seed DNS Server ownership."""
+        from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
+
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.3.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        state_manager.set_current_time(timestamp)
+        mixin = EmitterSetupMixin.__new__(EmitterSetupMixin)
+        mixin.state_manager = state_manager
+
+        pids: dict[str, int] = {}
+        mixin._seed_windows_process_tree(dc, pids)
+        dns_pid = pids.get("dns")
+        assert dns_pid is not None
+        proc = state_manager.get_process(dc.hostname, dns_pid)
+        assert proc is not None
+        assert proc.image.endswith(r"\dns.exe")
+
     def test_ubuntu_gets_systemd_resolved(self, state_manager, timestamp):
         """Ubuntu should have systemd_resolved in _system_pids."""
         from evidenceforge.generation.engine.emitter_setup import EmitterSetupMixin
@@ -310,6 +332,64 @@ class TestConnectionPidPropagation:
         )
         assert wfp_event.process is not None
         assert wfp_event.process.image.endswith(r"\Mozilla Firefox\firefox.exe")
+
+    def test_browser_http_owner_process_not_spaced_after_network(
+        self, activity_gen, state_manager, timestamp, win_system, mock_emitters
+    ):
+        """Causal browser owner process creation must stay before its socket evidence."""
+        user = User(username="jdoe", full_name="Jane Doe", email="jdoe@example.org")
+        activity_gen._users_by_username = {user.username: user}
+        activity_gen._ip_to_system = {win_system.ip: win_system}
+        state_manager.set_current_time(timestamp - timedelta(minutes=10))
+        logon_id = state_manager.create_session(
+            username=user.username,
+            system=win_system.hostname,
+            logon_type=2,
+            source_ip=win_system.ip,
+        )
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        session.explorer_pid = state_manager.create_process(
+            win_system.hostname,
+            4,
+            r"C:\Windows\explorer.exe",
+            "explorer.exe",
+            user.username,
+            "Medium",
+            logon_id=logon_id,
+        )
+        # Simulate a recent browser launch whose anti-burst spacing would push
+        # a new top-level browser process past the connection timestamp.
+        activity_gen._last_browser_launch_by_session[
+            (win_system.hostname, user.username, logon_id)
+        ] = timestamp - timedelta(seconds=1)
+
+        activity_gen.generate_connection(
+            src_ip=win_system.ip,
+            dst_ip="10.0.20.10",
+            time=timestamp,
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=400,
+            resp_bytes=2048,
+            conn_state="SF",
+            source_system=win_system,
+            http=self._browser_http_context(),
+        )
+
+        event = self._find_connection_event(mock_emitters)
+        assert event is not None
+        assert event.process is not None
+        assert event.process.start_time < event.timestamp
+        wfp_event = next(
+            call.args[0]
+            for call in mock_emitters["windows_event_security"].emit.call_args_list
+            if call.args[0].event_type == "wfp_connection"
+        )
+        assert wfp_event.process is not None
+        assert wfp_event.process.start_time < wfp_event.timestamp
 
     def test_browser_http_asset_request_does_not_become_process_launch_url(
         self, activity_gen, state_manager, timestamp, win_system, mock_emitters

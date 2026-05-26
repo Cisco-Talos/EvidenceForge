@@ -48,10 +48,12 @@ class ActiveSession:
         logon_type: Windows logon type (2=interactive, 3=network, 10=remote, etc.)
         start_time: When the session started
         source_ip: Source IP address for the logon
+        session_id: Windows terminal/session ID rendered by Security/Sysmon sources
         explorer_pid: PID of explorer.exe instance for this interactive session
         process_tree_root: Root PID for this session's process tree
         last_activity_time: Last baseline activity timestamp (for login cooldown)
         network_close_time: Close time for a transport connection backing the session
+        source_ready_time: Earliest source-visible time for session-owned child activity
     """
 
     logon_id: str
@@ -60,12 +62,14 @@ class ActiveSession:
     logon_type: int
     start_time: datetime
     source_ip: str
+    session_id: int = 0
     explorer_pid: int | None = None
     session_shell_pid: int | None = None  # Linux: per-session bash login shell
     session_winlogon_pid: int | None = None  # Windows: per-RDP-session winlogon
     process_tree_root: int | None = None
     last_activity_time: datetime | None = None
     network_close_time: datetime | None = None
+    source_ready_time: datetime | None = None
     source_port: int = 0
     session_kind: str = "logon"
     transport_pid: int | None = None

@@ -146,6 +146,8 @@ class ObservationPolicy:
     def _effective_missingness(
         self, source: str, event: SecurityEvent, settings: dict[str, Any]
     ) -> float:
+        if self._preserve_ssh_session_lifecycle(source, event):
+            return 0.0
         host = self._host_key_for_event(event)
         return self._effective_missingness_for_host(source, host, settings)
 
@@ -215,6 +217,18 @@ class ObservationPolicy:
         )
 
     def _coherent_group_key(self, source: str, event: SecurityEvent) -> str:
+        if (
+            source == "ecar"
+            and event.storyline_cluster_id
+            and event.process
+            and event.process.pid is not None
+        ):
+            image = event.process.image.rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+            return (
+                "storyline-process:"
+                f"{event.storyline_cluster_id}:{event.process.username}:"
+                f"{event.process.pid}:{image}"
+            )
         if source == "syslog" and event.syslog and event.syslog.app_name == "sshd":
             pid = event.syslog.pid if event.syslog.pid not in (None, "") else ""
             if pid:
@@ -244,11 +258,36 @@ class ObservationPolicy:
     @staticmethod
     def _uses_coherent_source_identity(source: str, group: str) -> bool:
         """Return whether observation delay/drop should be shared within a source group."""
+        if group.startswith("process:") and source in {"windows_security", "sysmon", "ecar"}:
+            return True
+        if group.startswith("session:") and source in {"windows_security", "ecar", "syslog"}:
+            return True
+        if group.startswith("uid:") and source in {
+            "zeek",
+            "ecar",
+            "sysmon",
+            "windows_security",
+            "proxy",
+            "asa",
+            "ids",
+        }:
+            return True
         if source == "syslog" and group.startswith("sshd:"):
+            return True
+        if source == "ecar" and group.startswith("storyline-process:"):
             return True
         if source == "zeek" and (group.startswith("uid:") or group.startswith("dns:")):
             return True
         return False
+
+    @staticmethod
+    def _preserve_ssh_session_lifecycle(source: str, event: SecurityEvent) -> bool:
+        """Preserve SSH PAM lifecycle rows that correlate with endpoint session rows."""
+        if source != "syslog" or event.syslog is None:
+            return False
+        if event.syslog.app_name != "sshd":
+            return False
+        return "pam_unix(sshd:session): session " in event.syslog.message
 
     def _host_key_for_event(self, event: SecurityEvent) -> str:
         host = event.dst_host or event.src_host

@@ -59,6 +59,7 @@ from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
 )
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 from evidenceforge.output_targets import OutputTarget
 from evidenceforge.utils.paths import sanitize_path_component
 from evidenceforge.utils.rng import _stable_seed
@@ -66,6 +67,7 @@ from evidenceforge.utils.time import ensure_utc
 from evidenceforge.utils.windows_ids import normalize_windows_id_value
 
 win_logger = logging.getLogger(__name__)
+_SOURCE_TIMING = SourceTimingPlanner()
 
 # Well-known service accounts that always use "NT AUTHORITY" as their domain
 _NT_AUTHORITY_ACCOUNTS = {"SYSTEM", "NETWORK SERVICE", "LOCAL SERVICE", "ANONYMOUS LOGON"}
@@ -115,6 +117,44 @@ def _has_nearby_dropped_unlock(
 def _windows_path_basename(path: str) -> str:
     """Return a lowercase basename for Windows or POSIX-looking paths."""
     return path.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
+
+
+def _windows_pid_hex(value: Any) -> str:
+    """Return a normalized lowercase hex PID key from Security event fields."""
+    max_decimal_pid_digits = 19
+    if isinstance(value, int):
+        return f"0x{value:x}"
+    text = str(value or "").strip().lower()
+    if not text or text == "-":
+        return ""
+    if text.startswith("0x"):
+        return text
+    if text.isdecimal():
+        if len(text) > max_decimal_pid_digits:
+            return text
+        try:
+            return f"0x{int(text):x}"
+        except ValueError:
+            return text
+    return text
+
+
+def _security_process_image_key(value: Any) -> str:
+    """Return a loose image key that matches Win32 and device-path renderings."""
+    return _windows_path_basename(str(value or ""))
+
+
+def _security_process_key(
+    computer: str,
+    pid_value: Any,
+    image_value: Any,
+) -> tuple[str, str, str] | None:
+    """Return a process lifecycle key for Security 4688/4689/5156 rows."""
+    pid = _windows_pid_hex(pid_value)
+    image = _security_process_image_key(image_value)
+    if not computer or not pid or pid in {"0x0", "0x4"} or not image or image == "system":
+        return None
+    return (computer, pid, image)
 
 
 def _normalize_windows_time_created(
@@ -223,16 +263,17 @@ def _auth_subject_domain(auth: Any, netbios_domain: str) -> str:
     return getattr(auth, "subject_domain", "") or _subject_domain(subject_name, netbios_domain)
 
 
-def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Return the same-user/source key for DC Kerberos ticket ordering checks."""
+def _kerberos_principal_source_key(event: dict[str, Any]) -> tuple[str, str, str, str] | None:
+    """Return the same-user/source-port key for DC Kerberos ticket ordering checks."""
     if event.get("EventID") not in {4768, 4769}:
         return None
     username = str(event.get("TargetUserName") or "").split("@", 1)[0].lower()
     source_ip = str(event.get("IpAddress") or "")
+    source_port = str(event.get("IpPort") or "")
     computer = str(event.get("Computer") or "")
-    if not username or not source_ip or source_ip == "-" or not computer:
+    if not username or not source_ip or source_ip == "-" or not source_port or not computer:
         return None
-    return (computer, username, source_ip)
+    return (computer, username, source_ip, source_port)
 
 
 def _special_privilege_fallback(username: str) -> str:
@@ -388,6 +429,47 @@ class WindowsEventEmitter(LogEmitter):
             normalized[field] = normalize_windows_id_value(value)
         return normalized
 
+    def _event_rng(self, event: SecurityEvent, salt: str = "") -> random.Random:
+        """Return a deterministic renderer-local RNG for incidental Windows fields."""
+        host = event.src_host or event.dst_host
+        parts: list[object] = [
+            salt or event.event_type,
+            event.event_type,
+            event.timestamp.isoformat(),
+        ]
+        if host is not None:
+            parts.extend((host.hostname, host.fqdn, host.ip))
+        if event.auth is not None:
+            parts.extend(
+                (
+                    event.auth.username,
+                    event.auth.logon_id,
+                    event.auth.source_ip,
+                    event.auth.source_port,
+                    event.auth.logon_type,
+                )
+            )
+        if event.process is not None:
+            parts.extend(
+                (
+                    event.process.pid,
+                    event.process.parent_pid,
+                    event.process.image,
+                    event.process.command_line,
+                )
+            )
+        if event.network is not None:
+            parts.extend(
+                (
+                    event.network.src_ip,
+                    event.network.src_port,
+                    event.network.dst_ip,
+                    event.network.dst_port,
+                    event.network.protocol,
+                )
+            )
+        return random.Random(_stable_seed("|".join(str(part) for part in parts)))
+
     # Event types where the Windows host is dst_host (target of the action)
     _DST_HOST_TYPES: set[str] = {
         "logon",
@@ -481,7 +563,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 (successful logon) + optional 4672 (special privileges)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         workstation_name = _logon_workstation_name(auth, host, event)
@@ -566,7 +648,7 @@ class WindowsEventEmitter(LogEmitter):
         4672 from _render_logon() so the privilege event shares the target
         host and LogonID with its 4624.
         """
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -590,10 +672,10 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_workstation_lock(self, event: SecurityEvent) -> None:
         """Render Windows 4800 (workstation locked)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
-        session_id = self._session_id_for_logon(auth.logon_id)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4800,
             "TimeCreated": event.timestamp,
@@ -612,10 +694,10 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_workstation_unlock(self, event: SecurityEvent) -> None:
         """Render Windows 4801 (workstation unlocked)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
-        session_id = self._session_id_for_logon(auth.logon_id)
+        session_id = auth.session_id or self._session_id_for_logon(auth.logon_id)
         event_data = {
             "EventID": 4801,
             "TimeCreated": event.timestamp,
@@ -634,7 +716,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_logoff(self, event: SecurityEvent) -> None:
         """Render Windows 4634 (logoff)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -658,7 +740,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_failed_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4625 (failed logon)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         ip_address = self._ipv6_mapped(auth.source_ip)
@@ -701,14 +783,21 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_process_create(self, event: SecurityEvent) -> None:
         """Render Windows 4688 (new process created)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
+        )
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -734,16 +823,23 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_process_terminate(self, event: SecurityEvent) -> None:
         """Render Windows 4689 (process exited)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
         if _windows_path_basename(proc.image) in _SECURITY_4689_NOISY_GUI_EXES:
             return
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_terminate",
+            seed_parts=(host.hostname, proc.pid, process_start_time, event.timestamp),
+            not_before=event.timestamp,
+        )
 
         event_data = {
             "EventID": 4689,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -761,14 +857,21 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_system_process_create(self, event: SecurityEvent) -> None:
         """Render Windows 4688 for system-account process (SYSTEM, LOCAL SERVICE, etc.)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         proc = event.process
         auth = event.auth
         host = self._get_host(event)
+        process_start_time = proc.start_time or event.timestamp
+        render_time = _SOURCE_TIMING.source_time(
+            event,
+            "source.windows_security_process_create",
+            seed_parts=(host.hostname, proc.pid, process_start_time),
+            not_before=process_start_time,
+        )
 
         event_data = {
             "EventID": 4688,
-            "TimeCreated": event.timestamp,
+            "TimeCreated": render_time,
             "Computer": host.fqdn,
             "Channel": "Security",
             "Level": 0,
@@ -794,7 +897,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_machine_logon(self, event: SecurityEvent) -> None:
         """Render Windows 4624 for machine account logon (type 3 on DC)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         # Derive WorkstationName from machine account (WKS-01$ → WKS-01)
@@ -827,7 +930,7 @@ class WindowsEventEmitter(LogEmitter):
             "ProcessId": "0x0",
             "ProcessName": "-",
             "IpAddress": self._ipv6_mapped(auth.source_ip),
-            "IpPort": str(rng.randint(49152, 65535)),
+            "IpPort": auth.source_port,
             "ImpersonationLevel": "%%1833",
             "RestrictedAdminMode": "-",
             "TargetOutboundUserName": "-",
@@ -864,7 +967,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_tgt(self, event: SecurityEvent) -> None:
         """Render Windows 4768 (Kerberos TGT request)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
         is_failure = krb.ticket_status != "0x0"
@@ -897,7 +1000,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_service(self, event: SecurityEvent) -> None:
         """Render Windows 4769 (Kerberos service ticket request)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
         is_failure = krb.ticket_status != "0x0"
@@ -927,7 +1030,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_tgt_renewal(self, event: SecurityEvent) -> None:
         """Render Windows 4770 (Kerberos TGT renewal)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
 
@@ -953,7 +1056,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_ntlm_validation(self, event: SecurityEvent) -> None:
         """Render Windows 4776 (NTLM credential validation)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -974,7 +1077,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_explicit_credentials(self, event: SecurityEvent) -> None:
         """Render Windows 4648 (explicit credentials logon)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -1006,7 +1109,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_wfp_connection(self, event: SecurityEvent) -> None:
         """Render Windows 5156 (WFP connection permitted)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         net = event.network
         host = self._get_host(event)
         proc = event.process
@@ -1028,7 +1131,8 @@ class WindowsEventEmitter(LogEmitter):
                 image = "System"
             else:
                 return
-        render_time = event.timestamp + sample_timing_delta(
+        render_time = _SOURCE_TIMING.source_time(
+            event,
             "source.windows_wfp_connection",
             seed_parts=(
                 host.hostname,
@@ -1039,6 +1143,7 @@ class WindowsEventEmitter(LogEmitter):
                 net.dst_port,
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
 
         event_data = {
@@ -1130,7 +1235,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_kerberos_preauth_failed(self, event: SecurityEvent) -> None:
         """Render Windows 4771 (Kerberos pre-authentication failed)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         krb = event.kerberos
         host = self._get_host(event)
         source_ip = krb.source_ip or "-"
@@ -1160,7 +1265,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_log_cleared(self, event: SecurityEvent) -> None:
         """Render Windows 1102 (security log cleared)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
 
@@ -1184,7 +1289,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_service_installed(self, event: SecurityEvent) -> None:
         """Render Windows 4697 (service installed in the system)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         svc = event.service
@@ -1220,7 +1325,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_scheduled_task(self, event: SecurityEvent) -> None:
         """Render Windows 4698/4699/4700/4701 (scheduled task operations)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         task = event.scheduled_task
@@ -1255,7 +1360,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_group_membership_change(self, event: SecurityEvent) -> None:
         """Render Windows 4728/4729/4732/4733/4756/4757 (group membership change)."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         grp = event.group_membership
@@ -1293,7 +1398,7 @@ class WindowsEventEmitter(LogEmitter):
 
     def _render_account_full(self, event: SecurityEvent, event_id: int) -> None:
         """Render 4720/4738 with full account property fields."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         acct = event.account_management
@@ -1338,7 +1443,7 @@ class WindowsEventEmitter(LogEmitter):
         self, event: SecurityEvent, event_id: int, include_privs: bool
     ) -> None:
         """Render 4723/4724/4726 with minimal account fields."""
-        rng = random.Random()
+        rng = self._event_rng(event)
         auth = event.auth
         host = self._get_host(event)
         acct = event.account_management
@@ -1556,6 +1661,17 @@ class WindowsEventEmitter(LogEmitter):
         for rowid, payload in cursor:
             yield int(rowid), _spool_decode(payload)
 
+    def _iter_spooled_kerberos_rows_unlocked(self):
+        """Yield only Security Kerberos (4768/4769) rows from the spool."""
+        if self._spool_conn is None:
+            return
+        cursor = self._spool_conn.execute(
+            "SELECT rowid, payload FROM events "
+            "WHERE CAST(json_extract(payload, '$.fields.EventID.value') AS INTEGER) IN (4768, 4769)"
+        )
+        for rowid, payload in cursor:
+            yield int(rowid), _spool_decode(payload)
+
     def _update_spooled_events_unlocked(self, updates: list[tuple[str, str, int]]) -> None:
         """Persist encoded payload and sort-key updates for spooled Windows events."""
         if not updates or self._spool_conn is None:
@@ -1589,7 +1705,9 @@ class WindowsEventEmitter(LogEmitter):
                 row[0],
             ),
         )
-        tgts_by_key: dict[tuple[str, str, str], list[tuple[int, dict[str, Any], datetime]]] = {}
+        tgts_by_key: dict[
+            tuple[str, str, str, str], list[tuple[int, dict[str, Any], datetime]]
+        ] = {}
         for rowid, event in ordered:
             if event.get("EventID") != 4768:
                 continue
@@ -1598,7 +1716,7 @@ class WindowsEventEmitter(LogEmitter):
             if key is not None and isinstance(ts, datetime):
                 tgts_by_key.setdefault(key, []).append((rowid, event, ensure_utc(ts)))
 
-        prior_tgt_by_key: dict[tuple[str, str, str], datetime] = {}
+        prior_tgt_by_key: dict[tuple[str, str, str, str], datetime] = {}
         moved: set[int] = set()
         for rowid, event in ordered:
             ts = event.get("TimeCreated")
@@ -1634,7 +1752,13 @@ class WindowsEventEmitter(LogEmitter):
                 _stable_seed(f"kerberos_tgt_before_tgs:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}")
                 % 181
             )
-            new_time = ts - timedelta(milliseconds=gap_ms)
+            gap_us = 41 + (
+                _stable_seed(
+                    f"kerberos_tgt_before_tgs_us:{key}:{rowid}:{tgt_rowid}:{ts.isoformat()}"
+                )
+                % 911
+            )
+            new_time = ts - timedelta(milliseconds=gap_ms, microseconds=gap_us)
             tgt_event["TimeCreated"] = new_time
             prior_tgt_by_key[key] = new_time
             moved.add(tgt_rowid)
@@ -1647,7 +1771,9 @@ class WindowsEventEmitter(LogEmitter):
 
     def _shift_spooled_kerberos_tgts_before_service_tickets_unlocked(self) -> None:
         """Prevent spooled Security 4769 rows from preceding their visible 4768 rows."""
-        rows = list(self._iter_spooled_rows_unlocked())
+        rows = list(self._iter_spooled_kerberos_rows_unlocked())
+        if not rows:
+            return
         moved = self._shift_kerberos_tgts_before_service_ticket_rows(rows)
         if not moved:
             return
@@ -1817,6 +1943,53 @@ class WindowsEventEmitter(LogEmitter):
                     updates.clear()
         self._update_spooled_events_unlocked(updates)
 
+    def _shift_spooled_process_dependents_after_create_unlocked(self) -> None:
+        """Keep spooled same-process Security dependents after visible 4688 rows."""
+        process_create_times: dict[tuple[str, str, str], datetime] = {}
+        for _, event in self._iter_spooled_rows_unlocked():
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("NewProcessId"),
+                event.get("NewProcessName"),
+            )
+            if isinstance(ts, datetime) and key is not None:
+                process_create_times[key] = ts
+
+        updates: list[tuple[str, str, int]] = []
+        for rowid, event in self._iter_spooled_rows_unlocked():
+            ts = event.get("TimeCreated")
+            event_id = event.get("EventID")
+            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+                continue
+            if event_id == 4689:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessId"),
+                    event.get("ProcessName"),
+                )
+                relationship_key = "windows.process_exit_after_visible_create"
+            else:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                relationship_key = "source.windows_wfp_connection"
+            create_time = process_create_times.get(key) if key is not None else None
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + sample_timing_delta(
+                    relationship_key,
+                    seed_parts=(key[0], key[1], key[2], create_time),
+                )
+                updates.append((_spool_encode(event), self._event_sort_key(event), rowid))
+                if len(updates) >= 1000:
+                    self._update_spooled_events_unlocked(updates)
+                    updates.clear()
+        self._update_spooled_events_unlocked(updates)
+
     def _suppress_spooled_duplicate_lock_unlock_transitions_unlocked(self) -> None:
         """Keep spooled 4800/4801 as a chronological session state machine."""
         session_state: dict[tuple[str, str, str], str] = {}
@@ -1881,6 +2054,7 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_spooled_kerberos_tgts_before_service_tickets_unlocked()
             self._shift_spooled_process_creates_after_logons_unlocked()
             self._shift_spooled_process_creates_after_visible_parent_unlocked()
+            self._shift_spooled_process_dependents_after_create_unlocked()
             self._shift_spooled_process_terminations_after_dependents_unlocked()
             self._shift_spooled_logoffs_after_dependents_unlocked()
             self._suppress_spooled_duplicate_lock_unlock_transitions_unlocked()
@@ -1889,6 +2063,7 @@ class WindowsEventEmitter(LogEmitter):
             self._shift_kerberos_tgts_before_service_tickets()
             self._shift_process_creates_after_logons()
             self._shift_process_creates_after_visible_parent()
+            self._shift_process_dependents_after_create()
             self._shift_process_terminations_after_dependents()
             self._shift_logoffs_after_dependents()
             self._suppress_duplicate_lock_unlock_transitions()
@@ -2186,6 +2361,47 @@ class WindowsEventEmitter(LogEmitter):
                 event["TimeCreated"] = latest + sample_timing_delta(
                     "windows.process_exit_after_visible_child",
                     seed_parts=(key[0], key[1], latest),
+                )
+
+    def _shift_process_dependents_after_create(self) -> None:
+        """Keep same-process Security dependents after visible 4688 rows."""
+        process_create_times: dict[tuple[str, str, str], datetime] = {}
+        for event in self._event_dicts:
+            if event.get("EventID") != 4688:
+                continue
+            ts = event.get("TimeCreated")
+            key = _security_process_key(
+                str(event.get("Computer", "")),
+                event.get("NewProcessId"),
+                event.get("NewProcessName"),
+            )
+            if isinstance(ts, datetime) and key is not None:
+                process_create_times[key] = ts
+
+        for event in self._event_dicts:
+            ts = event.get("TimeCreated")
+            event_id = event.get("EventID")
+            if not isinstance(ts, datetime) or event_id not in {4689, 5156}:
+                continue
+            if event_id == 4689:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessId"),
+                    event.get("ProcessName"),
+                )
+                relationship_key = "windows.process_exit_after_visible_create"
+            else:
+                key = _security_process_key(
+                    str(event.get("Computer", "")),
+                    event.get("ProcessID"),
+                    event.get("Application"),
+                )
+                relationship_key = "source.windows_wfp_connection"
+            create_time = process_create_times.get(key) if key is not None else None
+            if create_time is not None and ts <= create_time:
+                event["TimeCreated"] = create_time + sample_timing_delta(
+                    relationship_key,
+                    seed_parts=(key[0], key[1], key[2], create_time),
                 )
 
     def flush(self, *, force: bool = False) -> None:

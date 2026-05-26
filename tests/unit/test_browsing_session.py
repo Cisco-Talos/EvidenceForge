@@ -4,7 +4,12 @@
 """Tests for browsing session generator."""
 
 import random
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+from evidenceforge.generation.actions import BrowserSessionActionBundle, BrowserSessionRequest
+from evidenceforge.generation.activity import browsing_session
 from evidenceforge.generation.activity.browsing_session import (
     BrowsingRequest,
     generate_browsing_session,
@@ -47,6 +52,173 @@ class TestBrowsingSessionBasics:
         requests = generate_browsing_session(rng, "github.com", [])
         offsets = [r.time_offset_ms for r in requests]
         assert offsets == sorted(offsets)
+
+    def test_https_first_domain_redirects_plaintext_http_without_assets(self):
+        rng = random.Random(42)
+        requests = generate_browsing_session(rng, "accounts.google.com", [], port=80)
+
+        assert len(requests) == 1
+        assert requests[0].is_page_load is True
+        assert requests[0].status_code in {301, 302}
+        assert 120 <= requests[0].response_body_len <= 480
+
+    def test_plaintext_http_landing_pages_do_not_send_https_referrers(self):
+        """Browser sessions should not send HTTPS referrers to plaintext HTTP pages."""
+        for seed in range(200):
+            requests = generate_browsing_session(
+                random.Random(seed),
+                "www.office.com",
+                ["web", "saas"],
+                port=80,
+            )
+            assert not any(req.referrer.startswith("https://") for req in requests)
+
+
+class TestBrowserSessionActionBundle:
+    """Action-bundle expansion behavior."""
+
+    def test_request_has_stable_action_anchor(self):
+        source_system = SimpleNamespace(hostname="WKS-01")
+        request = BrowserSessionRequest(
+            src_ip="10.0.10.50",
+            dst_ip="142.250.80.46",
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            hostname="www.google.com",
+            dst_port=443,
+            service="ssl",
+            source_system=source_system,
+            domain_tags=("web",),
+            user_agent="Mozilla/5.0",
+        )
+        same_request = BrowserSessionRequest(
+            src_ip="10.0.10.50",
+            dst_ip="142.250.80.46",
+            time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+            hostname="www.google.com",
+            dst_port=443,
+            service="ssl",
+            source_system=source_system,
+            domain_tags=("web",),
+            user_agent="Mozilla/5.0",
+        )
+        bundle = BrowserSessionActionBundle(
+            request=request,
+            executor=MagicMock(),
+            rng=random.Random(7),
+        )
+
+        assert request.stable_id == same_request.stable_id
+        assert bundle.anchor.family == "browser_session"
+        assert bundle.anchor.stable_id == request.stable_id
+
+    def test_bundle_expands_page_and_subresource_to_grouped_http_flows(self, monkeypatch):
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/",
+                    method="GET",
+                    content_type="text/html",
+                    referrer="",
+                    trans_depth=1,
+                    is_page_load=True,
+                    response_body_len=4096,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+                BrowsingRequest(
+                    time_offset_ms=100,
+                    hostname=kwargs["hostname"],
+                    path="/assets/app.css",
+                    method="GET",
+                    content_type="text/css",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=2,
+                    is_page_load=False,
+                    response_body_len=2048,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+            ],
+        )
+        emitted = []
+        executor = MagicMock()
+        executor.state_manager = MagicMock()
+        executor.generate_connection.side_effect = lambda **kwargs: (
+            emitted.append(kwargs) or f"C{len(emitted)}"
+        )
+
+        result = BrowserSessionActionBundle(
+            request=BrowserSessionRequest(
+                src_ip="10.0.10.50",
+                dst_ip="142.250.80.46",
+                time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                hostname="www.google.com",
+                dst_port=443,
+                service="ssl",
+                source_system=SimpleNamespace(hostname="WKS-01"),
+                domain_tags=("web",),
+                user_agent="Mozilla/5.0",
+            ),
+            executor=executor,
+            rng=random.Random(11),
+        ).execute_with_result()
+
+        assert result.first_uid == "C1"
+        assert result.request_count == 2
+        assert result.page_load_count == 1
+        assert len(emitted) == 2
+        assert emitted[0]["http"].trans_depth == 1
+        assert emitted[0]["http"].flow_transaction_count == 2
+        assert emitted[0]["resp_bytes"] >= 4096 + 2048
+        assert emitted[1]["http"].trans_depth == 2
+        assert emitted[1]["http"].referrer == "https://www.google.com/"
+
+    def test_plaintext_http_bundle_drops_https_subresource_referrer(self, monkeypatch):
+        monkeypatch.setattr(
+            browsing_session,
+            "generate_browsing_session",
+            lambda **kwargs: [
+                BrowsingRequest(
+                    time_offset_ms=0,
+                    hostname=kwargs["hostname"],
+                    path="/assets/app.css",
+                    method="GET",
+                    content_type="text/css",
+                    referrer=f"https://{kwargs['hostname']}/",
+                    trans_depth=1,
+                    is_page_load=False,
+                    response_body_len=2048,
+                    request_body_len=0,
+                    status_code=200,
+                ),
+            ],
+        )
+        emitted = []
+        executor = MagicMock()
+        executor.state_manager = MagicMock()
+        executor.generate_connection.side_effect = lambda **kwargs: emitted.append(kwargs) or "C1"
+
+        BrowserSessionActionBundle(
+            request=BrowserSessionRequest(
+                src_ip="10.0.10.50",
+                dst_ip="13.107.42.14",
+                time=datetime(2024, 1, 15, 10, 0, tzinfo=UTC),
+                hostname="www.office.com",
+                dst_port=80,
+                service="http",
+                source_system=SimpleNamespace(hostname="WKS-01"),
+                domain_tags=("web", "saas"),
+                user_agent="Mozilla/5.0",
+            ),
+            executor=executor,
+            rng=random.Random(11),
+        ).execute()
+
+        assert emitted[0]["http"].referrer == ""
 
 
 class TestReferrerChains:
@@ -290,6 +462,38 @@ class TestResponseSizes:
         assert {r.response_body_len for r in successful_favicons} == {
             successful_favicons[0].response_body_len
         }
+
+    def test_static_asset_transfer_size_can_vary_by_client_variant(self):
+        requests_a = generate_browsing_session(
+            random.Random(9),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+            transfer_variant_key="10.10.1.10:chrome",
+        )
+        requests_a_repeat = generate_browsing_session(
+            random.Random(9),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+            transfer_variant_key="10.10.1.10:chrome",
+        )
+        requests_b = generate_browsing_session(
+            random.Random(9),
+            "portal.customer.example",
+            [],
+            require_browser_like_domain=False,
+            transfer_variant_key="10.10.1.11:firefox",
+        )
+
+        favicon_a = next(r for r in requests_a if r.path == "/favicon.ico" and r.status_code == 200)
+        favicon_a_repeat = next(
+            r for r in requests_a_repeat if r.path == "/favicon.ico" and r.status_code == 200
+        )
+        favicon_b = next(r for r in requests_b if r.path == "/favicon.ico" and r.status_code == 200)
+
+        assert favicon_a.response_body_len == favicon_a_repeat.response_body_len
+        assert favicon_a.response_body_len != favicon_b.response_body_len
 
     def test_sessions_include_non_success_http_outcomes(self):
         statuses = []

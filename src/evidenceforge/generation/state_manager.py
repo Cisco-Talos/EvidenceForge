@@ -29,7 +29,6 @@ log generation, ensuring consistency across log formats.
 import hashlib
 import logging
 import random
-import uuid
 from datetime import datetime, timedelta
 from threading import RLock
 
@@ -42,7 +41,7 @@ from evidenceforge.models.state import (
     RunningProcess,
 )
 from evidenceforge.utils.ids import generate_zeek_uid
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
@@ -103,6 +102,7 @@ class StateManager:
         self._linux_pid_used_ids: dict[str, set[int]] = {}
         self._linux_pid_allocations: dict[str, list[tuple[datetime, int]]] = {}
         self._connection_id_counter = 0
+        self._windows_session_id_counters: dict[str, int] = {}
         self._linux_logind_session_counters: dict[str, int] = {}
         self._linux_logind_session_initials: dict[str, int] = {}
         self._linux_logind_session_epochs: dict[str, datetime] = {}
@@ -229,6 +229,45 @@ class StateManager:
                 event_time = self.state.current_time
             return f"0x{self._allocate_logon_luid(system, event_time):x}"
 
+    def _allocate_windows_session_id(
+        self,
+        system: str,
+        username: str,
+        logon_type: int,
+        session_kind: str,
+    ) -> int:
+        """Allocate a host-local Windows terminal session ID for interactive sessions."""
+        if logon_type not in {2, 7, 10, 11} or session_kind in {"network", "service", "ssh"}:
+            return 0
+
+        used_ids = {
+            session.session_id
+            for session in self.state.active_sessions.values()
+            if session.system == system and session.session_id > 0
+        }
+
+        if logon_type in {2, 11} and session_kind in {"interactive", "logon"}:
+            preferred = 1 + (_stable_seed(f"windows_console_session:{system}") % 2)
+            if preferred not in used_ids:
+                return preferred
+
+        initial = self._windows_session_id_counters.get(
+            system,
+            3 + (_stable_seed(f"windows_session_initial:{system}") % 3),
+        )
+        candidate = initial
+        while candidate in used_ids or candidate <= 0:
+            candidate += 1 + (_stable_seed(f"windows_session_gap:{system}:{candidate}") % 2)
+        self._windows_session_id_counters[system] = candidate + 1
+        logger.debug(
+            "Allocated Windows session ID %s for %s@%s type %s",
+            candidate,
+            username,
+            system,
+            logon_type,
+        )
+        return candidate
+
     def _mark_logon_id_used(self, logon_id: str) -> None:
         """Record externally supplied LogonIDs so generated sessions avoid reuse."""
         try:
@@ -252,6 +291,7 @@ class StateManager:
         transport_pid: int | None = None,
         start_time: datetime | None = None,
         logon_guid: str = "",
+        session_id: int | None = None,
     ) -> str:
         """Create a new active session.
 
@@ -280,6 +320,16 @@ class StateManager:
             logon_id = f"0x{val:x}"
 
             # Create session
+            windows_session_id = (
+                session_id
+                if session_id is not None
+                else self._allocate_windows_session_id(
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                )
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -287,10 +337,22 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=session_start_time,
                 source_ip=source_ip,
+                session_id=windows_session_id,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=stable_uuid(
+                    "session",
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                    source_ip,
+                    source_port,
+                    session_start_time.isoformat(),
+                    logon_id,
+                    windows_session_id,
+                ),
                 logon_guid=logon_guid,
             )
 
@@ -326,6 +388,28 @@ class StateManager:
         with self._lock:
             return [s for s in self.state.active_sessions.values() if s.username == username]
 
+    def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[ActiveSession]:
+        """Get sessions that are active for a user at a specific event time.
+
+        Generation can enqueue a long-lived session's logoff before later
+        same-window activities are rendered. Those sessions are no longer in
+        active state, but they are still valid for events before the visible
+        logoff timestamp.
+        """
+        cutoff = ensure_utc(at_time)
+        with self._lock:
+            sessions: dict[str, ActiveSession] = {}
+            for session in self.state.active_sessions.values():
+                if session.username == username and ensure_utc(session.start_time) <= cutoff:
+                    sessions[session.logon_id] = session
+            for session, end_time in self._ended_sessions.values():
+                if (
+                    session.username == username
+                    and ensure_utc(session.start_time) <= cutoff < end_time
+                ):
+                    sessions[session.logon_id] = session
+            return list(sessions.values())
+
     def get_sessions_on_system(self, system: str) -> list[ActiveSession]:
         """Get all active sessions on a system.
 
@@ -350,6 +434,7 @@ class StateManager:
         session_kind: str = "logon",
         transport_pid: int | None = None,
         logon_guid: str = "",
+        session_id: int | None = None,
     ) -> ActiveSession:
         """Register a pre-existing session in state.
 
@@ -363,6 +448,16 @@ class StateManager:
                 return existing
             self._mark_logon_id_used(logon_id)
 
+            windows_session_id = (
+                session_id
+                if session_id is not None
+                else self._allocate_windows_session_id(
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                )
+            )
             session = ActiveSession(
                 logon_id=logon_id,
                 username=username,
@@ -370,10 +465,22 @@ class StateManager:
                 logon_type=logon_type,
                 start_time=ensure_utc(start_time),
                 source_ip=source_ip,
+                session_id=windows_session_id,
                 source_port=source_port,
                 session_kind=session_kind,
                 transport_pid=transport_pid,
-                ecar_object_id=str(uuid.uuid4()),
+                ecar_object_id=stable_uuid(
+                    "registered-session",
+                    system,
+                    username,
+                    logon_type,
+                    session_kind,
+                    source_ip,
+                    source_port,
+                    ensure_utc(start_time).isoformat(),
+                    logon_id,
+                    windows_session_id,
+                ),
                 logon_guid=logon_guid,
             )
             self.state.active_sessions[logon_id] = session
@@ -393,7 +500,9 @@ class StateManager:
         session_kind: str | None = None,
         transport_pid: int | None = None,
         network_close_time: datetime | None = None,
+        source_ready_time: datetime | None = None,
         logon_guid: str | None = None,
+        session_id: int | None = None,
     ) -> bool:
         """Update mutable metadata on an existing session."""
         with self._lock:
@@ -414,9 +523,25 @@ class StateManager:
                 session.transport_pid = transport_pid
             if network_close_time is not None:
                 session.network_close_time = ensure_utc(network_close_time)
+            if source_ready_time is not None:
+                session.source_ready_time = ensure_utc(source_ready_time)
             if logon_guid is not None:
                 session.logon_guid = logon_guid
+            if session_id is not None:
+                session.session_id = session_id
             return True
+
+    def get_session_id(self, logon_id: str) -> int:
+        """Return the canonical rendered session ID for an active or ended logon."""
+        with self._lock:
+            resolved_logon_id = self._resolve_logon_id(logon_id)
+            session = self.state.active_sessions.get(resolved_logon_id)
+            if session is not None:
+                return session.session_id
+            ended = self._ended_sessions.get(resolved_logon_id) or self._ended_sessions.get(
+                logon_id
+            )
+            return ended[0].session_id if ended is not None else 0
 
     def get_or_create_session_logon_guid(
         self,
@@ -671,6 +796,7 @@ class StateManager:
         system: str,
         pid_rng: random.Random,
         current_time: datetime | None = None,
+        minimum_pid_exclusive: int | None = None,
     ) -> int:
         """Allocate a Linux PID without exposing wall-clock elapsed seconds."""
         current_time = ensure_utc(current_time or self.state.current_time)
@@ -684,18 +810,84 @@ class StateManager:
         self._pid_bucket_offsets[ordinal_key] = ordinal + gap
 
         pid = self._pid_counters[system] + self._linux_pid_block_offset(system, block)
-        pid += (slot * 29) + ordinal
+        pid += (slot * 2) + ordinal
         pid = self._normalize_linux_pid(pid)
 
         running = {p.pid for (s, _), p in self.state.running_processes.items() if s == system}
         used = self._linux_pid_used_ids.setdefault(system, set())
         allocations = self._linux_pid_allocations.setdefault(system, [])
-        collision_salt = 0
-        while (
-            pid in running
-            or pid in used
-            or self._linux_pid_matches_elapsed_delta(allocations, current_time, pid)
+        prior_visible_pid = max(
+            (
+                allocated_pid
+                for allocated_time, allocated_pid in allocations
+                if allocated_time <= current_time
+            ),
+            default=None,
+        )
+        if prior_visible_pid is not None and (
+            minimum_pid_exclusive is None or prior_visible_pid > minimum_pid_exclusive
         ):
+            minimum_pid_exclusive = prior_visible_pid
+        future_pid_exclusive = min(
+            (
+                allocated_pid
+                for allocated_time, allocated_pid in allocations
+                if allocated_time > current_time
+            ),
+            default=None,
+        )
+
+        def is_available(candidate: int) -> bool:
+            return (
+                candidate not in running
+                and candidate not in used
+                and (
+                    minimum_pid_exclusive is None
+                    or minimum_pid_exclusive >= 4_194_304
+                    or candidate > minimum_pid_exclusive
+                )
+                and (future_pid_exclusive is None or candidate < future_pid_exclusive)
+                and not self._linux_pid_matches_elapsed_delta(allocations, current_time, candidate)
+            )
+
+        def bounded_candidate(salt: int) -> int | None:
+            if future_pid_exclusive is None:
+                return None
+            lower_bound = max(499, minimum_pid_exclusive or 499)
+            if future_pid_exclusive <= lower_bound + 1:
+                return None
+            span = future_pid_exclusive - lower_bound - 1
+            start = (
+                _stable_seed(
+                    f"linux_pid_future_bound:{system}:{current_time.isoformat()}:{pid}:{salt}"
+                )
+                % span
+            )
+            for offset in range(min(span, 4096)):
+                candidate = future_pid_exclusive - 1 - ((start + offset) % span)
+                if is_available(candidate):
+                    return candidate
+            return None
+
+        if not is_available(pid):
+            bounded = bounded_candidate(0)
+            if bounded is not None:
+                pid = bounded
+        collision_salt = 0
+        max_retries = 8_192
+        while not is_available(pid):
+            if collision_salt >= max_retries:
+                raise StateError(
+                    "Unable to allocate Linux PID after bounded retries; "
+                    "adjust scenario timing or reduce process contention."
+                )
+            bounded = bounded_candidate(collision_salt + 1)
+            if bounded is not None:
+                pid = bounded
+                if is_available(pid):
+                    break
+            elif future_pid_exclusive is not None and pid >= future_pid_exclusive:
+                future_pid_exclusive = None
             bump = 37 + (_stable_seed(f"linux_pid_collision:{system}:{pid}:{collision_salt}") % 41)
             pid = self._normalize_linux_pid(pid + bump)
             collision_salt += 1
@@ -703,7 +895,12 @@ class StateManager:
         allocations.append((current_time, pid))
         return pid
 
-    def allocate_transient_linux_pid(self, system: str, event_time: datetime) -> int:
+    def allocate_transient_linux_pid(
+        self,
+        system: str,
+        event_time: datetime,
+        os_category: str = "linux",
+    ) -> int:
         """Allocate a Linux PID for syslog-only transient process observations.
 
         Syslog records such as ``sudo[pid]`` and per-session ``sshd[pid]`` can
@@ -713,6 +910,13 @@ class StateManager:
         and used-ID ledger without registering a durable RunningProcess.
         """
         with self._lock:
+            if os_category != "linux":
+                raise StateError(f"Cannot allocate Linux transient PID for non-Linux host {system}")
+            if self._pid_os.get(system) not in {None, "linux"}:
+                raise StateError(
+                    f"Cannot allocate Linux transient PID in {self._pid_os[system]} "
+                    f"PID namespace for {system}"
+                )
             self._initialize_pid_allocator(system, "linux")
             pid_rng = self._pid_rngs[system]
             return self._allocate_linux_pid(system, pid_rng, event_time)
@@ -786,10 +990,32 @@ class StateManager:
                     while self._pid_counters[system] in running:
                         self._pid_counters[system] += 4
             else:
-                pid = self._allocate_linux_pid(system, pid_rng)
+                minimum_pid_exclusive = None
+                parent = self.state.running_processes.get((system, parent_pid))
+                if (
+                    parent is not None
+                    and parent.start_time <= self.state.current_time
+                    and parent.pid > 1
+                ):
+                    minimum_pid_exclusive = parent.pid
+                pid = self._allocate_linux_pid(
+                    system,
+                    pid_rng,
+                    minimum_pid_exclusive=minimum_pid_exclusive,
+                )
 
             # Create process
-            ecar_object_id = str(uuid.uuid4())
+            ecar_object_id = stable_uuid(
+                "process",
+                system,
+                pid,
+                parent_pid,
+                image,
+                command_line,
+                username,
+                self.state.current_time.isoformat(),
+                logon_id,
+            )
             process = RunningProcess(
                 pid=pid,
                 parent_pid=parent_pid,
@@ -847,6 +1073,17 @@ class StateManager:
             activity_time = ensure_utc(activity_time)
             if proc.last_activity_time is None or activity_time > proc.last_activity_time:
                 proc.last_activity_time = activity_time
+            return True
+
+    def update_session_activity_time(self, logon_id: str, activity_time: datetime) -> bool:
+        """Record the latest dependent activity timestamp for an active session."""
+        with self._lock:
+            session = self.state.active_sessions.get(self._resolve_logon_id(logon_id))
+            if session is None:
+                return False
+            activity_time = ensure_utc(activity_time)
+            if session.last_activity_time is None or activity_time > session.last_activity_time:
+                session.last_activity_time = activity_time
             return True
 
     def get_processes_for_user(self, username: str) -> list[RunningProcess]:
@@ -1012,6 +1249,21 @@ class StateManager:
         """
         with self._lock:
             return self.state.open_connections.get(conn_id)
+
+    def update_connection_interval(
+        self,
+        conn_id: str,
+        start_time: datetime,
+        close_time: datetime | None,
+    ) -> bool:
+        """Update the canonical source-visible interval for an open connection."""
+        with self._lock:
+            conn = self.state.open_connections.get(conn_id)
+            if conn is None:
+                return False
+            conn.start_time = ensure_utc(start_time)
+            conn.close_time = ensure_utc(close_time) if close_time is not None else None
+            return True
 
     def update_connection_bytes(self, conn_id: str, bytes_sent: int, bytes_received: int) -> bool:
         """Update cumulative byte counts for a connection.

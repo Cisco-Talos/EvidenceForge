@@ -203,6 +203,40 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_bash_workflow_model(self, monkeypatch):
+        from evidenceforge.generation.activity import bash_commands
+
+        real_loader = bash_commands.load_bash_commands
+
+        def load_invalid_bash_commands():
+            data = real_loader()
+            return {
+                **data,
+                "workflow_model": {"selection_probability": 1.5},
+                "workflows": {
+                    **data.get("workflows", {}),
+                    "sysadmin": [{"name": "bad", "weight": 1, "steps": [[]]}],
+                },
+            }
+
+        monkeypatch.setattr(bash_commands, "load_bash_commands", load_invalid_bash_commands)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "bash_commands.yaml"
+            and "workflow_model.selection_probability must be a number between 0 and 1"
+            in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "bash_commands.yaml"
+            and "steps[1] must be a command string or non-empty list" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_third_party_module_with_microsoft_identity(self, monkeypatch):
         from evidenceforge.generation.activity import application_catalog
 
@@ -265,6 +299,64 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_inverted_tls_authority_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            certificate_chains = dict(data.get("certificate_chains", {}))
+            certificate_chains["authority_profiles"] = [
+                {
+                    "subject": "CN=Bad Root CA, O=Example, C=US",
+                    "issuer": "CN=Bad Root CA, O=Example, C=US",
+                    "not_valid_before": 200,
+                    "not_valid_after": 100,
+                    "key_type": "rsa",
+                    "key_length": 2048,
+                }
+            ]
+            return {**data, "certificate_chains": certificate_chains}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "authority profile not_valid_after must be after not_valid_before" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_ocsp_request_path_bounds(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            ocsp = dict(data.get("ocsp", {}))
+            ocsp["request_path"] = {
+                "min_encoded_chars": 160,
+                "max_encoded_chars": 40,
+                "include_padding_probability": 0.35,
+                "der_prefixes": ["MFE"],
+            }
+            return {**data, "ocsp": ocsp}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "max_encoded_chars must be >= min_encoded_chars" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_public_dns_profile(self, monkeypatch):
         from evidenceforge.generation.activity import public_dns_profiles
 
@@ -298,6 +390,34 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "public_dns_profiles.yaml"
             and "mail_profiles must not be empty" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_proxy_user_agent_stickiness(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_user_agents
+
+        real_loader = proxy_user_agents.load_proxy_user_agents
+
+        def load_invalid_proxy_user_agents():
+            data = real_loader()
+            domain_overrides = dict(data.get("domain_overrides", {}))
+            windows_update = dict(domain_overrides["windows_update"])
+            windows_update["stickiness"] = "session"
+            domain_overrides["windows_update"] = windows_update
+            return {**data, "domain_overrides": domain_overrides}
+
+        monkeypatch.setattr(
+            proxy_user_agents,
+            "load_proxy_user_agents",
+            load_invalid_proxy_user_agents,
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_user_agents.yaml (domain_overrides)"
+            and "Input should be 'request' or 'source_host'" in issue.message
             for issue in result.issues
         )
 
@@ -477,6 +597,54 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_empty_kerberos_transport_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        real_loader = kerberos_realism.load_kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            data = real_loader()
+            transport_profiles = dict(data["transport_profiles"])
+            transport_profiles["default"] = {"udp": 0, "tcp": 0}
+            return {**data, "transport_profiles": transport_profiles}
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "transport profile must have a positive total weight" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_oversized_kerberos_transport_weight(self, monkeypatch):
+        from evidenceforge.generation.activity import kerberos_realism
+
+        real_loader = kerberos_realism.load_kerberos_realism
+
+        def load_invalid_kerberos_realism():
+            data = real_loader()
+            transport_profiles = dict(data["transport_profiles"])
+            transport_profiles["default"] = {"udp": 1_000_001, "tcp": 1}
+            return {**data, "transport_profiles": transport_profiles}
+
+        monkeypatch.setattr(
+            kerberos_realism, "load_kerberos_realism", load_invalid_kerberos_realism
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "kerberos_realism.yaml"
+            and "transport weights must be less than or equal to 1000000" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_browser_like_proxy_infra_template(self, monkeypatch):
         from evidenceforge.generation.activity import proxy_uri
 
@@ -638,6 +806,52 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_dns_tunnel_ttl_response_template(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_response_templates": ["slot-{seq}-t{ttl}-{token}"],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_response_templates)"
+            and "ttl" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_readable_dns_tunnel_response_template(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "dns_tunnel_response_templates": ["xid:{token}:path-{edge}:n{seq}"],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (dns_tunnel_response_templates)"
+            and "readable literal text" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_dns_tunnel_rcode_weights(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 
@@ -749,6 +963,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_external_scanner_profile(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {"name": "bad", "weight": 1, "ports": [{"port": 70000, "weight": 1}]}
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "less than or equal to 65535" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_overflowing_dns_tunnel_ttl_weight_total(self, monkeypatch):
         from evidenceforge.generation.activity import network_params
 
@@ -772,6 +1011,66 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "network_params.yaml (dns_tunnel_ttl_choices)"
             and "total" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_external_scanner_profile_weights(
+        self, monkeypatch
+    ):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {"name": "a", "weight": 1e308, "ports": [{"port": 443, "weight": 1}]},
+                    {"name": "b", "weight": 1e308, "ports": [{"port": 8443, "weight": 1}]},
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "total external_scanner_port_profiles weight must be finite" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_overflowing_external_scanner_port_weights(self, monkeypatch):
+        from evidenceforge.generation.activity import network_params
+
+        real_loader = network_params.load_network_params
+
+        def load_invalid_network_params():
+            data = real_loader()
+            return {
+                **data,
+                "external_scanner_port_profiles": [
+                    {
+                        "name": "bad_ports",
+                        "weight": 1.0,
+                        "ports": [
+                            {"port": 443, "weight": 1e308},
+                            {"port": 8443, "weight": 1e308},
+                        ],
+                    }
+                ],
+            }
+
+        monkeypatch.setattr(network_params, "load_network_params", load_invalid_network_params)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "network_params.yaml (external_scanner_port_profiles)"
+            and "entry 0 has non-finite cumulative port weight" in issue.message
             for issue in result.issues
         )
 
@@ -1236,6 +1535,34 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_reports_extra_syslog_params_type_errors_without_crashing(
+        self, monkeypatch
+    ):
+        from evidenceforge.generation.activity import extra_syslog
+
+        def load_invalid_extra_syslog_messages():
+            return [
+                {
+                    "app": "attacker-controlled-bad-params",
+                    "messages": ["ordinary message"],
+                    "params": {"bad": 1},
+                }
+            ]
+
+        monkeypatch.setattr(
+            extra_syslog, "load_extra_syslog_messages", load_invalid_extra_syslog_messages
+        )
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "extra_syslog_messages.yaml"
+            and 'Entry "attacker-controlled-bad-params"' in issue.message
+            and "params" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_cron_hourly_in_extra_syslog_noise(self, monkeypatch):
         from evidenceforge.generation.activity import extra_syslog
 
@@ -1402,6 +1729,25 @@ class TestValidateConfig:
         assert missing_placeholder.endswith("COMMAND=/bin/systemctl status {missing}")
         assert unmatched_brace.endswith("COMMAND=/bin/systemctl status {")
 
+    def test_extra_syslog_explicit_values_override_yaml_params(self):
+        from evidenceforge.generation.activity.extra_syslog import render_extra_syslog_message
+
+        message = render_extra_syslog_message(
+            {
+                "app": "rsyslogd",
+                "params": {"fd": ["695673"]},
+                "messages": [
+                    "imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' fd {fd}"
+                ],
+            },
+            random.Random(5),
+            positional_value=123456,
+            values={"fd": 9},
+        )
+
+        assert message.endswith(" fd 9")
+        assert "695673" not in message
+
     def test_extra_syslog_filters_by_system_type_and_excluded_roles(self):
         from evidenceforge.generation.activity.extra_syslog import filter_syslog_message_entries
 
@@ -1503,13 +1849,13 @@ class TestValidateConfig:
 
         assert checked_apps == high_volume_apps
 
-    def test_extra_syslog_linux_maintenance_texture_includes_cron_and_varied_sudo(self):
+    def test_extra_syslog_linux_maintenance_texture_excludes_schedule_native_cron(self):
         from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
 
         programs = load_extra_syslog_messages()
         apps = {entry["app"]: entry for entry in programs}
 
-        assert "cron" in apps
+        assert "cron" not in apps
         assert "anacron" in apps
 
         sudo_entry = next(
@@ -1526,9 +1872,61 @@ class TestValidateConfig:
         assert any("apt-get -s upgrade" in command for command in non_service_commands)
         assert any("vmstat" in command for command in non_service_commands)
 
-        cron_messages = apps["cron"]["messages"]
-        assert any("CMD" in message for message in cron_messages)
-        assert not any("cron.hourly" in message.lower() for message in cron_messages)
+        rendered_messages = []
+        for entry in programs:
+            if entry["app"] == "anacron":
+                continue
+            rendered_messages.extend(entry.get("messages", []))
+            rendered_messages.extend(
+                value
+                for values in (entry.get("params") or {}).values()
+                for value in values
+                if isinstance(value, str)
+            )
+        schedule_native_patterns = (
+            "apt.systemd.daily",
+            "cron.daily",
+            "cron.hourly",
+            "debian-sa1",
+            "logrotate /etc/logrotate.conf",
+            "update-motd-reboot-required",
+            "/tmp -xdev -type f -mtime",
+        )
+        assert not any(
+            pattern in message.lower()
+            for message in rendered_messages
+            for pattern in schedule_native_patterns
+        )
+
+    def test_extra_syslog_web_sudo_denial_profile_is_sparse_and_not_over_thematic(self):
+        from evidenceforge.generation.activity.extra_syslog import load_extra_syslog_messages
+
+        programs = load_extra_syslog_messages()
+        web_sudo = next(
+            entry
+            for entry in programs
+            if entry["app"] == "sudo" and entry.get("roles") == ["web_server", "forward_proxy"]
+        )
+        denied_commands = web_sudo["params"]["denied_command"]
+
+        assert web_sudo["max_per_host_window"] == 1
+        assert not any("169.254.169.254" in command for command in denied_commands)
+        assert not any("/etc/shadow" in command for command in denied_commands)
+        assert any("/var/www" in command for command in denied_commands)
+
+    def test_systemd_schedule_contains_sysstat_cron_cadence(self):
+        from evidenceforge.generation.engine.baseline import _load_systemd_schedules
+
+        debian_sa1 = next(
+            schedule
+            for schedule in _load_systemd_schedules()
+            if schedule["service"] == "debian-sa1"
+        )
+
+        assert debian_sa1["type"] == "cron"
+        assert debian_sa1["frequency"] == "30min"
+        assert debian_sa1["cron_user"] == "sysstat"
+        assert "debian-sa1" in debian_sa1["cron_commands"]["debian"]
 
     def test_extra_syslog_unattended_upgrades_bounds_phased_percentage(self):
         from evidenceforge.generation.activity.extra_syslog import (

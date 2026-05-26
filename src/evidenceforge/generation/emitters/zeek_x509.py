@@ -22,12 +22,15 @@
 
 """Zeek x509.log emitter."""
 
+from datetime import datetime
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.tls_realism import certificate_analyzer_delay_ms
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
-from evidenceforge.generation.emitters.zeek_files import _bounded_in_connection_timestamp
+from evidenceforge.generation.emitters.zeek_files import (
+    _tls_certificate_file_timestamp,
+    _tls_certificate_x509_timestamp,
+)
 
 
 class ZeekX509Emitter(SensorMultiplexEmitter):
@@ -51,25 +54,33 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
 
     def emit(self, event: SecurityEvent) -> None:
         certificates = event.x509_chain or ([event.x509] if event.x509 is not None else [])
+        previous_file_timestamp: datetime | None = None
+        previous_x509_timestamp: datetime | None = None
         for position, x509 in enumerate(certificates):
-            self._emit_certificate(
+            file_timestamp = _tls_certificate_file_timestamp(
                 event,
                 x509,
-                analyzer_delay_ms=certificate_analyzer_delay_ms(
-                    zeek_uid=event.network.zeek_uid if event.network is not None else "",
-                    event_timestamp=event.timestamp,
-                    fuid=x509.fuid,
-                    position=position,
-                ),
+                position,
+                previous_file_timestamp=previous_file_timestamp,
             )
+            previous_x509_timestamp = self._emit_certificate(
+                event,
+                x509,
+                position=position,
+                file_timestamp=file_timestamp,
+                chain_not_before=previous_x509_timestamp,
+            )
+            previous_file_timestamp = file_timestamp
 
     def _emit_certificate(
         self,
         event: SecurityEvent,
         x509: Any,
         *,
-        analyzer_delay_ms: int,
-    ) -> None:
+        position: int,
+        file_timestamp: datetime,
+        chain_not_before: datetime | None,
+    ) -> datetime:
         x509_sensor_hostnames = event._sensor_hostnames_by_format.get(
             self.format_def.name if self.format_def else "zeek_x509", []
         )
@@ -77,13 +88,13 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         sensor_hostnames = list(dict.fromkeys([*x509_sensor_hostnames, *ssl_sensor_hostnames]))
         targets = sensor_hostnames or self._sensor_hostnames
         new_targets = targets
-        timestamp = self._offset_timestamp(event.timestamp, analyzer_delay_ms)
-        if event.network is not None:
-            timestamp = _bounded_in_connection_timestamp(
-                event.timestamp,
-                event.network.duration,
-                timestamp,
-            )
+        timestamp = _tls_certificate_x509_timestamp(
+            event,
+            x509,
+            position,
+            file_timestamp=file_timestamp,
+            previous_x509_timestamp=chain_not_before,
+        )
         event_data: dict[str, Any] = {
             "ts": timestamp,
             "id": x509.fuid,
@@ -114,6 +125,7 @@ class ZeekX509Emitter(SensorMultiplexEmitter):
         if event._nat_swaps_by_sensor:
             event_data["_nat_swaps_by_sensor"] = event._nat_swaps_by_sensor
         self.emit_event(event_data)
+        return timestamp
 
     def _render_event(self, event_data: dict[str, Any]) -> str:
         optional_fields = ["san_dns", "basic_constraints_ca"]

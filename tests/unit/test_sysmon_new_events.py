@@ -3,6 +3,7 @@
 
 """Unit tests for new Sysmon events: 3, 7, 11, 12/13, 22."""
 
+import re
 from datetime import UTC, datetime
 from unittest.mock import patch
 
@@ -708,6 +709,54 @@ class TestRenderEvent11:
         assert "<EventID>11</EventID>" in content
         assert "payload.exe" in content
         assert "powershell.exe" in content
+        assert '<Data Name="User">CORP\\admin</Data>' in content
+
+    def test_file_creation_utc_time_follows_visible_process_create(self, emitter):
+        """Event 11 CreationUtcTime should move with final TimeCreated ordering repairs."""
+        start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        process = ProcessContext(
+            pid=4567,
+            parent_pid=1,
+            image=r"C:\Windows\System32\powershell.exe",
+            command_line="powershell Compress-Archive",
+            username="admin",
+            start_time=start_time,
+        )
+        process_event = SecurityEvent(
+            timestamp=start_time,
+            event_type="process_create",
+            src_host=_win_host(),
+            process=process,
+            auth=AuthContext(username="admin"),
+        )
+        file_event = SecurityEvent(
+            timestamp=start_time,
+            event_type="file_create",
+            src_host=_win_host(),
+            process=process,
+            auth=AuthContext(username="admin"),
+            file=FileContext(path=r"C:\Users\admin\AppData\Local\Temp\cache.zip", action="create"),
+        )
+
+        emitter.emit(process_event)
+        emitter.emit(file_event)
+        emitter.flush()
+
+        output_path = list(emitter._host_writers.values())[0].output_path
+        content = output_path.read_text()
+        event1 = content.split("<EventID>1</EventID>", 1)[1].split("</Event>", 1)[0]
+        event11 = content.split("<EventID>11</EventID>", 1)[1].split("</Event>", 1)[0]
+        event1_match = re.search(r'SystemTime="([^"]+)"', event1)
+        creation_match = re.search(r'<Data Name="CreationUtcTime">([^<]+)</Data>', event11)
+        assert event1_match is not None
+        assert creation_match is not None
+
+        event1_time = datetime.fromisoformat(event1_match.group(1).replace("Z", "+00:00"))
+        creation_time = datetime.strptime(
+            creation_match.group(1),
+            "%Y-%m-%d %H:%M:%S.%f",
+        ).replace(tzinfo=UTC)
+        assert creation_time >= event1_time
 
 
 class TestRenderEventRegistry:
@@ -842,6 +891,21 @@ class TestProcessCreateMetadata:
         content = output_path.read_text()
         assert content.count('<Data Name="FileVersion">10.0.19041.1</Data>') == 2
         assert "10.0.20348.1" not in content
+
+    def test_common_windows_admin_binaries_have_process_metadata(self):
+        host = _win_host()
+
+        for image in (
+            r"C:\Windows\System32\runas.exe",
+            r"C:\Windows\System32\msra.exe",
+            r"C:\Windows\System32\curl.exe",
+        ):
+            fv, desc, prod, company, orig = SysmonEventEmitter._get_pe_metadata(image, host)
+            assert fv != "-"
+            assert desc != "-"
+            assert prod != "-"
+            assert company == "Microsoft Corporation"
+            assert orig.lower() == image.rsplit("\\", 1)[-1].lower()
 
     def test_os_binary_hashes_follow_host_file_version(self):
         """The same OS binary path on different Windows builds should not share hashes."""
@@ -1475,7 +1539,7 @@ class TestProcessGuidBootTime:
         assert guid_a.split("-")[1] == f"{unix_ts & 0xFFFF:04x}"
         assert guid_a.split("-")[2] == f"{(unix_ts >> 16) & 0xFFFF:04x}"
         assert guid_a.split("-")[1] != "000c"
-        assert guid_a.strip("{}").split("-")[4].startswith("000000")
+        assert not guid_a.strip("{}").split("-")[4].startswith("000000")
 
     def test_guid_deterministic_with_boot_time(self, emitter):
         emitter._host_boot_times = {

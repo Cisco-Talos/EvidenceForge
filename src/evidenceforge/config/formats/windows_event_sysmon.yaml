@@ -79,9 +79,27 @@ variants:
       - name: Image
         type: string
         required: true
+      - name: FileVersion
+        type: string
+        required: false
+      - name: Description
+        type: string
+        required: false
+      - name: Product
+        type: string
+        required: false
+      - name: Company
+        type: string
+        required: false
+      - name: OriginalFileName
+        type: string
+        required: false
       - name: CommandLine
         type: string
         required: true
+      - name: CurrentDirectory
+        type: string
+        required: false
       - name: User
         type: string
         required: true
@@ -90,6 +108,9 @@ variants:
         required: false
       - name: LogonId
         type: string
+        required: false
+      - name: TerminalSessionId
+        type: integer
         required: false
       - name: IntegrityLevel
         type: string
@@ -352,6 +373,9 @@ variants:
       - name: Image
         type: string
         required: true
+      - name: User
+        type: string
+        required: true
       - name: TargetFilename
         type: string
         required: true
@@ -581,6 +605,7 @@ output:
         <Data Name="ProcessGuid">{{ ProcessGuid }}</Data>
         <Data Name="ProcessId">{{ ProcessId }}</Data>
         <Data Name="Image">{{ Image }}</Data>
+        <Data Name="User">{{ User }}</Data>
         <Data Name="TargetFilename">{{ TargetFilename }}</Data>
         <Data Name="CreationUtcTime">{{ CreationUtcTime }}</Data>
         {% elif EventID == 12 %}

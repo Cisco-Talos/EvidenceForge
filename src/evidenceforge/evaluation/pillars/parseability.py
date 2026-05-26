@@ -79,6 +79,20 @@ WINDOWS_VARIANT_MAP = {
     5156: "wfp_connection",
 }
 
+# EventID -> variant name mapping for Windows Event Sysmon
+SYSMON_VARIANT_MAP = {
+    1: "sysmon_process_create",
+    3: "sysmon_network_connect",
+    5: "sysmon_process_terminate",
+    7: "sysmon_image_loaded",
+    8: "sysmon_create_remote_thread",
+    10: "sysmon_process_access",
+    11: "sysmon_file_create",
+    12: "sysmon_registry_create_delete",
+    13: "sysmon_registry_set_value",
+    22: "sysmon_dns_query",
+}
+
 # Error category constants
 _SPEC_CATEGORIES = {"parse_error", "missing_field", "strict_validation"}
 _CONSTRAINT_CATEGORIES = {"constraint_violation", "validation_error"}
@@ -304,10 +318,12 @@ def _load_format_def(format_name: str) -> FormatDefinition | None:
 
 
 def _get_variant(format_name: str, record: ParsedRecord) -> str | None:
-    if format_name == "windows_event_security":
+    if format_name in ("windows_event_security", "windows_event_sysmon"):
         event_id = record.fields.get("EventID")
         if isinstance(event_id, int):
-            return WINDOWS_VARIANT_MAP.get(event_id)
+            if format_name == "windows_event_security":
+                return WINDOWS_VARIANT_MAP.get(event_id)
+            return SYSMON_VARIANT_MAP.get(event_id)
     return None
 
 

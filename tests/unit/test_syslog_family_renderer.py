@@ -24,6 +24,7 @@
 
 from datetime import UTC, datetime
 
+from evidenceforge.generation.emitters.syslog import SyslogEmitter
 from evidenceforge.generation.emitters.syslog_family import (
     make_syslog_family_route_key,
     render_rfc3164_syslog,
@@ -87,3 +88,108 @@ def test_rfc3164_timestamp_sort_key_handles_single_digit_day() -> None:
     assert rfc3164_timestamp_sort_key("<86>Mar  8 12:00:01 host app: one") < (
         rfc3164_timestamp_sort_key("<86>Mar 18 12:00:01 host app: two")
     )
+
+
+def test_normalize_sshd_child_pids_preserves_session_mapping_and_monotonicity() -> None:
+    lines = [
+        "<86>1 2024-03-18T12:37:10.283139Z app sshd 839794 - - Connection from 10.0.1.10 port 50000 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T12:37:11.001000Z app sshd 839794 - - Accepted password for admin from 10.0.1.10 port 50000 ssh2",
+        "<86>1 2024-03-18T12:45:43.059582Z app sshd 838687 - - Connection from 10.0.1.11 port 50001 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T12:45:44.100000Z app sshd 838687 - - Accepted password for admin from 10.0.1.11 port 50001 ssh2",
+    ]
+
+    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
+
+    pids = [int(line.split(" sshd ")[1].split(" ")[0]) for line in normalized]
+    assert pids[0] == pids[1]
+    assert pids[2] == pids[3]
+    assert pids[2] > pids[0]
+
+
+def test_normalize_sshd_child_pids_does_not_let_orphan_closes_rewrite_session_open() -> None:
+    lines = [
+        "<86>1 2024-03-18T15:51:34.963802Z app sshd 784323 - - Connection from 10.0.1.33 port 63690 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T15:51:35.491983Z app sshd 784323 - - Accepted publickey for user from 10.0.1.33 port 63690 ssh2",
+        "<86>1 2024-03-18T15:52:24.705921Z app sshd 784329 - - pam_unix(sshd:session): session closed for user other",
+        "<86>1 2024-03-18T15:54:22.189035Z app sshd 784327 - - Connection from 10.0.1.31 port 63843 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T15:54:23.876283Z app sshd 784327 - - Accepted password for user from 10.0.1.31 port 63843 ssh2",
+    ]
+
+    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
+
+    pids = [int(line.split(" sshd ")[1].split(" ")[0]) for line in normalized]
+    assert pids == [784323, 784323, 784329, 784327, 784327]
+
+
+def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
+    lines = [
+        "<30>1 2024-03-18T12:00:00.000000Z app unattended-upgr 100 - - Packages checked",
+        "<86>1 2024-03-18T12:00:10.000000Z app systemd-logind 456 - - New session 42 of user ubuntu.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "app.example",
+    )
+
+    assert len(normalized) == 3
+    assert any(
+        "pam_unix(" in line and "session opened for user ubuntu(uid=1000)" in line
+        for line in normalized
+    )
+    pam_index = next(i for i, line in enumerate(normalized) if "pam_unix(" in line)
+    logind_index = next(i for i, line in enumerate(normalized) if "systemd-logind" in line)
+    assert pam_index < logind_index
+
+
+def test_backfill_missing_logind_pam_openers_ignores_future_openers() -> None:
+    lines = [
+        "<86>1 2024-03-18T12:00:45.000000Z app sudo 1234 - - pam_unix(sudo:session): session opened for user admin(uid=1001) by (uid=0)",
+        "<86>1 2024-03-18T12:00:10.000000Z app systemd-logind 456 - - New session 42 of user admin.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "app.example",
+    )
+
+    pam_openers = [line for line in normalized if "session opened for user admin(uid=1001)" in line]
+    assert len(pam_openers) == 2
+
+
+def test_backfill_missing_logind_pam_openers_preserves_existing_opener() -> None:
+    lines = [
+        "<86>1 2024-03-18T12:00:05.000000Z app login 1234 - - pam_unix(login:session): session opened for user admin(uid=1001) by LOGIN(uid=0)",
+        "<86>1 2024-03-18T12:00:10.000000Z app systemd-logind 456 - - New session 42 of user admin.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "app.example",
+    )
+
+    assert normalized == lines
+
+
+def test_normalize_sudo_session_lifecycles_preserves_non_rfc5424_order() -> None:
+    lines = [
+        "<86>Nov  1 00:00:00 host sudo[2001]: 2023-NOV sentinel",
+        "<86>Apr  1 00:00:00 host sudo[2002]: 2024-APR sentinel",
+    ]
+
+    normalized = SyslogEmitter._normalize_sudo_session_lifecycles_for_lines(lines)
+
+    assert normalized == lines
+
+
+def test_normalize_sshd_child_pids_skips_oversized_pid_without_crashing() -> None:
+    huge_pid = "9" * 5000
+    lines = [
+        f"<86>1 2024-03-18T12:37:10.283139Z app sshd {huge_pid} - - Connection from 10.0.1.10 port 50000 on 10.0.2.10 port 22",
+        "<86>1 2024-03-18T12:37:11.001000Z app sshd 100 - - Accepted password for admin from 10.0.1.10 port 50000 ssh2",
+    ]
+
+    normalized = SyslogEmitter._normalize_sshd_child_pids_for_lines(lines, "app.example")
+
+    assert normalized[0] == lines[0]
+    assert " sshd 100 " in normalized[1]

@@ -34,11 +34,24 @@ from unittest.mock import Mock
 import pytest
 
 from evidenceforge.events.contexts import HttpContext, IdsContext
+from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
     _ambient_registry_entry_allowed,
+    _extra_syslog_service_values,
+    _linux_ambient_logind_probability,
+    _linux_baseline_pam_close_lead,
+    _linux_baseline_pam_open_lead,
+    _linux_baseline_session_initiator,
+    _linux_transient_syslog_pid,
     _materialize_registry_value_for_time,
     _module_matches_process,
+    _ntp_observed_second,
+    _ntp_sync_interval_seconds,
+    _ntp_sync_seconds_for_hour,
+    _render_extra_sudo_command_template,
+    _sample_lock_duration,
     _ufw_block_syn_packet_len,
     _ufw_block_ttl,
     _windows_scheduled_task_offsets,
@@ -71,6 +84,127 @@ def mock_emitters():
 @pytest.fixture
 def activity_gen(state_manager, mock_emitters):
     return ActivityGenerator(state_manager, mock_emitters)
+
+
+def test_lock_duration_sampler_avoids_exact_minute_fingerprints():
+    """Lock/unlock durations should carry human-scale second and millisecond texture."""
+    rng = random.Random(7)
+    meeting_durations = [_sample_lock_duration(rng, "meeting") for _ in range(50)]
+    lunch_durations = [_sample_lock_duration(rng, "lunch") for _ in range(50)]
+
+    assert all(duration.total_seconds() >= 127 for duration in meeting_durations)
+    assert any(duration.microseconds for duration in meeting_durations + lunch_durations)
+    assert any(duration.total_seconds() % 60 for duration in meeting_durations + lunch_durations)
+    assert max(duration.total_seconds() for duration in meeting_durations) > 20 * 60
+    assert min(duration.total_seconds() for duration in lunch_durations) < 35 * 60
+    assert max(duration.total_seconds() for duration in lunch_durations) > 55 * 60
+
+
+def test_linux_baseline_session_initiator_creates_pam_session_message():
+    """Ambient logind session noise should have a concrete PAM initiator."""
+    samples = [
+        _linux_baseline_session_initiator("admin", rng=random.Random(seed)) for seed in range(30)
+    ]
+    samples.extend(
+        _linux_baseline_session_initiator("root", rng=random.Random(seed)) for seed in range(30)
+    )
+
+    assert {service for _app_name, service, _message in samples} <= {"login", "sudo", "su"}
+    assert all(app_name != "CRON" for app_name, _service, _message in samples)
+    assert all(service != "cron" for _app_name, service, _message in samples)
+    assert all("pam_unix(" in message for _app_name, _service, message in samples)
+    assert any(
+        ":session): session opened for user admin(uid=" in message
+        for _app_name, _service, message in samples
+    )
+    assert any(
+        ":session): session opened for user root(uid=" in message
+        for _app_name, _service, message in samples
+    )
+
+
+def test_linux_server_ambient_logind_noise_is_thinned():
+    """Generic local-console/logind noise should be much sparser on servers."""
+    assert _linux_ambient_logind_probability("server") < _linux_ambient_logind_probability(
+        "workstation"
+    )
+    assert _linux_ambient_logind_probability("server") <= 0.15
+
+
+def test_server_pam_initiator_favors_sudo_over_local_login():
+    """Server baseline session noise should not overproduce LOGIN(uid=0)."""
+    samples = [
+        _linux_baseline_session_initiator("admin", rng=random.Random(seed), system_type="server")
+        for seed in range(120)
+    ]
+    services = [service for _app_name, service, _message in samples]
+
+    assert services.count("sudo") > services.count("login")
+
+
+def test_extra_sudo_command_template_uses_host_services():
+    """Extra sudo COMMAND text should vary through host-aware service placeholders."""
+    command = _render_extra_sudo_command_template(
+        "/bin/systemctl status {service}",
+        random.Random(3),
+        system_services=["mysql", "dns-client", "ssh"],
+        fallback_services=["apache2"],
+    )
+
+    assert command in {"/bin/systemctl status mysql", "/bin/systemctl status sshd"}
+    assert _extra_syslog_service_values(["mysql", "ssh"], ["apache2"]) == ["mysql", "sshd"]
+
+
+def test_extra_sudo_command_template_resolves_command_specific_placeholders():
+    """Extra sudo COMMAND text should vary counts and windows from config pools."""
+    command = _render_extra_sudo_command_template(
+        '/usr/bin/journalctl -u {service} -n {journal_lines} --since "{journal_window}"',
+        random.Random(7),
+        system_services=["postgresql", "dns-client"],
+        fallback_services=["apache2"],
+        params={
+            "journal_lines": ["40", "80"],
+            "journal_window": ["15 min ago", "45 min ago"],
+        },
+    )
+
+    assert command.startswith("/usr/bin/journalctl -u postgresql -n ")
+    assert "{journal_" not in command
+
+
+def test_linux_baseline_pam_leads_leave_visible_ordering_margin():
+    """Ambient PAM rows should lead logind rows by more than timestamp texture."""
+    rng = random.Random(11)
+    open_leads = [_linux_baseline_pam_open_lead(rng) for _ in range(50)]
+    close_leads = [_linux_baseline_pam_close_lead(rng) for _ in range(50)]
+
+    assert min(open_leads) >= timedelta(seconds=3)
+    assert max(open_leads) <= timedelta(seconds=8)
+    assert min(close_leads) >= timedelta(milliseconds=1200)
+    assert max(close_leads) <= timedelta(milliseconds=4200)
+
+
+def test_linux_transient_syslog_pid_uses_host_pid_allocator():
+    """Short-lived PAM/sudo syslog records should use one invocation PID per call."""
+    state_manager = Mock()
+    state_manager.allocate_transient_linux_pid.side_effect = [24123, 24171]
+    event_time = datetime(2024, 3, 18, 12, 5, tzinfo=UTC)
+
+    first = _linux_transient_syslog_pid(
+        state_manager,
+        "WEB-EXT-01",
+        event_time,
+        random.Random(3),
+    )
+    second = _linux_transient_syslog_pid(
+        state_manager,
+        "WEB-EXT-01",
+        event_time + timedelta(seconds=20),
+        random.Random(3),
+    )
+
+    assert [first, second] == [24123, 24171]
+    assert state_manager.allocate_transient_linux_pid.call_count == 2
 
 
 @pytest.fixture
@@ -218,9 +352,39 @@ class TestIdsAlertCorrelation:
         assert event.ntp.stratum >= 1
         assert event.ntp.rec_ts > event.ntp.org_ts
         assert event.ntp.xmt_ts >= event.ntp.rec_ts
+        assert event.network.conn_state == "SF"
+        assert event.network.history == "Dd"
+        assert event.network.resp_bytes > 0
+        assert event.network.resp_pkts > 0
+        assert event.network.resp_ip_bytes > 0
+
+    def test_ntp_no_response_connection_does_not_emit_ntp_log(
+        self,
+        activity_gen,
+        mock_emitters,
+        timestamp,
+    ):
+        """NTP parser rows require responder payload in the matching conn row."""
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="129.6.15.28",
+            time=timestamp,
+            dst_port=123,
+            proto="udp",
+            service="ntp",
+            duration=0.02,
+            orig_bytes=48,
+            resp_bytes=0,
+            conn_state="S0",
+        )
+
+        event = mock_emitters["zeek_conn"].emit.call_args[0][0]
+        assert event.ntp is None
+        assert event.network.resp_bytes == 0
+        assert event.network.resp_pkts == 0
 
     def test_ntp_association_fields_are_stable(self, activity_gen, mock_emitters, timestamp):
-        """NTP version and poll behavior should be stable per client/server pair."""
+        """NTP association and server response fields should be stable."""
         for minute in (0, 10):
             activity_gen.generate_connection(
                 src_ip="10.0.1.50",
@@ -242,6 +406,62 @@ class TestIdsAlertCorrelation:
         assert first.precision == second.precision
         assert first.root_delay == second.root_delay
         assert first.root_disp == second.root_disp
+
+    def test_ntp_response_fields_are_server_owned(self, activity_gen, mock_emitters, timestamp):
+        """Server-owned NTP response fields should not vary by requesting client."""
+        for src_ip in ("10.0.1.50", "10.0.1.51", "10.0.2.10"):
+            activity_gen.generate_connection(
+                src_ip=src_ip,
+                dst_ip="10.0.3.10",
+                time=timestamp,
+                dst_port=123,
+                proto="udp",
+                service="ntp",
+                duration=0.02,
+                orig_bytes=48,
+                resp_bytes=48,
+            )
+
+        ntp_rows = [call.args[0].ntp for call in mock_emitters["zeek_ntp"].emit.call_args_list]
+        assert len(ntp_rows) == 3
+        assert {row.precision for row in ntp_rows} == {ntp_rows[0].precision}
+        assert {row.root_delay for row in ntp_rows} == {ntp_rows[0].root_delay}
+        assert {row.root_disp for row in ntp_rows} == {ntp_rows[0].root_disp}
+
+    def test_ntp_schedule_helpers_avoid_exact_hourly_fingerprint(self):
+        """Baseline NTP intervals should vary around the association poll."""
+        intervals = [
+            round(_ntp_sync_interval_seconds("WS-01", "129.6.15.28", sequence, 4096), 3)
+            for sequence in range(12)
+        ]
+        observed = [
+            round(_ntp_observed_second("WS-01", "129.6.15.28", sequence, 4096.0 * sequence), 3)
+            for sequence in range(12)
+        ]
+
+        assert len(set(intervals)) > 1
+        assert any(abs(interval - 3600.0) > 30.0 for interval in intervals)
+        assert min(intervals) >= 300.0
+        assert observed != [4096.0 * sequence for sequence in range(12)]
+
+    def test_ntp_schedule_produces_visible_syncs_after_warmup(self):
+        """Fast-forwarding the NTP schedule should not skip the visible window."""
+        generation_epoch = datetime(2024, 6, 14, 22, 0, tzinfo=UTC)
+        visible_hours = [generation_epoch + timedelta(hours=hour) for hour in range(8, 16)]
+        syncs_by_hour = [
+            _ntp_sync_seconds_for_hour(
+                "WS-01",
+                "129.6.15.28",
+                generation_epoch,
+                hour,
+                4096,
+            )
+            for hour in visible_hours
+        ]
+        total_syncs = sum(len(syncs) for syncs in syncs_by_hour)
+
+        assert total_syncs > 0
+        assert [len(syncs) for syncs in syncs_by_hour] != [1] * len(syncs_by_hour)
 
     def test_completed_tls_duration_contains_zeek_analyzer_evidence(
         self, activity_gen, mock_emitters, timestamp
@@ -447,7 +667,10 @@ class TestWebAccessCorrelation:
         """Auto-generated HTTP contexts should not size static resources from flow bytes."""
         from evidenceforge.generation.activity import generator as generator_module
         from evidenceforge.generation.activity import proxy_uri
-        from evidenceforge.generation.activity.http_content import response_size_for_status
+        from evidenceforge.generation.activity.http_content import (
+            apply_transfer_size_variance,
+            response_size_for_status,
+        )
 
         monkeypatch.setattr(
             proxy_uri,
@@ -472,10 +695,13 @@ class TestWebAccessCorrelation:
 
         event = mock_emitters["zeek_http"].emit.call_args[0][0]
         assert event.http.uri == "/favicon.ico"
-        assert event.http.response_body_len == response_size_for_status(
-            200,
-            "portal.example.com",
-            "/favicon.ico",
+        assert event.http.response_body_len == apply_transfer_size_variance(
+            response_size_for_status(200, "portal.example.com", "/favicon.ico"),
+            status_code=200,
+            host="portal.example.com",
+            uri="/favicon.ico",
+            content_type="image/x-icon",
+            variant_key=f"10.0.10.50:{event.http.user_agent}",
         )
         assert event.http.resp_mime_types == ["image/x-icon"]
 
@@ -601,11 +827,47 @@ class TestSyslogContext:
         )
 
         syslog = mock_emitters["syslog"]
-        assert syslog.emit.called
-        event = syslog.emit.call_args[0][0]
-        assert event.syslog is not None
-        assert event.syslog.app_name == "sshd"
-        assert "Accepted password for alice" in event.syslog.message
+        syslog_events = [call.args[0] for call in syslog.emit.call_args_list]
+        assert any(
+            event.syslog
+            and event.syslog.app_name == "sshd"
+            and "Accepted password for alice" in event.syslog.message
+            for event in syslog_events
+        )
+
+    def test_linux_remote_logon_delegates_to_single_ssh_session_contract(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """Linux Type 10 compatibility should not emit a duplicate generic logon."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        logon_id = activity_gen.generate_logon(
+            user=User(username="alice", full_name="Alice", email="a@t.com", enabled=True),
+            system=linux,
+            time=timestamp,
+            source_ip="10.0.10.1",
+            logon_type=10,
+        )
+
+        session = state_manager.get_session(logon_id)
+        assert session is not None
+        assert session.session_kind == "ssh"
+
+        ecar_session_events = [
+            call.args[0]
+            for call in mock_emitters["ecar"].emit.call_args_list
+            if call.args[0].auth is not None and call.args[0].auth.username == "alice"
+        ]
+        assert [event.event_type for event in ecar_session_events] == ["ssh_session"]
+        assert ecar_session_events[0].auth.logon_id == logon_id
+
+        network_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call.args[0].network is not None and call.args[0].network.dst_port == 22
+        ]
+        assert network_events
 
     def test_logon_no_syslog_context_on_windows(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -793,6 +1055,41 @@ class TestWeirdContext:
 class TestDhcpLease:
     """DHCP lease events dispatch through canonical path."""
 
+    def test_dhcp_lease_bundle_anchor_is_stable(self, timestamp):
+        """DHCP lease requests should expose durable deterministic anchors."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        request = DhcpLeaseRequest(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+            server_addr="10.0.0.1",
+            lease_time=7200.0,
+            uid="CTest123456789ab",
+            msg_types=["REQUEST", "ACK"],
+            domain="corp.local",
+        )
+
+        first = DhcpLeaseActionBundle(Mock(), request).anchor
+        second = DhcpLeaseActionBundle(Mock(), request).anchor
+
+        assert first == second
+        assert first.family == "dhcp_lease"
+        assert first.stable_id.startswith("dhcp-lease-")
+
+    def test_dhcp_lease_bundle_delegates_to_adapter(self, timestamp):
+        """The bundle should preserve the current generator adapter contract."""
+        linux = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        request = DhcpLeaseRequest(
+            system=linux,
+            time=timestamp,
+            mac="00:50:56:ab:cd:ef",
+        )
+        executor = Mock()
+
+        DhcpLeaseActionBundle(executor, request).execute()
+
+        executor._execute_dhcp_lease_bundle.assert_called_once_with(request)
+
     def test_generate_dhcp_lease_dispatches(
         self, activity_gen, state_manager, mock_emitters, timestamp
     ):
@@ -870,8 +1167,9 @@ class TestDhcpLease:
             and call[0][0].syslog.app_name == "dhclient"
         ]
         syslog_messages = [event.syslog.message for event in syslog_events]
+        interface = linux_primary_interface(linux)
         assert syslog_messages == [
-            "DHCPREQUEST for 10.0.10.2 on eth0 to 10.0.0.1 port 67",
+            f"DHCPREQUEST for 10.0.10.2 on {interface} to 10.0.0.1 port 67",
             "DHCPACK of 10.0.10.2 from 10.0.0.1",
             "bound to 10.0.10.2 -- renewal in 3600 seconds.",
         ]
@@ -934,6 +1232,15 @@ class TestAnonymousLogon:
         assert event.auth.source_ip == ws.ip
         assert event.auth.source_port > 0
         assert event.auth.workstation_name == ws.hostname
+        network_event = next(
+            call[0][0]
+            for call in mock_emitters["zeek_conn"].emit.call_args_list
+            if call[0][0].event_type == "connection"
+        )
+        assert network_event.network.src_ip == ws.ip
+        assert network_event.network.src_port == event.auth.source_port
+        assert network_event.network.dst_ip == dc.ip
+        assert network_event.network.dst_port == 445
 
     def test_anonymous_logon_no_session_created(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -978,16 +1285,18 @@ class TestBaselineSshTiming:
     """Regression tests for baseline SSH connection/syslog correlation."""
 
     def test_disconnect_uses_same_duration_as_generated_connection(self):
-        """Baseline SSH disconnect timing should share the conn.log duration."""
+        """Baseline SSH disconnect timing should share the bundle transport duration."""
         import inspect
 
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
         assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
+        assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
-        assert 'conn_state="SF"' in source
         assert "max(1.0, ssh_duration)" in source
+        assert "emit_session_close=(" in source
+        assert 'source="baseline_ssh_noise"' in source
 
     def test_syslog_ssh_noise_is_server_scoped_and_roster_based(self):
         """Generic syslog SSH churn should not blanket every Linux host."""

@@ -10,11 +10,18 @@
 domain_overrides:
   windows_update:
     os_keywords: ["windows"]
+    # Windows Update clients are host/patch-level sticky: one workstation should
+    # keep a stable agent across repeated requests, while the fleet should not
+    # collapse to one build string.
+    stickiness: source_host
     hosts:
       - download.windowsupdate.com
-      - ctldl.windowsupdate.com
     user_agents:
-      - "Windows-Update-Agent/10.0.10011.16384 Client-Protocol/2.33"
+      - "Windows-Update-Agent/10.0.19041.3636 Client-Protocol/2.31"
+      - "Windows-Update-Agent/10.0.19045.4046 Client-Protocol/2.33"
+      - "Windows-Update-Agent/10.0.22000.2538 Client-Protocol/2.35"
+      - "Windows-Update-Agent/10.0.22621.3155 Client-Protocol/2.40"
+      - "Windows-Update-Agent/10.0.22631.3155 Client-Protocol/2.40"
   google_update_windows:
     os_keywords: ["windows"]
     hosts:
@@ -32,6 +39,7 @@ domain_overrides:
   windows_cryptoapi:
     os_keywords: ["windows"]
     hosts:
+      - ctldl.windowsupdate.com
       - crl.microsoft.com
       - ocsp.digicert.com
       - crl3.digicert.com
@@ -54,6 +62,72 @@ domain_overrides:
     user_agents:
       - "Windows-Device-Management/10.0"
       - "Microsoft-WNS/10.0"
+  adobe_update_windows:
+    os_keywords: ["windows"]
+    hosts:
+      - armmf.adobe.com
+      - swupmf.adobe.com
+      - ccmdl.adobe.com
+    user_agents:
+      - "AdobeARM/1.0"
+      - "Adobe Application Manager 2.0"
+  dropbox_update_windows:
+    os_keywords: ["windows"]
+    hosts:
+      - desktop.dropbox.com
+    user_agents:
+      - "DropboxUpdate/199.4.6287"
+  google_drive_desktop:
+    os_keywords: ["windows"]
+    hosts:
+      - clients6.google.com
+      - clients4.google.com
+    user_agents:
+      - "GoogleDriveFS/97.0.1.0 Windows"
+  cisco_secure_client:
+    os_keywords: ["windows"]
+    hosts:
+      - secure-client-updates.cisco.com
+    user_agents:
+      - "Cisco Secure Client/5.1.4 Windows"
+  globalprotect:
+    os_keywords: ["windows"]
+    hosts:
+      - updates.paloaltonetworks.com
+    user_agents:
+      - "GlobalProtect/6.2.3 Windows"
+  zscaler_client_connector:
+    os_keywords: ["windows"]
+    hosts:
+      - config.zscaler.net
+      - gateway.zscaler.net
+    user_agents:
+      - "Zscaler Client Connector/4.3.0"
+  lenovo_system_update:
+    os_keywords: ["windows"]
+    hosts:
+      - download.lenovo.com
+    user_agents:
+      - "Lenovo System Update"
+  hp_image_assistant:
+    os_keywords: ["windows"]
+    hosts:
+      - hpia.hpcloud.hp.com
+    user_agents:
+      - "HP Image Assistant"
+  dell_command_update:
+    os_keywords: ["windows"]
+    hosts:
+      - dellupdater.dell.com
+    user_agents:
+      - "Dell Command Update/5.1"
+  duo_device_health:
+    os_keywords: ["windows"]
+    hosts:
+      - dl.duosecurity.com
+      - api-17.duosecurity.com
+    user_agents:
+      - "Duo Device Health/5.6.0"
 
 workstation:
   windows:

@@ -11,6 +11,7 @@ PERSONA_APP_INDICES, and _PE_METADATA data structures.
 from __future__ import annotations
 
 import random
+import re
 from typing import Any
 
 from evidenceforge.config import get_activity_directory
@@ -232,6 +233,19 @@ def _build_pe_index() -> dict[str, tuple[str, str, str, str, str]]:
                 pe.get("company", "-"),
                 pe.get("original_filename", "-"),
             )
+        for child_command in win.get("children", []):
+            child_image = _child_image_from_command("windows", str(child_command), image_path)
+            child_basename = child_image.rsplit("\\", 1)[-1].lower()
+            if not child_basename or child_basename in index:
+                continue
+            child_original_filename = child_image.rsplit("\\", 1)[-1]
+            index[child_basename] = (
+                pe.get("file_version", "-"),
+                pe.get("description", "-"),
+                pe.get("product", "-"),
+                pe.get("company", "-"),
+                child_original_filename,
+            )
     return index
 
 
@@ -337,10 +351,36 @@ def _build_path_index() -> dict[str, dict[str, str]]:
     return index
 
 
+def _child_image_from_command(
+    os_category: str,
+    command_line: str,
+    fallback_image_path: str,
+) -> str:
+    """Return the executable image described by a child-process command line."""
+    stripped = command_line.strip()
+    if not stripped:
+        return fallback_image_path
+
+    if stripped.startswith('"'):
+        closing_quote = stripped.find('"', 1)
+        if closing_quote > 1:
+            return stripped[1:closing_quote]
+
+    if os_category == "windows":
+        match = re.match(r"^([A-Za-z]:\\.*?\.exe)\b", stripped, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    elif stripped.startswith("/"):
+        return stripped.split()[0]
+
+    return fallback_image_path
+
+
 def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str]]:
     """Get child process definitions for a given parent executable.
 
-    Children inherit the parent's image_path from the catalog.
+    Children use the executable named by their command line when it is present,
+    otherwise they inherit the parent's image path from the catalog.
 
     Args:
         os_category: "windows" or "linux"
@@ -366,7 +406,13 @@ def get_child_processes(os_category: str, parent_exe: str) -> list[dict[str, str
         children = platform.get("children", [])
         if not children:
             return []
-        return [{"image": image_path, "command_line": cmd} for cmd in children]
+        return [
+            {
+                "image": _child_image_from_command(os_category, cmd, image_path),
+                "command_line": cmd,
+            }
+            for cmd in children
+        ]
     return []
 
 

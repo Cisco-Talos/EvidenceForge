@@ -11,6 +11,7 @@ from evidenceforge.utils.rng import _stable_seed
 _EXTENSION_MIME_TYPES: dict[str, str] = {
     ".cab": "application/vnd.ms-cab-compressed",
     ".css": "text/css",
+    ".exe": "application/x-msdownload",
     ".gif": "image/gif",
     ".gz": "application/x-gzip",
     ".ico": "image/x-icon",
@@ -37,6 +38,7 @@ _RESPONSE_SIZE_RANGES: dict[str, tuple[int, int]] = {
     "application/pdf": (20_000, 2_000_000),
     "application/pkix-crl": (2_000, 200_000),
     "application/vnd.ms-cab-compressed": (50_000, 5_000_000),
+    "application/x-msdownload": (5_000_000, 150_000_000),
     "application/x-gzip": (10_000, 5_000_000),
     "font/woff": (20_000, 100_000),
     "font/woff2": (20_000, 100_000),
@@ -49,6 +51,16 @@ _RESPONSE_SIZE_RANGES: dict[str, tuple[int, int]] = {
     "text/css": (2_000, 50_000),
     "text/html": (5_000, 80_000),
     "text/plain": (100, 20_000),
+}
+
+_COMPRESSIBLE_MIME_TYPES = {
+    "application/javascript",
+    "application/json",
+    "application/xml",
+    "image/svg+xml",
+    "text/css",
+    "text/html",
+    "text/plain",
 }
 
 _HEALTH_ENDPOINT_PATHS = {
@@ -105,6 +117,94 @@ def response_size_for_mime(rng: random.Random, content_type: str) -> int:
     return rng.randint(lo, hi)
 
 
+def response_size_floor_for_mime(content_type: str) -> int:
+    """Return the configured minimum body size for a MIME type."""
+    lo, _hi = _RESPONSE_SIZE_RANGES.get(content_type, (500, 50_000))
+    return lo
+
+
+def is_download_scale_mime(content_type: str) -> bool:
+    """Return whether a MIME type should use download-scale body sizes."""
+    return response_size_floor_for_mime(content_type) >= 1_000_000
+
+
+def coerce_response_size_for_mime(
+    rng: random.Random,
+    content_type: str,
+    preferred_size: int | None,
+) -> int:
+    """Return a source-native body size, replacing tiny download bodies."""
+    preferred = max(0, preferred_size or 0)
+    floor = response_size_floor_for_mime(content_type)
+    if preferred and (not is_download_scale_mime(content_type) or preferred >= floor):
+        return preferred
+    return response_size_for_mime(rng, content_type)
+
+
+def apply_transfer_size_variance(
+    body_size: int,
+    *,
+    status_code: int,
+    host: str,
+    uri: str,
+    content_type: str | None = None,
+    variant_key: str | None = None,
+) -> int:
+    """Return source-visible transfer bytes for a stable response variant.
+
+    Static web resources have stable origin content, but source logs often record
+    bytes after client/cache/compression negotiation. Keep the default content
+    size stable while allowing callers with a client/session key to model those
+    source-visible variants deterministically.
+    """
+    if (
+        not variant_key
+        or body_size <= 0
+        or status_code != 200
+        or not is_stable_resource_path(uri)
+        or is_health_endpoint_path(uri)
+    ):
+        return body_size
+
+    mime_type = content_type or normalize_mime_type_for_path(uri, "text/html")
+    if is_download_scale_mime(mime_type):
+        return body_size
+
+    rng = random.Random(
+        _stable_seed(f"web_transfer_variant:{status_code}:{host}:{uri}:{mime_type}:{variant_key}")
+    )
+    if mime_type in _COMPRESSIBLE_MIME_TYPES or mime_type.startswith("text/"):
+        ratio = rng.uniform(0.36, 0.88)
+        jitter = rng.randint(-48, 96)
+    elif mime_type.startswith(("image/", "font/")):
+        ratio = rng.uniform(0.94, 1.025)
+        jitter = rng.randint(-16, 32)
+    else:
+        ratio = rng.uniform(0.82, 1.03)
+        jitter = rng.randint(-32, 64)
+    return max(1, int(body_size * ratio) + jitter)
+
+
+def response_size_for_transfer_variant(
+    status_code: int,
+    host: str,
+    uri: str,
+    *,
+    content_type: str | None = None,
+    variant_key: str | None = None,
+) -> int:
+    """Return a status-coherent response size with optional client variation."""
+    body_size = response_size_for_status(status_code, host, uri)
+    return apply_transfer_size_variance(
+        body_size,
+        status_code=status_code,
+        host=host,
+        uri=uri,
+        content_type=content_type,
+        variant_key=variant_key,
+    )
+
+
 def http_status_message(status_code: int) -> str:
     """Return a conventional HTTP reason phrase for a status code."""
     return _HTTP_STATUS_MESSAGES.get(status_code, "OK")
@@ -155,20 +255,25 @@ def is_stable_resource_path(uri: str) -> bool:
     if clean_path in {"/", "/index.html", "/robots.txt", "/sitemap.xml", "/favicon.ico"}:
         return True
     return suffix in {
+        ".cab",
         ".css",
+        ".exe",
         ".gif",
+        ".gz",
         ".ico",
         ".jpeg",
         ".jpg",
         ".js",
         ".map",
         ".png",
+        ".pdf",
         ".svg",
         ".txt",
         ".webp",
         ".woff",
         ".woff2",
         ".xml",
+        ".zip",
     }
 
 

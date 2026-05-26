@@ -1,0 +1,49 @@
+{
+  "loop": 133,
+  "fix_commit": "b4ee3d7d",
+  "assessment_commit": null,
+  "automated_eval": {
+    "overall_score": 96.1304298265616,
+    "total_records": 75833,
+    "acceptance_passed": true,
+    "pillars": {
+      "parseability": 100.0,
+      "plausibility": 97.22171356051913,
+      "causality": 93.84191176470588,
+      "timing": 91.8226174762767
+    }
+  },
+  "blind_review": {
+    "threat_hunter_synthetic_confidence": 72,
+    "detection_engineer_synthetic_confidence": 72,
+    "network_forensics_synthetic_confidence": 68,
+    "host_forensics_synthetic_confidence": 72,
+    "average_synthetic_confidence": 71.0
+  },
+  "hard_probes": {
+    "rsyslog_fd_over_999_count": 0,
+    "unix_session_over_999_count": 0,
+    "dbus_bus_over_999_count": 0,
+    "max_rsyslog_fd": 64,
+    "max_unix_session": 177,
+    "max_dbus_bus_id": 821,
+    "ecar_icmp_zero_port_count": 0,
+    "contamination_scan_status": "clean",
+    "data_directory_read_only_before_review": true
+  },
+  "top_next_targets": [
+    "Add source-native per-sensor Zeek observation variance for overlapping core/DMZ rows, because Threat Hunter matched 1,343/1,479 duplicate flow metrics.",
+    "Make Linux eCAR PID allocation mostly monotonic per host/time while preserving realistic wrap/reuse behavior.",
+    "Randomize Windows host boot-time anchors used in Sysmon ProcessGuid timestamp components.",
+    "Replace short hex DKIM/TXT placeholder payloads with source-native long base64 DNS TXT records.",
+    "Broaden suspicious DNS/web-scan grammar and separate scanner/resolver/source roles."
+  ],
+  "artifacts": {
+    "eval_results": "scenarios/iteration-test/blind-test/loop-133/eval_results.json",
+    "hard_probe_results": "scenarios/iteration-test/blind-test/loop-133/hard_probe_results.json",
+    "threat_hunter_report": "scenarios/iteration-test/blind-test/loop-133/threat-hunter-report.md",
+    "detection_engineer_report": "scenarios/iteration-test/blind-test/loop-133/detection-engineer-report.md",
+    "network_forensics_report": "scenarios/iteration-test/blind-test/loop-133/network-forensics-report.md",
+    "host_forensics_report": "scenarios/iteration-test/blind-test/loop-133/host-forensics-report.md"
+  }
+}

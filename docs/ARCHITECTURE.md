@@ -64,6 +64,13 @@ This separation means scenario creation benefits from LLM reasoning about attack
           └────────────┬────────────────┘
                        │
           ┌────────────▼────────────────┐
+          │     Action Bundles          │
+          │  Real activities produce    │
+          │  coordinated evidence       │
+          │  (SSH, proxy, RDP, scans)   │
+          └────────────┬────────────────┘
+                       │
+          ┌────────────▼────────────────┐
           │    ActivityGenerator         │
           │  Emits evidence against     │
           │  planner-owned state and    │
@@ -95,10 +102,66 @@ This separation means scenario creation benefits from LLM reasoning about attack
 
 The core architectural principle is that **two emitters cannot disagree about shared fields because there is only one source of truth.**
 
-A single `SecurityEvent` object carries all the data for one logical security event. When a user logs into a Linux system, ActivityGenerator creates one SecurityEvent with AuthContext + SyslogContext, and the EventDispatcher routes it to every relevant emitter. The syslog emitter renders from SyslogContext ("Accepted password for alice from ..."), and the eCAR emitter renders from AuthContext as a USER_SESSION record — all from the same object, so timestamps, usernames, and LogonIDs are guaranteed identical.
+A `SecurityEvent` object carries all the data for one logical evidence-producing
+occurrence. Multiple contexts on that event describe facets of the same occurrence
+when those facts must agree across sources. For example, a process-created
+occurrence can carry `AuthContext`, `ProcessContext`, and `EdrContext` so Windows,
+Sysmon, and endpoint telemetry render the same PID, LogonID, parent, image, and
+actor identity.
+
+Multi-phase activities are modeled one level higher, as action bundles. An action
+bundle represents a real-world activity that can produce several coordinated
+`SecurityEvent`s. For example, an SSH session may produce transport connection
+evidence, SSH auth syslog messages, endpoint `USER_SESSION` login/logout rows,
+sshd/bash process evidence, bash history commands, and close/teardown evidence.
+The bundle owns lifecycle, timing constraints, observation intent, and durable
+anchors across those events; each `SecurityEvent` remains the canonical evidence
+unit dispatched to state and emitters.
+
+Bundle contracts compose only through canonical semantic layers. A higher-level
+bundle may call a lower-level bundle or generator entrypoint when that lower
+layer owns a sub-occurrence; for example, an SSH session delegates its TCP/22
+transport occurrence to the network-connection contract, and browser sessions
+delegate request transport to network/proxy/DNS/file-transfer contracts. Rendered
+artifacts do not cascade. A Zeek `conn.log` row, eCAR FLOW row, syslog line, or
+Windows XML event can be validated against sibling evidence, but it must not
+trigger generation of that sibling evidence; the sibling must come from a
+canonical event, context, or upstream bundle.
+
+`SecurityEvent.timestamp` is canonical world time. Source-native timestamps are
+planned separately by `SourceTimingPlanner`
+(`src/evidenceforge/generation/source_timing.py`) and stored on
+`SecurityEvent.source_timing` during dispatch. Migrated emitters ask the planner
+for a source time with explicit bounds instead of adding independent jitter
+locally. Causally related rows are constrained (`A < B` within one source
+stream), equal canonical timestamps are ordered only when a relationship requires
+it, and independent events may still share source timestamps. Across different
+source families there is no global total order; each source is responsible for
+preserving its own causal order with stable, explainable offsets.
+
+`ObservationPolicy` (`src/evidenceforge/events/observation.py`) is the
+source-coverage contract. It applies named `observation_profile`s after
+canonical state is updated and before a matching emitter renders. Profiles may
+drop or delay source evidence, but decisions are coherent within source-local
+lifecycle groups: endpoint process create/dependent/terminate rows for one
+process, logon/logoff rows for one session, and network/protocol companions for
+one Zeek UID/tuple share one source-local observation decision. This models
+partial collection without leaving a single source with impossible orphaned
+process, session, or flow fragments. The default `complete` profile preserves
+full coverage; non-default profiles make observation status visible through
+`OBSERVATION_MANIFEST.json` and the ground-truth source evidence table.
+
+The temporal constraint graph
+(`src/evidenceforge/generation/timing/constraint_graph.py`) is the internal
+foundation for multi-event timing. It resolves preferred timestamps, hard
+not-before/not-after bounds, lifecycle windows, and directed "after this evidence
+by at least this gap" relationships deterministically. `SourceTimingPlanner`
+already uses this graph for paired source rows and "source after source" timing;
+future action bundles should use it when one activity produces dependent
+`SecurityEvent`s whose source-native observations must not invert.
 
 ```
-            ActivityGenerator
+            ActionBundle / ActivityGenerator
                    │
                    ▼
         ┌─── SecurityEvent ───┐
@@ -159,6 +222,7 @@ SecurityEvent
 ├── kerberos: KerberosContext (ticket_type, service, encryption)
 ├── shell: ShellContext (command)
 ├── ... (27 context types total)
+├── source_timing: SourceTimingPlan (planned source-native timestamps)
 └── _sensor_hostnames_by_format: dict (network visibility metadata)
 ```
 
@@ -167,9 +231,269 @@ All contexts are `@dataclass(slots=True)` for memory efficiency. They're defined
 **Key design decisions:**
 - Host context uses a dual `src_host`/`dst_host` model — `src_host` is the system that originates or performs the action; `dst_host` is the target or receiver. For single-host events only one is set; for network events both may be set when both endpoints are known
 - Contexts are composable — a logon event has Host + Auth + Syslog contexts; a process event has Host + Process + Syslog contexts
+- Contexts describe facets of one occurrence. They must not be used to pack a
+  whole multi-phase activity into one event. If connection, auth, session open,
+  process creation, command execution, and session close are distinct occurrences,
+  coordinate them with an action bundle and emit distinct `SecurityEvent`s.
 - All fields are optional except `timestamp` and `event_type` — emitters check for the contexts they need
 - The syslog emitter renders from SyslogContext (app_name, message, pid, facility, severity). All syslog message construction is done by ActivityGenerator, not the emitter.
 - `RawLogEntry` exists solely for the user-facing `raw` event type in scenario YAML. All internal engine code uses canonical SecurityEvent dispatch exclusively
+
+### Action Bundles
+
+Action bundles sit between world/storyline/baseline intent and canonical
+`SecurityEvent` dispatch:
+
+```
+intent -> action bundle -> lifecycle/timing/observation -> SecurityEvents -> dispatcher/state/emitters
+```
+
+The source of intent can be a storyline event, background/persona scheduler,
+red-herring generator, or scanner/noise generator. The evidence construction path
+should still be shared. A storyline SSH session, baseline SSH admin session, and
+suspicious-but-benign SSH red herring should use the same SSH action-bundle
+semantics instead of hand-rolling separate timing, session, syslog, endpoint, and
+Zeek behavior.
+
+SSH bundle callers may supply different intent sources, such as typed storyline
+events, baseline remote-admin noise, or storyline `scp` transfers to modeled
+Linux receivers. The bundle keeps an intent anchor for durable narrative
+references and a resolved execution anchor after source-port reservation, so two
+otherwise identical SSH sessions do not collapse when the network tuple differs.
+The bundle owns SSH auth/session/PAM/logind ordering, shell readiness, and
+session close intent, but the TCP/22 transport occurrence is delegated to the
+canonical `NetworkConnectionActionBundle` through `generate_connection()`. The
+network contract owns tuple allocation, Zeek UID, packet/byte accounting,
+visibility, endpoint flow rendering, and transport close time; SSH constrains
+its session evidence against that transport lifecycle instead of rendering Zeek
+connection evidence from the `ssh_session` event. Source-native PAM close
+evidence stays compatible with the transport close while retaining small
+source-local timing texture, so host close rows are not bit-identical to Zeek
+connection close rows unless a source contract requires exact equality.
+Transfer-specific receiver artifacts, such as the target-side file create for
+`scp`, are emitted after bundle-owned SSH auth/session timing rather than
+duplicating SSH auth or transport timing locally.
+The legacy Linux remote-interactive logon compatibility path also delegates to
+the SSH bundle when the source is remote. It returns the allocated session ID,
+but does not render a separate generic `logon` event; endpoint session evidence
+comes from the bundle-owned `ssh_session` occurrence so eCAR/EDR cannot observe
+two logins for one SSH transport. eCAR/EDR keeps a same-source ordering contract
+for modeled SSH: the matching inbound `FLOW` transport row renders before the
+SSH `USER_SESSION/LOGIN` row for the same source tuple. Endpoint FLOW rendering
+also treats outbound SSH client-process visibility as optional when preserving
+it would delay the transport observation past remote authentication. The SSH
+auth graph accounts for both the resolved network-sensor transport timestamp and
+the canonical connection event's eCAR/EDR source-latency window before placing
+syslog authentication rows.
+
+RDP bundle callers supply one remote interactive Windows session intent. The
+`RdpSessionActionBundle` materializes source-side `mstsc.exe` when a modeled
+source host is available, emits the TCP/3389 transport through canonical
+connection generation, and emits the target Type 10 logon after source-visible
+transport evidence. The bundle keeps source port, target session metadata,
+transport PID, network close time, and source-ready timing aligned so storyline,
+world-planner, and baseline RDP paths do not independently invent partial RDP
+evidence. When the source host is modeled, the bundle also extends the source
+`mstsc.exe` process and owning interactive session through the canonical
+transport close so source endpoint telemetry cannot terminate before the visible
+RDP flow. Successful RDP sessions request an `SF` transport with response-bearing
+byte/packet accounting and then use the resolved network interval as the floor
+and ceiling for target authentication timing. Compatibility calls that request a
+Windows Type 10 logon without a real remote source are treated as local
+interactive logons rather than inventing self-sourced RDP evidence.
+Endpoint FLOW rendering keeps RDP transport observations near the connection
+open, dropping late process identity when necessary instead of moving FLOW rows
+past target authentication.
+
+Windows remote-admin callers supply explicit credential use or service-install
+intent. `ExplicitCredentialUseActionBundle` owns source-host 4648 evidence:
+subject-session selection, caller-process materialization or validation, source
+endpoint semantics, and source-visible ordering after the caller process.
+`WindowsServiceInstallActionBundle` owns service-control/service-install
+evidence: companion SMB/RPC transport, dropped service-binary file creation when
+applicable, and the target 4697/service context. Tool-specific storyline choices
+such as `runas`, `PsExec`, `wmic`, and `schtasks` remain intent inputs rather
+than separate evidence-generation paths.
+
+Explicit forward proxy callers likewise supply one logical client-to-origin HTTP
+or HTTPS request, and `ProxyTransactionActionBundle` expands it into the
+source-native evidence that real sensors would see: client-to-proxy connection
+and proxy access rows, optional CONNECT tunnel setup/reuse, terminal deny or
+cache-hit behavior, proxy-origin DNS, and proxy-to-origin egress. The bundle owns
+the timing constraint that origin-side activity cannot become visible before the
+client-side proxy request would be source-visible. Proxy route selection and
+format-specific rendering stay outside the bundle.
+
+Network-connection callers supply one logical connection occurrence, and
+`NetworkConnectionActionBundle` owns the internal boundary around tuple identity,
+source/destination host semantics, source-port allocation, hostname/DNS/TLS/HTTP
+and file metadata, proxy/firewall/IDS/EDR flow correlation, packet accounting,
+visibility handoff, Zeek UID/state identity, source endpoint process ownership,
+and Windows WFP companions. Higher-level bundles still call the public
+`generate_connection()` compatibility entrypoint, but connection truth is routed
+through this shared bundle boundary before becoming one canonical
+`SecurityEvent` plus any source-native companion evidence. Endpoint FLOW
+timestamps are bounded by the canonical source-visible connection interval that
+is stored in state after Zeek/source observation jitter is resolved. When a very
+short connection cannot also satisfy source-visible process-create ordering, the
+eCAR renderer drops process actor identity for that FLOW row instead of moving
+endpoint telemetry after the network close. SSH and RDP authentication bundles
+anchor successful session evidence to this resolved transport interval rather
+than to the original intent timestamp. SSH inbound FLOW rows are treated as
+transport observations: they must remain before the corresponding endpoint
+`USER_SESSION` login even when destination-side `sshd` process identity would be
+visible later, so the renderer omits listener PID/principal rather than delaying
+the FLOW behind the session.
+
+NTP is a protocol parser fan-out from the same network-connection contract.
+When `NtpContext` is attached, the matching UDP/123 `conn.log` row must be
+response-bearing (`SF`/`Dd` with responder bytes and packets), because Zeek
+`ntp.log` mode 4 rows contain server response timing fields. Baseline NTP
+traffic uses a stable per-client/server poll schedule with small observation
+texture rather than one exact hourly event per host; the NTP association owns
+version and poll stability, while the responding server owns stratum, ref-id,
+precision, root delay, and root dispersion.
+
+DHCP callers supply one acquisition or renewal transaction, and
+`DhcpLeaseActionBundle` owns lease identity, MAC/IP/server/domain metadata, Zeek
+DHCP plus connection fan-out, link-local visibility semantics, and Linux
+`dhclient` syslog companion ordering. Baseline warm-up leases, periodic renewal,
+and typed storyline `dhcp_lease` events share this path so setup state and
+visible lease evidence do not diverge.
+
+DNS prerequisite callers supply one resolver lookup intent, and
+`DnsLookupActionBundle` owns resolver selection, DNS cache behavior,
+query/answer semantics, TTL observations, Zeek DNS plus UDP/53 connection
+fan-out, Sysmon DNS visibility, AD SRV discovery companions, and low-volume
+resolver companion questions. Storyline DNS-family events remain narrative
+events, while connection prerequisites use this shared lookup path so DNS
+answers, connection destinations, TLS SNI, and proxy hostnames stay aligned.
+
+Browser-session callers supply one browser visit intent, and
+`BrowserSessionActionBundle` expands it into page-load and subresource requests
+with grouped TCP flow accounting, HTTP transaction depths, referrer chains,
+static-asset cache suppression, response MIME/status metadata, and per-request
+timing. The bundle emits each request through canonical connection generation, so
+the same browser-session path works for direct network evidence and for hosts
+whose traffic is handed to `ProxyTransactionActionBundle` by explicit proxy
+routing. The parent plaintext HTTP transaction carries flow-level transaction
+counts and aggregate body-byte budgets so same-flow subresources reuse one Zeek
+UID and render later `trans_depth` values instead of being collapsed into
+independent single-request flows. Tool-like HTTP requests and raw storyline HTTP
+events remain single canonical events unless they are intentionally modeled as
+browser sessions.
+
+Scanner/probe callers supply one scan/probe intent, and scanner action bundles
+expand it into the relevant probe requests while preserving the canonical
+network-connection boundary. `PortScanActionBundle` owns typed storyline
+port-scan target fan-out, scan timing, open/closed service profiles, firewall
+denial contexts, and ground-truth summaries. `WebScanActionBundle` owns typed
+storyline web-scanner path selection, request timing, scanner user-agent
+rendering, referrer rules, HTTP status/body metadata, IDS alert selection, and
+Zeek/web-access correlation. `ScheduledScanOverlapActionBundle` covers
+suspicious-but-benign scanner noise, and `NmapCommandProbeActionBundle` covers
+network probes caused by modeled nmap processes.
+
+IDS alert callers supply one data-driven signature or preset rule, and
+`IdsAlertActionBundle` builds the canonical alert context attached to network
+evidence. The bundle owns `(gid, sid, rev)` identity,
+message/classification/priority normalization, and optional signature-owned DNS
+payload construction for DNS alerts. Snort/Suricata emitters render `IdsContext`
+only; signature choice and alert payload construction remain upstream.
+
+File-transfer callers supply transfer intent layered on top of a transport path.
+`HttpResponseFileTransferActionBundle` and `SmbFileTransferMetadataActionBundle`
+build Zeek files.log metadata, FUIDs, analyzers, hashes, MIME types, filenames,
+byte counts, transfer direction, and optional PE analysis from one transfer
+description. `StagedArchiveSmbReadActionBundle` emits the SMB read that moves a
+staged archive before exfiltration, and `ScpReceiverFileActionBundle` emits only
+the receiver-side endpoint file evidence after the SSH bundle owns transport,
+auth, and session timing. Large or download-scale HTTP responses attach the HTTP
+file-transfer bundle deterministically after canonical HTTP metadata is known,
+including caller-provided HTTP contexts from browser-session, proxy,
+process-command, or storyline paths. This keeps transport/session ownership
+separate from file evidence while preventing each caller from inventing transfer
+metadata independently.
+
+Linux shell-command callers supply one interactive shell command intent.
+`LinuxShellCommandActionBundle` owns the execution sequence around bash history:
+activity-key-to-command resolution, SSH/session-readiness alignment,
+per-user/per-host history scheduling, bash-history event emission, and optional
+foreground process telemetry through existing process helpers. The current slice
+keeps command pools, lifecycle clamps, and process side-effect builders as
+adapter hooks while moving the orchestration boundary above individual
+`SecurityEvent`s.
+
+Process-execution callers supply one process create or process terminate intent.
+`ProcessExecutionActionBundle` and `ProcessTerminationActionBundle` own the
+internal boundary around canonical process lifecycle evidence: parent/session
+ownership, source-visible create/terminate timing, command-owned network
+effects, guaranteed process-image file evidence, and probabilistic
+file/module/registry endpoint side effects. The current slice keeps the detailed
+identity repair and side-effect builders in the activity-generator adapter so
+existing callers, emitters, and public scenario behavior remain stable while
+other bundles gain one shared process lifecycle path.
+
+Auth/session callers supply successful logon, failed logon, logoff, service
+logon, machine-account logon, anonymous logon, NTLM validation, or workstation
+lock/unlock intent. `LogonActionBundle`, `FailedLogonActionBundle`,
+`LogoffActionBundle`, and the auxiliary auth/session bundles own the internal
+boundary around session lifecycle evidence: session allocation and reuse, logon
+ID and source endpoint ownership, workstation lock state, Linux SSH syslog
+companions, Windows DC validation evidence, failed-auth network companions,
+machine-account Kerberos/network companions, and session termination ordering
+after dependent activity. The current slices keep detailed source-native field
+selection in activity-generator adapters so existing storyline, baseline,
+world-planner, and higher-level bundle callers share one stable auth/session
+path.
+
+Kerberos/DC callers supply domain-logon ticket companions, visible KDC-flow audit
+companions, or explicit DC ticket events. The Kerberos/DC action bundles own the
+internal boundary for 4768 TGTs, 4769 service tickets, 4770 renewals, and 4771
+pre-authentication failures: DC host context, source endpoint semantics,
+source-port reservation, TGT cache behavior, source-native ticket timing,
+service-principal identity, and optional companion KDC network evidence. Causal
+domain-logon expansion, baseline KDC traffic, and standalone preauth failure
+paths now share the same bundle adapters instead of independently inventing
+ticket source ports or service-ticket context.
+
+Windows audit/account-management callers supply one audit intent, and Windows
+audit action bundles coordinate the source-native evidence around that
+occurrence. `LogClearedActionBundle`, `ScheduledTaskActionBundle`, account and
+group management bundles, `CreateRemoteThreadActionBundle`, and
+`ProcessAccessActionBundle` own subject/session ownership, target identity,
+source-ready timing, process/thread lifecycle validation, and shared Sysmon/eCAR
+context. Generator adapters still perform the existing source-native field
+construction, but storyline and causal call sites no longer independently build
+the same 1102, 4698, 472x/4738/475x, Sysmon Event 8, or Sysmon Event 10
+evidence.
+
+Action bundles own cross-event concerns:
+
+- Deterministic action anchors for durable references.
+- Lifecycle intervals and state ownership for sessions, processes, connections,
+  leases, file transfers, and proxy transactions.
+- Temporal constraints across dependent evidence.
+- Observation intent and source-family eligibility.
+- Expansion into one or more canonical `SecurityEvent`s.
+
+`SecurityEvent` remains the shared truth unit underneath the bundle. Emitters still
+receive only canonical events and source-local render rules; they do not inspect or
+execute action bundles directly.
+
+The final bundle-boundary audit classifies the remaining direct generator helpers
+as intentionally source-local or adapter-only. `generate_wfp_connection()` is the
+Windows host-audit renderer used by the network-connection bundle,
+`generate_image_load()` is a single module-load occurrence used by process
+side-effect adapters, `generate_syslog_event()` and `generate_sensor_startup()`
+emit source-local status/health evidence, and `generate_raw()` is the
+user-facing raw escape hatch. `generate_system_process()` and
+`generate_system_process_termination()` delegate to process lifecycle
+entrypoints, while helpers such as `_emit_ocsp_http_response()`,
+`_emit_ad_srv_discovery()`, and `_emit_process_network_correlation()` feed
+already-bundled HTTP/DNS/network/process paths. New correlated behavior should
+still start with an action bundle unless it is deliberately source-local and
+does not need cross-source lifecycle, timing, state, or identity ownership.
 
 ### WorldModel and WorldPlanner
 
@@ -267,7 +591,7 @@ legacy/default during evaluation.
 
 **Sensor multiplexing:** Network emitters (Zeek family, Snort, Cisco ASA) use `SensorMultiplexEmitter` to route output to per-sensor directories. A single emitter instance manages output for multiple sensors. Zeek/Snort write to `<sensor_hostname>/<log_file>`; Cisco ASA is syslog-family output and writes to `<sensor_hostname>/cisco_asa.log` for the default target or `<sensor_hostname>/<year>/cisco_asa.log` for the SOF-ELK target. The CiscoAsaEmitter also generates deny baseline traffic from the firewall sensor's policy rules.
 
-**Proxy path modeling:** `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions. Proxy access rows include an `x-proxy-action` cue such as `tunnel-setup`, `ssl-inspect`, `forward`, or `deny` so decrypted HTTPS rows are distinguishable from raw CONNECT tunnel rows.
+**Browser and proxy path modeling:** `BrowserSessionActionBundle` owns browser-like page sessions for outbound persona traffic and inbound human visitor traffic: request grouping, transaction depth, subresource timing, referrers, static-asset cache suppression, response MIME/status metadata, and generated HTTP contexts. Each planned request still enters `ActivityGenerator.generate_connection()`, preserving the same canonical connection, DNS, TLS, Zeek HTTP/files, web-access, and proxy behavior as a direct single request. Source-native web semantics are resolved in the browser/proxy planning layer before rendering: public browser-like domains default to plaintext HTTP redirects instead of success pages, internal and non-browser service endpoints keep compatible plaintext/User-Agent behavior, browser referrers follow no-referrer-when-downgrade semantics, and installer/download paths carry binary MIME and body-size semantics. `environment.proxy.mode` controls whether proxy-routed HTTP/HTTPS keeps transparent client→origin network evidence or is split into explicit client→proxy and proxy→origin legs. Explicit mode routes each logical client→origin request through `ProxyTransactionActionBundle`, which dispatches each concrete leg through the normal sensor visibility engine so Zeek/IDS/firewall sources only contain the side of the proxy they can observe; the original logical client→origin request is not emitted as network evidence. Denied proxy requests emit only the client→proxy/proxy access evidence and do not create downstream origin-side transactions. Cache hits likewise stop at client/proxy evidence. Allowed cache misses plan the client proxy-request visibility window and proxy→origin egress through the temporal constraint graph so origin-side evidence cannot appear before the client-side proxy request would be source-visible. Proxy access rows include an `x-proxy-action` cue such as `tunnel-setup`, `ssl-inspect`, `forward`, or `deny` so decrypted HTTPS rows are distinguishable from raw CONNECT tunnel rows.
 
 **Threading:** Each emitter optionally runs in a background thread with a bounded queue (50K max). Hour-level flush barriers ensure temporal consistency.
 
@@ -414,8 +738,13 @@ ActivityGenerator.generate_connection()
 - `CausalExpansionEngine` — evaluates all matching rules, sorts by timing (before-events first), returns ordered list
 
 The timing profile file is overlay-aware. Causal prerequisites, source latency,
-teardown margins, and Windows/Sysmon same-timestamp collision spacing are data-driven
-so tuning can happen at the relationship class without hardcoding one global delay.
+teardown margins, source-observation profiles, and Windows/Sysmon same-timestamp
+collision spacing are data-driven so tuning can happen at the relationship class
+without hardcoding one global delay. Source timing profiles are sampled through
+`SourceTimingPlanner`, which clamps sampled source latency to relationship bounds
+before emitters render. Network sensor rows add stable per-sensor clock skew,
+path delay, and bounded capture noise so two Zeek sensors may see the same flow
+at slightly different times while keeping each sensor stream internally causal.
 
 **Currently registered rules:**
 

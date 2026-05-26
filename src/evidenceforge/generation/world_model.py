@@ -11,11 +11,12 @@ exists. This module adds the missing "why would this happen here?" layer:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from evidenceforge.generation.activity.generator import _ephemeral_port
+from evidenceforge.generation.activity.generator import _ephemeral_port, _linux_foreground_lifetime
 from evidenceforge.generation.activity.helpers import _get_os_category
 from evidenceforge.generation.activity.network_params import public_ntp_ips
 from evidenceforge.generation.activity.process_network import get_service_to_exes
@@ -715,6 +716,30 @@ class WorldPlanner:
             storyline_protected=storyline_protected,
         ).session
 
+    def _find_windows_interactive_session(
+        self,
+        username: str,
+        target_system: System,
+        at_time: datetime,
+    ) -> ActiveSession | None:
+        """Return a durable same-user Windows interactive session, if one exists."""
+        host = self.world_model.hosts.get(target_system.hostname)
+        if host is None or host.os_category != "windows":
+            return None
+
+        cutoff = at_time.replace(tzinfo=UTC) if at_time.tzinfo is None else at_time.astimezone(UTC)
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(username, at_time)
+            if session.system == target_system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and self._session_start_sort_key(session) <= cutoff
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=self._session_start_sort_key)
+
     def bootstrap_user_session(
         self,
         user: User,
@@ -727,6 +752,18 @@ class WorldPlanner:
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
     ) -> SessionBootstrapResult:
+        if allow_existing and session_kind in (None, "interactive"):
+            existing_interactive = self._find_windows_interactive_session(
+                user.username,
+                target_system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                if storyline_protected:
+                    existing_interactive.storyline_protected = True
+                return SessionBootstrapResult(session=existing_interactive, network_uid=None)
+
         existing = self._find_user_session(
             user.username, target_system.hostname, session_kind, at_time=time
         )
@@ -739,6 +776,20 @@ class WorldPlanner:
                 transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
+                if existing.session_kind == "ssh":
+                    ensure_shell = getattr(
+                        self.activity_generator,
+                        "ensure_linux_ssh_session_shell",
+                        None,
+                    )
+                    if ensure_shell is not None:
+                        ensure_shell(
+                            user=user,
+                            target_system=target_system,
+                            logon_id=existing.logon_id,
+                            logon_time=self._session_start_sort_key(existing),
+                            activity_time=time,
+                        )
                 if storyline_protected:
                     existing.storyline_protected = True
                 return SessionBootstrapResult(session=existing, network_uid=None)
@@ -751,7 +802,13 @@ class WorldPlanner:
             source_system=source_system,
             source_ip_override=source_ip_override,
         )
-        logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
+        if plan.session_kind == "ssh":
+            # SSH emits connection, accepted-auth, PAM, eCAR session, then shell
+            # process evidence. Give that source-native sequence room before
+            # the first user-visible command tied to the session.
+            logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+        else:
+            logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
@@ -862,7 +919,6 @@ class WorldPlanner:
             load_catalog,
             resolve_image_path,
         )
-        from evidenceforge.generation.activity.helpers import _parameterize_command
 
         os_cat = self.world_model.hosts[system.hostname].os_category
         # _server_admin is a policy overlay: use the user's real persona for
@@ -921,7 +977,12 @@ class WorldPlanner:
                 templates = plat.get("command_templates", [])
                 if templates:
                     command_line = rng.choice(templates)
-                    command_line = _parameterize_command(rng, command_line, username=user.username)
+                    command_line = self.activity_generator._parameterize_command_for_system(
+                        rng,
+                        command_line,
+                        username=user.username,
+                        system=system,
+                    )
                 break
 
         # Backdate the process slightly, but never before the session started
@@ -942,6 +1003,17 @@ class WorldPlanner:
             command_line=command_line,
             parent_pid=parent_pid,
         )
+        if target_exe.lower() == "ldapsearch":
+            lifetime = _linux_foreground_lifetime(image, command_line) or (0.5, 4.0)
+            termination_time = time + timedelta(seconds=rng.uniform(*lifetime))
+            self.activity_generator._remember_foreground_process_finalizer(
+                system=system,
+                user=user,
+                pid=pid,
+                process_name=image,
+                logon_id=session.logon_id,
+                termination_time=termination_time,
+            )
         self.activity_generator._record_user_process(system, user, pid, image)
         return pid
 
@@ -958,7 +1030,11 @@ class WorldPlanner:
         Returns the most recent session (by start_time) to avoid picking
         stale network sessions over newer SSH/RDP ones.
         """
-        sessions = self.state_manager.get_sessions_for_user(username)
+        sessions = (
+            self.state_manager.get_sessions_for_user_at(username, at_time)
+            if at_time is not None
+            else self.state_manager.get_sessions_for_user(username)
+        )
         host_sessions = [s for s in sessions if s.system == hostname]
         if at_time is not None:
             cutoff = (
@@ -1003,11 +1079,6 @@ class WorldPlanner:
             source_port=source_port,
             session_kind="ssh",
         )
-        sshd_pid = self.state_manager.allocate_transient_linux_pid(
-            plan.target_system.hostname,
-            logon_time,
-        )
-        self.state_manager.update_session_metadata(logon_id, transport_pid=sshd_pid)
         session_obj_id = self.state_manager.get_session_object_id(logon_id)
         min_duration = max(
             30.0,
@@ -1020,7 +1091,6 @@ class WorldPlanner:
             source_ip=plan.source_ip,
             source_system=plan.source_system,
             source_port=source_port,
-            sshd_pid=sshd_pid,
             logon_id=logon_id,
             session_obj_id=session_obj_id,
             min_duration=min_duration,
@@ -1034,36 +1104,19 @@ class WorldPlanner:
             if marker is not None
         )
 
-        # Create per-session sshd child + bash login shell for realistic
-        # Linux process trees.  Each SSH session gets its own sshd fork
-        # (privilege separation) and bash PID so user commands have
-        # distinct parent PIDs per session.
-        sys_pids = getattr(self.activity_generator, "_system_pids", {}).get(
-            plan.target_system.hostname, {}
-        )
-        global_sshd = sys_pids.get("sshd")
-        if global_sshd and self.state_manager.get_process(plan.target_system.hostname, global_sshd):
-            # Per-session sshd child (privilege separation fork)
-            session_sshd_pid = self.state_manager.create_process(
-                plan.target_system.hostname,
-                global_sshd,
-                "/usr/sbin/sshd",
-                f"sshd: {user.username} [priv]",
-                "root",
-                "System",
+        # Create visible per-session sshd child + bash login shell for realistic
+        # Linux process trees. Each SSH session gets its own sshd fork
+        # (privilege separation) and bash PID so user commands have distinct
+        # parent PIDs and eCAR can observe the parent lifecycle.
+        ensure_shell = getattr(self.activity_generator, "ensure_linux_ssh_session_shell", None)
+        if ensure_shell is not None:
+            ensure_shell(
+                user=user,
+                target_system=plan.target_system,
                 logon_id=logon_id,
+                logon_time=logon_time,
+                activity_time=activity_time,
             )
-            # Per-session bash login shell
-            bash_pid = self.state_manager.create_process(
-                plan.target_system.hostname,
-                session_sshd_pid,
-                "/bin/bash",
-                "-bash",
-                user.username,
-                "Medium",
-                logon_id=logon_id,
-            )
-            session.session_shell_pid = bash_pid
 
         return SessionBootstrapResult(session=session, network_uid=uid)
 
@@ -1076,14 +1129,21 @@ class WorldPlanner:
         rng: random.Random,
     ) -> SessionBootstrapResult:
         source_pid = -1
+        source_process_time = logon_time - timedelta(milliseconds=rng.randint(1800, 3200))
+        source_process_factory = None
         if plan.source_system is not None:
-            source_pid = self._ensure_rdp_client_process(
-                user=user,
+            aligned_source_time = self._align_rdp_source_after_future_workstation_session(
+                username=user.username,
                 source_system=plan.source_system,
-                target_system=plan.target_system,
-                time=logon_time - timedelta(milliseconds=rng.randint(1800, 3200)),
+                source_process_time=source_process_time,
                 rng=rng,
             )
+            if aligned_source_time > source_process_time:
+                shift = aligned_source_time - source_process_time
+                source_process_time = aligned_source_time
+                logon_time += shift
+                activity_time += shift
+            source_process_factory = self._rdp_source_process_factory(rng)
         logon_id = self.state_manager.create_session(
             username=user.username,
             system=plan.target_system.hostname,
@@ -1099,6 +1159,8 @@ class WorldPlanner:
             source_system=plan.source_system,
             source_pid=source_pid,
             logon_id=logon_id,
+            source_process_time=source_process_time if plan.source_system is not None else None,
+            source_process_factory=source_process_factory,
         )
         session = self.state_manager.get_session(logon_id)
         if session is None:
@@ -1107,6 +1169,66 @@ class WorldPlanner:
             )
         session.last_activity_time = activity_time
         return SessionBootstrapResult(session=session, network_uid=uid)
+
+    def _rdp_source_process_factory(self, rng: random.Random) -> Callable[..., int]:
+        """Return a callback that materializes source-side mstsc.exe inside the bundle."""
+
+        def materialize(
+            *,
+            user: User,
+            source_system: System,
+            target_system: System,
+            time: datetime,
+        ) -> int:
+            return self._ensure_rdp_client_process(
+                user=user,
+                source_system=source_system,
+                target_system=target_system,
+                time=time,
+                rng=rng,
+            )
+
+        return materialize
+
+    def _align_rdp_source_after_future_workstation_session(
+        self,
+        *,
+        username: str,
+        source_system: System,
+        source_process_time: datetime,
+        rng: random.Random,
+    ) -> datetime:
+        """Move source-side RDP work after an already-planned workstation session."""
+        host = self.world_model.hosts.get(source_system.hostname)
+        if host is None or host.os_category != "windows":
+            return source_process_time
+
+        source_utc = (
+            source_process_time.replace(tzinfo=UTC)
+            if source_process_time.tzinfo is None
+            else source_process_time.astimezone(UTC)
+        )
+        hour_end = source_utc.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        future_sessions = [
+            session
+            for session in self.state_manager.get_sessions_for_user(username)
+            if session.system == source_system.hostname
+            and session.logon_type in {2, 10, 11}
+            and session.session_kind not in {"network", "service"}
+            and source_utc < self._session_start_sort_key(session) < hour_end
+        ]
+        if not future_sessions:
+            return source_process_time
+
+        next_session = min(future_sessions, key=self._session_start_sort_key)
+        aligned_utc = self._session_start_sort_key(next_session) + timedelta(
+            seconds=rng.uniform(20.0, 90.0)
+        )
+        if aligned_utc >= hour_end:
+            return source_process_time
+        if source_process_time.tzinfo is None:
+            return aligned_utc.replace(tzinfo=None)
+        return aligned_utc.astimezone(source_process_time.tzinfo)
 
     def _ensure_rdp_client_process(
         self,

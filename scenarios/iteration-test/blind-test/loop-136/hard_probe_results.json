@@ -1,0 +1,49 @@
+{
+  "loop": 136,
+  "sensors": {
+    "zeek-core": {
+      "files": 207,
+      "ssl": 51,
+      "x509": 20,
+      "adjacentPairs": 9,
+      "depthInversions": 0,
+      "adjacentEqual": 0,
+      "adjacentExact001": 0,
+      "x509BeforeFile": 0,
+      "x509EqualFile": 0,
+      "x509AfterFileGapRange": {
+        "min": 0.003204,
+        "max": 0.391148,
+        "unique": 20
+      },
+      "depthExamples": [],
+      "x509Examples": []
+    },
+    "zeek-dmz": {
+      "files": 882,
+      "ssl": 2020,
+      "x509": 794,
+      "adjacentPairs": 372,
+      "depthInversions": 0,
+      "adjacentEqual": 0,
+      "adjacentExact001": 0,
+      "x509BeforeFile": 0,
+      "x509EqualFile": 0,
+      "x509AfterFileGapRange": {
+        "min": 0.002306,
+        "max": 0.583709,
+        "unique": 792
+      },
+      "depthExamples": [],
+      "x509Examples": []
+    }
+  },
+  "totals": {
+    "adjacentPairs": 381,
+    "depthInversions": 0,
+    "adjacentEqual": 0,
+    "adjacentExact001": 0,
+    "x509BeforeFile": 0,
+    "x509EqualFile": 0
+  }
+}

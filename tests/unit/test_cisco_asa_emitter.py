@@ -615,6 +615,45 @@ class TestSyslogFormat:
         assert "<164>" in output
         assert "%ASA-4-106023:" in output
 
+    def test_emit_raw_invalid_pri_and_severity_falls_back_without_crash(
+        self, asa_emitter, tmp_path
+    ):
+        """Raw ASA records with invalid pri/severity should render with default severity."""
+        asa_emitter.emit_raw(
+            {
+                "timestamp": T0,
+                "hostname": "fw01",
+                "severity": "x",
+                "msg_id": 302013,
+                "message": "Built inbound TCP connection",
+                "pri": "x",
+            }
+        )
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
+        first_line = output.strip().split("\n")[0]
+        assert first_line.startswith("<166>")
+        assert "fw01 %ASA-6-302013:" in first_line
+
+    def test_emit_raw_out_of_range_severity_is_bounded(self, asa_emitter, tmp_path):
+        """Raw ASA severity must stay in the source-native 0-7 syslog range."""
+        asa_emitter.emit_raw(
+            {
+                "timestamp": T0,
+                "hostname": "fw01",
+                "severity": 99,
+                "msg_id": 302013,
+                "message": "Built inbound TCP connection",
+            }
+        )
+        asa_emitter.flush()
+
+        output = (tmp_path / "fw01" / "2024" / "cisco_asa.log").read_text()
+        first_line = output.strip().split("\n")[0]
+        assert first_line.startswith("<167>")
+        assert "fw01 %ASA-7-302013:" in first_line
+
 
 class TestFormatDefinition:
     def test_cisco_asa_format_loads(self):

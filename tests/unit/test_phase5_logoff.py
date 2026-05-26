@@ -228,7 +228,9 @@ class TestLogoffLinux:
         )
         close_time = timestamp + timedelta(minutes=8)
         state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        session_obj_id = state_manager.get_session_object_id(logon_id)
         mock_emitters["syslog"].reset_mock()
+        mock_emitters["ecar"].reset_mock()
 
         activity_gen.generate_logoff(
             test_user,
@@ -239,18 +241,23 @@ class TestLogoffLinux:
         )
 
         event = mock_emitters["syslog"].emit.call_args[0][0]
+        ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
         expected_delta = sample_timing_delta(
             "windows.logoff_after_last_activity",
             seed_parts=(linux_system.hostname, logon_id, close_time),
         )
         assert event.timestamp == close_time + expected_delta
-        assert "Received disconnect from 10.0.10.50 port 51111" in event.syslog.message
-        assert event.syslog.message.endswith(":11:  [preauth]")
+        assert event.syslog.message == (
+            "pam_unix(sshd:session): session closed for user alice.smith"
+        )
+        assert ecar_event.edr.object_id == session_obj_id
+        assert ecar_event.auth.source_ip == "10.0.10.50"
+        assert ecar_event.auth.source_port == 51111
 
-    def test_ssh_logoff_suppresses_syslog_when_far_from_transport_close(
+    def test_ssh_logoff_binds_late_cleanup_to_transport_close(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):
-        """Stale transport tuples should not produce contradictory sshd session closes."""
+        """Late SSH cleanup should render the close at the transport boundary."""
         state_manager.set_current_time(timestamp)
         logon_id = state_manager.create_session(
             username=test_user.username,
@@ -278,7 +285,43 @@ class TestLogoffLinux:
         )
 
         event = mock_emitters["syslog"].emit.call_args[0][0]
-        assert event.syslog is None
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(linux_system.hostname, logon_id, close_time),
+        )
+        assert event.timestamp == close_time + expected_delta
+        assert event.syslog.message == (
+            "pam_unix(sshd:session): session closed for user alice.smith"
+        )
+
+    def test_linux_type10_logoff_gets_pam_close_even_when_kind_was_not_preserved(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Linux type-10 eCAR SSH logout classification should match syslog close gating."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="logon",
+            transport_pid=6505,
+        )
+        mock_emitters["syslog"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(minutes=8),
+            logon_id,
+            logon_type=10,
+        )
+
+        event = mock_emitters["syslog"].emit.call_args[0][0]
+        assert event.syslog.message == (
+            "pam_unix(sshd:session): session closed for user alice.smith"
+        )
 
     def test_ssh_logoff_suppresses_syslog_for_self_sourced_session(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters

@@ -22,6 +22,7 @@
 
 """Unit tests for utility modules."""
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -45,6 +46,28 @@ from evidenceforge.utils import (
     validate_output_path,
     write_yaml,
 )
+from evidenceforge.utils.rng import stable_uuid
+
+
+class TestStableUuid:
+    """Tests for deterministic source-native UUID helpers."""
+
+    def test_stable_uuid_is_repeatable_uuid4_shape(self):
+        """Stable IDs should be deterministic without exposing UUIDv5 morphology."""
+        first = stable_uuid("ecar-process", "WS-01", 1234, "cmd.exe")
+        second = stable_uuid("ecar-process", "WS-01", 1234, "cmd.exe")
+
+        parsed = uuid.UUID(first)
+        assert first == second
+        assert parsed.version == 4
+        assert parsed.variant == uuid.RFC_4122
+
+    def test_stable_uuid_changes_with_semantic_parts(self):
+        """Different semantic inputs should produce different deterministic IDs."""
+        first = stable_uuid("ecar-process", "WS-01", 1234, "cmd.exe")
+        second = stable_uuid("ecar-process", "WS-01", 1235, "cmd.exe")
+
+        assert first != second
 
 
 class TestRedactSecrets:

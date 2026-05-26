@@ -4,6 +4,7 @@
 """Tests for bulk/periodic event types and shared timing engine."""
 
 import random
+import re
 from collections import Counter
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -11,6 +12,14 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
+from evidenceforge.generation.actions import (
+    PortScanActionBundle,
+    PortScanRequest,
+    ScheduledScanOverlapActionBundle,
+    ScheduledScanOverlapRequest,
+    WebScanActionBundle,
+    WebScanRequest,
+)
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
     _c2_http_response_size,
@@ -614,6 +623,142 @@ class TestPortScanPairIteration:
         assert len(set(first_pairs)) == 8
         assert all(target in targets for target, _port in first_pairs)
         assert all(port in ports for _target, port in first_pairs)
+
+
+class TestScannerProbeActionBundles:
+    def test_port_scan_bundle_anchor_is_stable(self):
+        actor = User(username="scanner", full_name="Scanner", email="scanner@example.com")
+        system = System(hostname="SCAN-01", ip="10.0.0.5", os="Ubuntu 22.04", type="server")
+        spec = PortScanEventSpec(
+            source_ip="185.70.41.45",
+            target_ips=["10.0.0.10"],
+            ports=[22, 80],
+            scan_rate=20.0,
+        )
+        request = PortScanRequest(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC),
+            rng=random.Random(7),
+            malicious_event={"type": "port_scan"},
+        )
+
+        anchor = PortScanActionBundle(executor=SimpleNamespace(), request=request).anchor
+
+        assert anchor.family == "port_scan"
+        assert anchor.stable_id == request.stable_id
+        assert anchor.stable_id.startswith("port-scan-")
+
+    def test_web_scan_bundle_anchor_is_stable(self):
+        actor = User(username="webscan", full_name="Web Scan", email="webscan@example.com")
+        system = System(hostname="SCAN-01", ip="10.0.0.5", os="Ubuntu 22.04", type="server")
+        spec = WebScanEventSpec(
+            dst_ip="10.0.0.20",
+            rate=5.0,
+            count=3,
+            paths=[{"uri": "/admin", "method": "GET", "status": 404}],
+            hostname="app.example.test",
+        )
+        request = WebScanRequest(
+            spec=spec,
+            actor=actor,
+            system=system,
+            time=datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC),
+            rng=random.Random(11),
+            malicious_event={"type": "web_scan"},
+        )
+
+        anchor = WebScanActionBundle(executor=SimpleNamespace(), request=request).anchor
+
+        assert anchor.family == "web_scan"
+        assert anchor.stable_id == request.stable_id
+        assert anchor.stable_id.startswith("web-scan-")
+
+    def test_scanner_bundles_delegate_to_adapter(self):
+        actor = User(username="scanner", full_name="Scanner", email="scanner@example.com")
+        system = System(hostname="SCAN-01", ip="10.0.0.5", os="Ubuntu 22.04", type="server")
+        target = System(hostname="WEB-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server")
+        port_request = PortScanRequest(
+            spec=PortScanEventSpec(target_ips=["10.0.0.10"], ports=[22], scan_rate=10.0),
+            actor=actor,
+            system=system,
+            time=datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC),
+            rng=random.Random(13),
+            malicious_event={"type": "port_scan"},
+        )
+        web_request = WebScanRequest(
+            spec=WebScanEventSpec(
+                dst_ip="10.0.0.20",
+                rate=5.0,
+                count=1,
+                paths=[{"uri": "/", "method": "GET", "status": 200}],
+            ),
+            actor=actor,
+            system=system,
+            time=datetime(2026, 4, 16, 12, 0, 0, tzinfo=UTC),
+            rng=random.Random(17),
+            malicious_event={"type": "web_scan"},
+        )
+        overlap_request = ScheduledScanOverlapRequest(
+            scanner=system,
+            targets=(target,),
+            time=datetime(2026, 4, 16, 12, 5, 0, tzinfo=UTC),
+            rng=random.Random(19),
+        )
+
+        class Executor:
+            def __init__(self) -> None:
+                self.port_request = None
+                self.web_request = None
+                self.overlap_request = None
+
+            def _execute_port_scan_bundle(self, request: PortScanRequest) -> dict[str, str]:
+                self.port_request = request
+                return {"result": "port"}
+
+            def _execute_web_scan_bundle(self, request: WebScanRequest) -> dict[str, str]:
+                self.web_request = request
+                return {"result": "web"}
+
+            def _execute_scheduled_scan_overlap_bundle(
+                self, request: ScheduledScanOverlapRequest
+            ) -> None:
+                self.overlap_request = request
+
+        executor = Executor()
+
+        assert PortScanActionBundle(executor=executor, request=port_request).execute() == {
+            "result": "port"
+        }
+        assert WebScanActionBundle(executor=executor, request=web_request).execute() == {
+            "result": "web"
+        }
+        ScheduledScanOverlapActionBundle(executor=executor, request=overlap_request).execute()
+        assert executor.port_request is port_request
+        assert executor.web_request is web_request
+        assert executor.overlap_request is overlap_request
+
+    def test_scheduled_scan_overlap_bundle_anchor_is_stable(self):
+        scanner = System(hostname="SCAN-01", ip="10.0.0.5", os="Ubuntu 22.04", type="server")
+        targets = (
+            System(hostname="WEB-01", ip="10.0.0.20", os="Ubuntu 22.04", type="server"),
+            System(hostname="DB-01", ip="10.0.0.30", os="Ubuntu 22.04", type="server"),
+        )
+        request = ScheduledScanOverlapRequest(
+            scanner=scanner,
+            targets=targets,
+            time=datetime(2026, 4, 16, 12, 5, 0, tzinfo=UTC),
+            rng=random.Random(23),
+        )
+
+        anchor = ScheduledScanOverlapActionBundle(
+            executor=SimpleNamespace(), request=request
+        ).anchor
+
+        assert anchor.family == "scheduled_scan_overlap"
+        assert anchor.stable_id == request.stable_id
+        assert anchor.stable_id.startswith("scheduled-scan-overlap-")
 
 
 class TestPortScanConnectionProfile:
@@ -1359,6 +1504,7 @@ class TestDnsTunnelEventSpec:
         assert not any(
             answer.startswith(("status=", "node=", "cdn=", "cache=", "edge-", "ack."))
             or "ttl=30" in answer
+            or re.search(r"\bslot-\d+-t\d+-", answer)
             for answer in answers
         )
 

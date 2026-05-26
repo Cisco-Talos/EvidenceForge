@@ -346,6 +346,61 @@ class TestHostnameConsistency:
         ]
         assert ttls == [float(_dns_base_ttl("dc01.example.org", is_internal=True))]
 
+    def test_resolver_rrset_ttl_is_shared_across_clients(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """A resolver should not expose unrelated TTL ages for the same external RRset."""
+        state_manager.set_current_time(timestamp)
+
+        for idx, src_ip in enumerate(("10.0.1.50", "10.0.1.51")):
+            activity_gen._emit_dns_lookup(
+                src_ip=src_ip,
+                dst_ip="93.184.216.34",
+                time=timestamp + timedelta(seconds=idx * 10),
+                hostname="cdn.example.net",
+                force_address=True,
+            )
+
+        dns_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns and call.args[0].dns.query == "cdn.example.net"
+        ]
+        assert len(dns_events) == 2
+        assert {event.network.dst_ip for event in dns_events} == {"10.0.0.1"}
+
+        first_ttl = dns_events[0].dns.TTLs[0]
+        second_ttl = dns_events[1].dns.TTLs[0]
+        assert 0 <= first_ttl - second_ttl <= 15
+
+    def test_registered_a_rrset_is_stable_across_cache_expirations(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Repeated registered A lookups should not redraw answer shape per call."""
+        from evidenceforge.generation.activity.dns_registry import get_domain_ips
+
+        state_manager.set_current_time(timestamp)
+        expected_answers = get_domain_ips("postman.com")
+
+        for offset in (0, 7200):
+            activity_gen._emit_dns_lookup(
+                src_ip="10.0.1.50",
+                dst_ip=expected_answers[0],
+                time=timestamp + timedelta(seconds=offset),
+                hostname="postman.com",
+                force_address=True,
+            )
+
+        dns_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns
+            and call.args[0].dns.query == "postman.com"
+            and call.args[0].dns.query_type == "A"
+        ]
+        assert len(dns_events) == 2
+        assert [event.dns.answers for event in dns_events] == [expected_answers, expected_answers]
+
 
 class TestNoReverseDnsHostnames:
     """Web/SaaS connections must never produce reverse-DNS style hostnames."""
@@ -846,6 +901,8 @@ class TestWeirdProtocolConstraint:
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
         """Internal names should not flip AA on otherwise equivalent rows."""
+        from evidenceforge.generation.activity.generator import _dns_base_ttl
+
         state_manager.set_current_time(timestamp)
         activity_gen._ad_domain = "example.org"
 
@@ -872,8 +929,9 @@ class TestWeirdProtocolConstraint:
 
         event = mock_emitters["zeek_dns"].emit.call_args[0][0]
         assert event.dns.AA is True
+        assert event.dns.TTLs[0] == float(_dns_base_ttl("DC-01.example.org", True))
 
-    def test_sensor_duration_jitter_respects_dns_rtt(self, timestamp, tmp_path):
+    def test_sensor_duration_texture_preserves_dns_rtt_floor(self, timestamp, tmp_path):
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(
             format_def=fmt,
@@ -903,10 +961,13 @@ class TestWeirdProtocolConstraint:
         emitter.emit(event)
         emitter.flush()
 
-        for path in tmp_path.glob("zeek-*/conn.json"):
-            for line in path.read_text().splitlines():
-                row = json.loads(line)
-                assert row["duration"] == event.dns.rtt
+        rows = {
+            path.parent.name: json.loads(path.read_text().splitlines()[0])
+            for path in tmp_path.glob("zeek-*/conn.json")
+        }
+        assert rows["zeek-a"]["duration"] == event.dns.rtt
+        assert rows["zeek-b"]["duration"] > event.dns.rtt
+        assert rows["zeek-b"]["duration"] - rows["zeek-a"]["duration"] <= 0.05
 
     def test_generic_dns_service_accounting_is_clamped(
         self, activity_gen, timestamp, state_manager, mock_emitters
@@ -1199,6 +1260,7 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "example.com"
         assert event.dns.answers == ["v=spf1 include:_spf.example.com ~all"]
+        assert event.dns.TTLs and 0 < event.dns.TTLs[0] <= 1800
 
     def test_mx_roll_on_cdn_hostname_falls_back_to_txt(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
@@ -1217,6 +1279,110 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query_type == "TXT"
         assert event.dns.query == "cloudfront.net"
         assert event.dns.answers == ["v=spf1 include:_spf.cloudfront.net ~all"]
+        assert event.dns.TTLs and 0 < event.dns.TTLs[0] <= 1800
+
+    def test_txt_answers_are_stable_and_dkim_keys_are_source_native(self):
+        from evidenceforge.generation.activity.dns_txt import (
+            choose_background_dns_txt_record,
+            stable_dns_txt_record,
+        )
+
+        assert stable_dns_txt_record("_dmarc.microsoft.com") == stable_dns_txt_record(
+            "_dmarc.microsoft.com"
+        )
+        dkim_answer, dkim_ttl = stable_dns_txt_record("selector1._domainkey.sendgrid.net")
+        dkim_key = dkim_answer.split("p=", 1)[1]
+
+        assert dkim_answer.startswith("v=DKIM1; k=rsa; p=")
+        assert len(dkim_key) > 180
+        assert not all(char in "0123456789abcdef" for char in dkim_key.lower())
+        assert dkim_ttl >= 900
+
+        seen: dict[str, tuple[str, int]] = {}
+        for seed in range(500):
+            query, answer, ttl = choose_background_dns_txt_record(random.Random(seed))
+            prior = seen.setdefault(query, (answer, ttl))
+            assert prior == (answer, ttl)
+
+    def test_external_txt_context_ttls_use_resolver_cache_countdown(self, activity_gen, timestamp):
+        """Caller-provided public TXT TTLs should still age inside the resolver cache."""
+        first = DnsContext(
+            query="zoom.us",
+            query_type="TXT",
+            qtype=16,
+            answers=["v=spf1 include:spf.protection.outlook.com ~all"],
+            TTLs=[1800.0],
+        )
+        second = DnsContext(
+            query=first.query,
+            query_type=first.query_type,
+            qtype=first.qtype,
+            answers=list(first.answers),
+            TTLs=[1800.0],
+        )
+
+        activity_gen._normalize_dns_context_for_resolver(
+            first,
+            resolver_ip="10.0.0.1",
+            time=timestamp,
+        )
+        activity_gen._normalize_dns_context_for_resolver(
+            second,
+            resolver_ip="10.0.0.1",
+            time=timestamp + timedelta(seconds=55),
+        )
+
+        assert second.TTLs[0] < first.TTLs[0]
+        assert second.TTLs[0] <= first.TTLs[0] - 50
+
+    def test_authored_dns_context_ttls_are_preserved(self, activity_gen, timestamp):
+        """Explicit scenario DNS TTL overrides should bypass resolver normalization."""
+        authored = DnsContext(
+            query="cache-poison.example",
+            query_type="A",
+            qtype=1,
+            answers=["203.0.113.77"],
+            TTLs=[42.0],
+            preserve_ttls=True,
+        )
+        activity_gen._normalize_dns_context_for_resolver(
+            authored,
+            resolver_ip="10.0.0.1",
+            time=timestamp,
+        )
+
+        assert authored.TTLs == [42.0]
+
+    def test_external_rrset_ttl_countdown_is_generation_order_independent(
+        self, activity_gen, timestamp
+    ):
+        """Resolver TTL aging should follow event time even if generation order differs."""
+        common = {
+            "resolver_ip": "10.0.0.1",
+            "query": "zoom.us",
+            "qtype_name": "TXT",
+            "answers": ["v=spf1 include:spf.protection.outlook.com include:amazonses.com ~all"],
+            "is_internal": False,
+            "base_ttl": 1800,
+        }
+        early = timestamp
+        late = timestamp + timedelta(seconds=55)
+        for offset_seconds in range(0, 1800, 30):
+            candidate = timestamp + timedelta(seconds=offset_seconds)
+            first = activity_gen._dns_observed_ttls(**common, time=candidate)[0]
+            second = activity_gen._dns_observed_ttls(
+                **common,
+                time=candidate + timedelta(seconds=55),
+            )[0]
+            if first - second >= 50:
+                early = candidate
+                late = candidate + timedelta(seconds=55)
+                break
+
+        late_first = activity_gen._dns_observed_ttls(**common, time=late)[0]
+        early_second = activity_gen._dns_observed_ttls(**common, time=early)[0]
+
+        assert early_second - late_first >= 50
 
     def test_forward_proxy_srv_queries_use_internal_resolver(
         self, activity_gen, timestamp, mock_emitters, monkeypatch
@@ -1283,6 +1449,54 @@ class TestDnsSupportQueryTypes:
         assert event.dns.answers == ["0 100 389 dc-01.example.com"]
         assert event.network.dst_ip == "10.0.0.10"
         assert event.dns.AA is True
+
+    def test_internal_forced_address_lookup_emits_cached_ad_srv_discovery(
+        self, activity_gen, timestamp, mock_emitters
+    ):
+        dc = System(
+            hostname="DC-01",
+            ip="10.0.0.10",
+            os="Windows Server 2019",
+            type="domain_controller",
+        )
+        activity_gen._dc_systems = [dc]
+        activity_gen._dns_server_ips = [dc.ip]
+        activity_gen._ad_domain = "corp.example"
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip=dc.ip,
+            time=timestamp,
+            hostname="DC-01.corp.example",
+            force_address=True,
+        )
+        first_events = [call.args[0] for call in mock_emitters["zeek_dns"].emit.call_args_list]
+        srv_events = [event for event in first_events if event.dns.query_type == "SRV"]
+        address_events = [
+            event
+            for event in first_events
+            if event.dns.query_type == "A" and event.dns.query == "DC-01.corp.example"
+        ]
+
+        assert srv_events
+        assert address_events
+        assert srv_events[0].timestamp < address_events[0].timestamp
+        assert srv_events[0].dns.answers in (
+            ["0 100 88 DC-01.corp.example"],
+            ["0 100 389 DC-01.corp.example"],
+        )
+
+        mock_emitters["zeek_dns"].emit.reset_mock()
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.20",
+            time=timestamp + timedelta(minutes=5),
+            hostname="FILE-01.corp.example",
+            force_address=True,
+        )
+        second_events = [call.args[0] for call in mock_emitters["zeek_dns"].emit.call_args_list]
+
+        assert not [event for event in second_events if event.dns.query_type == "SRV"]
 
     def test_default_ad_site_srv_is_not_nxdomain_noise(self):
         from evidenceforge.generation.activity.generator import _dns_nxdomain_companion_queries

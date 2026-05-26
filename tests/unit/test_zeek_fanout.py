@@ -508,7 +508,6 @@ class TestMultiSensorFanOut:
             core = json.loads((base / "core" / "conn.json").read_text())
             dmz = json.loads((base / "dmz" / "conn.json").read_text())
             locked_fields = (
-                "duration",
                 "orig_bytes",
                 "resp_bytes",
                 "orig_pkts",
@@ -519,5 +518,7 @@ class TestMultiSensorFanOut:
             assert core["uid"] != dmz["uid"]
             assert core["ts"] != dmz["ts"]
             assert all(core[field] == dmz[field] for field in locked_fields)
+            assert dmz["duration"] > core["duration"]
+            assert dmz["duration"] - core["duration"] <= 0.05
             assert core["orig_ip_bytes"] - core["orig_bytes"] == 28
             assert core["resp_ip_bytes"] - core["resp_bytes"] == 28

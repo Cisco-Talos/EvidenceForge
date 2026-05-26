@@ -18,40 +18,56 @@ This architecture combines LLM flexibility/realism with deterministic speed, cos
 
 **Baseline Realism:** The baseline engine includes: Hawkes self-exciting temporal model for bursty user activity (parameters derived from persona risk_profile), periodic+jitter timing for system/service traffic, day-of-week variation (Monday login storms, weekend near-zero), 26 legitimate lateral movement patterns (backup, monitoring, AD replication, app→DB, etc.), process→network correlation (browsers→HTTPS, DB clients→SQL, etc.), enriched stale account noise (Kerberos failures, lingering tasks, service startup failures), network-level red herrings (suspicious DNS, unusual outbound, scan overlaps), Linux syslog depth (18 categories including SSH login/key exchange, apt/dnf, systemd timers, logrotate, journald), diversified command pools with per-user parameterization, and entity lifecycle validation (boot time tracking, PID existence checks). Lateral movement patterns are conditional on environment topology — assign `roles` to systems to enable specific patterns.
 
-**Causal Expansion Engine:** The `CausalExpansionEngine` (`src/evidenceforge/generation/causal/`) auto-generates prerequisite and consequent events via composable rules. DNS lookups before TCP connections, Kerberos TGT/TGS before domain logons, ProcessAccess after lsass injection, and supplementary audit events from command-line patterns are all handled automatically — scenario authors should NOT manually specify these as prerequisites. Authors CAN still specify these event types when they are part of the attack narrative itself (e.g., DNS tunneling, golden ticket forging). The validator warns on potentially redundant manual specifications. See `docs/ARCHITECTURE.md` § Causal Expansion Engine for implementation details.
+**Causal Expansion Engine:** The `CausalExpansionEngine` (`src/evidenceforge/generation/causal/`) auto-generates prerequisite and consequent events via composable rules. DNS lookups before TCP connections, Kerberos/DC-bundle TGT/TGS evidence before domain logons, ProcessAccess after lsass injection, and supplementary audit events from command-line patterns are all handled automatically — scenario authors should NOT manually specify these as prerequisites. Authors CAN still specify these event types when they are part of the attack narrative itself (e.g., DNS tunneling, golden ticket forging). The validator warns on potentially redundant manual specifications. See `docs/ARCHITECTURE.md` § Causal Expansion Engine for implementation details.
 
-## MANDATORY: Implementation State Tracking
+## MANDATORY: Project Memory Workflow
 
 **CRITICAL: Read this section first before doing ANY work on this project.**
 
-This project uses `TODO.md` as the **persistent implementation plan and progress tracker**. This is NOT optional.
+This project uses `TODO.md` as the durable roadmap and backlog. It also uses
+tracked worklogs under `docs/worklog/` for multi-session effort memory. This is
+designed to preserve agent continuity without forcing every branch to edit the
+same high-conflict roadmap file.
 
 ### Required Workflow for Every Session
 
 1. **START OF SESSION (BEFORE ANY WORK):**
    - **ALWAYS read `TODO.md` first** to understand:
      - What phase/milestone the project is in
-     - What's been completed
-     - What's in progress
-     - What's next to work on
-   - If `TODO.md` doesn't exist, create it with the initial implementation plan based on the PRD
+     - What durable backlog items remain
+     - Which worklogs contain active handoff context
+   - If `TODO.md` references a relevant worklog, read that worklog before
+     changing code.
+   - If `TODO.md` doesn't exist, create it with the initial durable roadmap
+     based on the PRD.
 
-2. **BEFORE STARTING ANY TASK:**
-   - Update the task status to `- [ ] **IN PROGRESS**` in `TODO.md`
-   - This marks your claim on the work and provides visibility
+2. **DURING NORMAL TASK WORK:**
+   - Do **not** edit `TODO.md` just to mark a task as started, in progress, or
+     completed.
+   - For one-shot fixes, use commits, PR descriptions, and final response notes
+     as the task record.
+   - For multi-session efforts, assessment loops, investigations, or branch-local
+     progress that future agents need, create or update one focused worklog under
+     `docs/worklog/`.
+   - Use one worklog per effort, named `YYYY-MM-DD-<effort-slug>.md`.
 
-3. **WHEN COMPLETING TASKS:**
-   - **IMMEDIATELY** update `TODO.md` to mark the task as `- [x]` completed
-   - Do NOT batch updates - update as soon as each item is done
-   - Add notes if the implementation deviated from the plan
+3. **WHEN TO UPDATE `TODO.md`:**
+   - Add, remove, or reprioritize durable backlog items.
+   - Record a milestone-level completion or major roadmap pivot.
+   - Reconcile roadmap state during release/integration work.
+   - Replace detailed progress history with a short pointer to a worklog or
+     changelog entry.
 
-4. **WHEN ADDING NEW TASKS:**
-   - Add them to `TODO.md` in the appropriate phase/section
-   - Use `- [ ]` for pending tasks
+4. **WHEN ADDING NEW WORK:**
+   - If it is durable product/project work, add it to `TODO.md`.
+   - If it is branch-local execution detail, loop history, command output,
+     review notes, or handoff context, add it to a worklog instead.
 
 ### Changelog Workflow
 
-When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line summary and move the detailed task history to `CHANGELOG.md`. This keeps `TODO.md` focused on active/future work while preserving the full development record.
+When a phase is fully complete, collapse its tasks in `TODO.md` to a 2-3 line
+summary and move the detailed release history to `CHANGELOG.md`. Keep ongoing
+handoff details in `docs/worklog/` until they are no longer useful.
 
 ## Tech Stack
 
@@ -236,6 +252,242 @@ Use `_stable_seed(f"context_{scope_key}")` for all deterministic derivation. **N
 - `WorldModel` resolves canonical host/user capabilities once from scenario fields such as `user.primary_system`, `system.assigned_user`, `system.roles`, and `system.services`
 - `WorldPlanner` owns session bootstrap semantics (interactive, network, SSH, RDP) and may allocate session state in `StateManager` before `ActivityGenerator` emits the correlated host/network evidence
 - Baseline and storyline code should call this layer for persona placement, remote admin source selection, and shared session bootstrap instead of re-implementing heuristics locally
+
+### Action Bundles, SecurityEvents, and Contexts
+
+Action bundles represent real-world activities that can produce multiple pieces of
+evidence. They sit above `SecurityEvent` and are the preferred home for
+cross-event lifecycle, timing, observation, and durable identity ownership.
+
+A `SecurityEvent` represents one logical evidence-producing occurrence. It may
+carry multiple contexts when those contexts describe facets of that same
+occurrence and need to share truth. Contexts are not mini-event queues. Do not
+cram a multi-phase activity into one `SecurityEvent` just because a context exists.
+If an activity has distinct lifecycle phases (connection, auth accepted, session
+opened, process created, command executed, session closed), model those as
+distinct `SecurityEvent`s coordinated by an action bundle.
+
+Use action bundles for correlated behavior families across storyline, baseline,
+red herrings, and scanners. The source of intent may differ, but evidence
+construction should share the same bundle/lifecycle/timing path.
+
+Contracts compose only through canonical semantic layers. Higher-level bundles may
+request lower-level bundle contracts (for example SSH -> network connection, or
+browser -> proxy/network/DNS/file transfer), but rendered source artifacts must
+not become generation triggers. A Zeek `conn.log` row, eCAR FLOW row, Syslog
+line, or Windows event may have validation/rendering contracts, but it must not
+generate sibling evidence. Model those siblings as canonical events or contexts
+owned by the appropriate bundle before rendering.
+
+Source-observation profiles own source-level gaps and collection delay after
+canonical events are built, but before rendering. Observation decisions must be
+coherent for source-local lifecycle groups: process create/dependent/terminate
+rows for one process, logon/logoff rows for one session, and network/protocol
+companions for one UID/tuple should share the same source-local drop/delay
+decision. Do not add emitter-local missingness or one-off timestamp delays that
+can orphan a same-source lifecycle. Use observation profiles for coverage shape,
+`SourceTimingPlanner` for source-native timestamp relationships, and bundles for
+canonical lifecycle ownership.
+
+For SSH specifically, modeled sessions from typed storyline events, baseline
+remote-admin noise, and `scp` transfers to modeled Linux receivers should route
+through the SSH action bundle. The SSH bundle owns SSH auth/session/PAM/logind
+semantics, shell readiness, and session close intent; it delegates the TCP/22
+transport occurrence to the canonical network-connection contract. Keep
+transfer-specific receiver artifacts (for example, target-side file creation)
+separate from the bundle only after the bundle has owned SSH auth/session timing
+and the network contract has owned transport tuple, Zeek UID, packet accounting,
+visibility, and transport close time. When source ports are allocated during
+execution, use the resolved execution anchor rather than the pre-reservation
+intent anchor for tuple-specific identity. Source-native SSH close evidence must
+be lifecycle-compatible with the transport close, but should not be bit-identical
+to Zeek close timing unless the source semantics require exact equality.
+Compatibility paths that receive a Linux remote-interactive logon intent
+(`logon_type=10` with a remote source) must delegate to the SSH bundle as the
+single owner. Do not emit a generic Linux `logon` event before or after the SSH
+bundle for the same session; that creates duplicate endpoint `USER_SESSION`
+evidence and breaks transport-before-auth ordering. In eCAR/EDR rendering, the
+matching inbound SSH `FLOW` row is the transport observation and must render
+before the bundle-owned SSH `USER_SESSION/LOGIN` row for the same source tuple.
+If outbound client process visibility would delay the source-host SSH `FLOW`
+past remote authentication, omit that FLOW's process identity rather than moving
+the transport observation later. SSH syslog auth timing must account for the
+canonical event's eCAR/EDR FLOW source-latency window, not only the network
+sensor's final rendered connection timestamp.
+
+For RDP specifically, modeled remote interactive Windows sessions should route
+through the RDP action bundle. The bundle owns the source-side RDP client process
+when a modeled source host is available, the TCP/3389 transport, target Type 10
+logon/session metadata, source-port reuse, and temporal ordering between
+source-visible transport evidence and target authentication evidence. It also
+protects the source `mstsc.exe` process and its owning interactive session
+through the transport close so endpoint process telemetry cannot end before the
+visible RDP flow. Successful RDP logons must consume an `SF` transport interval
+from the network-connection contract, not a failed, reset, or tiny placeholder
+flow. Compatibility paths must not fabricate self-sourced Type 10 logons when no
+real remote source exists; use the RDP bundle with a source, or downgrade the
+event to local interactive semantics. Do not emit independent port 3389
+connections or Type 10 logons for the same modeled RDP session outside the
+bundle.
+As with SSH, endpoint `FLOW` rows for RDP transport should stay near the
+transport open; if late process visibility would invert transport-before-auth
+ordering, drop PID/principal from the FLOW instead of delaying it.
+
+For Windows remote administration specifically, explicit credential use and
+remote service installation should route through the Windows remote-admin action
+bundles. The bundles own 4648 subject/caller-process alignment, source endpoint
+semantics, source-visible caller timing, service-control transport, dropped
+service-binary evidence, and target service-install records. Keep tool-specific
+authoring (`runas`, `PsExec`, `wmic`, `schtasks`) in scenario/storyline layers;
+the generated evidence semantics belong in the bundle path.
+
+For explicit forward proxy traffic, logical client-to-origin HTTP/HTTPS requests
+from hosts with explicit proxy routes should route through the proxy transaction
+action bundle. The bundle owns client-to-proxy evidence, proxy access semantics,
+tunnel reuse, cache/deny terminal behavior, proxy-origin DNS, proxy-to-origin
+egress, and the timing relationship between source-visible proxy requests and
+origin-side activity. Keep proxy format rendering in emitters and proxy route
+selection in planning/config layers.
+
+For canonical network connections, route connection orchestration through the
+network-connection action bundle. The bundle owns the boundary for source and
+destination semantics, source-port allocation, DNS/TLS/HTTP/file/proxy/firewall
+metadata, IDS/EDR flow correlation, source endpoint process ownership, Zeek UID
+and connection state identity, visibility handoff, and source-native timing.
+Higher-level bundles may request connections through the public generator
+entrypoint, but they should not duplicate tuple allocation, hostname resolution,
+packet accounting, or endpoint-flow ownership locally. Endpoint FLOW timestamps
+must remain inside the canonical source-visible connection interval recorded in
+state after network observation jitter is resolved; if a very short connection
+cannot also satisfy source-visible process-create ordering, omit process actor
+identity for that FLOW row instead of moving endpoint telemetry after the
+transport close. Higher-level auth/session bundles such as SSH and RDP should
+anchor successful authentication evidence to that interval, not to their original
+intent timestamp. For inbound SSH, eCAR FLOW is transport evidence and must not
+be delayed behind the `USER_SESSION` login solely to wait for destination-side
+`sshd` process visibility; omit the listener PID/principal when that identity
+would invert transport-before-session ordering.
+
+For NTP specifically, `ntp.log` fan-out is a parser view of a response-bearing
+UDP/123 connection. The network-connection contract must own the shared UID,
+`conn_state`, history, byte/packet accounting, duration, and `NtpContext`.
+Do not emit Zeek NTP rows for S0/no-response connections. Baseline NTP traffic
+should follow a stable per-client/server poll schedule with source-observation
+texture, not one exact hourly tick per host.
+
+For DHCP leases, route acquisition and renewal transactions through the DHCP
+lease action bundle. The bundle owns lease identity, MAC/IP/server/domain
+metadata, Zeek DHCP plus connection fan-out, link-local visibility semantics,
+and Linux `dhclient` syslog companion ordering. Do not hand-roll separate DHCP
+syslog or Zeek rows for the same lease transaction outside the bundle.
+
+For automatic DNS lookups, route prerequisite resolver evidence through the DNS
+lookup action bundle. The bundle owns resolver selection, cache behavior,
+query/answer semantics, TTL observations, Zeek DNS plus UDP/53 connection
+fan-out, Sysmon DNS visibility, AD SRV discovery companions, and low-volume
+resolver companion questions. Storyline `dns_query`, `dga_queries`, and
+`dns_tunnel` events may still model DNS as the attack narrative, but connection
+prerequisite DNS should not be duplicated at call sites.
+
+For browser-like HTTP/S sessions, page loads and their subresources should route
+through the browser-session action bundle. The bundle owns request grouping,
+transaction depth, referrer chains, page/subresource timing, static-asset cache
+suppression, response metadata, and direct-vs-explicit-proxy handoff through
+canonical connection generation. Single tool requests, raw storyline HTTP
+events, and source-local web server noise may remain direct canonical events
+unless they model a browser session.
+Browser/proxy HTTP planning owns source-native web semantics before render:
+HTTPS-first domains should redirect rather than serve plaintext HTTP success
+pages, non-browser service endpoints should keep compatible User-Agents, and
+installer/download paths should carry binary MIME and body-size semantics.
+The first request on a persistent plaintext HTTP flow must carry flow-level
+transaction count and body-byte budgets so later same-flow requests can reuse the
+Zeek UID and render `trans_depth > 1`; do not disable that accounting for
+browser-style page/subresource sessions.
+
+For scanner/probe activity, typed `port_scan` and `web_scan` storyline events,
+scheduled scanner-overlap suspicious noise, and nmap process side effects should
+route through scanner/probe action bundles. The bundles own bulk target/request
+expansion, scanner timing, per-probe connection profiles, firewall/IDS/HTTP
+contexts, source process attribution when present, and ground-truth summaries.
+They may still request canonical network connections through the generator; do
+not duplicate scanner target fan-out, IDS scanner selection, or nmap transport
+side effects at individual call sites.
+
+For IDS alerts, build alert context through the IDS alert action bundle when a
+data-driven signature or preset rule is attached to canonical network evidence.
+The bundle owns `(gid, sid, rev)` identity, message/classification/priority
+normalization, and signature-owned DNS payload construction for DNS alerts.
+Emitters should only render `IdsContext`; they should not choose signatures or
+invent alert/DNS payloads.
+
+For modeled file transfers, use the file-transfer action bundles for transfer
+identity, Zeek files.log metadata, receiver endpoint file evidence, and
+source-visible timing. HTTP response bodies, substantial SMB reads/writes,
+staged-archive SMB reads, and SCP receiver-side file creation should share the
+bundle helpers instead of independently inventing FUIDs, hashes, filenames,
+transfer direction, or target process ownership. SSH/RDP/proxy bundles still own
+their transport/session semantics; file-transfer bundles own the transfer/file
+evidence layered on top. Large or download-scale HTTP responses with
+source-native MIME/body metadata should attach the HTTP file-transfer bundle
+deterministically, even when the `HttpContext` was supplied by a browser-session,
+proxy, process-command, or storyline path.
+
+For Linux shell command execution, route bash-history emission and correlated
+foreground process telemetry through the Linux shell-command action bundle. The
+bundle owns the command execution sequence: resolve activity keys to concrete
+commands, align commands after SSH/session readiness, schedule per-user
+bash-history timestamps, emit bash history, and then emit optional process
+telemetry through shared adapter hooks. Do not hand-roll separate bash-history
+and process timing paths for the same modeled command.
+
+For process execution, route canonical process create/terminate lifecycle and
+process-owned side effects through the process-execution action bundle. The
+bundle owns the boundary between modeled execution intent and `SecurityEvent`
+evidence: session/parent ownership, source-visible create/terminate timing,
+command-owned network effects, guaranteed process-image file evidence, and
+probabilistic file/module/registry endpoint side effects. Other bundles may call
+the public process entrypoints, but they should not duplicate process lifecycle
+or side-effect generation locally.
+
+For authentication and session lifecycle, route successful logons, failed
+logons, logoffs, service logons, machine-account logons, anonymous logons, NTLM
+validation, and workstation lock/unlock evidence through the auth/session action
+bundles. The bundles own the boundary for session allocation/reuse, logon IDs,
+lock state, source endpoint semantics, transport/syslog companions, DC-side
+validation evidence, failure-network companions, and session termination
+ordering. Other bundles may request logon or logoff evidence, but they should
+not locally invent duplicate session IDs, source ports, auth-package fields,
+lock/unlock re-authentication, or validation companion traffic.
+
+For Kerberos/DC evidence, route domain-logon TGT/TGS companions, visible KDC-flow
+audit repair, TGT requests, TGT renewals, service-ticket requests, and
+pre-authentication failures through the Kerberos/DC action bundles. The bundles
+own DC-side Kerberos source endpoint semantics, source-port reservation, TGT
+cache behavior, service-principal identity, source-native ticket timing, and
+optional companion KDC network evidence. Do not independently emit 4768, 4769,
+4770, or 4771 rows at call sites or patch Kerberos source ports in emitters.
+
+For Windows audit/account-management evidence, route log-cleared,
+scheduled-task, account-created/deleted/changed, password reset/change,
+group-membership, create-remote-thread, and process-access evidence through the
+Windows audit action bundles. The bundles own subject/session ownership, target
+identity, source timing, process/thread lifecycle validation, and shared
+Sysmon/eCAR context. Do not duplicate 1102, 4698, 472x/4738/475x, Sysmon Event
+8, or Sysmon Event 10 construction at storyline/causal call sites or patch
+these fields in emitters.
+
+When fixing realism defects:
+- Cross-event ordering, lifecycle, source timing, observation, and durable
+  identities belong in bundle/lifecycle/timing/observation layers.
+- Use the temporal constraint graph for relationships that span multiple
+  evidence timestamps or source observations. Local timestamp clamps are still
+  acceptable at narrow boundaries, but new family-level timing ownership should
+  express preferred times, hard bounds, lifecycle windows, and causal edges in
+  the graph so dependent evidence cannot invert.
+- Shared facts for one occurrence belong on `SecurityEvent` contexts.
+- Emitters render source-native views; they do not invent shared facts or repair
+  upstream lifecycle contradictions.
 
 ### Canonical Event Model
 

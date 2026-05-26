@@ -6,12 +6,13 @@
 from __future__ import annotations
 
 import math
+import random
 from typing import Any
 
 from pydantic import ValidationError
 
 from evidenceforge.config import get_activity_directory
-from evidenceforge.config.overlay import extend_list, load_with_overlay
+from evidenceforge.config.overlay import extend_list, load_with_overlay, merge_keyed_list
 from evidenceforge.config.schemas import DnsTunnelRttConfig
 from evidenceforge.utils.rng import _stable_seed
 
@@ -38,6 +39,47 @@ _DEFAULT_PROXY_CONNECT_STATUS_MESSAGES: dict[int, list[str]] = {
     503: ["Service Unavailable"],
     504: ["Gateway Timeout"],
 }
+_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES: list[dict[str, Any]] = [
+    {
+        "name": "web_recon",
+        "weight": 32.0,
+        "ports": [(80, 34.0), (443, 38.0), (8080, 16.0), (8443, 7.0), (22, 5.0)],
+    },
+    {
+        "name": "windows_exposure",
+        "weight": 24.0,
+        "ports": [(445, 36.0), (3389, 28.0), (135, 14.0), (139, 10.0), (5985, 7.0)],
+    },
+    {
+        "name": "iot_telnet",
+        "weight": 15.0,
+        "ports": [(23, 48.0), (2323, 18.0), (22, 16.0), (80, 10.0), (8080, 8.0)],
+    },
+    {
+        "name": "mail_relay_probe",
+        "weight": 10.0,
+        "ports": [(25, 44.0), (587, 24.0), (465, 16.0), (110, 8.0), (143, 8.0)],
+    },
+    {
+        "name": "database_probe",
+        "weight": 9.0,
+        "ports": [(1433, 32.0), (3306, 24.0), (5432, 22.0), (6379, 12.0), (9200, 10.0)],
+    },
+    {
+        "name": "broad_low_rate",
+        "weight": 10.0,
+        "ports": [
+            (22, 12.0),
+            (23, 10.0),
+            (80, 18.0),
+            (443, 18.0),
+            (445, 12.0),
+            (3389, 12.0),
+            (8080, 10.0),
+            (8443, 8.0),
+        ],
+    },
+]
 
 
 def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
@@ -62,6 +104,12 @@ def merge_network_params(default: dict[str, Any], overlay: dict[str, Any]) -> di
         result["dns_tunnel_ttl_choices"] = extend_list(
             default.get("dns_tunnel_ttl_choices", []),
             overlay["dns_tunnel_ttl_choices"],
+        )
+    if "external_scanner_port_profiles" in overlay:
+        result["external_scanner_port_profiles"] = merge_keyed_list(
+            default.get("external_scanner_port_profiles", []),
+            overlay["external_scanner_port_profiles"],
+            "name",
         )
     if isinstance(overlay.get("dns_tunnel_rcode_weights"), dict):
         result["dns_tunnel_rcode_weights"] = dict(overlay["dns_tunnel_rcode_weights"])
@@ -185,6 +233,76 @@ def dns_tunnel_rcode_weights() -> dict[str, float]:
 
     max_weight = max(cleaned.values())
     return {name: weight / max_weight for name, weight in cleaned.items()}
+
+
+def external_scanner_port_profiles() -> list[dict[str, Any]]:
+    """Return cleaned source-sticky external scanner destination-port profiles."""
+    raw_profiles = load_network_params().get("external_scanner_port_profiles", [])
+    if not isinstance(raw_profiles, list):
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    profiles: list[dict[str, Any]] = []
+    for raw_profile in raw_profiles:
+        if not isinstance(raw_profile, dict):
+            continue
+        name = str(raw_profile.get("name", "")).strip()
+        try:
+            profile_weight = float(raw_profile.get("weight", 1.0))
+        except (TypeError, ValueError):
+            continue
+        if not name or not math.isfinite(profile_weight) or profile_weight <= 0:
+            continue
+        ports: list[tuple[int, float]] = []
+        for raw_port in raw_profile.get("ports", []):
+            if not isinstance(raw_port, dict):
+                continue
+            try:
+                port = int(raw_port["port"])
+                weight = float(raw_port.get("weight", 1.0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 1 <= port <= 65535 and math.isfinite(weight) and weight > 0:
+                ports.append((port, weight))
+        if ports:
+            profiles.append({"name": name, "weight": profile_weight, "ports": ports})
+    if not profiles:
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    total_profile_weight = sum(float(profile["weight"]) for profile in profiles)
+    if not math.isfinite(total_profile_weight):
+        return list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+    cleaned_profiles: list[dict[str, Any]] = []
+    for profile in profiles:
+        ports = list(profile.get("ports", []))
+        total_port_weight = sum(float(weight) for _port, weight in ports)
+        if not math.isfinite(total_port_weight):
+            continue
+        cleaned_profiles.append(profile)
+
+    return cleaned_profiles or list(_DEFAULT_EXTERNAL_SCANNER_PORT_PROFILES)
+
+
+def external_scanner_port_profile_for_source(src_ip: str) -> dict[str, Any]:
+    """Return a stable external scanner port profile for a scanner source IP."""
+    profiles = external_scanner_port_profiles()
+    rng = random.Random(_stable_seed(f"external_scanner_profile:{src_ip}"))
+    return rng.choices(
+        profiles,
+        weights=[float(profile["weight"]) for profile in profiles],
+        k=1,
+    )[0]
+
+
+def external_scanner_port_for_source(src_ip: str, rng: Any) -> int:
+    """Pick a destination port from the stable scanner profile for this source."""
+    profile = external_scanner_port_profile_for_source(src_ip)
+    ports = list(profile.get("ports", []))
+    if not ports:
+        return 443
+    values = [int(port) for port, _weight in ports]
+    weights = [float(weight) for _port, weight in ports]
+    return int(rng.choices(values, weights=weights, k=1)[0])
 
 
 def proxy_connect_status_messages() -> dict[int, list[str]]:

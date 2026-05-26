@@ -23,14 +23,14 @@
 """Tests for eCAR format spec compliance.
 
 Verifies that the EcarEmitter produces records matching the eCAR spec:
-- pid and tid always present (with -1 sentinel for unavailable)
+- pid and tid are present only when source-native IDs are known
 - ppid only on PROCESS events
 - All properties values are strings
 - parent_image_path in PROCESS/CREATE properties
 """
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
 import pytest
@@ -69,7 +69,7 @@ def ts():
     return datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
 
 
-class TestPidAlwaysPresent:
+class TestPidEmission:
     def test_pid_present_on_process_create(self, emitter, ts):
         """PROCESS/CREATE should have pid."""
         rendered = emitter._render_event(
@@ -86,13 +86,13 @@ class TestPidAlwaysPresent:
         record = json.loads(rendered)
         assert record["pid"] == 0
 
-    def test_pid_defaults_to_negative_one(self, emitter, ts):
-        """When pid not set, it should default to -1."""
+    def test_pid_omitted_when_unavailable(self, emitter, ts):
+        """When pid is unavailable, session rows should not carry sentinel IDs."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "USER_SESSION", "action": "LOGIN"}
         )
         record = json.loads(rendered)
-        assert record["pid"] == -1
+        assert "pid" not in record
 
     def test_unlock_reauth_renders_login_with_logon_type(self, emitter, ts):
         """Type 7 unlock reauth should use session lifecycle action vocabulary."""
@@ -182,13 +182,13 @@ class TestPidAlwaysPresent:
             if "Unknown field in ecar (USER_SESSION/LOGIN): logon_type" in log_record.getMessage()
         ]
 
-    def test_pid_none_becomes_negative_one(self, emitter, ts):
-        """Explicit pid=None should become -1."""
+    def test_pid_none_is_omitted(self, emitter, ts):
+        """Explicit pid=None should be omitted."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "FILE", "action": "CREATE", "pid": None}
         )
         record = json.loads(rendered)
-        assert record["pid"] == -1
+        assert "pid" not in record
 
 
 class TestFileEventActions:
@@ -402,6 +402,55 @@ class TestSessionOutcomeRendering:
 
         assert logon_row["timestamp"] < process_row["timestamp"]
 
+    def test_ssh_session_login_renders_after_matching_inbound_flow(self, emitter, ts):
+        """eCAR SSH LOGIN should not appear before the same tuple's FLOW."""
+        host = HostContext(
+            hostname="LINUX-01",
+            ip="10.0.0.20",
+            os="Ubuntu 22.04",
+            os_category="linux",
+            system_type="server",
+            fqdn="linux-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        flow_event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=host,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=55222,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                service="ssh",
+                duration=120.0,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            edr=EdrContext(object_id="flow-1"),
+        )
+        session_event = SecurityEvent(
+            timestamp=ts,
+            event_type="ssh_session",
+            dst_host=host,
+            auth=AuthContext(
+                username="alice",
+                source_ip="10.0.0.10",
+                source_port=55222,
+                logon_id="0x123",
+                logon_type=10,
+            ),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter._render_connection(flow_event)
+        flow_row = emitter.emit_event.call_args.args[0]
+        emitter._render_logon(session_event)
+        login_row = emitter.emit_event.call_args.args[0]
+
+        assert login_row["timestamp"] > flow_row["timestamp"]
+
     def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
         """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
         host = HostContext(
@@ -564,6 +613,37 @@ class TestChronologicalOutput:
         ]
         assert len(rows) == 1
 
+    def test_close_drops_rows_shifted_after_output_window(self, tmp_path, ts):
+        """Final eCAR source ordering should not leak records after scenario end."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        emitter._output_end_time = ts + timedelta(seconds=10)
+
+        for offset in (5, 10, 11):
+            emitter.emit_event(
+                {
+                    "timestamp": ts + timedelta(seconds=offset),
+                    "hostname": "ws01",
+                    "object": "FLOW",
+                    "action": "CONNECT",
+                    "pid": 100 + offset,
+                    "_host_fqdn": "ws01.example.org",
+                }
+            )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert len(rows) == 1
+        assert rows[0]["pid"] == 105
+
     def test_close_moves_process_terminate_after_later_references(self, tmp_path, ts):
         """eCAR output should not terminate a process before later same-process telemetry."""
         fmt = Mock()
@@ -622,6 +702,58 @@ class TestChronologicalOutput:
         )
         assert terminate_ts > module_ts
 
+    def test_close_rewrites_linux_pids_by_source_timestamp_not_canonical_order(self, tmp_path, ts):
+        """Linux PID morphology should follow rendered source time, not canonical time."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "proc-a",
+                "pid": 5000,
+                "image_path": "/usr/bin/parent",
+                "_canonical_ms": int(ts.replace(second=1).timestamp() * 1000),
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "proc-b",
+                "pid": 1000,
+                "image_path": "/usr/bin/child",
+                "_canonical_ms": int(ts.replace(second=3).timestamp() * 1000),
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "linux01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        creates = sorted(
+            (row for row in rows if row["object"] == "PROCESS" and row["action"] == "CREATE"),
+            key=lambda row: row["timestamp_ms"],
+        )
+        assert [row["pid"] for row in creates] == sorted(row["pid"] for row in creates)
+        assert creates[0]["pid"] == 1000
+        assert creates[1]["pid"] == 5000
+        assert "_canonical_ms" not in creates[0]
+        assert "_canonical_ms" not in creates[1]
+
     def test_flow_uses_source_native_timestamp_offset(self, emitter, monkeypatch, ts):
         emitted: list[dict] = []
         monkeypatch.setattr(emitter, "emit_event", emitted.append)
@@ -663,6 +795,88 @@ class TestChronologicalOutput:
         )
         assert emitted[0]["timestamp"] == ts + expected_delta
 
+    def test_short_flow_stays_inside_canonical_connection_interval(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """FLOW rows should not be source-timed after the canonical transport close."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=1234,
+            parent_pid=4,
+            image=r"C:\Windows\System32\curl.exe",
+            command_line="curl.exe https://example.org",
+            username="alice",
+            start_time=ts,
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                duration=0.05,
+                initiating_pid=1234,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id="process-1"),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] <= ts + timedelta(milliseconds=50)
+        assert emitted[0]["pid"] == -1
+        assert "actorID" not in emitted[0]
+
+    def test_incomplete_flow_without_duration_stays_at_canonical_attempt_time(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """FLOW rows without a duration should not drift after a zero-duration Zeek row."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=135,
+                protocol="tcp",
+                conn_state="S0",
+                initiating_pid=-1,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["timestamp"] == ts
+
     def test_actor_linked_flow_renders_after_process_create(self, emitter, monkeypatch, ts):
         """FLOW rows should not reference an actor before its visible PROCESS/CREATE row."""
         emitted: list[dict] = []
@@ -701,6 +915,183 @@ class TestChronologicalOutput:
         emitter._render_connection(event)
 
         assert emitted[0]["timestamp"] > emitter._process_create_timestamp(event, process)
+
+    def test_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Inbound FLOW observations should not wait for late listener PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state_manager = StateManager()
+        state_manager.set_current_time(ts + timedelta(seconds=2))
+        listener_pid = state_manager.create_process(
+            "linux01",
+            parent_pid=0,
+            image="/usr/sbin/sshd",
+            command_line="sshd: admin [priv]",
+            username="root",
+            integrity_level="System",
+        )
+        emitter._state_manager = state_manager
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.0.20",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                duration=None,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=-1,
+                responding_pid=listener_pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        inbound = next(row for row in emitted if row["direction"] == "INBOUND")
+        assert inbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert inbound["pid"] == -1
+        assert "principal" not in inbound
+
+    def test_rdp_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """RDP FLOW observations should not wait for late TermService PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state_manager = StateManager()
+        state_manager.set_current_time(ts + timedelta(seconds=2))
+        listener_pid = state_manager.create_process(
+            "win01",
+            parent_pid=4,
+            image=r"C:\Windows\System32\svchost.exe",
+            command_line=r"C:\Windows\System32\svchost.exe -k termsvcs",
+            username="NETWORK SERVICE",
+            integrity_level="System",
+        )
+        emitter._state_manager = state_manager
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="win01",
+                ip="10.0.0.20",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="server",
+                fqdn="win01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=3389,
+                protocol="tcp",
+                duration=60.0,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=-1,
+                responding_pid=listener_pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        inbound = next(row for row in emitted if row["direction"] == "INBOUND")
+        assert inbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert inbound["pid"] == -1
+        assert "principal" not in inbound
+
+    def test_outbound_remote_session_flow_drops_late_process_identity(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """Remote-session FLOW observations should not wait for late client PROCESS visibility."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        process = ProcessContext(
+            pid=4321,
+            parent_pid=1000,
+            image="/usr/bin/ssh",
+            command_line="ssh admin@linux01",
+            username="alice",
+            start_time=ts + timedelta(seconds=2),
+        )
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="linux02",
+                ip="10.0.0.10",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux02.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.0.20",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            process=process,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                duration=60.0,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=process.pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        outbound = next(row for row in emitted if row["direction"] == "OUTBOUND")
+        assert outbound["timestamp"] <= EcarEmitter._flow_identity_deadline(event)
+        assert outbound["pid"] == -1
+        assert "principal" not in outbound
 
     def test_outbound_flow_can_render_user_principal(self, emitter, monkeypatch, ts):
         """User-owned FLOW records should be able to carry mixed principal attribution."""
@@ -828,6 +1219,152 @@ class TestChronologicalOutput:
         assert emitted[0]["direction"] == "INBOUND"
         assert emitted[0]["pid"] == 24118
 
+    @pytest.mark.parametrize(
+        ("dst_port", "proto", "system_pids", "expected_pid"),
+        [
+            (53, "udp", {"dns": 5300, "lsass": 700}, 5300),
+            (88, "udp", {"dns": 5300, "lsass": 700}, 700),
+            (389, "tcp", {"dns": 5300, "lsass": 700}, 700),
+            (445, "tcp", {"system": 4, "lsass": 700}, 4),
+        ],
+    )
+    def test_inbound_infrastructure_flow_uses_destination_service_pid(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+        dst_port,
+        proto,
+        system_pids,
+        expected_pid,
+    ):
+        """DC DNS/auth/SMB listener FLOW rows should use destination-local owners."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        emitter._system_pids = {"DC-01": system_pids}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.3.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.7",
+                src_port=49152,
+                dst_ip="10.0.3.10",
+                dst_port=dst_port,
+                protocol=proto,
+                conn_state="SF",
+                history="ShADadF" if proto == "tcp" else "Dd",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == expected_pid
+
+    def test_short_inbound_service_flow_keeps_preexisting_listener_pid(
+        self, emitter, monkeypatch, ts
+    ):
+        """Long-running service PIDs should survive tiny source-native flow windows."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts - timedelta(minutes=10))
+        dns_pid = state.create_process(
+            "DC-01",
+            0,
+            r"C:\Windows\System32\dns.exe",
+            "dns.exe",
+            "SYSTEM",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"DC-01": {"dns": dns_pid}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="DC-01",
+                ip="10.0.3.10",
+                os="Windows Server 2022",
+                os_category="windows",
+                system_type="domain_controller",
+                fqdn="dc-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.1.7",
+                src_port=49152,
+                dst_ip="10.0.3.10",
+                dst_port=53,
+                protocol="udp",
+                duration=0.0002,
+                conn_state="SF",
+                history="Dd",
+                initiating_pid=-1,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == dns_pid
+
+    def test_inbound_flow_prefers_canonical_destination_pid_for_non_remote_session(
+        self, emitter, monkeypatch, ts
+    ):
+        """Non-remote-session inbound flows should prefer a canonical listener PID."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state = StateManager()
+        state.set_current_time(ts - timedelta(seconds=2))
+        listener_pid = state.create_process(
+            "APP-INT-01",
+            0,
+            "/usr/sbin/apache2",
+            "/usr/sbin/apache2 -DFOREGROUND",
+            "www-data",
+            "System",
+        )
+        emitter._state_manager = state
+        emitter._system_pids = {"APP-INT-01": {"apache2": 36148}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=HostContext(
+                hostname="APP-INT-01",
+                ip="10.10.2.30",
+                os="Ubuntu 22.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="app-int-01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.10.1.31",
+                src_port=50049,
+                dst_ip="10.10.2.30",
+                dst_port=443,
+                protocol="tcp",
+                responding_pid=listener_pid,
+            ),
+            edr=EdrContext(object_id="flow-1", actor_id=""),
+        )
+
+        emitter._render_connection(event)
+
+        assert emitted[0]["direction"] == "INBOUND"
+        assert emitted[0]["pid"] == listener_pid
+        assert emitted[0]["pid"] != 36148
+
     def test_inbound_listener_flow_can_render_principal(self, emitter, monkeypatch, ts):
         """Observed listener-side FLOW rows can carry local service principal context."""
         monkeypatch.setattr(
@@ -914,6 +1451,9 @@ class TestChronologicalOutput:
         assert emitted[0]["pid"] == -1
         assert emitted[0]["outcome"] == "failure"
         assert emitted[0]["connection_state"] == "REJ"
+        rendered = json.loads(emitter._render_event(emitted[0]))
+        assert "pid" not in rendered
+        assert "tid" not in rendered
 
     def test_outbound_flow_with_pid_only_renders_after_process_create(
         self, emitter, monkeypatch, ts
@@ -1052,6 +1592,138 @@ class TestChronologicalOutput:
         child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
         assert child_ms > parent_ms
 
+    def test_close_moves_parent_termination_after_visible_child_termination(self, tmp_path, ts):
+        """Visible eCAR parents should not terminate before foreground children."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=0),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "shell-process",
+                "pid": 837798,
+                "ppid": 36175,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=80_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "debian-sa1-process",
+                "actorID": "shell-process",
+                "pid": 837826,
+                "ppid": 837798,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=90_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "shell-process",
+                "pid": 837798,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=200_000),
+                "hostname": "linux01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "debian-sa1-process",
+                "pid": 837826,
+                "_host_fqdn": "linux01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "linux01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        shell_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "shell-process" and row["action"] == "TERMINATE"
+        )
+        child_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "debian-sa1-process" and row["action"] == "TERMINATE"
+        )
+        assert shell_ms > child_ms
+
+    def test_close_moves_dependent_telemetry_after_reordered_process_create(self, tmp_path, ts):
+        """Dependent eCAR records should follow a process create shifted after its parent."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=5),
+                "hostname": "ws01",
+                "object": "FILE",
+                "action": "WRITE",
+                "actorID": "child-process",
+                "pid": 4904,
+                "file_path": r"C:\Users\alice\AppData\Local\Temp\cache.bin",
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=6),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "child-process",
+                "actorID": "parent-process",
+                "pid": 4904,
+                "ppid": 4896,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=7),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "parent-process",
+                "pid": 4896,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        parent_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "parent-process")
+        child_ms = next(row["timestamp_ms"] for row in rows if row["objectID"] == "child-process")
+        file_ms = next(row["timestamp_ms"] for row in rows if row["object"] == "FILE")
+        assert parent_ms < child_ms < file_ms
+
     def test_close_moves_child_process_create_after_parent_pid_without_actor_id(self, tmp_path, ts):
         """Visible eCAR child creates should also respect ppid when actorID is absent."""
         fmt = Mock()
@@ -1114,6 +1786,131 @@ class TestChronologicalOutput:
         row = json.loads(normalized[0])
         assert row["timestamp_ms"] == 1000
 
+    def test_linux_pid_morphology_rewrites_later_lower_process_pids(self):
+        """Linux eCAR PID rendering should not move backward over source time."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "parent",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/bin/sh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "shell",
+                    "pid": 450,
+                    "tid": 450,
+                    "properties": {"image_path": "/usr/bin/journalctl"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "FILE",
+                    "action": "READ",
+                    "actorID": "shell",
+                    "pid": 450,
+                    "properties": {"file_path": "/var/log/syslog"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2200,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "child",
+                    "actorID": "shell",
+                    "pid": 440,
+                    "tid": 440,
+                    "ppid": 450,
+                    "properties": {"image_path": "/usr/bin/tail"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        parent = next(row for row in normalized if row.get("objectID") == "parent")
+        shell = next(row for row in normalized if row.get("objectID") == "shell")
+        file_row = next(row for row in normalized if row.get("object") == "FILE")
+        child = next(row for row in normalized if row.get("objectID") == "child")
+        assert shell["pid"] > parent["pid"]
+        assert file_row["pid"] == shell["pid"]
+        assert child["pid"] > shell["pid"]
+        assert child["ppid"] == shell["pid"]
+
+    def test_linux_pid_morphology_preserves_process_open_actor_pid(self):
+        """PROCESS/OPEN top-level pid should track actorID (source), not objectID target."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "source",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/usr/bin/bash"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "target",
+                    "pid": 400,
+                    "tid": 400,
+                    "properties": {"image_path": "/usr/bin/ssh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target",
+                    "actorID": "source",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"target_pid": 400, "target_process_uuid": "target"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        source_create = next(row for row in normalized if row.get("objectID") == "source")
+        target_create = next(row for row in normalized if row.get("objectID") == "target")
+        process_open = next(
+            row
+            for row in normalized
+            if row.get("object") == "PROCESS" and row.get("action") == "OPEN"
+        )
+
+        assert target_create["pid"] > source_create["pid"]
+        assert process_open["pid"] == source_create["pid"]
+        assert process_open["properties"]["target_pid"] == target_create["pid"]
+
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""
         lines = [
@@ -1147,23 +1944,22 @@ class TestChronologicalOutput:
         assert [row["timestamp_ms"] for row in rows] == [1000, 1000]
 
 
-class TestTidAlwaysPresent:
-    def test_tid_present_default(self, emitter, ts):
-        """tid should always be present, defaulting to -1."""
+class TestTidEmission:
+    def test_tid_omitted_when_unavailable(self, emitter, ts):
+        """Rows without a source-native thread ID should omit tid."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "USER_SESSION", "action": "LOGIN"}
         )
         record = json.loads(rendered)
-        assert "tid" in record
-        assert record["tid"] == -1
+        assert "tid" not in record
 
-    def test_tid_present_on_process(self, emitter, ts):
-        """tid should be present on PROCESS events."""
+    def test_tid_not_invented_on_raw_process_dict(self, emitter, ts):
+        """Low-level rendering should not invent a thread ID without event context."""
         rendered = emitter._render_event(
             {"timestamp": ts, "object": "PROCESS", "action": "CREATE", "pid": 100, "ppid": 4}
         )
         record = json.loads(rendered)
-        assert "tid" in record
+        assert "tid" not in record
 
     def test_tid_explicit_value(self, emitter, ts):
         """Explicit tid value should be preserved."""

@@ -106,6 +106,9 @@ class EventDispatcher:
         self.observation_policy = observation_policy or ObservationPolicy("complete")
         self._source_evidence_status: dict[str, dict[str, ObservationSummary]] = {}
         self.storyline_cluster_id: str | None = None
+        from evidenceforge.generation.source_timing import SourceTimingPlanner
+
+        self.source_timing_planner = SourceTimingPlanner()
 
     @property
     def source_evidence_status(self) -> dict[str, dict[str, dict[str, int]]]:
@@ -165,6 +168,7 @@ class EventDispatcher:
             if decision.delay.total_seconds() > 0:
                 event_to_emit = replace(event, timestamp=event.timestamp + decision.delay)
                 status = "delayed"
+            event_to_emit = self.source_timing_planner.plan_event(event_to_emit)
             self._record_observation(event, format_name, status)
             if event.raw is not None:
                 emitter.emit_raw(event_to_emit.raw.fields)

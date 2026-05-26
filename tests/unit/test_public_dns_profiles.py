@@ -5,6 +5,7 @@
 
 from evidenceforge.generation.activity.generator import (
     _dns_registrable_domain,
+    _dns_soa_answer,
     _public_dns_mx_answers,
     _public_dns_ns_answers,
     _public_dns_soa_answers,
@@ -24,6 +25,32 @@ def test_public_dns_profiles_avoid_default_ns_mx_soa_templates():
     assert _public_dns_soa_answers(domain) != [f"ns1.{domain} hostmaster.{domain}"]
 
 
+def test_public_dns_soa_answers_include_full_rdata():
+    answer = _public_dns_soa_answers("pypi.org")[0]
+    fields = answer.split()
+
+    assert len(fields) == 7
+    assert fields[0].endswith(".net") or fields[0].endswith(".com") or fields[0].endswith(".org")
+    assert "." in fields[1]
+    assert all(field.isdigit() for field in fields[2:])
+    assert int(fields[3]) > int(fields[4])
+    assert int(fields[5]) > int(fields[3])
+
+
+def test_internal_dns_soa_answers_include_full_rdata():
+    answer = _dns_soa_answer(
+        "meridianhcs.local",
+        "ns1.meridianhcs.local",
+        "hostmaster.meridianhcs.local",
+        "internal",
+    )
+    fields = answer.split()
+
+    assert fields[:2] == ["ns1.meridianhcs.local", "hostmaster.meridianhcs.local"]
+    assert len(fields) == 7
+    assert all(field.isdigit() for field in fields[2:])
+
+
 def test_public_dns_profiles_preserve_well_known_provider_overrides():
     assert _public_dns_ns_answers("google.com") == [
         "ns1.google.com",
@@ -34,7 +61,9 @@ def test_public_dns_profiles_preserve_well_known_provider_overrides():
     assert _public_dns_mx_answers("microsoft.com") == [
         "0 microsoft-com.mail.protection.outlook.com"
     ]
-    assert _public_dns_soa_answers("microsoft.com")[0].endswith("azuredns-hostmaster.microsoft.com")
+    assert _public_dns_soa_answers("microsoft.com")[0].split()[1] == (
+        "azuredns-hostmaster.microsoft.com"
+    )
 
 
 def test_public_dns_answer_renderer_allows_only_literal_domain_tokens():

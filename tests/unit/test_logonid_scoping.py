@@ -550,6 +550,7 @@ def test_execute_storyline_uses_last_intra_step_timestamp_for_monotonic_ordering
         time: datetime,
         activity: str,
         explicit_types: set[str],
+        future_specs=(),
     ):
         observed_times.append(time)
         return None

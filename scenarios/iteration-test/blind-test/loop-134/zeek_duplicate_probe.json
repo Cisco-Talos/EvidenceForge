@@ -1,0 +1,93 @@
+{
+  "loop": 134,
+  "core_rows": 4699,
+  "dmz_rows": 6531,
+  "matched": 1479,
+  "identicalMetrics": 194,
+  "lockedMatched": 201,
+  "lockedIdentical": 194,
+  "unlockedMatched": 1278,
+  "unlockedIdentical": 0,
+  "durationDiff": 1273,
+  "packetDiff": 1197,
+  "ipByteDiff": 1284,
+  "byProto": {
+    "tcp/http": {
+      "matched": 1077,
+      "identical": 0
+    },
+    "tcp/ssh": {
+      "matched": 113,
+      "identical": 0
+    },
+    "tcp/ssl": {
+      "matched": 28,
+      "identical": 0
+    },
+    "icmp/-": {
+      "matched": 46,
+      "identical": 39
+    },
+    "tcp/ldap": {
+      "matched": 19,
+      "identical": 0
+    },
+    "tcp/smb": {
+      "matched": 24,
+      "identical": 0
+    },
+    "udp/dns": {
+      "matched": 155,
+      "identical": 155
+    },
+    "tcp/-": {
+      "matched": 16,
+      "identical": 0
+    },
+    "tcp/rdp": {
+      "matched": 1,
+      "identical": 0
+    }
+  },
+  "examples": [
+    {
+      "tuple": "10.10.3.10|8|10.10.2.20|0|icmp",
+      "proto": "icmp",
+      "service": null,
+      "core_uid": "Co0grpdJXEGc7IzvG29",
+      "dmz_uid": "Cbtk2OT9wmphP3XCkGd",
+      "core_ts": 1710763517.391044,
+      "dmz_ts": 1710763517.367414,
+      "duration": 0.037773,
+      "orig_pkts": 1,
+      "resp_pkts": 1,
+      "history": "Dd"
+    },
+    {
+      "tuple": "10.10.3.20|42676|10.10.2.10|53|udp",
+      "proto": "udp",
+      "service": "dns",
+      "core_uid": "CeLix7Cjb0EM8r2vZH9",
+      "dmz_uid": "Ccthc2LADuHgaBiWXVV",
+      "core_ts": 1710764453.362887,
+      "dmz_ts": 1710764453.332589,
+      "duration": 0.00029,
+      "orig_pkts": 1,
+      "resp_pkts": 1,
+      "history": "Dd"
+    },
+    {
+      "tuple": "10.10.2.10|8|10.10.3.20|0|icmp",
+      "proto": "icmp",
+      "service": null,
+      "core_uid": "CCziC5JTqdreSY85Yh",
+      "dmz_uid": "C8JeQAicBhdgXDnKoG",
+      "core_ts": 1710764481.09479,
+      "dmz_ts": 1710764481.114248,
+      "duration": 0.035819,
+      "orig_pkts": 1,
+      "resp_pkts": 1,
+      "history": "Dd"
+    }
+  ]
+}

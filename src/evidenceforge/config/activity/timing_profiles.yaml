@@ -31,6 +31,16 @@ relationships:
     position: after
     min_ms: 100
     max_ms: 900
+  windows.account_password_reset_from_add:
+    class: source_latency
+    position: after
+    min_ms: 950
+    max_ms: 1800
+  windows.account_attributes_from_add:
+    class: source_latency
+    position: after
+    min_ms: 1850
+    max_ms: 3200
   windows.logoff_after_last_activity:
     class: teardown
     position: after
@@ -46,6 +56,16 @@ relationships:
     position: before
     min_ms: 250
     max_ms: 3000
+  windows.process_exit_after_visible_create:
+    class: teardown
+    position: after
+    min_ms: 25
+    max_ms: 350
+  windows.audit_after_visible_admin_command:
+    class: source_latency
+    position: after
+    min_ms: 120
+    max_ms: 900
   source.windows_wfp_connection:
     class: source_latency
     position: after
@@ -61,6 +81,56 @@ relationships:
     position: after
     min_ms: 25
     max_ms: 420
+  source.windows_security_process_create:
+    class: source_latency
+    position: after
+    min_ms: 80
+    max_ms: 4200
+  source.windows_explicit_credentials_after_process_create:
+    class: source_latency
+    position: after
+    min_ms: 35
+    max_ms: 650
+  source.windows_security_process_terminate:
+    class: source_latency
+    position: after
+    min_ms: 15
+    max_ms: 420
+  source.windows_security_after_sysmon_process_create_gap:
+    class: source_latency
+    position: after
+    min_ms: 250
+    max_ms: 1850
+  source.sysmon_process_create:
+    class: source_latency
+    position: after
+    min_ms: 18
+    max_ms: 2400
+  source.sysmon_process_terminate:
+    class: source_latency
+    position: after
+    min_ms: 12
+    max_ms: 520
+  source.ecar_process_create:
+    class: source_latency
+    position: after
+    min_ms: 8
+    max_ms: 950
+  source.ecar_after_sysmon_process_create_gap:
+    class: source_latency
+    position: after
+    min_ms: 120
+    max_ms: 420
+  source.ecar_dependent_after_process_create:
+    class: source_latency
+    position: after
+    min_ms: 1
+    max_ms: 35
+  source.ecar_process_terminate:
+    class: source_latency
+    position: after
+    min_ms: 25
+    max_ms: 220
   source.ecar_flow:
     class: source_latency
     position: after
@@ -71,12 +141,22 @@ relationships:
     position: after
     min_ms: 1
     max_ms: 11
+  source.ecar_ssh_session_after_accept:
+    class: source_latency
+    position: after
+    min_ms: 275
+    max_ms: 650
   source.ecar_remote_thread:
     class: source_latency
     position: after
     min_ms: 35
     max_ms: 250
   source.zeek_conn_start:
+    class: same_observation
+    position: after
+    min_ms: 0
+    max_ms: 0
+  network.connection_start_jitter:
     class: same_observation
     position: after
     min_ms: 0
@@ -106,6 +186,11 @@ relationships:
     position: after
     min_ms: 120
     max_ms: 650
+  source.zeek_file_analyzer:
+    class: same_observation
+    position: after
+    min_ms: 25
+    max_ms: 250
   network.tls_completed_min_duration:
     class: same_observation
     position: after

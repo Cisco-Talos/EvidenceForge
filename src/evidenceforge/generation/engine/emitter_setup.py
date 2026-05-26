@@ -63,7 +63,7 @@ from evidenceforge.generation.emitters import (
     ZeekX509Emitter,
 )
 from evidenceforge.models.scenario import System
-from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.rng import _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +228,9 @@ class EmitterSetupMixin:
                         for rule in sensor.nat_rules:
                             if rule.type == "static" and rule.mapped_ip and rule.real_ip:
                                 asa_emitter._vip_to_real_ip[rule.mapped_ip] = rule.real_ip
+
+        if "ecar" in self.emitters:
+            self.emitters["ecar"]._output_end_time = self.end_time
 
     def _build_proxy_routes(self) -> None:
         """Build proxy routing table: which systems route through which proxies.
@@ -669,6 +672,9 @@ class EmitterSetupMixin:
         for name, cmdline, user in svchost_groups:
             pids[name] = _c(pids["services"], r"C:\Windows\System32\svchost.exe", cmdline, user)
 
+        if (system.type or "").lower() == "domain_controller":
+            pids["dns"] = _c(pids["services"], r"C:\Windows\System32\dns.exe", "dns.exe", "SYSTEM")
+
         pids["msmpeng"] = _c(
             pids["services"],
             r"C:\ProgramData\Microsoft\Windows Defender\Platform\MsMpEng.exe",
@@ -765,11 +771,9 @@ class EmitterSetupMixin:
             _advance_boot_clock()
             return sm.create_process(hn, parent, image, cmd, user, "System")
 
-        import uuid
-
         from evidenceforge.models.state import RunningProcess
 
-        systemd_object_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"linux-systemd:{hn}"))
+        systemd_object_id = stable_uuid("linux-systemd", hn)
         sm.state.running_processes[(hn, 1)] = RunningProcess(
             pid=1,
             parent_pid=0,

@@ -26,10 +26,25 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.generation.activity.timing_profiles import sample_packet_timing_delta
 from evidenceforge.generation.emitters.zeek_base import SensorMultiplexEmitter
+from evidenceforge.generation.source_timing import SourceTimingPlanner
 
 _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP = timedelta(milliseconds=1)
+_MIN_HTTP_FILE_TIMESTAMP_GAP = timedelta(milliseconds=2)
+_SOURCE_TIMING = SourceTimingPlanner()
+
+
+def _response_file_vectors(http: Any) -> tuple[list[str] | None, list[str] | None]:
+    """Return Zeek HTTP response file vectors only when file IDs are visible."""
+    resp_fuids = list(getattr(http, "resp_fuids", []) or [])
+    if not resp_fuids:
+        return None, None
+    resp_mime_types = list(getattr(http, "resp_mime_types", []) or [])
+    if len(resp_mime_types) == len(resp_fuids):
+        return resp_fuids, resp_mime_types
+    if len(resp_mime_types) == 1:
+        return resp_fuids, resp_mime_types * len(resp_fuids)
+    return resp_fuids, None
 
 
 class ZeekHttpEmitter(SensorMultiplexEmitter):
@@ -46,6 +61,9 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._last_http_ts_by_uid: dict[tuple[str, str, int, str, int], datetime] = {}
+        self._conn_bounds_by_uid: dict[
+            tuple[str, str, int, str, int], tuple[datetime, datetime | None]
+        ] = {}
 
     def can_handle(self, event: SecurityEvent) -> bool:
         if event.event_type not in self._supported_types:
@@ -63,8 +81,10 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
     def emit(self, event: SecurityEvent) -> None:
         net = event.network
         http = event.http
-        event_ts = event.timestamp + sample_packet_timing_delta(
-            "source.zeek_http_request",
+        uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
+        conn_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_conn_start",
             seed_parts=(
                 net.zeek_uid,
                 net.src_ip,
@@ -73,12 +93,53 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
                 net.dst_port,
                 event.timestamp,
             ),
+            not_before=event.timestamp,
         )
-        uid_key = (net.zeek_uid, net.src_ip, net.src_port, net.dst_ip, net.dst_port)
+        within = None
+        latest_ts = None
+        resp_fuids, resp_mime_types = _response_file_vectors(http)
+        if net.duration is not None and net.duration > 0:
+            tail_gap = _MIN_HTTP_FILE_TIMESTAMP_GAP if resp_fuids else timedelta(microseconds=1)
+            latest_ts = conn_ts + timedelta(seconds=max(0.0, net.duration)) - tail_gap
+            if latest_ts < conn_ts:
+                latest_ts = conn_ts
+            within = (conn_ts, latest_ts)
+        cached_bounds = self._conn_bounds_by_uid.get(uid_key)
+        if cached_bounds is not None:
+            conn_ts, latest_ts = cached_bounds
+            if resp_fuids and latest_ts is not None:
+                reserve = _MIN_HTTP_FILE_TIMESTAMP_GAP - timedelta(microseconds=1)
+                latest_ts = max(conn_ts, latest_ts - reserve)
+            within = (conn_ts, latest_ts) if latest_ts is not None else None
+        else:
+            self._conn_bounds_by_uid[uid_key] = (conn_ts, latest_ts)
+        http_seed_parts = (
+            net.zeek_uid,
+            net.src_ip,
+            net.src_port,
+            net.dst_ip,
+            net.dst_port,
+            event.timestamp,
+        )
+        event_ts = _SOURCE_TIMING.source_time(
+            event,
+            "source.zeek_http_request",
+            seed_parts=http_seed_parts,
+            not_before=conn_ts,
+            within=within,
+        )
         previous_ts = self._last_http_ts_by_uid.get(uid_key)
         if previous_ts is not None and event_ts <= previous_ts:
             event_ts = previous_ts + _MIN_HTTP_TRANSACTION_TIMESTAMP_GAP
+        if latest_ts is not None and event_ts > latest_ts:
+            event_ts = latest_ts
         self._last_http_ts_by_uid[uid_key] = event_ts
+        _SOURCE_TIMING.record_source_time(
+            event,
+            "source.zeek_http_request",
+            event_ts,
+            seed_parts=http_seed_parts,
+        )
         event_data: dict[str, Any] = {
             "ts": event_ts,
             "uid": net.zeek_uid,
@@ -98,8 +159,8 @@ class ZeekHttpEmitter(SensorMultiplexEmitter):
             "status_msg": http.status_msg,
             "tags": http.tags if http.tags else None,
             "referrer": http.referrer or None,
-            "resp_fuids": http.resp_fuids if http.resp_fuids else None,
-            "resp_mime_types": http.resp_mime_types if http.resp_mime_types else None,
+            "resp_fuids": resp_fuids,
+            "resp_mime_types": resp_mime_types,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }
         if event._nat_swaps_by_sensor:

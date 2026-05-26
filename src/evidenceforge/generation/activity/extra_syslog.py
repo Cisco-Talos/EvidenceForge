@@ -150,6 +150,8 @@ def render_extra_syslog_message(
     template = rng.choice(entry.get("messages", [""]))
     render_values: dict[str, Any] = dict(values or {})
     for key, candidates in (entry.get("params") or {}).items():
+        if key in render_values:
+            continue
         pool = (
             _service_template_values(system_services, candidates)
             if key == "service"

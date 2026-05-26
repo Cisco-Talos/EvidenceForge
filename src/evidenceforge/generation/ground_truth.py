@@ -28,7 +28,7 @@ timelines, and indicators of compromise (IOCs) for threat hunting training.
 
 import ipaddress
 import logging
-from datetime import datetime
+from datetime import UTC
 from pathlib import Path
 
 from evidenceforge.models.scenario import Scenario
@@ -80,9 +80,15 @@ class GroundTruthGenerator:
         content = []
 
         # Header
+        generated_at = self.scenario.time_window.end or self.scenario.time_window.start
+        generated_at = (
+            generated_at.replace(tzinfo=UTC) if generated_at.tzinfo is None else generated_at
+        )
         content.append(f"# Ground Truth: {self.scenario.name}\n")
         content.append(f"**Scenario:** {self.scenario.description}\n")
-        content.append(f"**Generated:** {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}\n")
+        content.append(
+            f"**Generated:** {generated_at.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+        )
 
         # 1. Attack Summary (narrative from storyline)
         content.append("\n## Attack Summary\n")

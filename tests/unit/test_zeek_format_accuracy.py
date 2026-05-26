@@ -507,7 +507,8 @@ class TestZeekDnsFormatAccuracy:
 
         record = json.loads((tmp_path / "zeek_dns.json").read_text().splitlines()[0])
         delta = record["ts"] - ts.timestamp()
-        assert 0 < delta < duration
+        assert 0 <= delta <= duration
+        assert delta + record["rtt"] <= duration + 0.000001
 
     def test_nxdomain_omits_answers_and_ttls(self):
         """NXDOMAIN records should NOT include answers or TTLs fields."""
