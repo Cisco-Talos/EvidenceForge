@@ -1853,6 +1853,64 @@ class TestChronologicalOutput:
         assert child["pid"] > shell["pid"]
         assert child["ppid"] == shell["pid"]
 
+    def test_linux_pid_morphology_preserves_process_open_actor_pid(self):
+        """PROCESS/OPEN top-level pid should track actorID (source), not objectID target."""
+        lines = [
+            json.dumps(
+                {
+                    "timestamp_ms": 1000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "source",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"image_path": "/usr/bin/bash"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2000,
+                    "object": "PROCESS",
+                    "action": "CREATE",
+                    "objectID": "target",
+                    "pid": 400,
+                    "tid": 400,
+                    "properties": {"image_path": "/usr/bin/ssh"},
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "timestamp_ms": 2100,
+                    "object": "PROCESS",
+                    "action": "OPEN",
+                    "objectID": "target",
+                    "actorID": "source",
+                    "pid": 500,
+                    "tid": 500,
+                    "properties": {"target_pid": 400, "target_process_uuid": "target"},
+                },
+                separators=(",", ":"),
+            ),
+        ]
+
+        normalized = [
+            json.loads(line) for line in EcarEmitter._normalize_linux_pid_morphology(lines)
+        ]
+
+        source_create = next(row for row in normalized if row.get("objectID") == "source")
+        target_create = next(row for row in normalized if row.get("objectID") == "target")
+        process_open = next(
+            row
+            for row in normalized
+            if row.get("object") == "PROCESS" and row.get("action") == "OPEN"
+        )
+
+        assert target_create["pid"] > source_create["pid"]
+        assert process_open["pid"] == source_create["pid"]
+        assert process_open["properties"]["target_pid"] == target_create["pid"]
+
     def test_parent_order_skips_pid_parent_cycles_without_hanging(self):
         """Raw eCAR cyclic ppid records should not loop forever."""
         lines = [
