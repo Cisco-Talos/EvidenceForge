@@ -164,6 +164,18 @@ or follow-up batch is needed.
   source-native consistency, especially Windows Security channel `EventRecordID`
   monotonicity after log clear and eCAR FLOW/session/process lifecycle timing and
   identity pairing.
+- Loop 213 fixed Windows Security channel `EventRecordID` monotonicity
+  (`9ce3ad27`) by removing the renderer reset on Event ID 1102 while preserving
+  the 1102 event. Automated eval passed at 96.39589873896136 over 74657 records;
+  the rendered probe showed loop 212 had one non-increasing/decreasing Security
+  record-ID transition on DC-01, from Event ID 4688 record `11619147` to Event
+  ID 1102 record `2`, while loop 213 had zero non-increasing record IDs across
+  7044 Security rows and still had one 1102 row. Blind scores were
+  86/88/86/88, average 87.00. No deliberation was triggered because all
+  reviewers agreed on Synthetic. The next highest-leverage target is
+  source-observation realism for endpoint/network/proxy correlations: reduce
+  same-second eCAR FLOW/Zeek/proxy completeness with realistic jitter, dropout,
+  caching, and source-specific visibility gaps while preserving huntable pivots.
 
 ## Recent Completed Work Previously Kept in TODO
 
