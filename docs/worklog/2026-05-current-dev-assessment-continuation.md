@@ -203,6 +203,18 @@ or follow-up batch is needed.
   commands had non-overlapping eCAR process lifetimes, with WEB-EXT LDAP stale
   endpoint/Zeek tuple ownership queued behind it.
 
+- Loop 216 fixed eCAR Linux shell pipeline process concurrency (`fd786afc`) by
+  grouping near-simultaneous same-shell foreground creates during eCAR timing
+  normalization while preserving serialization for separate foreground
+  commands. Automated eval passed at 96.58483954300257 over 69503 records; the
+  hard probe showed visible two-stage pipeline non-overlap dropped from 10/10 in
+  loop 215 to 0/10 in loop 216. Blind scores were 38/32/36/43, average 37.25.
+  No deliberation was triggered because reviewers clustered in
+  mostly-realistic, mixed, or inconclusive territory with an 11-point score
+  spread. The next highest-leverage target is remote-session and receiver-side
+  file-transfer ordering, especially RDP login-before-endpoint-flow and SCP
+  receiver file-before-SSH/session evidence.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
