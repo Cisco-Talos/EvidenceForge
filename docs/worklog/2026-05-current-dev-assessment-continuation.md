@@ -128,6 +128,17 @@ or follow-up batch is needed.
   highest-leverage target is multi-sensor Zeek timing texture: add per-sensor
   clock offset/drift, broader capture jitter, occasional missing companions, and
   packet-accounting variance.
+- Loop 210 fixed multi-sensor Zeek timing texture (`f2b1c34b`) by widening
+  flow-local sensor path-delay jitter inside configured timing bounds so
+  duplicated core/DMZ observations no longer imply one fixed positive tap order.
+  Automated eval passed at 97.42953794362485 over 75679 records; rendered probes
+  showed paired core/DMZ conn offsets move from 1 negative / 2271 positive rows
+  in loop 209 to 805 negative / 1467 positive rows in loop 210, with rounded
+  offset buckets increasing from 25 to 91. Blind scores were 47/51/42/46,
+  average 46.50. No deliberation was triggered because all reviewers agreed on
+  Synthetic and score spread was small. The next highest-leverage target is
+  Windows explicit-credential 4648 source/target semantics, with shell workflow
+  texture close behind.
 
 ## Recent Completed Work Previously Kept in TODO
 
