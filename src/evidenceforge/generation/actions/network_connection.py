@@ -35,6 +35,7 @@ from evidenceforge.events.contexts import (
     HttpContext,
     IdsContext,
     OcspContext,
+    PeContext,
     ProxyContext,
 )
 from evidenceforge.generation.actions.base import ActionAnchor
@@ -88,6 +89,7 @@ class NetworkConnectionRequest:
     ids: IdsContext | None = None
     http: HttpContext | None = None
     file_transfer: FileTransferContext | None = None
+    pe: PeContext | None = None
     ocsp: OcspContext | None = None
     proxy: ProxyContext | None = None
     firewall: FirewallContext | None = None
@@ -112,7 +114,8 @@ class NetworkConnectionRequest:
             f"{self.emit_dns}:{self.pid}:{source_hostname}:{self.conn_state or ''}:"
             f"{_context_fingerprint(self.dns)}:{_context_fingerprint(self.ids)}:"
             f"{_context_fingerprint(self.http)}:{_context_fingerprint(self.file_transfer)}:"
-            f"{_context_fingerprint(self.ocsp)}:{_context_fingerprint(self.proxy)}:"
+            f"{_context_fingerprint(self.pe)}:{_context_fingerprint(self.ocsp)}:"
+            f"{_context_fingerprint(self.proxy)}:"
             f"{_context_fingerprint(self.firewall)}:{self.hostname or ''}:"
             f"{self.proxy_bypass}:{self.process_image or ''}:{self.preserve_dst_ip}:"
             f"{self.packet_overhead_bytes or ''}:{self.responding_pid}:{self.source}"

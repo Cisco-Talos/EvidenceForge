@@ -61,9 +61,12 @@ checkpoints/
 .eforge/
 
 # Ignore any scenarios we might produce
-scenarios/
+scenarios/*
 !scenarios/COVERAGE-TEST-PROMPT.md
 !scenarios/LARGE-SCALE-COVERAGE-TEST-PROMPT.md
+!scenarios/branch-office-example/
+scenarios/branch-office-example/*
+!scenarios/branch-office-example/scenario.yaml
 
 
 # Scan / analysis tool output

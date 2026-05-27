@@ -1356,6 +1356,21 @@ class EdrFileSideEffectProfile(BaseModel, extra="forbid"):
         return self
 
 
+class EdrInstalledSoftwareProduct(BaseModel, extra="forbid"):
+    """A data-driven installed software identity in edr_pools.yaml."""
+
+    name: str
+    publisher: str
+    version: str
+
+    @field_validator("name", "publisher", "version")
+    @classmethod
+    def values_non_empty(cls, v: str) -> str:
+        if not v:
+            raise ValueError("installed software fields must be non-empty")
+        return v
+
+
 # --- Endpoint Noise ---
 
 
@@ -1418,12 +1433,42 @@ class EcarFlowIdentityConfig(BaseModel, extra="forbid"):
     inbound_listener_probability: float = Field(ge=0.0, le=1.0)
 
 
+class EcarFileChurnOsConfig(BaseModel, extra="forbid"):
+    """Per-OS ambient eCAR FILE event count and action policy."""
+
+    count_min: int = Field(ge=0)
+    count_max: int = Field(ge=0)
+    action_weights: dict[Literal["read", "modify", "create"], int]
+
+    @model_validator(mode="after")
+    def bounds_and_weights_are_valid(self) -> Self:
+        """Reject inverted count bounds and unusable action weights."""
+        if self.count_min > self.count_max:
+            raise ValueError("count_min must be <= count_max")
+        if not self.action_weights:
+            raise ValueError("action_weights must not be empty")
+        if any(weight < 0 for weight in self.action_weights.values()):
+            raise ValueError("action_weights must be non-negative")
+        if sum(self.action_weights.values()) <= 0:
+            raise ValueError("action_weights must include at least one positive weight")
+        return self
+
+
+class EcarFileChurnConfig(BaseModel, extra="forbid"):
+    """Ambient eCAR FILE event baseline policy."""
+
+    enabled: bool
+    windows: EcarFileChurnOsConfig
+    linux: EcarFileChurnOsConfig
+
+
 class EndpointNoiseConfig(BaseModel, extra="forbid"):
     """Root schema for endpoint_noise.yaml."""
 
     windows_scheduled_processes: WindowsScheduledProcessNoiseConfig
     registry_noise: RegistryNoiseConfig
     ecar_flow_identity: EcarFlowIdentityConfig
+    ecar_file_churn: EcarFileChurnConfig
 
 
 # --- Observation Profiles ---

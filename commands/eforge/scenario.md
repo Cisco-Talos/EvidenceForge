@@ -33,6 +33,10 @@ The engine does NOT embellish or fill in details. Whatever you put in the scenar
 
 Your job is to understand what the user wants, ask smart questions to fill gaps, and produce a valid, technically detailed scenario YAML file — plus an ENVIRONMENT.md companion document.
 
+CLI examples in this document use `eforge`. In a source checkout, prefix them
+with `uv run` (for example, `uv run eforge validate ...`). Installed package
+users can run `eforge` directly.
+
 ## Scenario Bundle Layout
 
 Before writing any files, derive a stable slug from the scenario name and create/use

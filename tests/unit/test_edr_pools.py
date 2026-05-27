@@ -4,15 +4,18 @@
 """Unit tests for EDR pools YAML loader."""
 
 import random
+import re
 from unittest.mock import patch
 
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
     defender_platform_version,
+    file_path_templates_for_user,
     get_dll_pool,
     get_file_paths,
     get_registry_keys_hkcu,
     get_registry_keys_hklm,
+    is_service_account,
     load_edr_pools,
     materialize_edr_template,
     materialize_edr_template_group,
@@ -32,6 +35,7 @@ class TestLoadEdrPools:
         assert "registry_keys_hklm" in pools
         assert "dll_pool" in pools
         assert "runmru_commands" in pools
+        assert "installed_software_products" in pools
 
     def test_all_sections_non_empty(self):
         pools = load_edr_pools()
@@ -43,6 +47,7 @@ class TestLoadEdrPools:
             "dll_pool",
             "runmru_commands",
             "file_side_effect_profiles",
+            "installed_software_products",
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
 
@@ -110,6 +115,35 @@ class TestLoadEdrPools:
             _action, path = effect
             assert expected_path_fragment in path.lower()
 
+    def test_service_accounts_do_not_receive_interactive_profile_side_effects(self):
+        import random
+
+        assert is_service_account("windows", "LOCAL SERVICE")
+        assert is_service_account("linux", "systemd-timesync")
+
+        windows_templates = file_path_templates_for_user(
+            get_file_paths("windows"),
+            "windows",
+            "LOCAL SERVICE",
+        )
+        linux_templates = file_path_templates_for_user(
+            get_file_paths("linux"),
+            "linux",
+            "systemd-timesync",
+        )
+
+        assert not any(path.startswith(r"C:\Users\{user}") for path in windows_templates)
+        assert not any(path.startswith("/home/{user}/") for path in linux_templates)
+
+        shell_effect = select_file_side_effect(
+            process_name="/bin/bash",
+            command_line="bash -lc true",
+            os_category="linux",
+            rng=random.Random(5),
+            user="systemd-timesync",
+        )
+        assert shell_effect is None
+
 
 class TestFilePaths:
     """Test file path pool content."""
@@ -131,6 +165,25 @@ class TestFilePaths:
     def test_linux_paths_have_forward_slashes(self):
         paths = get_file_paths("linux")
         assert all("/" in p for p in paths), "Linux paths should use forward slashes"
+
+    def test_windows_prefetch_templates_use_hex_suffix(self):
+        paths = get_file_paths("windows")
+        prefetch_paths = [
+            path for path in paths if r"\windows\prefetch" in path.lower().replace("/", "\\")
+        ]
+
+        assert prefetch_paths, "No Windows Prefetch templates in EDR path pool"
+        for template in prefetch_paths:
+            assert "{hex}" in template
+            path = materialize_edr_template(template, random.Random(7), user="alice")
+            assert re.search(r"-[0-9A-F]{8}\.pf$", path), path
+
+    def test_linux_generic_paths_avoid_action_incompatible_sources(self):
+        paths = get_file_paths("linux")
+        assert not any(re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", path) for path in paths)
+        assert "/etc/passwd" not in paths
+        assert "/var/log/apache2/access.log" not in paths
+        assert not any("systemd-private-" in path and "apache2.service" in path for path in paths)
 
 
 class TestRegistryKeys:
@@ -345,6 +398,65 @@ class TestTemplateMaterialization:
         assert first == second
         assert first != other
         assert first[2] == "10.10.2.20"
+
+    def test_materializes_installed_product_identity_stably_per_host(self):
+        product = {
+            "name": "Contoso Endpoint Agent",
+            "publisher": "Contoso Ltd.",
+            "version": "8.4.2",
+        }
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"installed_software_products": [product]},
+        ):
+            templates = (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{{installed_product_guid}}}",
+                "DisplayName",
+                "{installed_product_name}",
+            )
+            first = materialize_edr_template_group(
+                templates,
+                random.Random(1),
+                host_key="WS-EBROOKS-01",
+            )
+            second = materialize_edr_template_group(
+                templates,
+                random.Random(999),
+                host_key="WS-EBROOKS-01",
+            )
+            other_host = materialize_edr_template_group(
+                templates,
+                random.Random(1),
+                host_key="WS-OTHER-01",
+            )
+
+        assert first == second
+        assert first != other_host
+        assert first[2] == "Contoso Endpoint Agent"
+
+    def test_materializes_installed_product_related_values_together(self):
+        product = {
+            "name": "Contoso Endpoint Agent",
+            "publisher": "Contoso Ltd.",
+            "version": "8.4.2",
+        }
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"installed_software_products": [product]},
+        ):
+            key, publisher, version = materialize_edr_template_group(
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{{installed_product_guid}}}",
+                    "{installed_product_publisher}",
+                    "{installed_product_version}",
+                ),
+                random.Random(5),
+                host_key="WS-EBROOKS-01",
+            )
+
+        assert "{" in key and "}" in key
+        assert publisher == "Contoso Ltd."
+        assert version == "8.4.2"
 
     def test_materializes_defender_platform_with_product_version_shape(self):
         import random

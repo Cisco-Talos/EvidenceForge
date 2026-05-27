@@ -26,10 +26,11 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
@@ -177,7 +178,25 @@ def _http_content_seed_material(
 ) -> str:
     """Return the canonical HTTP response-content identity seed."""
 
-    return f"http:{host}:{uri}:{response_body_len}:{mime_type}"
+    identity_uri = _http_content_identity_uri(host, uri)
+    return f"http:{host}:{identity_uri}:{response_body_len}:{mime_type}"
+
+
+def _http_content_identity_uri(host: str, uri: str) -> str:
+    """Normalize absolute-form proxy URLs to the origin-form content identity."""
+
+    if not uri:
+        return "/"
+    parsed = urlsplit(uri)
+    if parsed.scheme and parsed.netloc:
+        parsed_host = (parsed.hostname or "").rstrip(".").lower()
+        expected_host = host.rstrip(".").lower()
+        if not expected_host or parsed_host == expected_host:
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            return path
+    return uri
 
 
 def _http_pe_is_64bit(uri: str, content_seed_material: str) -> bool:
@@ -470,7 +489,22 @@ class FileTransferStorylineExecutor(Protocol):
     state_manager: StateManager
 
 
-SmbLogonPairEmitter = Callable[[User, System, str, datetime, random.Random], None]
+class SmbLogonPairEmitter(Protocol):
+    """Adapter protocol for SMB companion logon evidence."""
+
+    def __call__(
+        self,
+        user: User,
+        file_server: System,
+        source_ip: str,
+        time: datetime,
+        rng: random.Random,
+        *,
+        source_port: int | None = None,
+        emit_network_evidence: bool = True,
+    ) -> object:
+        """Emit a file-server logon/logoff pair for an SMB transport."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -584,6 +618,7 @@ class StagedArchiveSmbReadActionBundle:
                 **hashes,
             ),
         )
+        smb_source_port = self._last_smb_connection_source_port()
         if self._target_is_file_server() and self._emit_smb_logon_pair is not None:
             self._emit_smb_logon_pair(
                 self._request.actor,
@@ -591,8 +626,26 @@ class StagedArchiveSmbReadActionBundle:
                 self._request.source_ip,
                 transfer_time,
                 self._rng,
+                source_port=smb_source_port,
+                emit_network_evidence=smb_source_port is None,
             )
         return True
+
+    def _last_smb_connection_source_port(self) -> int | None:
+        """Return the just-emitted SMB transfer source port when available."""
+        matcher = getattr(
+            self._executor.activity_generator,
+            "_last_effective_connection_source_port",
+            None,
+        )
+        if matcher is None:
+            return None
+        return matcher(
+            src_ip=self._request.source_ip,
+            dst_ip=self._request.staging_ip,
+            dst_port=445,
+            proto="tcp",
+        )
 
     def _transfer_time(self, duration: float) -> datetime | None:
         """Return a transfer time between archive staging and upload."""
@@ -697,6 +750,19 @@ class ScpReceiverFileActionBundle:
                 file_time = source_process_time + timedelta(
                     milliseconds=self._rng.randint(250, 1400)
                 )
+        ready_time_getter = getattr(
+            self._executor.activity_generator,
+            "ssh_session_ready_time_for_tuple",
+            None,
+        )
+        if callable(ready_time_getter):
+            ready_time = ready_time_getter(
+                self._request.source_system.ip,
+                self._request.source_port,
+                self._request.target_system.ip,
+            )
+            if isinstance(ready_time, datetime) and file_time <= ready_time:
+                file_time = ready_time + timedelta(milliseconds=self._rng.randint(120, 900))
 
         self._executor.dispatcher.dispatch(
             SecurityEvent(

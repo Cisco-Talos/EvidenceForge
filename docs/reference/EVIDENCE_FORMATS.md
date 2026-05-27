@@ -17,38 +17,40 @@ output/
   GROUND_TRUTH.md                          # Ground truth sidecar; empty for baseline-only runs
   OBSERVATION_MANIFEST.json                # Source-observation sidecar for eval
   OUTPUT_TARGET.txt                        # "default" or "sof-elk"; missing legacy marker means default
-  ENVIRONMENT.md                           # Student-facing environment description (created by /eforge scenario skill)
-  <hostname.domain>/                       # Per-host directories (FQDN)
-    windows_event_security.xml             # Windows Security channel events
-    windows_event_sysmon.xml               # Sysmon operational channel events
-    syslog.log                             # Linux syslog (default target; RFC5424)
-    bash_history/<username>.bash_history    # Per-user bash history (Linux only)
-    <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
-    <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 (sof-elk target)
-    <year>/syslog.log                      # Linux syslog (sof-elk target; RFC3164)
-  <sensor-name>/                           # Per-sensor directories (network)
-    conn.json                              # Zeek conn.log (NDJSON)
-    dns.json                               # Zeek dns.log
-    http.json                              # Zeek http.log
-    ssl.json                               # Zeek ssl.log
-    files.json                             # Zeek files.log
-    ...                                    # Other Zeek logs
-  ecar.json                                # Simulated EDR telemetry in eCAR format (NDJSON)
-  snort_alert.log                          # Snort/Suricata IDS alerts
-  <fw-hostname>/                           # Per-firewall directories
-    cisco_asa.log                          # Cisco ASA firewall syslog (default target)
-    <year>/cisco_asa.log                   # Cisco ASA firewall syslog (sof-elk target)
-  web_access.log                           # Apache/Nginx access log
-  <proxy-hostname.domain>/                 # Per-proxy-host directories
-    proxy_access.log                       # HTTP forward proxy access log (W3C Extended)
+  ENVIRONMENT.md                           # Optional student-facing environment description
+  data/                                    # Generated logs for every output target
+    <hostname.domain>/                     # Per-host directories (FQDN)
+      windows_event_security.xml           # Windows Security channel events
+      windows_event_sysmon.xml             # Sysmon operational channel events
+      ecar.json                            # Simulated EDR telemetry in eCAR format (NDJSON)
+      syslog.log                           # Linux syslog (default target; RFC5424)
+      bash_history/<username>.bash_history # Per-user bash history (Linux only)
+      web_access.log                       # Web server access log on web_server hosts
+      proxy_access.log                     # Forward proxy access log on forward_proxy hosts
+      <year>/windows_event_security_snare.log # Windows Security Snare/RFC3164 (sof-elk target)
+      <year>/windows_event_sysmon_snare.log   # Sysmon Snare/RFC3164 (sof-elk target)
+      <year>/syslog.log                    # Linux syslog (sof-elk target; RFC3164)
+    <sensor-name>/                         # Per-sensor directories (network)
+      conn.json                            # Zeek conn.log (NDJSON)
+      dns.json                             # Zeek dns.log
+      http.json                            # Zeek http.log
+      ssl.json                             # Zeek ssl.log
+      files.json                           # Zeek files.log
+      ...                                  # Other Zeek logs
+    <ids-sensor-name>/                     # Per-IDS-sensor directories
+      snort_alert.log                      # Snort/Suricata IDS alerts
+    <fw-hostname>/                         # Per-firewall-sensor directories
+      cisco_asa.log                        # Cisco ASA firewall syslog (default target)
+      <year>/cisco_asa.log                 # Cisco ASA firewall syslog (sof-elk target)
 ```
 
 ## Output Targets
 
 `eforge generate --target default|sof-elk` selects the on-disk rendering and
-layout for tools that expect different formats. Scenario YAML and `--formats`
-remain canonical: request `windows_event_security`, `windows_event_sysmon`,
-`syslog`, `cisco_asa`, and so on, then choose the target at generation time.
+layout inside the generated `data/` directory for tools that expect different
+formats. Scenario YAML and `--formats` remain canonical: request
+`windows_event_security`, `windows_event_sysmon`, `syslog`, `cisco_asa`, and so
+on, then choose the target at generation time.
 When `OUTPUT_TARGET.txt` is missing, `eforge eval` treats the dataset as
 legacy/default output.
 

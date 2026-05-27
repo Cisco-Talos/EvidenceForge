@@ -54,6 +54,7 @@ def test_timing_profiles_load_default_relationship():
     assert source_window.position == "after"
     assert source_window.relationship_class == "source_latency"
     assert source_window.min_ms > 0
+    assert source_window.max_ms >= 1500
 
     security_process_window = get_timing_window(
         "source.windows_security_process_create",

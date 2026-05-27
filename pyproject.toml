@@ -22,11 +22,13 @@
 
 [project]
 name = "evidence-forge"
-version = "1.0.0"
+version = "1.0.1"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-    { name = "David J. Bianco", email = "davidjbianco@gmail.com" }
+    { name = "Cisco Talos" }
 ]
 requires-python = ">=3.11"
 dependencies = [
@@ -42,6 +44,12 @@ dependencies = [
 
 [project.scripts]
 eforge = "evidenceforge.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Cisco-Talos/EvidenceForge"
+Repository = "https://github.com/Cisco-Talos/EvidenceForge"
+Issues = "https://github.com/Cisco-Talos/EvidenceForge/issues"
+Changelog = "https://github.com/Cisco-Talos/EvidenceForge/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [

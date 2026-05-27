@@ -782,7 +782,6 @@ _LONG_RUNNING_EXES: set[str] = {
     "mstsc",
     "rdpclip.exe",
     "rdpclip",
-    "psexesvc.exe",
     "healthmonitorsvc.exe",
     "ncat",
     "ncat.exe",
@@ -805,6 +804,9 @@ def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[fl
         exe = process_name.rsplit("/", 1)[-1].lower()
     else:
         exe = process_name.lower()
+
+    if exe == "psexesvc.exe":
+        return (8.0, 45.0)
 
     # Check long-running first
     if exe in _LONG_RUNNING_EXES:
@@ -889,6 +891,10 @@ class StorylineMixin:
         """Initialize the account SID tracking dict if not already present."""
         if not hasattr(self, "_created_account_sids"):
             self._created_account_sids: dict[str, str] = {}
+        if not hasattr(self, "_created_account_effect_times"):
+            self._created_account_effect_times: dict[tuple[str, str], datetime] = {}
+        if not hasattr(self, "_storyline_host_available_at"):
+            self._storyline_host_available_at: dict[tuple[str, str], datetime] = {}
 
     def _record_last_storyline_process(self, system: System, pid: int, image: str) -> None:
         """Record the last storyline process by host for later network provenance."""
@@ -962,11 +968,6 @@ class StorylineMixin:
         if not service:
             return None
 
-        installed_at = service.get("installed_at")
-        if isinstance(installed_at, datetime):
-            if time < installed_at or time - installed_at > timedelta(minutes=30):
-                return None
-
         service_file_name = str(service.get("service_file_name") or "")
         if not service_file_name:
             return None
@@ -974,6 +975,13 @@ class StorylineMixin:
         service_exe = service_image.rsplit("\\", 1)[-1].lower()
         if service_exe not in {"psexesvc.exe", "healthmonitorsvc.exe"}:
             return None
+        installed_at = service.get("installed_at")
+        if isinstance(installed_at, datetime):
+            context_window = (
+                timedelta(minutes=2) if service_exe == "psexesvc.exe" else timedelta(minutes=30)
+            )
+            if time < installed_at or time - installed_at > context_window:
+                return None
 
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if process_exe == service_exe:
@@ -1132,6 +1140,30 @@ class StorylineMixin:
         commands = getattr(self, "_storyline_account_create_commands", {})
         return commands.get(self._account_create_lookup_key(system, username), "")
 
+    @staticmethod
+    def _storyline_host_actor_key(system: System, actor: User) -> tuple[str, str]:
+        """Return the host/actor key used for in-step action readiness."""
+        return (system.hostname, actor.username.strip().lower())
+
+    def _record_storyline_host_available_after(
+        self,
+        *,
+        system: System,
+        actor: User,
+        time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Delay later same-host commands until a prior audit effect is visible."""
+        if not hasattr(self, "_storyline_host_available_at"):
+            self._storyline_host_available_at: dict[tuple[str, str], datetime] = {}
+        delay = timedelta(milliseconds=rng.randint(180, 950))
+        key = self._storyline_host_actor_key(system, actor)
+        available_at = time + delay
+        self._storyline_host_available_at[key] = max(
+            available_at,
+            self._storyline_host_available_at.get(key, available_at),
+        )
+
     def _emit_storyline_account_password_followups(
         self,
         actor: User,
@@ -1236,12 +1268,14 @@ class StorylineMixin:
         service_file_name = self._normalize_storyline_service_file_name(service_file_name)
 
         image_lower = service_file_name.lower()
+        service_exe = service_file_name.rsplit("\\", 1)[-1].lower()
         running = [
             proc
             for proc in self.state_manager.get_processes_on_system(system.hostname)
             if proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
+            and (service_exe != "psexesvc.exe" or time - proc.start_time <= timedelta(minutes=2))
         ]
         if running:
             proc = max(running, key=lambda candidate: candidate.start_time)
@@ -1253,6 +1287,14 @@ class StorylineMixin:
         process_time = time - timedelta(seconds=45)
         if isinstance(installed_at, datetime):
             process_time = max(process_time, installed_at + timedelta(seconds=1))
+        if service_exe == "psexesvc.exe":
+            start_lead_ms = 500 + (
+                _stable_seed(f"storyline_psexesvc_start:{system.hostname}:{time.isoformat()}")
+                % 2500
+            )
+            process_time = time - timedelta(milliseconds=start_lead_ms)
+            if isinstance(installed_at, datetime):
+                process_time = max(process_time, installed_at + timedelta(seconds=1))
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
 
@@ -1271,6 +1313,19 @@ class StorylineMixin:
         )
         self.activity_generator._record_user_process(system, actor, pid, service_file_name)
         self._record_last_storyline_process(system, pid, service_file_name)
+        if service_exe == "psexesvc.exe":
+            ttl_ms = 8000 + (
+                _stable_seed(f"storyline_psexesvc_ttl:{system.hostname}:{pid}:{time.isoformat()}")
+                % 37000
+            )
+            self._queue_story_process_termination(
+                actor=actor,
+                system=system,
+                time=time + timedelta(milliseconds=ttl_ms),
+                pid=pid,
+                process_name=service_file_name,
+                logon_id="0x3e7",
+            )
         return pid, service_file_name
 
     def _record_storyline_logon(
@@ -1585,7 +1640,12 @@ class StorylineMixin:
         time: datetime,
         rng: random.Random,
     ) -> datetime:
-        """Delay Linux same-user storyline siblings until their shell is available."""
+        """Delay same-host storyline siblings until prior actions and shells are ready."""
+        host_ready = getattr(self, "_storyline_host_available_at", {}).get(
+            self._storyline_host_actor_key(system, actor)
+        )
+        if host_ready is not None and time < host_ready:
+            time = host_ready + timedelta(milliseconds=rng.randint(120, 700))
         if _get_os_category(system.os) != "linux":
             return time
         available_at = getattr(self, "_storyline_shell_available_at", {}).get(
@@ -2662,7 +2722,28 @@ class StorylineMixin:
                     and "file_server" in [r.lower() for r in dst_sys.roles]
                 ):
                     if hasattr(self, "_emit_smb_logon_pair"):
-                        self._emit_smb_logon_pair(actor, dst_sys, source_ip, time, rng)
+                        smb_source_port = None
+                        matcher = getattr(
+                            self.activity_generator,
+                            "_last_effective_connection_source_port",
+                            None,
+                        )
+                        if matcher is not None:
+                            smb_source_port = matcher(
+                                src_ip=source_ip,
+                                dst_ip=logged_dst_ip,
+                                dst_port=445,
+                                proto="tcp",
+                            )
+                        self._emit_smb_logon_pair(
+                            actor,
+                            dst_sys,
+                            source_ip,
+                            time,
+                            rng,
+                            source_port=smb_source_port,
+                            emit_network_evidence=smb_source_port is None,
+                        )
 
         elif spec.type == "ssh_session":
             target = next(
@@ -2781,6 +2862,15 @@ class StorylineMixin:
             # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
             self.activity_generator.sid_registry[spec.target_username] = target_sid
+            self._created_account_effect_times[
+                self._account_create_lookup_key(dc, spec.target_username)
+            ] = effect_time
+            self._record_storyline_host_available_after(
+                system=dc,
+                actor=actor,
+                time=effect_time,
+                rng=rng,
+            )
             if self._recent_storyline_account_create_command(dc, spec.target_username):
                 self._emit_storyline_account_password_followups(
                     actor=actor,
@@ -2834,6 +2924,11 @@ class StorylineMixin:
                 event_time=time,
                 rng=rng,
             )
+            account_created_at = self._created_account_effect_times.get(
+                self._account_create_lookup_key(dc, spec.member_name)
+            )
+            if account_created_at is not None and effect_time <= account_created_at:
+                effect_time = account_created_at + timedelta(milliseconds=rng.randint(180, 950))
             self.activity_generator.generate_group_membership_change(
                 actor=actor,
                 system=dc,
@@ -2844,6 +2939,12 @@ class StorylineMixin:
                 group_sid=group_sid,
                 member_username=spec.member_name,
                 member_sid=member_sid,
+            )
+            self._record_storyline_host_available_after(
+                system=dc,
+                actor=actor,
+                time=effect_time,
+                rng=rng,
             )
             malicious_event["group_name"] = spec.group_name
             malicious_event["member_name"] = spec.member_name
@@ -3948,7 +4049,7 @@ class StorylineMixin:
                 target_server=spec.target_server or system.hostname,
                 process_name=spec.process_name or r"C:\Windows\System32\runas.exe",
                 process_pid=story_pid if story_pid > 0 else 0,
-                source_ip=spec.source_ip or system.ip,
+                source_ip=spec.source_ip or "",
             )
             malicious_event["target_username"] = spec.target_username
             malicious_event["target_server"] = spec.target_server

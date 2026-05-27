@@ -1177,6 +1177,50 @@ class TestActivityGenerator:
         ]
         assert "logon" not in emitted_types
 
+    def test_generate_logon_reuses_active_linux_local_session_with_syslog_companion(
+        self, state_manager, test_user
+    ):
+        """Repeated local Linux activity should reuse one login with logind evidence."""
+        syslog_emitter = Mock()
+        syslog_emitter.can_handle.side_effect = lambda event: event.syslog is not None
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.side_effect = lambda event: event.event_type == "logon"
+        emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        linux_system = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.0.41",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        first_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        later_time = first_time + timedelta(minutes=35)
+
+        logon_id = activity_gen.generate_logon(test_user, linux_system, first_time, logon_type=2)
+        reused_logon_id = activity_gen.generate_logon(
+            test_user,
+            linux_system,
+            later_time,
+            logon_type=2,
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        emitted_logons = [
+            call.args[0]
+            for call in ecar_emitter.emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        syslog_messages = [
+            call.args[0].syslog.message for call in syslog_emitter.emit.call_args_list
+        ]
+        assert reused_logon_id == logon_id
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert sessions[0].last_activity_time == later_time
+        assert len(emitted_logons) == 1
+        assert any("New session" in msg and test_user.username in msg for msg in syslog_messages)
+
     def test_interactive_logons_get_distinct_userinit_parents(
         self, activity_gen, test_user, test_system, state_manager
     ):
@@ -2245,6 +2289,29 @@ class TestActivityGenerator:
             if call.args[0].event_type == "logon" and call.args[0].auth.logon_type == 10
         )
         assert logon_event.auth.username == "orphan"
+
+    def test_reserve_ssh_source_port_reuses_recent_explicit_reservation(self, activity_gen):
+        """Pre-reserved SSH ports should be idempotent for the owning near-time tuple."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = activity_gen.reserve_ssh_source_port(
+            "10.0.0.10",
+            "10.0.0.20",
+            None,
+            random.Random(7),
+            "linux",
+            time=timestamp,
+        )
+        second = activity_gen.reserve_ssh_source_port(
+            "10.0.0.10",
+            "10.0.0.20",
+            first,
+            random.Random(11),
+            "linux",
+            time=timestamp + timedelta(milliseconds=250),
+        )
+
+        assert second == first
 
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters
@@ -4878,6 +4945,41 @@ class TestActivityGenerator:
 
         assert not mock_emitters["windows_event_security"].emit.called
 
+    def test_image_load_skips_process_after_owning_session_end(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Ambient module loads should not attach to processes after logoff."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+        )
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe",
+            command_line=r'"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /systemstartup',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        state_manager.end_session(logon_id, timestamp + timedelta(minutes=30))
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(hours=1),
+            pid,
+            r"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe",
+            r"C:\Windows\System32\ws2_32.dll",
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
+
     def test_image_load_skips_duplicate_module_for_process_instance(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
@@ -5603,10 +5705,10 @@ class TestActivityGenerator:
         assert logon.timestamp < explicit.timestamp
         assert explicit.auth.subject_logon_id == logon.auth.logon_id
 
-    def test_generate_explicit_credentials_defaults_remote_network_endpoint(
+    def test_generate_explicit_credentials_defaults_remote_network_endpoint_blank(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Remote 4648 records should carry source endpoint metadata by default."""
+        """Remote 4648 records should not invent local source endpoint metadata."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -5624,13 +5726,13 @@ class TestActivityGenerator:
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        assert explicit.auth.source_ip == test_system.ip
-        assert 49152 <= explicit.auth.source_port <= 65535
+        assert explicit.auth.source_ip == "-"
+        assert explicit.auth.source_port == 0
 
     def test_generate_explicit_credentials_ignores_unrelated_source_ip_override(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """A 4648 on a workstation should not borrow another host's source address."""
+        """A 4648 on a workstation should not borrow an unknown source address."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -5650,9 +5752,44 @@ class TestActivityGenerator:
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        assert explicit.auth.source_ip == test_system.ip
-        assert explicit.auth.source_port != 50001
-        assert 49152 <= explicit.auth.source_port <= 65535
+        assert explicit.auth.source_ip == "-"
+        assert explicit.auth.source_port == 0
+
+    def test_generate_explicit_credentials_preserves_modeled_remote_origin(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A modeled remote-origin 4648 may carry its known source endpoint."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        remote_system = System(
+            hostname="ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            remote_system.ip: remote_system,
+        }
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip=remote_system.ip,
+            source_port=50001,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == remote_system.ip
+        assert explicit.auth.source_port == 50001
 
     def test_generate_explicit_credentials_local_target_keeps_blank_network_endpoint(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

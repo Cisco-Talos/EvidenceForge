@@ -451,6 +451,55 @@ class TestSessionOutcomeRendering:
 
         assert login_row["timestamp"] > flow_row["timestamp"]
 
+    def test_rdp_session_login_renders_after_matching_inbound_flow(self, emitter, ts):
+        """eCAR RDP LOGIN should not appear before the same tuple's FLOW."""
+        host = HostContext(
+            hostname="WIN-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            fqdn="win-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        flow_event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=host,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=55222,
+                dst_ip="10.0.0.20",
+                dst_port=3389,
+                protocol="tcp",
+                service="rdp",
+                duration=120.0,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            edr=EdrContext(object_id="flow-1"),
+        )
+        session_event = SecurityEvent(
+            timestamp=ts,
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="alice",
+                source_ip="10.0.0.10",
+                source_port=55222,
+                logon_id="0x123",
+                logon_type=10,
+            ),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter._render_connection(flow_event)
+        flow_row = emitter.emit_event.call_args.args[0]
+        emitter._render_logon(session_event)
+        login_row = emitter.emit_event.call_args.args[0]
+
+        assert login_row["timestamp"] > flow_row["timestamp"]
+
     def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
         """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
         host = HostContext(
@@ -701,6 +750,180 @@ class TestChronologicalOutput:
             if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
         )
         assert terminate_ts > module_ts
+
+    def test_close_drops_stale_module_after_process_terminate(self, tmp_path, ts):
+        """Long-stale process-owned module rows should not drag termination forward."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(hours=1),
+                "hostname": "ws01",
+                "object": "MODULE",
+                "action": "LOAD",
+                "actorID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert {row["object"] for row in rows} == {"PROCESS"}
+        terminate_ts = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+        )
+        assert terminate_ts < int((ts + timedelta(minutes=5)).timestamp() * 1000)
+
+    def test_close_drops_minute_scale_module_after_process_terminate(self, tmp_path, ts):
+        """Minute-scale module rows should not keep a terminated process alive."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(seconds=45),
+                "hostname": "ws01",
+                "object": "MODULE",
+                "action": "LOAD",
+                "actorID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert {row["object"] for row in rows} == {"PROCESS"}
+        terminate_ts = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+        )
+        assert terminate_ts < int((ts + timedelta(seconds=30)).timestamp() * 1000)
+
+    def test_close_scrubs_stale_flow_process_identity_after_process_terminate(self, tmp_path, ts):
+        """Late FLOW rows should keep transport evidence without stale PID attribution."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(hours=1),
+                "hostname": "ws01",
+                "object": "FLOW",
+                "action": "CONNECT",
+                "actorID": process_id,
+                "pid": 100,
+                "principal": "alice",
+                "image_path": r"C:\Program Files\App\app.exe",
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        flow = next(row for row in rows if row["object"] == "FLOW")
+        assert "actorID" not in flow
+        assert "pid" not in flow
+        assert "principal" not in flow
+        assert "image_path" not in flow["properties"]
 
     def test_close_rewrites_linux_pids_by_source_timestamp_not_canonical_order(self, tmp_path, ts):
         """Linux PID morphology should follow rendered source time, not canonical time."""
@@ -1666,6 +1889,81 @@ class TestChronologicalOutput:
             if row["objectID"] == "debian-sa1-process" and row["action"] == "TERMINATE"
         )
         assert shell_ms > child_ms
+
+    def test_close_does_not_drag_parent_termination_past_long_lived_child(self, tmp_path, ts):
+        """A long-lived child should not keep a finished parent alive for hours."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=0),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "parent-process",
+                "pid": 7496,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(seconds=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "child-process",
+                "actorID": "parent-process",
+                "pid": 7508,
+                "ppid": 7496,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(minutes=10),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "parent-process",
+                "pid": 7496,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(hours=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "child-process",
+                "pid": 7508,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        parent_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "parent-process" and row["action"] == "TERMINATE"
+        )
+        child_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "child-process" and row["action"] == "TERMINATE"
+        )
+        assert parent_ms < child_ms
+        assert parent_ms < int((ts + timedelta(minutes=15)).timestamp() * 1000)
 
     def test_close_moves_dependent_telemetry_after_reordered_process_create(self, tmp_path, ts):
         """Dependent eCAR records should follow a process create shifted after its parent."""

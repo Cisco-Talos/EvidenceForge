@@ -38,6 +38,9 @@ from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseReq
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
+    _LINUX_AMBIENT_SSH_NOISE_BAND,
+    _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
+    _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
     _ambient_registry_entry_allowed,
     _extra_syslog_service_values,
     _linux_ambient_logind_probability,
@@ -1291,6 +1294,8 @@ class TestBaselineSshTiming:
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
+        assert "_linux_remote_admin_hour_probability(system)" in source
+        assert "_linux_remote_admin_session_count(rng, system)" in source
         assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
         assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
@@ -1305,7 +1310,12 @@ class TestBaselineSshTiming:
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
-        assert 'source_roll < 0.34 and sys_type == "server"' in source
+        assert _LINUX_AMBIENT_SSH_NOISE_BAND <= 0.01
+        assert _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY <= 0.35
+        assert _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY <= 0.25
+        assert 'source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server"' in (
+            source
+        )
         assert "ssh_roster = self._get_server_ssh_users(system)" in source
         assert "ssh_usernames = [user.username for user in ssh_roster]" in source
 
@@ -1338,6 +1348,7 @@ class TestBaselineRegistryRealism:
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
         assert "driverdesc" in source
+        assert "materialize_edr_template_group" in source
 
     def test_ambient_registry_noise_suppresses_dhcp_values_for_static_hosts(self):
         """Static infrastructure should not emit DHCP registry churn as ambient noise."""

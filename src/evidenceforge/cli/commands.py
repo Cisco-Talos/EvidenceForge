@@ -102,6 +102,7 @@ app = typer.Typer(
     help="EvidenceForge - Generate realistic synthetic security logs for threat hunting training",
     add_completion=False,
     cls=AbbreviatedGroup,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = Console()
 
@@ -682,7 +683,7 @@ def eval_cmd(
         is_flag=True,
     ),
 ) -> None:
-    """Evaluate a generated dataset for quality across multiple dimensions.
+    """Evaluate a generated dataset for quality across four pillars.
 
     Reads generated log files and the original scenario, runs deterministic
     and statistical quality checks, and produces a quality report.

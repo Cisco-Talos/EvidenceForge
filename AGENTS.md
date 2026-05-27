@@ -89,8 +89,15 @@ handoff details in `docs/worklog/` until they are no longer useful.
   for normal local and feature-PR validation. Coverage is a release/readiness
   gate before `dev` → `main`, run explicitly with
   `uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70`.
-- Separate test markers: `@pytest.mark.slow` for large dataset/workload tests (not run by default). Run slow tests with `--no-cov` unless you are specifically profiling coverage behavior, because coverage instrumentation makes the generator workload much slower.
-- Target coverage: 95%+ overall, 95%+ for core generation engine
+- Separate test markers: `@pytest.mark.slow` for large dataset/workload tests
+  (not run by default). Run slow tests with `--no-cov` unless you are
+  specifically profiling coverage behavior, because coverage instrumentation
+  makes the generator workload much slower.
+- Do not combine `--include-slow` with coverage during release validation. Slow
+  tests are intentionally run with `--no-cov`; coverage is measured on the
+  default non-slow suite.
+- Enforced release coverage gate: 70% minimum. Aspirational target: 95%+ overall
+  and 95%+ for the core generation engine.
 
 **Format Support:**
 - json-logic-qubit for format definition validation rules
@@ -578,11 +585,14 @@ When adding or significantly modifying event types, emitters, or the event schem
 
 **Organization:** `tests/unit/` (fast, no I/O), `tests/integration/` (file I/O OK), `tests/fixtures/` (shared data)
 
-**Coverage targets:** 95%+ overall, 95%+ core engine, 90%+ formats, 85%+ CLI. Exclude: `__main__.py`, type stubs, test fixtures.
+**Coverage targets:** the enforced release gate is 70% minimum. Aspirational
+targets are 95%+ overall, 95%+ core engine, 90%+ formats, and 85%+ CLI. Exclude:
+`__main__.py`, type stubs, test fixtures.
 
 **Default validation:** run `uv run pytest --no-cov` for normal development and
 feature PRs. Run the explicit coverage command only for release readiness before
-opening or updating a `dev` → `main` PR.
+opening or updating a `dev` → `main` PR. Do not combine `--include-slow` with
+coverage during release validation.
 
 **Conventions:**
 - Test naming: `test_<function>_<scenario>_<expected_result>`

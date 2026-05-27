@@ -44,6 +44,55 @@ _USERASSIST_RUNPATHS = (
     r"C:\Windows\System32\mstsc.exe",
     r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
 )
+_DEFAULT_INSTALLED_SOFTWARE_PRODUCTS = (
+    {
+        "name": "Microsoft Update Health Tools",
+        "publisher": "Microsoft Corporation",
+        "version": "5.72.0.0",
+    },
+)
+_WINDOWS_SERVICE_USERS = {
+    "ANONYMOUS LOGON",
+    "LOCAL SERVICE",
+    "NETWORK SERVICE",
+    "SYSTEM",
+}
+_LINUX_SERVICE_USERS = {
+    "_apt",
+    "apache",
+    "backup",
+    "chrony",
+    "daemon",
+    "dnsmasq",
+    "games",
+    "gnats",
+    "httpd",
+    "irc",
+    "list",
+    "lp",
+    "mail",
+    "man",
+    "messagebus",
+    "mysql",
+    "news",
+    "nginx",
+    "nobody",
+    "ntp",
+    "postgres",
+    "proxy",
+    "redis",
+    "root",
+    "sshd",
+    "sync",
+    "sys",
+    "syslog",
+    "systemd-network",
+    "systemd-resolve",
+    "systemd-timesync",
+    "tomcat",
+    "uucp",
+    "www-data",
+}
 
 
 def _merge_edr_pools(default: dict, overlay: dict) -> dict:
@@ -94,6 +143,18 @@ def _is_valid_registry_pool(value: Any) -> bool:
     return True
 
 
+def _is_valid_installed_software_products(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) == 0:
+        return False
+    for item in value:
+        if not isinstance(item, dict):
+            return False
+        required = ("name", "publisher", "version")
+        if any(not isinstance(item.get(field), str) or not item.get(field) for field in required):
+            return False
+    return True
+
+
 def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dict[str, Any]:
     """Validate merged EDR pools and fall back to defaults for malformed sections."""
     validators: dict[str, Any] = {
@@ -103,6 +164,7 @@ def _sanitize_edr_pools(defaults: dict[str, Any], merged: dict[str, Any]) -> dic
         "runmru_commands": _is_valid_string_list,
         "registry_keys_hkcu": _is_valid_registry_pool,
         "registry_keys_hklm": _is_valid_registry_pool,
+        "installed_software_products": _is_valid_installed_software_products,
     }
     sanitized = dict(defaults)
     for key, validator in validators.items():
@@ -131,6 +193,48 @@ def get_file_paths(os_category: str) -> list[str]:
     return pools.get(key, [])
 
 
+def _principal_name(user: str) -> str:
+    """Return the account leaf name from a source-native principal string."""
+    return user.rsplit("\\", 1)[-1].strip()
+
+
+def is_service_account(os_category: str, user: str) -> bool:
+    """Return True when a principal should not use an interactive profile path."""
+    account = _principal_name(user)
+    if not account:
+        return True
+    if os_category == "windows":
+        return account.upper() in _WINDOWS_SERVICE_USERS or account.endswith("$")
+    return account.lower() in _LINUX_SERVICE_USERS
+
+
+def file_path_templates_for_user(
+    templates: list[str],
+    os_category: str,
+    user: str,
+) -> list[str]:
+    """Return templates compatible with the account's source-native profile model."""
+    if not is_service_account(os_category, user):
+        return list(templates)
+
+    if os_category == "windows":
+        filtered = [
+            template
+            for template in templates
+            if not template.lower().startswith(r"c:\users\{user}".lower())
+        ]
+    else:
+        filtered = [template for template in templates if not template.startswith("/home/{user}/")]
+    return filtered or list(templates)
+
+
+def _uses_interactive_profile_template(template: str, os_category: str) -> bool:
+    """Return True when a file template requires a normal user profile root."""
+    if os_category == "windows":
+        return template.lower().startswith(r"c:\users\{user}".lower())
+    return template.startswith("/home/{user}/")
+
+
 def get_registry_keys_hkcu() -> list[tuple[str, str, str]]:
     """Return HKCU registry key pool as (key, value_name, details) tuples."""
     pools = load_edr_pools()
@@ -147,6 +251,34 @@ def get_dll_pool() -> list[str]:
     """Return DLL path pool for module load events."""
     pools = load_edr_pools()
     return pools.get("dll_pool", [])
+
+
+def _installed_software_product(rng: random.Random) -> dict[str, str]:
+    """Return one data-driven installed software product template."""
+    products = load_edr_pools().get(
+        "installed_software_products",
+        list(_DEFAULT_INSTALLED_SOFTWARE_PRODUCTS),
+    )
+    if not _is_valid_installed_software_products(products):
+        products = list(_DEFAULT_INSTALLED_SOFTWARE_PRODUCTS)
+    product = rng.choice(products)
+    return {
+        "name": str(product["name"]),
+        "publisher": str(product["publisher"]),
+        "version": str(product["version"]),
+    }
+
+
+def _installed_product_guid(host_key: str, product_name: str) -> str:
+    """Return a host-stable uninstall key GUID for an installed product."""
+    seed_key = f"installed_product_guid:{host_key or 'default'}:{product_name}"
+    return (
+        f"{_stable_seed(seed_key) & 0xFFFFFFFF:08X}-"
+        f"{(_stable_seed(f'{seed_key}:a') >> 16) & 0xFFFF:04X}-"
+        f"{(_stable_seed(f'{seed_key}:b') >> 16) & 0xFFFF:04X}-"
+        f"{(_stable_seed(f'{seed_key}:c') >> 16) & 0xFFFF:04X}-"
+        f"{_stable_seed(f'{seed_key}:d') & 0xFFFFFFFFFFFF:012X}"
+    )
 
 
 def defender_platform_version(host_key: str) -> str:
@@ -257,6 +389,7 @@ def materialize_edr_template(
 ) -> str:
     """Materialize common EDR pool template placeholders deterministically from an RNG."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
+    installed_product = _installed_software_product(rng)
     template_lower = template.lower()
     if "windows defender\\platform" in template_lower:
         version = defender_platform_version(host_key)
@@ -273,6 +406,10 @@ def materialize_edr_template(
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "os_build": _windows_component_build(host_os, host_key),
+        "installed_product_guid": _installed_product_guid(host_key, installed_product["name"]),
+        "installed_product_name": installed_product["name"],
+        "installed_product_publisher": installed_product["publisher"],
+        "installed_product_version": installed_product["version"],
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in template_lower
@@ -320,6 +457,7 @@ def materialize_edr_template_group(
 ) -> tuple[str, ...]:
     """Materialize related templates with one shared placeholder context."""
     version = rng.choice(["1.0", "2.1", "4.8", "16.0", "24.2", "125.0", "2024.3"])
+    installed_product = _installed_software_product(rng)
     combined_lower = "\n".join(templates).lower()
     if "windows defender\\platform" in combined_lower:
         version = defender_platform_version(host_key)
@@ -336,6 +474,10 @@ def materialize_edr_template_group(
         "minute": f"{rng.randint(0, 59):02d}",
         "hex": f"{rng.getrandbits(32):08X}",
         "os_build": _windows_component_build(host_os, host_key),
+        "installed_product_guid": _installed_product_guid(host_key, installed_product["name"]),
+        "installed_product_name": installed_product["name"],
+        "installed_product_publisher": installed_product["publisher"],
+        "installed_product_version": installed_product["version"],
         "guid": (
             _interface_guid(rng, host_key, host_ip)
             if "services\\tcpip\\parameters\\interfaces" in combined_lower
@@ -411,7 +553,17 @@ def select_file_side_effect(
         if not paths or not actions:
             return None
         action = str(rng.choice(actions)).lower()
-        path_templates = list(paths)
+        raw_path_templates = [str(path) for path in paths]
+        path_templates = file_path_templates_for_user(raw_path_templates, os_category, user)
+        if (
+            is_service_account(os_category, user)
+            and path_templates == raw_path_templates
+            and any(
+                _uses_interactive_profile_template(template, os_category)
+                for template in raw_path_templates
+            )
+        ):
+            return None
         path = materialize_edr_template(str(rng.choice(path_templates)), rng, user=user)
         if (
             exe in {"bash", "sh"}

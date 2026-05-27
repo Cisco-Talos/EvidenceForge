@@ -104,6 +104,61 @@ class ValidationResult:
         return [i for i in self.issues if i.severity == "INFO"]
 
 
+def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict[str, Any]) -> None:
+    """Validate generic EDR file churn pools for source-native path templates."""
+    windows_paths = edr_pools_data.get("file_paths_windows", [])
+    if isinstance(windows_paths, list):
+        for path in windows_paths:
+            if not isinstance(path, str):
+                continue
+            normalized = path.replace("/", "\\").lower()
+            if "\\windows\\prefetch\\" not in normalized or not normalized.endswith(".pf"):
+                continue
+            if not re.search(r"-\{hex\}\.pf$", normalized):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_windows)",
+                        "Windows Prefetch templates in generic EDR file churn must use an "
+                        "8-character hex suffix via {hex}, not decimal {rand}",
+                    )
+                )
+
+    linux_paths = edr_pools_data.get("file_paths_linux", [])
+    if isinstance(linux_paths, list):
+        for path in linux_paths:
+            if not isinstance(path, str):
+                continue
+            normalized = path.lower()
+            if re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", normalized):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use /proc/<pid>/status paths because "
+                        "the churn action model can emit impossible CREATE/WRITE events",
+                    )
+                )
+            elif normalized == "/etc/passwd":
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use /etc/passwd because ambient "
+                        "service-principal reads look source-native synthetic",
+                    )
+                )
+            elif "systemd-private-" in normalized and "apache2.service" in normalized:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use apache2 systemd-private temp "
+                        "paths without web-role/process constraints",
+                    )
+                )
+
+
 def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
     """Load YAML file, returning (data, error_message)."""
     try:
@@ -238,7 +293,7 @@ def validate_config() -> ValidationResult:
             "list_fields": {"patterns": None},
         },
         "activity/edr_pools.yaml": {
-            "list_fields": {"file_side_effect_profiles": None},
+            "list_fields": {"file_side_effect_profiles": None, "installed_software_products": None},
             "string_list_fields": {
                 "file_paths_windows",
                 "file_paths_linux",
@@ -251,6 +306,7 @@ def validate_config() -> ValidationResult:
                 "windows_scheduled_processes",
                 "registry_noise",
                 "ecar_flow_identity",
+                "ecar_file_churn",
             },
         },
         "activity/host_activity_profiles.yaml": {
@@ -1899,6 +1955,7 @@ def validate_config() -> ValidationResult:
         DnsTunnelRttConfig,
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
+        EdrInstalledSoftwareProduct,
         EndpointNoiseConfig,
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
@@ -2023,11 +2080,19 @@ def validate_config() -> ValidationResult:
 
     edr_pools_data = load_edr_pools()
     if edr_pools_data:
+        _validate_edr_file_path_pools(result, edr_pools_data)
         _SCHEMA_CHECKS.append(
             (
                 edr_pools_data.get("file_side_effect_profiles", []),
                 EdrFileSideEffectProfile,
                 "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
+        _SCHEMA_CHECKS.append(
+            (
+                edr_pools_data.get("installed_software_products", []),
+                EdrInstalledSoftwareProduct,
+                "edr_pools.yaml (installed_software_products)",
             )
         )
     if endpoint_noise_data:

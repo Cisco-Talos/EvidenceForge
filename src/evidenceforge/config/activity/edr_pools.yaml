@@ -7,7 +7,8 @@
 # Override via .eforge/config/activity/edr_pools.yaml — any top-level
 # key you include fully replaces the corresponding default section.
 #
-# Template variables: {user} = process owner username, {rand} = 5-digit random
+# Template variables: {user} = process owner username, {rand} = 5-digit random,
+# {hex} = 8-character hexadecimal token
 
 # Process-aware file side effects for ambient eCAR/Sysmon FILE telemetry.
 # Only processes matching one of these profiles emit probabilistic file events;
@@ -73,6 +74,32 @@ file_side_effect_profiles:
     paths_linux:
       - "/tmp/.tmp-{rand}"
 
+installed_software_products:
+  - name: "Microsoft Update Health Tools"
+    publisher: "Microsoft Corporation"
+    version: "5.72.0.0"
+  - name: "Microsoft Edge Update"
+    publisher: "Microsoft Corporation"
+    version: "1.3.187.37"
+  - name: "Microsoft OneDrive"
+    publisher: "Microsoft Corporation"
+    version: "24.045.0303.0002"
+  - name: "Google Chrome"
+    publisher: "Google LLC"
+    version: "123.0.6312.86"
+  - name: "Mozilla Firefox"
+    publisher: "Mozilla Corporation"
+    version: "121.0.1"
+  - name: "7-Zip 23.01 (x64)"
+    publisher: "Igor Pavlov"
+    version: "23.01"
+  - name: "Adobe Acrobat Reader"
+    publisher: "Adobe Inc."
+    version: "24.001.20604"
+  - name: "Cisco Secure Client"
+    publisher: "Cisco Systems, Inc."
+    version: "5.1.8.42"
+
 file_paths_windows:
   # User documents
   - "C:\\Users\\{user}\\Documents\\report.docx"
@@ -97,8 +124,8 @@ file_paths_windows:
   - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
   # System paths
   - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
-  - "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf"
-  - "C:\\Windows\\Prefetch\\SVCHOST.EXE-{rand}.pf"
+  - "C:\\Windows\\Prefetch\\CMD.EXE-{hex}.pf"
+  - "C:\\Windows\\Prefetch\\SVCHOST.EXE-{hex}.pf"
   - "C:\\Windows\\Temp\\{rand}.tmp"
   - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
   - "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"
@@ -114,7 +141,7 @@ file_paths_linux:
   - "/home/{user}/.ssh/known_hosts"
   # Temp files
   - "/tmp/tmp{rand}"
-  - "/tmp/systemd-private-{rand}-apache2.service"
+  - "/tmp/.cache-{rand}.tmp"
   - "/var/tmp/{rand}.lock"
   # Application caches
   - "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}"
@@ -123,9 +150,7 @@ file_paths_linux:
   # Logs and system
   - "/var/log/syslog"
   - "/var/log/auth.log"
-  - "/var/log/apache2/access.log"
-  - "/proc/{rand}/status"
-  - "/etc/passwd"
+  - "/var/log/journal/{hex}/system.journal"
   # Package manager
   - "/var/lib/dpkg/status"
   - "/var/cache/apt/archives/lock"
@@ -196,7 +221,9 @@ registry_keys_hklm:
   - ["HKLM\\SOFTWARE\\Microsoft\\WBEM\\CIMOM", "Logging", "DWORD (0x00000002)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\Packages\\{package}~31bf3856ad364e35~amd64~~{os_build}.{small}", "CurrentState", "DWORD (0x00000070)"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Installer\\UserData\\S-1-5-18\\Products\\{hex}\\InstallProperties", "DisplayVersion", "{version}"]
-  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{guid}}}", "DisplayName", "Microsoft Update Health Tools"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{installed_product_guid}}}", "DisplayName", "{installed_product_name}"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{installed_product_guid}}}", "Publisher", "{installed_product_publisher}"]
+  - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{{{installed_product_guid}}}", "DisplayVersion", "{installed_product_version}"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\chrome.exe", "Path", "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe", "Path", "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe"]
   - ["HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Acrobat.exe", "Path", "C:\\Program Files\\Adobe\\Acrobat DC\\Acrobat\\Acrobat.exe"]

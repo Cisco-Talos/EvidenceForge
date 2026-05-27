@@ -18,6 +18,10 @@ You are helping the user validate an EvidenceForge scenario YAML file before gen
 eforge validate <scenario-file>
 ```
 
+In a source checkout, prefix CLI commands with `uv run` (for example,
+`uv run eforge validate ...`). Installed package users can run `eforge`
+directly.
+
 Exit codes:
 - 0 = Valid (may include warnings)
 - 1 = YAML parse error or file I/O error

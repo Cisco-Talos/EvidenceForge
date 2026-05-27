@@ -21,6 +21,10 @@ If the user has a generated output directory and scenario file:
 eforge eval scenarios/<slug>/data --scenario scenarios/<slug>/scenario.yaml --verbose
 ```
 
+In a source checkout, prefix CLI commands with `uv run` (for example,
+`uv run eforge eval ...`). Installed package users can run `eforge`
+directly.
+
 If they don't have generated output yet, suggest using `/eforge generate` first.
 
 For detailed field documentation and known limitations of each log format, use the `/eforge:references:evidence-formats` skill.
@@ -41,7 +45,7 @@ scenarios/<scenario-name>/
   data/              ← this is the output_dir for eforge eval
 ```
 
-If the user provides the scenario directory (e.g., `scenarios/retail-store-ftp-attack/`), derive:
+If the user provides the scenario directory (e.g., `scenarios/branch-office-example/`), derive:
 - Data directory: `scenarios/<name>/data/`
 - Scenario file: `scenarios/<name>/scenario.yaml`
 

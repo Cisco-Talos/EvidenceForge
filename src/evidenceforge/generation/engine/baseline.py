@@ -97,9 +97,13 @@ from evidenceforge.generation.activity.suspicious_benign import (
     pick_suspicious_pattern,
 )
 from evidenceforge.models.scenario import Persona, System, User
-from evidenceforge.utils.rng import _get_rng, _stable_seed
+from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
+
+_LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
+_LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
+_LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
 
 
 def _ufw_block_syn_packet_len(src_ip: str) -> int:
@@ -4046,6 +4050,20 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
+    def _linux_remote_admin_hour_probability(self, system: Any) -> float:
+        """Return the hourly probability of an organic SSH admin session on a Linux server."""
+        multiplier = self._activity_multiplier(system, "linux_remote_admin")
+        return min(0.72, _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY * multiplier)
+
+    def _linux_remote_admin_session_count(self, rng: random.Random, system: Any) -> int:
+        """Return a low-volume count for organic SSH admin sessions in one hour."""
+        multiplier = self._activity_multiplier(system, "linux_remote_admin")
+        second_session_probability = min(
+            0.38,
+            _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY * multiplier,
+        )
+        return 1 + int(rng.random() < second_session_probability)
+
     # Service→DNS tag defaults for external resolution when dns_tags is absent
     _SERVICE_DNS_DEFAULTS: dict[str, tuple[str, ...]] = {
         "smtp": ("email",),
@@ -4197,6 +4215,9 @@ class BaselineMixin:
         source_ip: str,
         time: datetime,
         rng: Any,
+        *,
+        source_port: int | None = None,
+        emit_network_evidence: bool = True,
     ) -> str | None:
         """Emit type 3 network logon + logoff pair on a file server for SMB access.
 
@@ -4209,12 +4230,20 @@ class BaselineMixin:
         if _get_os_category(file_server.os) != "windows":
             return None
 
+        logon_kwargs: dict[str, Any] = {
+            "user": user,
+            "system": file_server,
+            "time": time,
+            "logon_type": 3,
+            "source_ip": source_ip,
+        }
+        if source_port is not None:
+            logon_kwargs["source_port"] = source_port
+        if not emit_network_evidence:
+            logon_kwargs["emit_network_evidence"] = False
+
         logon_id = self.activity_generator.generate_logon(
-            user=user,
-            system=file_server,
-            time=time,
-            logon_type=3,
-            source_ip=source_ip,
+            **logon_kwargs,
         )
         logoff_delay = rng.uniform(5.0, 60.0)
         logoff_time = time + timedelta(seconds=logoff_delay)
@@ -4226,6 +4255,19 @@ class BaselineMixin:
             logon_type=3,
         )
         return logon_id
+
+    def _last_smb_connection_source_port(
+        self,
+        *,
+        source_ip: str,
+        dst_ip: str,
+    ) -> int | None:
+        """Return the source port from the most recent matching SMB transport."""
+        activity_generator = getattr(self, "activity_generator", None)
+        matcher = getattr(activity_generator, "_last_effective_connection_source_port", None)
+        if matcher is None:
+            return None
+        return matcher(src_ip=source_ip, dst_ip=dst_ip, dst_port=445, proto="tcp")
 
     def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
         """Build weighted SMB targets for Windows client browsing noise."""
@@ -4311,6 +4353,137 @@ class BaselineMixin:
                         pid=4,
                     ),
                     edr=EdrContext(object_id=str(uuid.UUID(int=rng.getrandbits(128)))),
+                )
+            )
+
+    def _emit_ecar_file_churn(
+        self,
+        system: Any,
+        current_hour: datetime,
+        rng: random.Random,
+        os_cat: str,
+        sys_pids: dict[str, int],
+    ) -> None:
+        """Emit ordinary endpoint FILE telemetry from running baseline processes."""
+        if "ecar" not in self.emitters:
+            return
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import (
+            AuthContext,
+            EdrContext,
+            FileContext,
+            ProcessContext,
+        )
+        from evidenceforge.generation.activity.edr_pools import (
+            file_path_templates_for_user,
+            get_file_paths,
+            is_service_account,
+            materialize_edr_template,
+        )
+        from evidenceforge.generation.activity.endpoint_noise import ecar_file_churn_config
+
+        cfg = ecar_file_churn_config()
+        if not cfg.get("enabled", True):
+            return
+        os_cfg = cfg.get(os_cat, {})
+        count_min = int(os_cfg.get("count_min", 0))
+        count_max = int(os_cfg.get("count_max", count_min))
+        if count_max <= 0 or count_min > count_max:
+            return
+
+        processes = []
+        for pid in sorted(set(sys_pids.values())):
+            running = self.state_manager.get_process(system.hostname, pid)
+            if running is not None:
+                processes.append(running)
+        if not processes:
+            return
+
+        action_weights = os_cfg.get("action_weights", {"read": 60, "modify": 30, "create": 10})
+        actions = [str(action) for action, weight in action_weights.items() if int(weight) > 0]
+        weights = [int(action_weights[action]) for action in actions]
+        path_templates = get_file_paths(os_cat)
+        if not actions or not path_templates:
+            return
+
+        count = self._scaled_randint(
+            rng,
+            system,
+            "ecar_file_churn",
+            count_min,
+            count_max,
+        )
+        host_ctx = self.activity_generator._build_host_context(system)
+        assigned_user = getattr(system, "assigned_user", None) or ""
+        hour_end = current_hour + timedelta(hours=1)
+
+        for idx in range(count):
+            process = rng.choice(processes)
+            process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
+            if is_service_account(os_cat, process_username):
+                username = process_username
+            else:
+                username = assigned_user or process_username
+            if (
+                process.username
+                and not is_service_account(os_cat, process.username)
+                and rng.random() < 0.55
+            ):
+                username = process.username
+
+            candidates = file_path_templates_for_user(path_templates, os_cat, username)
+
+            file_action = str(rng.choices(actions, weights=weights, k=1)[0])
+            file_path = materialize_edr_template(
+                str(rng.choice(candidates)),
+                rng,
+                username,
+                host_ip=system.ip,
+                host_key=system.hostname,
+                host_os=system.os,
+            )
+            if os_cat == "linux" and username == "root":
+                file_path = file_path.replace("/home/root/", "/root/")
+
+            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            if process.start_time and ts <= process.start_time:
+                ts = process.start_time + timedelta(milliseconds=rng.randint(5, 750))
+            if ts >= hour_end:
+                continue
+
+            event_type = f"file_{file_action}"
+            object_id = stable_uuid(
+                "baseline.ecar.file",
+                system.hostname,
+                process.pid,
+                file_path,
+                file_action,
+                current_hour.isoformat(),
+                idx,
+            )
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=ts,
+                    event_type=event_type,
+                    src_host=host_ctx,
+                    auth=AuthContext(
+                        username=username,
+                        user_sid=self.activity_generator._get_sid(username),
+                        logon_id=process.logon_id,
+                    ),
+                    process=ProcessContext(
+                        pid=process.pid,
+                        parent_pid=process.parent_pid,
+                        image=process.image,
+                        command_line=process.command_line,
+                        username=process.username,
+                        integrity_level=process.integrity_level,
+                        logon_id=process.logon_id,
+                        start_time=process.start_time,
+                    ),
+                    file=FileContext(path=file_path, action=file_action, pid=process.pid),
+                    edr=EdrContext(object_id=object_id, actor_id=process.ecar_object_id),
                 )
             )
 
@@ -4705,6 +4878,10 @@ class BaselineMixin:
                             emit_dns=is_internal_src,
                             hostname=dst_hostname,
                         )
+                        smb_source_port = self._last_smb_connection_source_port(
+                            source_ip=src_ip,
+                            dst_ip=effective_dst_ip,
+                        )
 
                         # SMB access to file servers produces type 3 logon
                         if (
@@ -4727,7 +4904,15 @@ class BaselineMixin:
                                         None,
                                     )
                                     if smb_user:
-                                        self._emit_smb_logon_pair(smb_user, system, src_ip, ts, rng)
+                                        self._emit_smb_logon_pair(
+                                            smb_user,
+                                            system,
+                                            src_ip,
+                                            ts,
+                                            rng,
+                                            source_port=smb_source_port,
+                                            emit_network_evidence=smb_source_port is None,
+                                        )
                                         break
 
         # --- Persona traffic (user-level, during active sessions) ---
@@ -5197,6 +5382,10 @@ class BaselineMixin:
                             source_system=system,
                             pid=4,  # SMB: kernel System process
                         )
+                        smb_source_port = self._last_smb_connection_source_port(
+                            source_ip=system.ip,
+                            dst_ip=smb_dst_ip,
+                        )
                         # Emit type 3 logon on file server for SMB access
                         if smb_dst_sys:
                             # Find active user on this workstation
@@ -5213,7 +5402,13 @@ class BaselineMixin:
                                     )
                                     if ws_user:
                                         self._emit_smb_logon_pair(
-                                            ws_user, smb_dst_sys, system.ip, ts, rng
+                                            ws_user,
+                                            smb_dst_sys,
+                                            system.ip,
+                                            ts,
+                                            rng,
+                                            source_port=smb_source_port,
+                                            emit_network_evidence=smb_source_port is None,
                                         )
                                         self._emit_smb_file_operations(
                                             ws_user, smb_dst_sys, system, ts, rng
@@ -5351,6 +5546,8 @@ class BaselineMixin:
                         username="SYSTEM",
                     )
 
+            self._emit_ecar_file_churn(system, current_hour, rng, os_cat, sys_pids)
+
             # Baseline registry activity from running services. Real Sysmon
             # generates hundreds-thousands of Event 12/13 per hour. We emit
             # 15-40 per host per hour to provide realistic background volume.
@@ -5365,6 +5562,7 @@ class BaselineMixin:
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
                     materialize_edr_template,
+                    materialize_edr_template_group,
                 )
                 from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
@@ -5425,24 +5623,8 @@ class BaselineMixin:
                     ):
                         continue
                     _template_user = system.assigned_user or "SYSTEM"
-                    _key = materialize_edr_template(
-                        _key,
-                        rng,
-                        _template_user,
-                        host_ip=system.ip,
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    _vname = materialize_edr_template(
-                        _vname,
-                        rng,
-                        _template_user,
-                        host_ip=system.ip,
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    _details = materialize_edr_template(
-                        _details,
+                    _key, _vname, _details = materialize_edr_template_group(
+                        (_key, _vname, _details),
                         rng,
                         _template_user,
                         host_ip=system.ip,
@@ -5734,12 +5916,12 @@ class BaselineMixin:
             sys_type = (system.type or "workstation").lower()
             if os_cat == "linux" and sys_type == "server":
                 roster = self._get_server_ssh_users(system)
-                if roster:
+                if roster and rng.random() < self._linux_remote_admin_hour_probability(system):
                     from evidenceforge.generation.activity.bash_commands import (
                         pick_bash_session_commands,
                     )
 
-                    num_ssh = self._scaled_randint(rng, system, "linux_remote_admin", 1, 3)
+                    num_ssh = self._linux_remote_admin_session_count(rng, system)
                     for _ in range(num_ssh):
                         ssh_user = rng.choice(roster)
                         offset = rng.uniform(0, 3599)
@@ -6289,7 +6471,7 @@ class BaselineMixin:
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                             facility=10,
                         )
-                elif source_roll < 0.34 and sys_type == "server":
+                elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]

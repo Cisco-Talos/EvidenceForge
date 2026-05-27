@@ -316,6 +316,42 @@ class TestHostnameConsistency:
         assert first == second
         assert first in {300, 600, 1800, 3600, 7200, 86400}
 
+    def test_known_internal_short_name_dns_uses_fqdn_authority(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Known scenario host short names should not look like public DNS names."""
+        from evidenceforge.generation.activity.generator import _dns_base_ttl
+
+        state_manager.set_current_time(timestamp)
+        web = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        activity_gen._ip_to_system = {web.ip: web}
+        activity_gen._ad_domain = "example.org"
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip=web.ip,
+            time=timestamp,
+            hostname="WEB-EXT-01",
+            force_address=True,
+        )
+
+        address_events = [
+            call.args[0]
+            for call in mock_emitters["zeek_dns"].emit.call_args_list
+            if call.args[0].dns and call.args[0].dns.query_type == "A"
+        ]
+        assert address_events
+        event = address_events[-1]
+        assert event.dns.query == "WEB-EXT-01.example.org"
+        assert event.dns.AA is True
+        assert event.dns.TTLs == [float(_dns_base_ttl("WEB-EXT-01.example.org", True))]
+
     def test_direct_dns_connection_uses_internal_cache(
         self, activity_gen, timestamp, state_manager, mock_emitters
     ):
@@ -931,6 +967,45 @@ class TestWeirdProtocolConstraint:
         assert event.dns.AA is True
         assert event.dns.TTLs[0] == float(_dns_base_ttl("DC-01.example.org", True))
 
+    def test_direct_dns_connection_canonicalizes_known_short_name(
+        self, activity_gen, timestamp, state_manager, mock_emitters
+    ):
+        """Caller-provided short host queries should share internal FQDN semantics."""
+        web = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        activity_gen._ip_to_system = {web.ip: web}
+        activity_gen._ad_domain = "example.org"
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.generate_connection(
+            src_ip="10.0.1.50",
+            dst_ip="10.0.0.10",
+            time=timestamp,
+            dst_port=53,
+            proto="udp",
+            service="dns",
+            dns=DnsContext(
+                query="WEB-EXT-01",
+                query_type="A",
+                qtype=1,
+                rcode="NOERROR",
+                rcode_num=0,
+                answers=[web.ip],
+                AA=False,
+                rtt=0.004,
+            ),
+            orig_bytes=80,
+            resp_bytes=140,
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args[0][0]
+        assert event.dns.query == "WEB-EXT-01.example.org"
+        assert event.dns.AA is True
+
     def test_sensor_duration_texture_preserves_dns_rtt_floor(self, timestamp, tmp_path):
         fmt = load_format("zeek_conn")
         emitter = ZeekEmitter(
@@ -1280,6 +1355,40 @@ class TestDnsSupportQueryTypes:
         assert event.dns.query == "cloudfront.net"
         assert event.dns.answers == ["v=spf1 include:_spf.cloudfront.net ~all"]
         assert event.dns.TTLs and 0 < event.dns.TTLs[0] <= 1800
+
+    def test_single_label_hostname_does_not_receive_public_mx_answers(self):
+        from evidenceforge.generation.activity.generator import _dns_hostname_allows_mx
+
+        assert not _dns_hostname_allows_mx("WEB-EXT-01")
+
+    def test_mx_roll_on_known_internal_short_name_uses_internal_owner(
+        self, activity_gen, timestamp, state_manager, mock_emitters, monkeypatch
+    ):
+        """MX rolls for known short hostnames should resolve internal owner names."""
+        self._force_dns_random(monkeypatch, [0.999])
+        state_manager.set_current_time(timestamp)
+        web = System(
+            hostname="WEB-EXT-01",
+            ip="10.0.3.10",
+            os="Ubuntu 24.04",
+            type="server",
+        )
+        activity_gen._ip_to_system = {web.ip: web}
+        activity_gen._ad_domain = "example.org"
+        activity_gen._dns_server_ips = ["10.0.0.10"]
+
+        activity_gen._emit_dns_lookup(
+            src_ip="10.0.1.50",
+            dst_ip=web.ip,
+            time=timestamp,
+            hostname="WEB-EXT-01",
+        )
+
+        event = mock_emitters["zeek_dns"].emit.call_args[0][0]
+        assert event.dns.query == "example.org"
+        assert event.dns.query_type == "MX"
+        assert event.dns.AA is True
+        assert event.dns.answers == ["10 mail.example.org"]
 
     def test_txt_answers_are_stable_and_dkim_keys_are_source_native(self):
         from evidenceforge.generation.activity.dns_txt import (

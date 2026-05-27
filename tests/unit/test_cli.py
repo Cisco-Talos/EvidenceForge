@@ -42,6 +42,30 @@ from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME, OutputTarget
 runner = CliRunner()
 
 
+class TestHelpAliases:
+    """Tests for CLI help option aliases."""
+
+    @pytest.mark.parametrize(
+        "args",
+        [
+            ["-h"],
+            ["generate", "-h"],
+            ["validate", "-h"],
+            ["eval", "-h"],
+            ["install-skills", "-h"],
+            ["info", "-h"],
+            ["validate-config", "-h"],
+            ["version", "-h"],
+        ],
+    )
+    def test_short_help_alias(self, args):
+        """Every eforge command should accept -h as an alias for --help."""
+        result = runner.invoke(app, args)
+
+        assert result.exit_code == EXIT_SUCCESS
+        assert "Usage:" in result.stdout
+
+
 class TestVersionCommand:
     """Tests for 'eforge version' command."""
 

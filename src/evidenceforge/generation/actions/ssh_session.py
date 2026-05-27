@@ -285,6 +285,16 @@ class SshSessionExecutor(Protocol):
         """Return a stable system process PID."""
         ...
 
+    def _remember_ssh_session_ready_time(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+        ready_time: datetime,
+    ) -> None:
+        """Remember when tuple-scoped receiver-side SSH child evidence may appear."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class SshSessionActionBundle:
@@ -831,15 +841,24 @@ class SshSessionActionBundle:
             ecar_login_time,
             seed_parts=ecar_seed,
         )
+        ready_seed = _stable_seed(
+            "ssh_session_source_ready:"
+            f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
+            f"{state.source_port}:{request.logon_id}:{request.time.isoformat()}"
+        )
+        ready_time = max(ecar_login_time, auth_state.logind_time) + timedelta(
+            milliseconds=80 + (ready_seed % 160)
+        )
+        self.executor._remember_ssh_session_ready_time(
+            request.source_ip,
+            state.source_port,
+            request.target_system.ip,
+            ready_time,
+        )
         if request.logon_id:
-            ready_seed = _stable_seed(
-                "ssh_session_source_ready:"
-                f"{request.target_system.hostname}:{request.user.username}:{request.source_ip}:"
-                f"{state.source_port}:{request.logon_id}:{request.time.isoformat()}"
-            )
             self.executor.state_manager.update_session_metadata(
                 request.logon_id,
-                source_ready_time=ecar_login_time + timedelta(milliseconds=80 + (ready_seed % 160)),
+                source_ready_time=ready_time,
             )
 
     def _dispatch_linux_auth_messages(

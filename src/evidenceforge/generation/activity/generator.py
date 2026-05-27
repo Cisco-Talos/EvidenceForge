@@ -57,6 +57,7 @@ from evidenceforge.events.contexts import (
     KerberosContext,
     NetworkContext,
     OcspContext,
+    PeContext,
     ProcessAccessContext,
     ProcessContext,
     ProxyContext,
@@ -1151,6 +1152,8 @@ _WINDOWS_ELECTRON_CHILD_MARKERS = (
 _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = frozenset({2, 10, 11})
 _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = frozenset({2, 11})
 _WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
+_LINUX_LOCAL_SESSION_LOGON_TYPES = frozenset({2, 11})
+_LINUX_REMOTE_SESSION_KINDS = frozenset({"network", "service", "ssh"})
 _SSH_SYSLOG_MICRO_JITTER_BANDS = {
     "connection": 101,
     "accepted": 301,
@@ -2365,6 +2368,8 @@ def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) 
 def _dns_hostname_allows_mx(hostname: str) -> bool:
     """Return whether a hostname is plausible owner context for MX lookups."""
     lowered = hostname.lower().rstrip(".")
+    if "." not in lowered:
+        return False
     cdn_suffixes = (
         "cloudfront.net",
         "akamaiedge.net",
@@ -3193,6 +3198,9 @@ class ActivityGenerator:
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
+        self._linux_local_logon_syslog_sessions: set[str] = set()
+        self._linux_local_logind_session_ids: dict[str, int] = {}
+        self._ssh_session_ready_times: dict[str, datetime] = {}
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_process_finalizers: dict[
             tuple[str, int], tuple[System, str, str, str, datetime]
@@ -3212,6 +3220,8 @@ class ActivityGenerator:
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
         self._last_connection_effective_dst_ip = ""
+        self._last_connection_effective_tuple: tuple[str, int, str, int, str] | None = None
+        self._last_connection_effective_time: datetime | None = None
 
     def _process_termination_recorded(
         self,
@@ -3542,6 +3552,21 @@ class ActivityGenerator:
             if wanted in {system_host, system_fqdn}:
                 return system
         return None
+
+    def _dns_canonical_internal_hostname(self, hostname: str | None) -> str | None:
+        """Return the scenario FQDN for known internal hostnames."""
+        if not hostname:
+            return hostname
+        system = self._system_for_hostname(hostname)
+        if system is None:
+            return hostname
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").strip().rstrip(".")
+        system_host = str(getattr(system, "hostname", "") or "").strip().rstrip(".")
+        if not system_host or not ad_domain:
+            return system_host or hostname
+        if "." in system_host:
+            return system_host
+        return f"{system_host}.{ad_domain}"
 
     def _unique_environment_systems(self) -> list[Any]:
         """Return scenario systems once, preserving environment order where possible."""
@@ -3874,6 +3899,30 @@ class ActivityGenerator:
             return None
         return max(candidates, key=lambda session: session.start_time)
 
+    def _active_user_local_linux_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest active local Linux session for this user/host."""
+        if _get_os_category(system.os) != "linux":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if (
+                session.system == system.hostname
+                and session.logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+                and session.session_kind not in _LINUX_REMOTE_SESSION_KINDS
+                and _session_active_for_activity(session, time)
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: ensure_utc(session.start_time))
+
     def _session_id_for_logon(self, logon_id: str) -> int:
         """Return the canonical source-native session ID for a LogonID."""
         if not logon_id:
@@ -4032,6 +4081,28 @@ class ActivityGenerator:
         src_port = _ephemeral_port(rng, os_category)
         self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
         return src_port
+
+    def _last_effective_connection_source_port(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str = "tcp",
+    ) -> int | None:
+        """Return the source port from the most recently emitted matching connection."""
+        last_tuple = self._last_connection_effective_tuple
+        if last_tuple is None:
+            return None
+        last_src_ip, last_src_port, last_dst_ip, last_dst_port, last_proto = last_tuple
+        if (
+            last_src_ip == src_ip
+            and last_dst_ip == dst_ip
+            and last_dst_port == dst_port
+            and last_proto == proto
+        ):
+            return last_src_port
+        return None
 
     @staticmethod
     def _kerberos_port_key(source_ip: str, dc_hostname: str) -> tuple[str, str]:
@@ -6191,6 +6262,20 @@ class ActivityGenerator:
             if existing_interactive is not None:
                 existing_interactive.last_activity_time = time
                 return existing_interactive.logon_id
+        if (
+            logon_id is None
+            and os_cat == "linux"
+            and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            and source_ip in (None, "", "-", system.ip)
+        ):
+            existing_interactive = self._active_user_local_linux_session(
+                user,
+                system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                return existing_interactive.logon_id
         local_logon = logon_type in (2, 5, 7, 11)
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
@@ -6199,6 +6284,15 @@ class ActivityGenerator:
         if not local_logon and source_port is None and source_ip and source_ip != "-":
             if logon_type == 3 and source_ip == system.ip:
                 source_port = 0
+            elif os_cat == "windows" and logon_type in (3, 10):
+                source_port = self._allocate_ephemeral_port(
+                    source_ip,
+                    system.ip,
+                    3389 if logon_type == 10 else 445,
+                    "tcp",
+                    time,
+                    self._os_for_ip(source_ip),
+                )
             else:
                 source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
@@ -6329,6 +6423,9 @@ class ActivityGenerator:
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
         )
+
+        if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
+            self._emit_linux_local_logon_syslog(user, system, time, logon_id)
 
         # Phase 2: Build SecurityEvent with all contexts
         # For network logons (type 3, 10), resolve source host from source_ip
@@ -6501,6 +6598,50 @@ class ActivityGenerator:
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
+
+    def _emit_linux_local_logon_syslog(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> None:
+        """Emit logind open evidence for a durable local Linux session."""
+        if (
+            self.dispatcher is None
+            or "syslog" not in self.dispatcher.emitters
+            or logon_id in self._linux_local_logon_syslog_sessions
+        ):
+            return
+        if _get_os_category(system.os) != "linux":
+            return
+        session = self.state_manager.get_session(logon_id)
+        if (
+            session is None
+            or session.logon_type not in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            or session.session_kind in _LINUX_REMOTE_SESSION_KINDS
+        ):
+            return
+
+        rng = random.Random(
+            _stable_seed(f"linux_local_logon_syslog:{system.hostname}:{user.username}:{logon_id}")
+        )
+        logind_time = time - timedelta(milliseconds=rng.randint(20, 80))
+        session_id = self.state_manager.next_linux_logind_session_id(
+            system.hostname,
+            rng,
+            logind_time,
+        )
+        self._linux_local_logind_session_ids[logon_id] = session_id
+        self.generate_syslog_event(
+            system=system,
+            time=logind_time,
+            app_name="systemd-logind",
+            message=f"New session {session_id} of user {user.username}.",
+            pid=self._get_system_pid(system.hostname, "logind", 456),
+            facility=10,
+        )
+        self._linux_local_logon_syslog_sessions.add(logon_id)
 
     def _emit_dc_ntlm_for_logon(
         self,
@@ -8547,6 +8688,31 @@ class ActivityGenerator:
             self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
         )
 
+    def _remember_ssh_session_ready_time(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+        ready_time: datetime,
+    ) -> None:
+        """Remember when tuple-scoped receiver-side SSH child evidence may appear."""
+
+        self._ssh_session_ready_times[
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        ] = ensure_utc(ready_time)
+
+    def ssh_session_ready_time_for_tuple(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> datetime | None:
+        """Return the receiver-side SSH child-evidence readiness time for a tuple."""
+
+        return self._ssh_session_ready_times.get(
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        )
+
     def ensure_linux_ssh_responder_process(
         self,
         *,
@@ -8651,6 +8817,14 @@ class ActivityGenerator:
                 and recent_seen is not None
                 and time.timestamp() - recent_seen <= 86_400.0
             )
+            if (
+                source_port is not None
+                and key in self._ssh_source_ports
+                and time is not None
+                and recent_seen is not None
+                and abs(time.timestamp() - recent_seen) <= 1.0
+            ):
+                return candidate
             if key not in self._ssh_source_ports and not recent_is_active:
                 self._ssh_source_ports.add(key)
                 if time is not None:
@@ -9002,6 +9176,7 @@ class ActivityGenerator:
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
+        pe: PeContext | None = None,
         ocsp: OcspContext | None = None,
         proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
@@ -9064,6 +9239,7 @@ class ActivityGenerator:
             ids=ids,
             http=http,
             file_transfer=file_transfer,
+            pe=pe,
             ocsp=ocsp,
             proxy=proxy,
             firewall=firewall,
@@ -9100,6 +9276,7 @@ class ActivityGenerator:
         http = request.http
         caller_supplied_http = http is not None
         file_transfer = request.file_transfer
+        pe = request.pe
         ocsp = request.ocsp
         proxy = request.proxy
         firewall = request.firewall
@@ -9111,6 +9288,9 @@ class ActivityGenerator:
         responding_pid = request.responding_pid
 
         from evidenceforge.events.contexts import NetworkContext
+
+        self._last_connection_effective_tuple = None
+        self._last_connection_effective_time = None
 
         if http is not None:
             http = _normalize_http_context_for_source_native_response(http)
@@ -10181,6 +10361,8 @@ class ActivityGenerator:
             event.http = http
         if file_transfer is not None:
             event.file_transfer = file_transfer
+        if pe is not None:
+            event.pe = pe
         if ocsp is not None:
             event.ocsp = ocsp
         if proxy is not None:
@@ -10890,6 +11072,15 @@ class ActivityGenerator:
             )
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
+        if not event.network.application_layer_only and event.network.src_port > 0:
+            self._last_connection_effective_tuple = (
+                event.network.src_ip,
+                event.network.src_port,
+                event.network.dst_ip,
+                event.network.dst_port,
+                event.network.protocol,
+            )
+            self._last_connection_effective_time = event.timestamp
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 
@@ -11412,7 +11603,7 @@ class ActivityGenerator:
                 'journalctl -u apache2 --since "1 hour ago"',
                 "htop",
                 "ss -tulnp",
-                "ip addr show",
+                "ip -o addr show scope global",
             ],
             "default": [
                 "ls -la",
@@ -11426,7 +11617,7 @@ class ActivityGenerator:
                 "free -m",
                 "w",
                 "tail -20 /var/log/syslog",
-                "history",
+                "history | tail -20",
                 "date",
                 "ls /tmp",
                 "mount | grep -v tmpfs",
@@ -11456,7 +11647,7 @@ class ActivityGenerator:
                         "ss -tulnp",
                         "w",
                         "htop",
-                        "ip addr show",
+                        "ip -4 addr show scope global",
                     ]
                 elif server_role != "web":
                     web_markers = (
@@ -11471,7 +11662,18 @@ class ActivityGenerator:
                         for command in command_list
                         if not any(marker in command for marker in web_markers)
                     ]
-            command = _get_rng().choice(command_list)
+            from evidenceforge.generation.activity.bash_commands import (
+                _choose_template_with_memory,
+            )
+
+            command = _choose_template_with_memory(
+                _get_rng(),
+                command_list,
+                {},
+                list(getattr(system, "services", []) or []),
+                system.hostname,
+                user.username,
+            )
         else:
             command = activity_type_or_command
         return command
@@ -12098,6 +12300,8 @@ class ActivityGenerator:
         """Normalize caller-provided DNS context through shared resolver semantics."""
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         qtype_name = (dns.query_type or "").upper()
+        if qtype_name in {"A", "AAAA", "PTR", "MX", "NS", "SOA"}:
+            dns.query = self._dns_canonical_internal_hostname(dns.query) or dns.query
         is_internal = qtype_name == "SRV" or _dns_is_internal_name(dns.query, ad_domain)
         if is_internal:
             dns.AA = True
@@ -12173,6 +12377,7 @@ class ActivityGenerator:
                 )
             else:
                 hostname = _generate_random_hostname(rng, dst_ip)
+        hostname = self._dns_canonical_internal_hostname(hostname) or hostname
 
         # DNS caching: skip re-emission if this (src, hostname) was queried recently.
         # Real clients cache DNS responses (TTL typically 60-3600s), so not every
@@ -12902,11 +13107,20 @@ class ActivityGenerator:
             # Type 3 (network) should dominate in AD; Type 5 only for service accounts
             rng = _get_rng()
             sys_type = (system.type or "workstation").lower()
+            os_category = _get_os_category(system.os)
             is_service_account = user.username.endswith("$") or user.username.lower().startswith(
                 "svc"
             )
 
-            if sys_type in ("server", "domain_controller"):
+            if os_category == "linux":
+                # SSH is a modeled remote-session bundle on Linux. Generic
+                # baseline logon activity should not create successful
+                # non-SSH "remote" endpoint sessions.
+                if is_service_account:
+                    logon_type = 5
+                else:
+                    logon_type = 2
+            elif sys_type in ("server", "domain_controller"):
                 # Servers/DCs: Type 3 (network) dominates
                 logon_type = rng.choices(
                     [3, 5, 10, 4, 2, 8, 9], weights=[70, 15, 8, 4, 1, 1, 1], k=1
@@ -12985,11 +13199,6 @@ class ActivityGenerator:
                 source_ip = "127.0.0.1"
             elif logon_type in (10, 11):
                 # Remote interactive (RDP/VNC) — pick a realistic remote IP
-                other_ips = getattr(self, "_all_system_ips", [])
-                remote_ips = [ip for ip in other_ips if ip != system.ip]
-                source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip
-            elif logon_type == 2 and _get_os_category(system.os) == "linux":
-                # Console logon on Linux servers often comes via SSH from another host
                 other_ips = getattr(self, "_all_system_ips", [])
                 remote_ips = [ip for ip in other_ips if ip != system.ip]
                 source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip
@@ -13967,37 +14176,37 @@ class ActivityGenerator:
         target_server: str,
         source_ip: str = "",
     ) -> str:
-        """Return source network metadata for remote explicit-credential use."""
+        """Return source network metadata for explicit-credential use."""
         target = target_server.strip().lower()
-        if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
-            default_source_ip = "-"
-        else:
-            system_domain = getattr(system, "domain", "")
-            local_names = {
-                system.hostname.lower(),
-                f"{system.hostname}.{system_domain}".lower() if system_domain else "",
-                system.ip,
-            }
-            target_host = target.split(".", 1)[0]
-            default_source_ip = (
-                "-"
-                if target in local_names or target_host == system.hostname.lower()
-                else system.ip
-            )
-        explicit_source_ip = source_ip.strip()
-        if explicit_source_ip in {"", "-"}:
-            return default_source_ip
-        if default_source_ip == "-":
-            return "-"
         system_domain = getattr(system, "domain", "")
         local_names = {
             system.hostname.lower(),
             f"{system.hostname}.{system_domain}".lower() if system_domain else "",
             system.ip,
         }
-        if explicit_source_ip.lower() in local_names:
-            return system.ip
-        return default_source_ip
+        if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
+            return "-"
+        target_host = target.split(".", 1)[0]
+        if target in local_names or target_host == system.hostname.lower():
+            return "-"
+
+        explicit_source_ip = source_ip.strip()
+        if explicit_source_ip in {"", "-"}:
+            return "-"
+
+        normalized_source_ip = explicit_source_ip.removeprefix("::ffff:")
+        if normalized_source_ip.lower() in local_names or explicit_source_ip.lower() in local_names:
+            return "-"
+
+        source_system = getattr(self, "_ip_to_system", {}).get(normalized_source_ip)
+        if source_system is None:
+            return "-"
+        if (
+            source_system.ip == system.ip
+            or source_system.hostname.lower() == system.hostname.lower()
+        ):
+            return "-"
+        return normalized_source_ip
 
     def _ensure_explicit_credentials_subject_logon(
         self,
@@ -15765,6 +15974,18 @@ class ActivityGenerator:
                 system.hostname,
                 pid,
                 image,
+                dll_path,
+            )
+            return
+        session_end_time = (
+            self.state_manager.get_session_end_time(proc.logon_id) if proc.logon_id else None
+        )
+        if session_end_time is not None and ensure_utc(time) >= ensure_utc(session_end_time):
+            logger.debug(
+                "Skipping image load after owning session ended: %s pid=%s logon_id=%s dll=%s",
+                system.hostname,
+                pid,
+                proc.logon_id,
                 dll_path,
             )
             return
