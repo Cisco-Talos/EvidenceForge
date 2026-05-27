@@ -117,6 +117,17 @@ or follow-up batch is needed.
   SSH fan-out across production Linux systems and eliminate unsupported generic
   eCAR `remote` successful sessions unless source-native SSH/PAM companion
   evidence exists.
+- Loop 209 fixed Linux remote-session noise (`67bec768`) by keeping generic
+  baseline Linux logon activity local/service, reducing organic SSH fan-out, and
+  thinning ambient SSH noise while preserving SSH-bundle-owned remote sessions.
+  Automated eval passed at 97.42953794362485 over 75679 records; rendered
+  probes confirmed successful generic Linux `remote` eCAR sessions dropped from
+  4 to 0 and successful SSH sessions dropped from 221 to 83. Blind scores were
+  47/51/50/45, average 48.25. No deliberation was triggered because all
+  reviewers agreed on Synthetic and score spread was small. The next
+  highest-leverage target is multi-sensor Zeek timing texture: add per-sensor
+  clock offset/drift, broader capture jitter, occasional missing companions, and
+  packet-accounting variance.
 
 ## Recent Completed Work Previously Kept in TODO
 
