@@ -1783,6 +1783,81 @@ class TestChronologicalOutput:
         )
         assert shell_ms > child_ms
 
+    def test_close_does_not_drag_parent_termination_past_long_lived_child(self, tmp_path, ts):
+        """A long-lived child should not keep a finished parent alive for hours."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(microsecond=0),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "parent-process",
+                "pid": 7496,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(seconds=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": "child-process",
+                "actorID": "parent-process",
+                "pid": 7508,
+                "ppid": 7496,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(minutes=10),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "parent-process",
+                "pid": 7496,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(hours=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": "child-process",
+                "pid": 7508,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        parent_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "parent-process" and row["action"] == "TERMINATE"
+        )
+        child_ms = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["objectID"] == "child-process" and row["action"] == "TERMINATE"
+        )
+        assert parent_ms < child_ms
+        assert parent_ms < int((ts + timedelta(minutes=15)).timestamp() * 1000)
+
     def test_close_moves_dependent_telemetry_after_reordered_process_create(self, tmp_path, ts):
         """Dependent eCAR records should follow a process create shifted after its parent."""
         fmt = Mock()

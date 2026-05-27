@@ -1463,7 +1463,10 @@ class EcarEmitter(HostMultiplexEmitter):
                     latest_child_ms_by_parent_id.get(object_id, 0),
                     latest_child_ms_by_parent_pid.get(pid, 0),
                 )
-                if latest_child_ms >= timestamp_ms:
+                if (
+                    latest_child_ms >= timestamp_ms
+                    and latest_child_ms - timestamp_ms <= cls._stale_process_reference_grace_ms
+                ):
                     stable_delay_ms = 20 + (sum(ord(ch) for ch in object_id) % 480)
                     record["timestamp_ms"] = latest_child_ms + stable_delay_ms
                     line = json.dumps(record, separators=(",", ":"))
