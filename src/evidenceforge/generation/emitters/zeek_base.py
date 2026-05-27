@@ -144,7 +144,12 @@ def _sensor_path_delay_us(hostname: str, original_uid: Any = None) -> int:
     if original_uid is None:
         return baseline
     jitter_seed = _stable_seed(f"zeek_sensor_path_delay_jitter:{hostname}:{original_uid}")
-    jitter = (jitter_seed % 12001) - 6000
+    # Flow-local buffering and packet-broker scheduling should sometimes
+    # dominate the stable sensor path ordering. Keep each individual sensor
+    # inside the configured path-delay window, but allow same-flow cross-sensor
+    # deltas to change sign instead of always reading as a fixed tap order.
+    jitter_width = max(6_000, int(width * 0.55))
+    jitter = (jitter_seed % ((jitter_width * 2) + 1)) - jitter_width
     return max(timing.path_delay_min_us, min(timing.path_delay_max_us, baseline + jitter))
 
 

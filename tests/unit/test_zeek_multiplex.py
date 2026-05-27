@@ -131,7 +131,7 @@ class TestPerSensorDirectoryRouting:
             assert rows["dmz"]["x509"]["id"] == rows["dmz"]["files"]["fuid"]
             core_gap = rows["core"]["files"]["ts"] - rows["core"]["x509"]["ts"]
             dmz_gap = rows["dmz"]["files"]["ts"] - rows["dmz"]["x509"]["ts"]
-            assert dmz_gap == core_gap
+            assert abs(dmz_gap - core_gap) <= 0.000001
 
     def test_second_sensor_observation_textures_lossless_packetization(self):
         """Lossless multi-sensor rows keep tuple/payload facts but vary tap metrics."""
@@ -407,6 +407,8 @@ class TestPerSensorDirectoryRouting:
             ]
 
             assert len(set(offsets)) >= 12
+            assert any(offset < 0 for offset in offsets)
+            assert any(offset > 0 for offset in offsets)
             assert max(abs(offset) for offset in offsets) <= 0.16
 
     def test_sensor_conn_metrics_do_not_clone_across_lossless_tcp_flows(self):
