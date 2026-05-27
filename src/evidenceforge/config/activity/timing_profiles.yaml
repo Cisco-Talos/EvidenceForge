@@ -134,8 +134,8 @@ relationships:
   source.ecar_flow:
     class: source_latency
     position: after
-    min_ms: 40
-    max_ms: 300
+    min_ms: 180
+    max_ms: 1800
   source.ecar_session:
     class: source_latency
     position: after
