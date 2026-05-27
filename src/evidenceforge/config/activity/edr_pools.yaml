@@ -150,7 +150,6 @@ file_paths_linux:
   # Logs and system
   - "/var/log/syslog"
   - "/var/log/auth.log"
-  - "/var/log/apache2/access.log"
   - "/var/log/journal/{hex}/system.journal"
   # Package manager
   - "/var/lib/dpkg/status"

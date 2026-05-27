@@ -1152,6 +1152,8 @@ _WINDOWS_ELECTRON_CHILD_MARKERS = (
 _WINDOWS_INTERACTIVE_SESSION_LOGON_TYPES = frozenset({2, 10, 11})
 _WINDOWS_WORKSTATION_SESSION_LOGON_TYPES = frozenset({2, 11})
 _WINDOWS_REMOTE_SESSION_KINDS = frozenset({"network", "service", "rdp", "ssh"})
+_LINUX_LOCAL_SESSION_LOGON_TYPES = frozenset({2, 11})
+_LINUX_REMOTE_SESSION_KINDS = frozenset({"network", "service", "ssh"})
 _SSH_SYSLOG_MICRO_JITTER_BANDS = {
     "connection": 101,
     "accepted": 301,
@@ -3196,6 +3198,8 @@ class ActivityGenerator:
         self._bash_history_command_counts: dict[tuple[str, str], int] = {}
         self._bash_history_quick_streaks: dict[tuple[str, str], int] = {}
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
+        self._linux_local_logon_syslog_sessions: set[str] = set()
+        self._linux_local_logind_session_ids: dict[str, int] = {}
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_process_finalizers: dict[
             tuple[str, int], tuple[System, str, str, str, datetime]
@@ -3893,6 +3897,30 @@ class ActivityGenerator:
         if not candidates:
             return None
         return max(candidates, key=lambda session: session.start_time)
+
+    def _active_user_local_linux_session(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+    ) -> ActiveSession | None:
+        """Return the newest active local Linux session for this user/host."""
+        if _get_os_category(system.os) != "linux":
+            return None
+
+        candidates = [
+            session
+            for session in self.state_manager.get_sessions_for_user_at(user.username, time)
+            if (
+                session.system == system.hostname
+                and session.logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+                and session.session_kind not in _LINUX_REMOTE_SESSION_KINDS
+                and _session_active_for_activity(session, time)
+            )
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda session: ensure_utc(session.start_time))
 
     def _session_id_for_logon(self, logon_id: str) -> int:
         """Return the canonical source-native session ID for a LogonID."""
@@ -6233,6 +6261,20 @@ class ActivityGenerator:
             if existing_interactive is not None:
                 existing_interactive.last_activity_time = time
                 return existing_interactive.logon_id
+        if (
+            logon_id is None
+            and os_cat == "linux"
+            and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            and source_ip in (None, "", "-", system.ip)
+        ):
+            existing_interactive = self._active_user_local_linux_session(
+                user,
+                system,
+                time,
+            )
+            if existing_interactive is not None:
+                existing_interactive.last_activity_time = time
+                return existing_interactive.logon_id
         local_logon = logon_type in (2, 5, 7, 11)
         dc_source_ip = source_ip or system.ip
         if source_ip is None:
@@ -6380,6 +6422,9 @@ class ActivityGenerator:
         privilege_list = (
             self._select_special_privileges(user, logon_type, system.hostname) if elevated else ""
         )
+
+        if os_cat == "linux" and logon_type in _LINUX_LOCAL_SESSION_LOGON_TYPES:
+            self._emit_linux_local_logon_syslog(user, system, time, logon_id)
 
         # Phase 2: Build SecurityEvent with all contexts
         # For network logons (type 3, 10), resolve source host from source_ip
@@ -6552,6 +6597,50 @@ class ActivityGenerator:
 
         logger.debug(f"Generated logon: {user.username} on {system.hostname} (LogonID: {logon_id})")
         return logon_id
+
+    def _emit_linux_local_logon_syslog(
+        self,
+        user: User,
+        system: System,
+        time: datetime,
+        logon_id: str,
+    ) -> None:
+        """Emit logind open evidence for a durable local Linux session."""
+        if (
+            self.dispatcher is None
+            or "syslog" not in self.dispatcher.emitters
+            or logon_id in self._linux_local_logon_syslog_sessions
+        ):
+            return
+        if _get_os_category(system.os) != "linux":
+            return
+        session = self.state_manager.get_session(logon_id)
+        if (
+            session is None
+            or session.logon_type not in _LINUX_LOCAL_SESSION_LOGON_TYPES
+            or session.session_kind in _LINUX_REMOTE_SESSION_KINDS
+        ):
+            return
+
+        rng = random.Random(
+            _stable_seed(f"linux_local_logon_syslog:{system.hostname}:{user.username}:{logon_id}")
+        )
+        logind_time = time - timedelta(milliseconds=rng.randint(20, 80))
+        session_id = self.state_manager.next_linux_logind_session_id(
+            system.hostname,
+            rng,
+            logind_time,
+        )
+        self._linux_local_logind_session_ids[logon_id] = session_id
+        self.generate_syslog_event(
+            system=system,
+            time=logind_time,
+            app_name="systemd-logind",
+            message=f"New session {session_id} of user {user.username}.",
+            pid=self._get_system_pid(system.hostname, "logind", 456),
+            facility=10,
+        )
+        self._linux_local_logon_syslog_sessions.add(logon_id)
 
     def _emit_dc_ntlm_for_logon(
         self,

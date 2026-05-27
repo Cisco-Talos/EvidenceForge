@@ -182,6 +182,7 @@ class TestFilePaths:
         paths = get_file_paths("linux")
         assert not any(re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", path) for path in paths)
         assert "/etc/passwd" not in paths
+        assert "/var/log/apache2/access.log" not in paths
         assert not any("systemd-private-" in path and "apache2.service" in path for path in paths)
 
 

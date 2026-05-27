@@ -1177,6 +1177,50 @@ class TestActivityGenerator:
         ]
         assert "logon" not in emitted_types
 
+    def test_generate_logon_reuses_active_linux_local_session_with_syslog_companion(
+        self, state_manager, test_user
+    ):
+        """Repeated local Linux activity should reuse one login with logind evidence."""
+        syslog_emitter = Mock()
+        syslog_emitter.can_handle.side_effect = lambda event: event.syslog is not None
+        ecar_emitter = Mock()
+        ecar_emitter.can_handle.side_effect = lambda event: event.event_type == "logon"
+        emitters = {"syslog": syslog_emitter, "ecar": ecar_emitter}
+        dispatcher = EventDispatcher(state_manager=state_manager, emitters=emitters)
+        activity_gen = ActivityGenerator(state_manager, emitters, dispatcher=dispatcher)
+        linux_system = System(
+            hostname="WS-LINUX-01",
+            ip="10.0.0.41",
+            os="Ubuntu 22.04",
+            type="workstation",
+            assigned_user=test_user.username,
+        )
+        first_time = datetime(2024, 1, 15, 9, 0, 0, tzinfo=UTC)
+        later_time = first_time + timedelta(minutes=35)
+
+        logon_id = activity_gen.generate_logon(test_user, linux_system, first_time, logon_type=2)
+        reused_logon_id = activity_gen.generate_logon(
+            test_user,
+            linux_system,
+            later_time,
+            logon_type=2,
+        )
+
+        sessions = state_manager.get_sessions_for_user(test_user.username)
+        emitted_logons = [
+            call.args[0]
+            for call in ecar_emitter.emit.call_args_list
+            if call.args[0].event_type == "logon"
+        ]
+        syslog_messages = [
+            call.args[0].syslog.message for call in syslog_emitter.emit.call_args_list
+        ]
+        assert reused_logon_id == logon_id
+        assert [session.logon_id for session in sessions] == [logon_id]
+        assert sessions[0].last_activity_time == later_time
+        assert len(emitted_logons) == 1
+        assert any("New session" in msg and test_user.username in msg for msg in syslog_messages)
+
     def test_interactive_logons_get_distinct_userinit_parents(
         self, activity_gen, test_user, test_system, state_manager
     ):
