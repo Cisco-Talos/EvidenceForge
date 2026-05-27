@@ -176,6 +176,19 @@ or follow-up batch is needed.
   source-observation realism for endpoint/network/proxy correlations: reduce
   same-second eCAR FLOW/Zeek/proxy completeness with realistic jitter, dropout,
   caching, and source-specific visibility gaps while preserving huntable pivots.
+- Loop 214 fixed eCAR FLOW source-observation timing texture (`9895f149`) by
+  widening the data-driven `source.ecar_flow` latency profile from 40-300ms to
+  180-1800ms while preserving connection-interval clamps and remote-session FLOW
+  ordering tests. Automated eval passed at 96.39580305774429 over 74653 records;
+  the hard probe matched 13565 eCAR FLOW rows to Zeek tuples in both loop 213 and
+  loop 214, with same-second matches dropping from 66.31% to 43.84%, within-one-
+  second matches dropping from 99.42% to 70.61%, and p90 delta moving from
+  0.573s to 1.649s. Blind scores were 68/64/67/74, average 68.25. No
+  deliberation was triggered because all reviewers agreed on Synthetic and score
+  spread was 10 points. The next highest-leverage targets are eCAR Linux
+  local-session durability and file/process ownership, TLSv1.2 resumed-handshake
+  consistency across `resumed`/`ssl_history`/certificate FUIDs, and Windows
+  source-native texture for Defender paths and Sysmon `ProcessGuid` shape.
 
 ## Recent Completed Work Previously Kept in TODO
 
