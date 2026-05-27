@@ -151,6 +151,19 @@ or follow-up batch is needed.
   43.50. The next highest-leverage target is Windows remote-execution lifecycle
   texture, especially long-lived PsExec parentage and audit-log-clear 1102
   subject rendering.
+- Loop 212 fixed Windows PsExec remote-execution lifecycle texture (`0ad5983c`,
+  `b725f912`) by bounding `PSEXESVC.exe` lifetime, expiring stale PsExec service
+  context, and emitting explicit wrapper termination. Automated eval passed at
+  96.39589873896136 over 74657 records; the rendered probe showed loop 211 had
+  8 PSEXESVC-parented child processes, 7 late children after two minutes, no
+  termination, and 6 monitored later commands parented by PsExec, while loop
+  212 had one immediate PsExec child, one termination, zero late children, and
+  zero monitored later commands parented by PsExec. Blind scores were
+  78/86/91/86, average 85.25. No deliberation was triggered because all
+  reviewers agreed on Synthetic. The next highest-leverage target is endpoint
+  source-native consistency, especially Windows Security channel `EventRecordID`
+  monotonicity after log clear and eCAR FLOW/session/process lifecycle timing and
+  identity pairing.
 
 ## Recent Completed Work Previously Kept in TODO
 
