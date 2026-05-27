@@ -9,7 +9,7 @@ This document lists every evidence type EvidenceForge can generate, where to fin
 ## Output Directory Structure
 
 One generation run emits one output target. The tree below shows both default
-and SOF-ELK target-specific files where they differ; they are not emitted
+and SOF-ELK® target-specific files where they differ; they are not emitted
 together.
 
 ```

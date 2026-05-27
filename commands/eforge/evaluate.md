@@ -82,7 +82,7 @@ source-native field mismatches, and evidence marked `visible` or `delayed` remai
 For each pillar, explain what the score means in practical terms:
 
 **Pillar 1: Parseability (weight 0.30)**
-- Spec Conformance: Does every record parse cleanly under strict-mode rules? Missing required fields? Type violations? `eforge eval` reads `OUTPUT_TARGET.txt` to choose target-specific variants, treating a missing marker as legacy/default. Windows/Sysmon XML and SOF-ELK Snare syslog both map to the canonical Windows buckets; default RFC5424 syslog and SOF-ELK RFC3164/year syslog both map to `syslog`; typed columns for Zeek; schema-strict for eCAR.
+- Spec Conformance: Does every record parse cleanly under strict-mode rules? Missing required fields? Type violations? `eforge eval` reads `OUTPUT_TARGET.txt` to choose target-specific variants, treating a missing marker as legacy/default. Windows/Sysmon XML and SOF-ELK® Snare syslog both map to the canonical Windows buckets; default RFC5424 syslog and SOF-ELK RFC3164/year syslog both map to `syslog`; typed columns for Zeek; schema-strict for eCAR.
 - Format Constraints: Do records satisfy `FormatDefinition` constraints (field ranges, enum values, structural rules)?
 
 **Pillar 2: Plausibility (weight 0.25)**

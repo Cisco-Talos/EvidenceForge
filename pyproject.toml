@@ -81,6 +81,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "slow: Tests requiring large dataset generation (100+ users, minutes to run)",
+    "external_parser: Tests that run third-party parser containers",
 ]
 addopts = [
     "-v",

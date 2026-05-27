@@ -264,6 +264,10 @@ uv run pytest --no-cov
 # Run slow comprehensive workload tests without coverage instrumentation
 uv run pytest --include-slow -m slow --no-cov --durations=20
 
+# Run optional third-party parser validation tests.
+# Requires Docker Compose v2 or Podman Compose.
+uv run pytest --include-external-parsers -m external_parser --no-cov
+
 # Run the release coverage gate before a dev -> main PR
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70
 
@@ -277,6 +281,10 @@ uv run pytest tests/unit/test_network_visibility.py -v
 uv run ruff check .
 uv run ruff format --check .
 ```
+
+See [External Parser Validation](docs/external-parser-validation/README.md)
+for the third-party parser validation quickstart, external-parser harness architecture,
+full-dataset runner command, and failure report details.
 
 ### Tech Stack
 
@@ -304,6 +312,10 @@ uv run ruff format --check .
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, sending pull requests, and setting up a development environment.
+
+## Acknowledgements
+
+SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used with permission.
 
 ## License
 
