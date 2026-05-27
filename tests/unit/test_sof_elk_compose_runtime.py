@@ -154,6 +154,7 @@ def test_create_compose_run_writes_prep_and_compose_files(
     assert "1000-preprocess-all.conf" in prep_script
     assert "6200-zeek_dns.conf" in prep_script
     assert "zeek.yml" in prep_script
+    assert "file_identity.path: ~" in prep_script
     input_config = (generated_config.pipeline_dir / "0000-input-beats.conf").read_text(
         encoding="utf-8"
     )

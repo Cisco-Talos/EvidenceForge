@@ -415,6 +415,28 @@ for file in {input_args}; do
   test -f "$SOF_ELK_DIR/lib/filebeat_inputs/$file"
   cp "$SOF_ELK_DIR/lib/filebeat_inputs/$file" "/runtime-config/filebeat-inputs/$file"
 done
+
+# Filebeat 9 fingerprint identity waits for files to reach 1024 bytes before
+# harvesting. The parser harness uses immutable staged files, so path identity
+# is acceptable and lets small smoke-test samples exercise the full pipeline.
+for file in /runtime-config/filebeat-inputs/*.yml; do
+  [ -f "$file" ] || continue
+  if grep -q "file_identity\\." "$file"; then
+    continue
+  fi
+  tmp="$file.tmp"
+  awk '
+    {{
+      print
+      if ($0 ~ /^[[:space:]]*-[[:space:]]*type:[[:space:]]*filestream[[:space:]]*$/) {{
+        indent = $0
+        sub(/-.*/, "", indent)
+        print indent "  file_identity.path: ~"
+      }}
+    }}
+  ' "$file" > "$tmp"
+  mv "$tmp" "$file"
+done
 """
 
 
