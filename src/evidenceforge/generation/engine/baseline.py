@@ -4197,6 +4197,9 @@ class BaselineMixin:
         source_ip: str,
         time: datetime,
         rng: Any,
+        *,
+        source_port: int | None = None,
+        emit_network_evidence: bool = True,
     ) -> str | None:
         """Emit type 3 network logon + logoff pair on a file server for SMB access.
 
@@ -4209,12 +4212,20 @@ class BaselineMixin:
         if _get_os_category(file_server.os) != "windows":
             return None
 
+        logon_kwargs: dict[str, Any] = {
+            "user": user,
+            "system": file_server,
+            "time": time,
+            "logon_type": 3,
+            "source_ip": source_ip,
+        }
+        if source_port is not None:
+            logon_kwargs["source_port"] = source_port
+        if not emit_network_evidence:
+            logon_kwargs["emit_network_evidence"] = False
+
         logon_id = self.activity_generator.generate_logon(
-            user=user,
-            system=file_server,
-            time=time,
-            logon_type=3,
-            source_ip=source_ip,
+            **logon_kwargs,
         )
         logoff_delay = rng.uniform(5.0, 60.0)
         logoff_time = time + timedelta(seconds=logoff_delay)
@@ -4226,6 +4237,19 @@ class BaselineMixin:
             logon_type=3,
         )
         return logon_id
+
+    def _last_smb_connection_source_port(
+        self,
+        *,
+        source_ip: str,
+        dst_ip: str,
+    ) -> int | None:
+        """Return the source port from the most recent matching SMB transport."""
+        activity_generator = getattr(self, "activity_generator", None)
+        matcher = getattr(activity_generator, "_last_effective_connection_source_port", None)
+        if matcher is None:
+            return None
+        return matcher(src_ip=source_ip, dst_ip=dst_ip, dst_port=445, proto="tcp")
 
     def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
         """Build weighted SMB targets for Windows client browsing noise."""
@@ -4836,6 +4860,10 @@ class BaselineMixin:
                             emit_dns=is_internal_src,
                             hostname=dst_hostname,
                         )
+                        smb_source_port = self._last_smb_connection_source_port(
+                            source_ip=src_ip,
+                            dst_ip=effective_dst_ip,
+                        )
 
                         # SMB access to file servers produces type 3 logon
                         if (
@@ -4858,7 +4886,15 @@ class BaselineMixin:
                                         None,
                                     )
                                     if smb_user:
-                                        self._emit_smb_logon_pair(smb_user, system, src_ip, ts, rng)
+                                        self._emit_smb_logon_pair(
+                                            smb_user,
+                                            system,
+                                            src_ip,
+                                            ts,
+                                            rng,
+                                            source_port=smb_source_port,
+                                            emit_network_evidence=smb_source_port is None,
+                                        )
                                         break
 
         # --- Persona traffic (user-level, during active sessions) ---
@@ -5328,6 +5364,10 @@ class BaselineMixin:
                             source_system=system,
                             pid=4,  # SMB: kernel System process
                         )
+                        smb_source_port = self._last_smb_connection_source_port(
+                            source_ip=system.ip,
+                            dst_ip=smb_dst_ip,
+                        )
                         # Emit type 3 logon on file server for SMB access
                         if smb_dst_sys:
                             # Find active user on this workstation
@@ -5344,7 +5384,13 @@ class BaselineMixin:
                                     )
                                     if ws_user:
                                         self._emit_smb_logon_pair(
-                                            ws_user, smb_dst_sys, system.ip, ts, rng
+                                            ws_user,
+                                            smb_dst_sys,
+                                            system.ip,
+                                            ts,
+                                            rng,
+                                            source_port=smb_source_port,
+                                            emit_network_evidence=smb_source_port is None,
                                         )
                                         self._emit_smb_file_operations(
                                             ws_user, smb_dst_sys, system, ts, rng

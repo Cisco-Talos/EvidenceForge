@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -489,7 +489,22 @@ class FileTransferStorylineExecutor(Protocol):
     state_manager: StateManager
 
 
-SmbLogonPairEmitter = Callable[[User, System, str, datetime, random.Random], None]
+class SmbLogonPairEmitter(Protocol):
+    """Adapter protocol for SMB companion logon evidence."""
+
+    def __call__(
+        self,
+        user: User,
+        file_server: System,
+        source_ip: str,
+        time: datetime,
+        rng: random.Random,
+        *,
+        source_port: int | None = None,
+        emit_network_evidence: bool = True,
+    ) -> object:
+        """Emit a file-server logon/logoff pair for an SMB transport."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -603,6 +618,7 @@ class StagedArchiveSmbReadActionBundle:
                 **hashes,
             ),
         )
+        smb_source_port = self._last_smb_connection_source_port()
         if self._target_is_file_server() and self._emit_smb_logon_pair is not None:
             self._emit_smb_logon_pair(
                 self._request.actor,
@@ -610,8 +626,26 @@ class StagedArchiveSmbReadActionBundle:
                 self._request.source_ip,
                 transfer_time,
                 self._rng,
+                source_port=smb_source_port,
+                emit_network_evidence=smb_source_port is None,
             )
         return True
+
+    def _last_smb_connection_source_port(self) -> int | None:
+        """Return the just-emitted SMB transfer source port when available."""
+        matcher = getattr(
+            self._executor.activity_generator,
+            "_last_effective_connection_source_port",
+            None,
+        )
+        if matcher is None:
+            return None
+        return matcher(
+            src_ip=self._request.source_ip,
+            dst_ip=self._request.staging_ip,
+            dst_port=445,
+            proto="tcp",
+        )
 
     def _transfer_time(self, duration: float) -> datetime | None:
         """Return a transfer time between archive staging and upload."""

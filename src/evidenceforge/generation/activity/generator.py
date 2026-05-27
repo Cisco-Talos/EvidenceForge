@@ -3215,6 +3215,8 @@ class ActivityGenerator:
         self._causal_engine = causal_engine or CausalExpansionEngine()
         self._expanding_types: set[str] = set()
         self._last_connection_effective_dst_ip = ""
+        self._last_connection_effective_tuple: tuple[str, int, str, int, str] | None = None
+        self._last_connection_effective_time: datetime | None = None
 
     def _process_termination_recorded(
         self,
@@ -4050,6 +4052,28 @@ class ActivityGenerator:
         src_port = _ephemeral_port(rng, os_category)
         self._recent_connection_tuples[(src_ip, src_port, dst_ip, dst_port, proto)] = ts_epoch
         return src_port
+
+    def _last_effective_connection_source_port(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str = "tcp",
+    ) -> int | None:
+        """Return the source port from the most recently emitted matching connection."""
+        last_tuple = self._last_connection_effective_tuple
+        if last_tuple is None:
+            return None
+        last_src_ip, last_src_port, last_dst_ip, last_dst_port, last_proto = last_tuple
+        if (
+            last_src_ip == src_ip
+            and last_dst_ip == dst_ip
+            and last_dst_port == dst_port
+            and last_proto == proto
+        ):
+            return last_src_port
+        return None
 
     @staticmethod
     def _kerberos_port_key(source_ip: str, dc_hostname: str) -> tuple[str, str]:
@@ -6217,6 +6241,15 @@ class ActivityGenerator:
         if not local_logon and source_port is None and source_ip and source_ip != "-":
             if logon_type == 3 and source_ip == system.ip:
                 source_port = 0
+            elif os_cat == "windows" and logon_type in (3, 10):
+                source_port = self._allocate_ephemeral_port(
+                    source_ip,
+                    system.ip,
+                    3389 if logon_type == 10 else 445,
+                    "tcp",
+                    time,
+                    self._os_for_ip(source_ip),
+                )
             else:
                 source_port = _ephemeral_port(_get_rng(), self._os_for_ip(source_ip))
 
@@ -9133,6 +9166,9 @@ class ActivityGenerator:
 
         from evidenceforge.events.contexts import NetworkContext
 
+        self._last_connection_effective_tuple = None
+        self._last_connection_effective_time = None
+
         if http is not None:
             http = _normalize_http_context_for_source_native_response(http)
 
@@ -10913,6 +10949,15 @@ class ActivityGenerator:
             )
 
         # Phase 3: Dispatch to matching emitters (visibility handled by dispatcher)
+        if not event.network.application_layer_only and event.network.src_port > 0:
+            self._last_connection_effective_tuple = (
+                event.network.src_ip,
+                event.network.src_port,
+                event.network.dst_ip,
+                event.network.dst_port,
+                event.network.protocol,
+            )
+            self._last_connection_effective_time = event.timestamp
         self.dispatcher.dispatch(event)
         logger.debug(f"Generated connection: {src_ip} -> {dst_ip}:{dst_port} (UID: {uid})")
 

@@ -563,6 +563,7 @@ class _FakeActivityGenerator:
         self.group_memberships: list[dict] = []
         self.log_clears: list[dict] = []
         self.process_accesses: list[dict] = []
+        self._last_connection_effective_tuple: tuple[str, int, str, int, str] | None = None
         self.remote_threads: list[dict] = []
         self.scheduled_tasks: list[dict] = []
         self.sid_registry: dict[str, str] = {}
@@ -664,8 +665,38 @@ class _FakeActivityGenerator:
         return 45678
 
     def generate_connection(self, **kwargs: Any) -> str:
+        src_port = kwargs.get("src_port") or 50000 + len(self.connections)
+        self._last_connection_effective_tuple = (
+            kwargs["src_ip"],
+            src_port,
+            kwargs["dst_ip"],
+            kwargs["dst_port"],
+            kwargs.get("proto", "tcp"),
+        )
         self.connections.append(kwargs)
         return "Cscptransfer00001"
+
+    def _last_effective_connection_source_port(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str = "tcp",
+    ) -> int | None:
+        if self._last_connection_effective_tuple is None:
+            return None
+        last_src_ip, last_src_port, last_dst_ip, last_dst_port, last_proto = (
+            self._last_connection_effective_tuple
+        )
+        if (
+            last_src_ip == src_ip
+            and last_dst_ip == dst_ip
+            and last_dst_port == dst_port
+            and last_proto == proto
+        ):
+            return last_src_port
+        return None
 
     def generate_ssh_session(self, **kwargs: Any) -> str:
         self.ssh_sessions.append(kwargs)
@@ -1404,9 +1435,20 @@ class TestStorylineCommandSideEffects:
             src_ip: str,
             time: datetime,
             rng: random.Random,
+            *,
+            source_port: int | None = None,
+            emit_network_evidence: bool = True,
         ) -> None:
             _ = time, rng
-            smb_logons.append({"actor": actor.username, "dst": dst_sys.hostname, "src_ip": src_ip})
+            smb_logons.append(
+                {
+                    "actor": actor.username,
+                    "dst": dst_sys.hostname,
+                    "emit_network_evidence": emit_network_evidence,
+                    "source_port": source_port,
+                    "src_ip": src_ip,
+                }
+            )
 
         engine._emit_smb_logon_pair = capture_smb_logon_pair
         engine._record_storyline_logon(actor, file_server, "0xabc", source_ip=source.ip)
@@ -1470,7 +1512,13 @@ class TestStorylineCommandSideEffects:
         assert file_transfer.total_bytes == smb_transfer["resp_bytes"]
         assert file_transfer.filename == (r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip")
         assert smb_logons == [
-            {"actor": actor.username, "dst": file_server.hostname, "src_ip": source.ip}
+            {
+                "actor": actor.username,
+                "dst": file_server.hostname,
+                "emit_network_evidence": False,
+                "source_port": 50000,
+                "src_ip": source.ip,
+            }
         ]
 
     def test_scp_receiver_file_artifacts_leave_ssh_syslog_to_bundle(self):

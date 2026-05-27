@@ -2695,7 +2695,28 @@ class StorylineMixin:
                     and "file_server" in [r.lower() for r in dst_sys.roles]
                 ):
                     if hasattr(self, "_emit_smb_logon_pair"):
-                        self._emit_smb_logon_pair(actor, dst_sys, source_ip, time, rng)
+                        smb_source_port = None
+                        matcher = getattr(
+                            self.activity_generator,
+                            "_last_effective_connection_source_port",
+                            None,
+                        )
+                        if matcher is not None:
+                            smb_source_port = matcher(
+                                src_ip=source_ip,
+                                dst_ip=logged_dst_ip,
+                                dst_port=445,
+                                proto="tcp",
+                            )
+                        self._emit_smb_logon_pair(
+                            actor,
+                            dst_sys,
+                            source_ip,
+                            time,
+                            rng,
+                            source_port=smb_source_port,
+                            emit_network_evidence=smb_source_port is None,
+                        )
 
         elif spec.type == "ssh_session":
             target = next(
