@@ -1587,6 +1587,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "whoami",
         "zip",
     }
+    _LINUX_SHELL_PIPELINE_CREATE_WINDOW_MS = 1000
 
     @classmethod
     def _is_linux_shell_foreground_create(cls, record: dict[str, Any]) -> bool:
@@ -1619,7 +1620,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     @classmethod
     def _normalize_linux_shell_foreground_order(cls, lines: list[str]) -> list[str]:
-        """Serialize foreground Linux commands created by the same visible shell."""
+        """Serialize foreground shell commands while preserving pipeline concurrency."""
         records: list[dict[str, Any] | None] = []
         for line in lines:
             try:
@@ -1666,34 +1667,63 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
             )
             next_available_ms = 0
+            groups: list[list[int]] = []
             for index in indexes:
                 record = records[index]
                 if record is None:
                     continue
                 timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
-                object_id = str(record.get("objectID") or "")
+                if groups:
+                    first_record = records[groups[-1][0]]
+                    first_ms = (
+                        cls._ecar_int(first_record.get("timestamp_ms"), 0)
+                        if first_record is not None
+                        else 0
+                    )
+                    if timestamp_ms <= first_ms + cls._LINUX_SHELL_PIPELINE_CREATE_WINDOW_MS:
+                        groups[-1].append(index)
+                        continue
+                groups.append([index])
+
+            for group in groups:
+                group_records = [records[index] for index in group if records[index] is not None]
+                if not group_records:
+                    continue
+                group_start_ms = min(
+                    cls._ecar_int(record.get("timestamp_ms"), 0) for record in group_records
+                )
                 shift_ms = 0
-                if next_available_ms and timestamp_ms <= next_available_ms:
+                if next_available_ms and group_start_ms <= next_available_ms:
                     seed_text = ":".join(
-                        [
-                            object_id,
-                            str(record.get("pid", "")),
-                            str(record.get("id", "")),
-                        ]
+                        ":".join(
+                            [
+                                str(record.get("objectID") or ""),
+                                str(record.get("pid", "")),
+                                str(record.get("id", "")),
+                            ]
+                        )
+                        for record in group_records
                     )
                     shifted_ms = next_available_ms + 50 + (sum(ord(ch) for ch in seed_text) % 950)
-                    shift_ms = shifted_ms - timestamp_ms
-                    record["timestamp_ms"] = shifted_ms
-                    if object_id:
-                        shift_by_object_id[object_id] = shift_ms
-                    timestamp_ms = shifted_ms
-                if object_id and object_id in terminate_ms_by_object_id:
-                    next_available_ms = max(
-                        next_available_ms,
-                        terminate_ms_by_object_id[object_id] + shift_ms,
-                    )
-                else:
-                    next_available_ms = max(next_available_ms, timestamp_ms)
+                    shift_ms = shifted_ms - group_start_ms
+
+                group_latest_ms = next_available_ms
+                for record in group_records:
+                    timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                    object_id = str(record.get("objectID") or "")
+                    if shift_ms:
+                        timestamp_ms += shift_ms
+                        record["timestamp_ms"] = timestamp_ms
+                        if object_id:
+                            shift_by_object_id[object_id] = shift_ms
+                    if object_id and object_id in terminate_ms_by_object_id:
+                        group_latest_ms = max(
+                            group_latest_ms,
+                            terminate_ms_by_object_id[object_id] + shift_ms,
+                        )
+                    else:
+                        group_latest_ms = max(group_latest_ms, timestamp_ms)
+                next_available_ms = max(next_available_ms, group_latest_ms)
 
         normalized: list[str] = []
         for line, record in zip(lines, records, strict=True):
