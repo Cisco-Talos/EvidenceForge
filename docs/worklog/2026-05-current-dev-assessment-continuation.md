@@ -70,6 +70,16 @@ or follow-up batch is needed.
   scores were 52/67/38/56, average 53.25. Next target: eCAR FILE
   source-native artifacts, especially Linux `/proc/<pid>/status` CREATE/WRITE
   rows and Windows Prefetch suffix morphology.
+- Loop 205 fixed eCAR FILE source-native artifact pools (`2e86c4aa`) by moving
+  Windows Prefetch templates to `{hex}` suffixes, removing generic Linux paths
+  that could be paired with invalid churn actions, and adding `validate-config`
+  guards for overlays. Automated eval passed at 96.83137893723699 over 76420
+  records; the reviewer-finding probe confirmed zero decimal/non-hex Prefetch
+  hits, zero Linux `/proc/<pid>/status` non-read hits, zero apache private-temp
+  leaks, and zero service-principal `/etc/passwd` hits. Blind scores were
+  42/38/64/63, average 51.75; deliberation final scores were 58/56/72/69,
+  average 63.75. Next target: DNS source-native semantics, especially
+  short-name/FQDN qtype behavior and resolver TTL modeling.
 
 ## Recent Completed Work Previously Kept in TODO
 
