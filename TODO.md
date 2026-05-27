@@ -69,6 +69,30 @@ per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P1** Route Windows remote-admin command execution through concrete
+  execution owners instead of direct `services.exe` parentage; model realistic
+  chains such as PsExec service wrapper → `cmd.exe`, WMI provider, PowerShell
+  remoting, or temporary service binaries with matching lifecycle evidence.
+- [ ] **P1** Reduce high-frequency Linux `systemd-journald` runtime-size filler;
+  gate those messages around startup, rotation, vacuum, or explicit journal
+  pressure instead of emitting them as dense background texture.
+- [ ] **P2** Make Sysmon Event ID 10 LSASS access call traces source-image-aware
+  so module stacks are plausible for the accessing process and are not reused
+  across incompatible sources such as `csrss.exe`, `services.exe`, and
+  `svchost.exe`.
+- [ ] **P2** Widen ordinary SMB file-transfer filename, path, and size
+  distributions; add organically recurring documents and fewer semantically
+  assembled one-off business filenames.
+- [ ] **P2** Add friction and timing texture to staged intrusion/exfiltration
+  chains, including retries, failed commands, dwell-time slack, partial cleanup,
+  tool residue, competing benign traffic, and less perfectly staged large-file
+  handoffs.
+- [ ] **P3** De-rate uniform Windows maintenance and endpoint startup palettes,
+  especially repeated `cleanmgr.exe`, `gpupdate.exe`, and clustered VPN/ZTNA
+  tray launches on DC/server roles.
+- [ ] **P3** Validate Windows Security Event ID 1102 rendering against real
+  exported XML and ensure audit-log-clear subject/account fields appear in the
+  correct native structure.
 - [ ] Ground truth File IOCs section truncated in `GROUND_TRUTH.md` output.
 - [ ] Add RFC 5737 validation warnings for realism-bound scenario fields such as
   `public_cidrs`, NAT `mapped_ip`, storyline `source_ip`/`dst_ip`, and DNS
