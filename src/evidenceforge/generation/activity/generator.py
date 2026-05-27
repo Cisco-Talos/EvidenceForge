@@ -12984,11 +12984,20 @@ class ActivityGenerator:
             # Type 3 (network) should dominate in AD; Type 5 only for service accounts
             rng = _get_rng()
             sys_type = (system.type or "workstation").lower()
+            os_category = _get_os_category(system.os)
             is_service_account = user.username.endswith("$") or user.username.lower().startswith(
                 "svc"
             )
 
-            if sys_type in ("server", "domain_controller"):
+            if os_category == "linux":
+                # SSH is a modeled remote-session bundle on Linux. Generic
+                # baseline logon activity should not create successful
+                # non-SSH "remote" endpoint sessions.
+                if is_service_account:
+                    logon_type = 5
+                else:
+                    logon_type = 2
+            elif sys_type in ("server", "domain_controller"):
                 # Servers/DCs: Type 3 (network) dominates
                 logon_type = rng.choices(
                     [3, 5, 10, 4, 2, 8, 9], weights=[70, 15, 8, 4, 1, 1, 1], k=1
@@ -13067,11 +13076,6 @@ class ActivityGenerator:
                 source_ip = "127.0.0.1"
             elif logon_type in (10, 11):
                 # Remote interactive (RDP/VNC) — pick a realistic remote IP
-                other_ips = getattr(self, "_all_system_ips", [])
-                remote_ips = [ip for ip in other_ips if ip != system.ip]
-                source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip
-            elif logon_type == 2 and _get_os_category(system.os) == "linux":
-                # Console logon on Linux servers often comes via SSH from another host
                 other_ips = getattr(self, "_all_system_ips", [])
                 remote_ips = [ip for ip in other_ips if ip != system.ip]
                 source_ip = _get_rng().choice(remote_ips) if remote_ips else system.ip

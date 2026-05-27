@@ -101,6 +101,10 @@ from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
 
+_LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
+_LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
+_LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
+
 
 def _ufw_block_syn_packet_len(src_ip: str) -> int:
     """Return a stable valid IP total length for a header-only blocked TCP SYN."""
@@ -4046,6 +4050,20 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
+    def _linux_remote_admin_hour_probability(self, system: Any) -> float:
+        """Return the hourly probability of an organic SSH admin session on a Linux server."""
+        multiplier = self._activity_multiplier(system, "linux_remote_admin")
+        return min(0.72, _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY * multiplier)
+
+    def _linux_remote_admin_session_count(self, rng: random.Random, system: Any) -> int:
+        """Return a low-volume count for organic SSH admin sessions in one hour."""
+        multiplier = self._activity_multiplier(system, "linux_remote_admin")
+        second_session_probability = min(
+            0.38,
+            _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY * multiplier,
+        )
+        return 1 + int(rng.random() < second_session_probability)
+
     # Service→DNS tag defaults for external resolution when dns_tags is absent
     _SERVICE_DNS_DEFAULTS: dict[str, tuple[str, ...]] = {
         "smtp": ("email",),
@@ -5898,12 +5916,12 @@ class BaselineMixin:
             sys_type = (system.type or "workstation").lower()
             if os_cat == "linux" and sys_type == "server":
                 roster = self._get_server_ssh_users(system)
-                if roster:
+                if roster and rng.random() < self._linux_remote_admin_hour_probability(system):
                     from evidenceforge.generation.activity.bash_commands import (
                         pick_bash_session_commands,
                     )
 
-                    num_ssh = self._scaled_randint(rng, system, "linux_remote_admin", 1, 3)
+                    num_ssh = self._linux_remote_admin_session_count(rng, system)
                     for _ in range(num_ssh):
                         ssh_user = rng.choice(roster)
                         offset = rng.uniform(0, 3599)
@@ -6453,7 +6471,7 @@ class BaselineMixin:
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                             facility=10,
                         )
-                elif source_roll < 0.34 and sys_type == "server":
+                elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
