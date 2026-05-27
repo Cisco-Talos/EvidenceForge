@@ -782,7 +782,6 @@ _LONG_RUNNING_EXES: set[str] = {
     "mstsc",
     "rdpclip.exe",
     "rdpclip",
-    "psexesvc.exe",
     "healthmonitorsvc.exe",
     "ncat",
     "ncat.exe",
@@ -805,6 +804,9 @@ def _estimate_process_lifetime(process_name: str, command_line: str) -> tuple[fl
         exe = process_name.rsplit("/", 1)[-1].lower()
     else:
         exe = process_name.lower()
+
+    if exe == "psexesvc.exe":
+        return (8.0, 45.0)
 
     # Check long-running first
     if exe in _LONG_RUNNING_EXES:

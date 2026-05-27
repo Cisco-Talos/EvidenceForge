@@ -22,6 +22,7 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
+    _estimate_process_lifetime,
     _linux_shell_process_command_line,
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -2212,6 +2213,22 @@ class TestStorylineCommandSideEffects:
         assert child_proc["user"].username == "SYSTEM"
         assert child_proc["logon_id"] == "0x3e7"
         assert child_proc["parent_pid"] == 4242
+
+    def test_psexesvc_storyline_process_is_short_lived(self):
+        """PsExec wrappers should not survive long enough to own unrelated later commands."""
+        lifetime = _estimate_process_lifetime(
+            r"C:\Windows\System32\PSEXESVC.exe",
+            "PSEXESVC.exe -accepteula",
+        )
+
+        assert lifetime == (8.0, 45.0)
+        assert (
+            _estimate_process_lifetime(
+                r"C:\Windows\System32\HealthMonitorSvc.exe",
+                r"C:\Windows\System32\HealthMonitorSvc.exe",
+            )
+            is None
+        )
 
     def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
         source = System(
