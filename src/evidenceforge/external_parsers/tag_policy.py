@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -45,6 +46,8 @@ _DEFAULT_FATAL_TAGS = frozenset(
     }
 )
 _DEFAULT_FATAL_PREFIXES = ("_grokparsefail",)
+_SIGNED_32BIT_UNIX_MAX = 2_147_483_647
+_X509_UTCTIME_MAX_EPOCH = 2_524_607_999
 JsonMapping = Mapping[str, Any]
 EventPredicate = Callable[[JsonMapping], bool]
 
@@ -54,6 +57,7 @@ class ParserTagDisposition(StrEnum):
 
     FATAL = "fatal"
     IGNORED_OPTIONAL_ENRICHMENT = "ignored_optional_enrichment"
+    IGNORED_PARSER_LIMITATION = "ignored_parser_limitation"
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,7 @@ class ParserTagClassification:
 
     fatal: tuple[str, ...]
     ignored_optional_enrichment: tuple[str, ...]
+    ignored_parser_limitation: tuple[str, ...]
 
 
 def _is_parsed_sshd_pam_session_open_close(event: JsonMapping) -> bool:
@@ -136,6 +141,26 @@ def _is_parsed_snare_windows_event(event: JsonMapping) -> bool:
             "winlog.computer_name",
         )
     )
+
+
+def _is_zeek_x509_post_2038_date_limitation(event: JsonMapping) -> bool:
+    original = _get_path(event, "event.original")
+    if not isinstance(original, str):
+        return False
+    try:
+        raw = json.loads(original)
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(raw, Mapping):
+        return False
+
+    epochs: list[int | float] = []
+    for path in ("certificate.not_valid_before", "certificate.not_valid_after"):
+        epoch = _coerce_epoch(raw.get(path))
+        if epoch is None:
+            return False
+        epochs.append(epoch)
+    return any(_SIGNED_32BIT_UNIX_MAX < epoch <= _X509_UTCTIME_MAX_EPOCH for epoch in epochs)
 
 
 TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
@@ -224,6 +249,19 @@ TAG_POLICY_RULES: tuple[ParserTagRule, ...] = (
         ),
         event_predicate=_is_parsed_snare_windows_event,
     ),
+    ParserTagRule(
+        validator=SOF_ELK_ZEEK_VALIDATOR,
+        log_type="zeek_x509",
+        tag="_dateparsefailure",
+        disposition=ParserTagDisposition.IGNORED_PARSER_LIMITATION,
+        source="SOF-ELK configfiles/6204-zeek_x509.conf",
+        reason=(
+            "Zeek x509.log records store certificate validity as Unix epoch seconds. "
+            "RFC 5280 permits UTCTime validity dates through 2049, but this "
+            "SOF-ELK/Logstash date path cannot parse post-2038 epoch values."
+        ),
+        event_predicate=_is_zeek_x509_post_2038_date_limitation,
+    ),
 )
 _RULES_BY_KEY = {(rule.validator, rule.log_type, rule.tag): rule for rule in TAG_POLICY_RULES}
 
@@ -238,6 +276,7 @@ def classify_parser_tags(
     """Classify parser tags into validation-fatal and intentionally ignored groups."""
     fatal: list[str] = []
     ignored_optional_enrichment: list[str] = []
+    ignored_parser_limitation: list[str] = []
     for tag in _unique_tag_strings(tags):
         disposition = parser_tag_disposition(
             validator=validator,
@@ -249,9 +288,12 @@ def classify_parser_tags(
             fatal.append(tag)
         elif disposition == ParserTagDisposition.IGNORED_OPTIONAL_ENRICHMENT:
             ignored_optional_enrichment.append(tag)
+        elif disposition == ParserTagDisposition.IGNORED_PARSER_LIMITATION:
+            ignored_parser_limitation.append(tag)
     return ParserTagClassification(
         fatal=tuple(sorted(fatal)),
         ignored_optional_enrichment=tuple(sorted(ignored_optional_enrichment)),
+        ignored_parser_limitation=tuple(sorted(ignored_parser_limitation)),
     )
 
 
@@ -282,6 +324,19 @@ def _get_path(event: JsonMapping, path: str) -> Any:
             return None
         value = value.get(part)
     return value
+
+
+def _coerce_epoch(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return value
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _unique_tag_strings(tags: list[Any]) -> tuple[str, ...]:

@@ -977,7 +977,7 @@ output:
 Supported formats: `windows`, `zeek`, `ecar` (simulated EDR using the eCAR record format), `syslog`, `bash_history`, `snort_alert`, `cisco_asa`, `web_access`, `proxy_access`.
 
 Output formats here are canonical and target-neutral. Choose target-specific
-file shapes, such as SOF-ELK Snare Windows events or year-partitioned RFC3164
+file shapes, such as SOF-ELK® Snare Windows events or year-partitioned RFC3164
 syslog, with `eforge generate --target default|sof-elk`; do not encode a parser
 target in scenario YAML.
 

@@ -474,7 +474,6 @@ def _compose_yaml(
     command: ["-f", "{COMPOSE_RUNTIME_CONFIG_PATH}/pipeline", "--config.test_and_exit"]
     environment:
       LS_JAVA_OPTS: "-Xms512m -Xmx512m"
-      XPACK_MONITORING_ENABLED: "false"
     labels:
 {labels}
     volumes:
@@ -485,7 +484,6 @@ def _compose_yaml(
     command: ["-f", "{COMPOSE_RUNTIME_CONFIG_PATH}/pipeline"]
     environment:
       LS_JAVA_OPTS: "-Xms512m -Xmx512m"
-      XPACK_MONITORING_ENABLED: "false"
     labels:
 {labels}
     volumes:

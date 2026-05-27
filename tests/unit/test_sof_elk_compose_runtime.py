@@ -128,8 +128,8 @@ def test_create_compose_run_writes_prep_and_compose_files(
         logstash_data_dir=tmp_path / "logstash-data",
         repo_url="https://github.com/philhagen/sof-elk.git",
         commit="517af9445574cc084cd5f4b80539fc244dab82b0",
-        filebeat_image="docker.elastic.co/beats/filebeat:8.19.0",
-        logstash_image="docker.elastic.co/logstash/logstash:8.19.0",
+        filebeat_image="docker.elastic.co/beats/filebeat-oss:9.4.1",
+        logstash_image="docker.elastic.co/logstash/logstash-oss:9.4.1",
         runtime=None,
         container_label="evidenceforge.external_parser=sof-elk",
     )
@@ -140,6 +140,9 @@ def test_create_compose_run_writes_prep_and_compose_files(
     assert "logstash-test:" in compose_yaml
     assert "logstash:" in compose_yaml
     assert "filebeat:" in compose_yaml
+    assert "docker.elastic.co/beats/filebeat-oss:9.4.1" in compose_yaml
+    assert "docker.elastic.co/logstash/logstash-oss:9.4.1" in compose_yaml
+    assert "XPACK_MONITORING_ENABLED" not in compose_yaml
     assert 'source: "sof_elk_checkout"' in compose_yaml
     assert 'source: "runtime_config"' in compose_yaml
     assert "alpine/git:2.49.1" in compose_yaml

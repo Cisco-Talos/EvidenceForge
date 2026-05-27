@@ -10,7 +10,7 @@ Start here:
 2. Read `coverage-matrix.md` before adding or changing parser coverage.
 3. Read `ignored-parser-tags.md` before touching tag policy.
 4. Read `sof-elk-harness.md` before changing Compose runtime, staging, or
-   SOF-ELK config handling.
+   SOF-ELK® config handling.
 
 Primary full-dataset command:
 

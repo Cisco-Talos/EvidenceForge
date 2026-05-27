@@ -4,11 +4,12 @@ External Parser Validation checks generated EvidenceForge logs with third-party
 parsers. The goal is format and parseability validation, not blind realism
 review and not the deterministic `eforge eval` scoring model.
 
-The current implementation uses SOF-ELK's Filebeat and Logstash parsing path
-through Docker Compose or Podman Compose. Generated files are staged in the
-directory layout SOF-ELK expects, a short-lived prep service downloads the
-pinned SOF-ELK checkout into Compose-managed volumes, and parsed events are
-written to temporary JSONL artifacts instead of Elasticsearch.
+The current implementation uses SOF-ELK®'s Filebeat and Logstash parsing path
+through Docker Compose or Podman Compose, using pinned Elastic OSS Filebeat and
+Logstash container images. Generated files are staged in the directory layout
+SOF-ELK expects, a short-lived prep service downloads the pinned SOF-ELK
+checkout into Compose-managed volumes, and parsed events are written to
+temporary JSONL artifacts instead of Elasticsearch.
 
 ## Quickstart
 
@@ -105,3 +106,9 @@ they are explicitly registered in code and documented in
 - [coverage-matrix.md](coverage-matrix.md): supported and unsupported log
   families
 - [AGENTS.md](AGENTS.md): short orientation for future agents
+
+## Acknowledgements
+
+SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used with permission.
+
+Elastic, Filebeat, and Logstash are trademarks or registered trademarks of Elasticsearch B.V.

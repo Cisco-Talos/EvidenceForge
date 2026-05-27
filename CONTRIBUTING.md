@@ -71,7 +71,7 @@ uv run pytest --include-external-parsers -m external_parser --no-cov
 ```
 
 See [External Parser Validation](docs/external-parser-validation/README.md)
-for the full-dataset runner command, SOF-ELK harness architecture, coverage
+for the full-dataset runner command, SOF-ELK® harness architecture, coverage
 matrix, ignored-tag policy, and failure report details.
 
 If you add or change a log format that already has external parser support,

@@ -1,10 +1,11 @@
-# SOF-ELK Harness
+# SOF-ELK® Harness
 
 This harness validates generated EvidenceForge logs by running SOF-ELK's
 Filebeat and Logstash path without Elasticsearch. It requires Docker Compose v2
-or Podman Compose. A short-lived prep service downloads the pinned SOF-ELK repo
-inside Compose-managed volumes, copies selected SOF-ELK configs into an
-ephemeral runtime-config volume, and removes those volumes during cleanup.
+or Podman Compose and uses pinned Elastic OSS Filebeat and Logstash container
+images. A short-lived prep service downloads the pinned SOF-ELK repo inside
+Compose-managed volumes, copies selected SOF-ELK configs into an ephemeral
+runtime-config volume, and removes those volumes during cleanup.
 
 EvidenceForge does not vendor SOF-ELK and does not copy SOF-ELK GPL configs
 into the repository or host work directory. The host work directory contains
@@ -86,13 +87,17 @@ The prep service uses:
 | Prep image | `alpine/git:2.49.1` |
 | SOF-ELK repository | `https://github.com/philhagen/sof-elk.git` |
 | SOF-ELK commit | `SOF_ELK_COMMIT` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
-| Filebeat image | `FILEBEAT_IMAGE` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
-| Logstash image | `LOGSTASH_IMAGE` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
+| Filebeat OSS image | `FILEBEAT_IMAGE` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
+| Logstash OSS image | `LOGSTASH_IMAGE` in `src/evidenceforge/external_parsers/sof_elk_zeek.py` |
 
 The prep service clones SOF-ELK into a Compose-managed `sof_elk_checkout`
 volume, verifies `git rev-parse HEAD`, and checks every required filter/input
 file before copying selected files into a Compose-managed `runtime_config`
 volume. Logstash and Filebeat mount those volumes read-only.
+
+The Elastic runtime containers are separate from the SOF-ELK checkout and are
+pinned to OSS image repositories in code. Keep those constants on `*-oss` images
+unless there is a deliberate licensing and compatibility review.
 
 There is no `EFORGE_EXTERNAL_CACHE_DIR` path and no host-side SOF-ELK checkout
 in normal operation.

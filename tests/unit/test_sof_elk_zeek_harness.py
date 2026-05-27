@@ -345,6 +345,64 @@ def test_validate_parsed_output_reports_unclassified_grokparsefail_tags(
     assert report["dns_failure_qtype_counts"]["A"] == 1
 
 
+def test_validate_parsed_output_ignores_x509_post_2038_date_parser_limitation(
+    tmp_path: Path,
+) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "x509.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "x509.log",
+                log_type="zeek_x509",
+                record_count=1,
+            ),
+        ),
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_x509(not_valid_after=2_289_254_400)
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_dateparsefailure")
+    _write_jsonl(parsed_dir / "zeek_x509.jsonl", [event])
+
+    events_by_type = validate_parsed_output(manifest, parsed_dir)
+
+    assert len(events_by_type["zeek_x509"]) == 1
+    assert not (parsed_dir / FAILURE_REPORT_FILENAME).exists()
+
+
+def test_validate_parsed_output_keeps_x509_dateparsefailure_fatal_without_limitation(
+    tmp_path: Path,
+) -> None:
+    manifest = ZeekStageManifest(
+        logstash_root=tmp_path / "logstash",
+        logs=(
+            StagedLog(
+                source=tmp_path / "x509.json",
+                staged=tmp_path / "logstash" / "zeek" / "sensor" / "x509.log",
+                log_type="zeek_x509",
+                record_count=1,
+            ),
+        ),
+    )
+    parsed_dir = tmp_path / "parsed"
+    parsed_dir.mkdir()
+    event = _parsed_x509(not_valid_after=2_147_385_600)
+    tags = event["tags"]
+    assert isinstance(tags, list)
+    tags.append("_dateparsefailure")
+    _write_jsonl(parsed_dir / "zeek_x509.jsonl", [event])
+
+    with pytest.raises(SofElkParserError, match="_dateparsefailure"):
+        validate_parsed_output(manifest, parsed_dir)
+
+    report = json.loads((parsed_dir / FAILURE_REPORT_FILENAME).read_text(encoding="utf-8"))
+    assert report["failure_tag_counts"]["zeek_x509"]["_dateparsefailure"] == 1
+    assert report["sample_failures"][0]["tags"] == ["_dateparsefailure"]
+
+
 def test_validate_parsed_output_reports_dns_answer_loss(tmp_path: Path) -> None:
     manifest = ZeekStageManifest(
         logstash_root=tmp_path / "logstash",
@@ -432,3 +490,35 @@ def _parsed_dns(
             "answers": {"data": "93.184.216.34", "ttl": 3600},
         }
     return event
+
+
+def _parsed_x509(*, not_valid_after: int) -> dict[str, object]:
+    original = {
+        "ts": 1_710_763_203.773778,
+        "id": "FyJFPDb0DE0ZDqJn0J",
+        "fingerprint": "c82a44924acf3267eec7e286555b06b6185e5b65",
+        "certificate.version": 3,
+        "certificate.serial": "1DA3A22DB4C52180",
+        "certificate.subject": (
+            "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
+        ),
+        "certificate.issuer": "CN=DigiCert Global Root G2, O=DigiCert Inc, C=US",
+        "certificate.not_valid_before": 1_576_627_200,
+        "certificate.not_valid_after": not_valid_after,
+        "basic_constraints.ca": True,
+        "host_cert": False,
+        "client_cert": False,
+    }
+    return {
+        "tags": ["filebeat", "zeek", "zeek_json"],
+        "labels": {"type": "zeek_x509"},
+        "event": {"original": json.dumps(original, sort_keys=True)},
+        "tls": {
+            "cert_container": {
+                "x509": {
+                    "hash": {"sha256": original["fingerprint"]},
+                    "version_number": original["certificate.version"],
+                }
+            }
+        },
+    }

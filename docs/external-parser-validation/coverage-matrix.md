@@ -1,7 +1,7 @@
 # Coverage Matrix
 
 This matrix tracks which generated log families currently have third-party
-parser validation and which SOF-ELK filters are used.
+parser validation and which SOF-ELK® filters are used.
 
 The developer-facing SOF-ELK runner requires datasets generated with
 `eforge generate --target sof-elk`. The script reads `OUTPUT_TARGET.txt` and

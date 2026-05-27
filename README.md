@@ -272,7 +272,7 @@ uv run ruff format --check .
 ```
 
 See [External Parser Validation](docs/external-parser-validation/README.md)
-for the third-party parser validation quickstart, SOF-ELK harness architecture,
+for the third-party parser validation quickstart, external-parser harness architecture,
 full-dataset runner command, and failure report details.
 
 ### Tech Stack
@@ -301,6 +301,10 @@ full-dataset runner command, and failure report details.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, sending pull requests, and setting up a development environment.
+
+## Acknowledgements
+
+SOF-ELK® is a registered trademark of Lewes Technology Consulting, LLC. Used with permission.
 
 ## License
 

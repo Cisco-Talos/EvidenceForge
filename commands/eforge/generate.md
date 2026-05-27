@@ -56,7 +56,7 @@ Options:
                          `eforge generate scenario.yaml --formats zeek_conn,zeek_dns` to
                          generate only Zeek connection and DNS logs.
   --target <name>        Output target: default or sof-elk. The default target is SIEM-neutral.
-                         Use sof-elk when generating SOF-ELK-compatible file layouts.
+                         Use sof-elk when generating SOF-ELK®-compatible file layouts.
   --force, -f            Overwrite existing output without prompting
   --verbose, -v          INFO-level logging
   --debug, -d            DEBUG-level logging
