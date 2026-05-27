@@ -92,6 +92,18 @@ or follow-up batch is needed.
   highest-leverage target is TCP source-port lifecycle ownership: hard probes
   confirmed one same-sensor overlapping SMB 5-tuple in Zeek core and 32
   unmatched/stale eCAR FLOW examples after checking 9353 TCP flow rows.
+- Loop 207 fixed SMB logon/transport ownership (`b7a9c0fa`) by binding
+  companion Type 3 file-server logons to the just-emitted SMB transport source
+  port and suppressing duplicate network evidence for that same session.
+  Automated eval passed at 96.97058244405527 over 78480 records; hard probes
+  confirmed zero same-sensor overlapping identical TCP tuple pairs and no
+  recurrence of the loop-206 bad tuples. Valid blind scores were 48/30/34/33,
+  average 36.25; deliberation final scores were 44/29/32/34, average 34.75.
+  One initial detection review was discarded because the reviewer accidentally
+  overwrote the frozen DC Security XML; the file was restored, data made
+  read-only, and detection review rerun. The next target is texture rather than
+  correctness: diversify Linux bash-history command pools by persona/role/host
+  purpose and reduce exact-hour update/proxy/package traffic alignment.
 
 ## Recent Completed Work Previously Kept in TODO
 
