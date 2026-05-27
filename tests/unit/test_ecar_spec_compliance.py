@@ -451,6 +451,55 @@ class TestSessionOutcomeRendering:
 
         assert login_row["timestamp"] > flow_row["timestamp"]
 
+    def test_rdp_session_login_renders_after_matching_inbound_flow(self, emitter, ts):
+        """eCAR RDP LOGIN should not appear before the same tuple's FLOW."""
+        host = HostContext(
+            hostname="WIN-01",
+            ip="10.0.0.20",
+            os="Windows Server 2022",
+            os_category="windows",
+            system_type="server",
+            fqdn="win-01.example.com",
+        )
+        emitter.emit_event = Mock()
+        flow_event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            dst_host=host,
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=55222,
+                dst_ip="10.0.0.20",
+                dst_port=3389,
+                protocol="tcp",
+                service="rdp",
+                duration=120.0,
+                conn_state="SF",
+                history="ShADadFf",
+            ),
+            edr=EdrContext(object_id="flow-1"),
+        )
+        session_event = SecurityEvent(
+            timestamp=ts,
+            event_type="logon",
+            dst_host=host,
+            auth=AuthContext(
+                username="alice",
+                source_ip="10.0.0.10",
+                source_port=55222,
+                logon_id="0x123",
+                logon_type=10,
+            ),
+            edr=EdrContext(object_id="session-1"),
+        )
+
+        emitter._render_connection(flow_event)
+        flow_row = emitter.emit_event.call_args.args[0]
+        emitter._render_logon(session_event)
+        login_row = emitter.emit_event.call_args.args[0]
+
+        assert login_row["timestamp"] > flow_row["timestamp"]
+
     def test_failed_logon_includes_outcome_and_status(self, emitter, ts):
         """Failed eCAR logons should be explicit attempts, not ambiguous sessions."""
         host = HostContext(

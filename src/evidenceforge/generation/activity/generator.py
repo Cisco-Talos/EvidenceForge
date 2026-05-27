@@ -3200,6 +3200,7 @@ class ActivityGenerator:
         self._bash_history_user_seconds: dict[tuple[str, int], int] = {}
         self._linux_local_logon_syslog_sessions: set[str] = set()
         self._linux_local_logind_session_ids: dict[str, int] = {}
+        self._ssh_session_ready_times: dict[str, datetime] = {}
         self._foreground_shell_next_time: dict[tuple[str, str, str, int], datetime] = {}
         self._foreground_process_finalizers: dict[
             tuple[str, int], tuple[System, str, str, str, datetime]
@@ -8684,6 +8685,31 @@ class ActivityGenerator:
         if not hasattr(self, "_ssh_responder_pids"):
             return None
         return self._ssh_responder_pids.get(
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        )
+
+    def _remember_ssh_session_ready_time(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+        ready_time: datetime,
+    ) -> None:
+        """Remember when tuple-scoped receiver-side SSH child evidence may appear."""
+
+        self._ssh_session_ready_times[
+            self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
+        ] = ensure_utc(ready_time)
+
+    def ssh_session_ready_time_for_tuple(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> datetime | None:
+        """Return the receiver-side SSH child-evidence readiness time for a tuple."""
+
+        return self._ssh_session_ready_times.get(
             self._ssh_responder_tuple_key(source_ip, source_port, target_ip)
         )
 

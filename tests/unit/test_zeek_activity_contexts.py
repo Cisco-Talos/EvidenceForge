@@ -743,6 +743,12 @@ class TestSslContextPopulation:
         assert session.transport_pid == transport_event.network.responding_pid
         assert session.source_ready_time is not None
         assert session.source_ready_time < close_time
+        tuple_ready_time = gen.ssh_session_ready_time_for_tuple(
+            "10.0.10.50",
+            51111,
+            target.ip,
+        )
+        assert tuple_ready_time == session.source_ready_time
 
         responder = gen.state_manager.get_process(target.hostname, session.transport_pid)
         assert responder is not None

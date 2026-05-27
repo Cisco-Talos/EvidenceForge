@@ -199,7 +199,7 @@ class EcarEmitter(HostMultiplexEmitter):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize per-source ordering memory for cross-event eCAR contracts."""
         super().__init__(*args, **kwargs)
-        self._ssh_inbound_flow_times: dict[tuple[str, str, int, str, int], datetime] = {}
+        self._remote_inbound_flow_times: dict[tuple[str, str, int, str, int], datetime] = {}
 
     _supported_types: set[str] = {
         "logon",
@@ -419,34 +419,42 @@ class EcarEmitter(HostMultiplexEmitter):
             ),
         )
         if event.event_type == "ssh_session" and lifecycle == "login":
-            return self._ssh_session_timestamp_after_flow(event, host, timestamp)
+            return self._remote_session_timestamp_after_flow(event, host, timestamp, dst_port=22)
+        if (
+            event.event_type == "logon"
+            and lifecycle == "login"
+            and getattr(auth, "logon_type", None) == 10
+        ):
+            return self._remote_session_timestamp_after_flow(event, host, timestamp, dst_port=3389)
         return timestamp
 
-    def _ssh_session_timestamp_after_flow(
+    def _remote_session_timestamp_after_flow(
         self,
         event: SecurityEvent,
         host: HostContext | None,
         timestamp: datetime,
+        *,
+        dst_port: int,
     ) -> datetime:
-        """Keep eCAR SSH session login after the matching inbound FLOW row."""
+        """Keep eCAR remote session login after the matching inbound FLOW row."""
         auth = event.auth
         if auth is None or host is None or not auth.source_ip or not auth.source_port:
             return timestamp
-        flow_time = getattr(self, "_ssh_inbound_flow_times", {}).get(
+        flow_time = getattr(self, "_remote_inbound_flow_times", {}).get(
             (
                 host.hostname,
                 auth.source_ip,
                 int(auth.source_port),
                 host.ip,
-                22,
+                dst_port,
             )
         )
         if flow_time is None or timestamp > flow_time:
             return timestamp
         seed = _stable_seed(
-            "ecar_ssh_login_after_flow:"
+            "ecar_remote_login_after_flow:"
             f"{host.hostname}:{auth.source_ip}:{auth.source_port}:"
-            f"{getattr(auth, 'logon_id', '')}:{timestamp.isoformat()}"
+            f"{dst_port}:{getattr(auth, 'logon_id', '')}:{timestamp.isoformat()}"
         )
         return flow_time + timedelta(milliseconds=12 + (seed % 83))
 
@@ -757,8 +765,8 @@ class EcarEmitter(HostMultiplexEmitter):
                         getattr(event.dst_host, "os_category", ""),
                     ),
                 )
-                if net.protocol == "tcp" and net.dst_port == 22:
-                    self._ssh_inbound_flow_times[
+                if net.protocol == "tcp" and net.dst_port in {22, 3389}:
+                    self._remote_inbound_flow_times[
                         (
                             event.dst_host.hostname,
                             net.src_ip,

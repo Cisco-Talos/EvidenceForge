@@ -750,6 +750,19 @@ class ScpReceiverFileActionBundle:
                 file_time = source_process_time + timedelta(
                     milliseconds=self._rng.randint(250, 1400)
                 )
+        ready_time_getter = getattr(
+            self._executor.activity_generator,
+            "ssh_session_ready_time_for_tuple",
+            None,
+        )
+        if callable(ready_time_getter):
+            ready_time = ready_time_getter(
+                self._request.source_system.ip,
+                self._request.source_port,
+                self._request.target_system.ip,
+            )
+            if isinstance(ready_time, datetime) and file_time <= ready_time:
+                file_time = ready_time + timedelta(milliseconds=self._rng.randint(120, 900))
 
         self._executor.dispatcher.dispatch(
             SecurityEvent(
