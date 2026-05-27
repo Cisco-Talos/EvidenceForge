@@ -51,6 +51,14 @@ or follow-up batch is needed.
   68/76/72/74, average 72.50. Next target: canonical endpoint process/file
   ownership, especially service/kernel principals on user profile paths and
   Sysmon terminal-session inheritance.
+- Loop 203 fixed service-principal endpoint profile artifacts and Sysmon
+  terminal-session drift (`649fa9a6`). Automated eval passed at
+  97.1909324170483 over 76333 records; the hard probe found zero service
+  profile-path hits in eCAR/Sysmon, zero eCAR PID 4 interactive-profile
+  contradictions, and zero Sysmon terminal-session drift cases. Blind scores
+  were 68/55/44/72, average 59.75; deliberation final scores were
+  72/66/50/76, average 66.00. Next target: eCAR process lifecycle ownership,
+  especially module/process activity after native Security/Sysmon termination.
 
 ## Recent Completed Work Previously Kept in TODO
 
