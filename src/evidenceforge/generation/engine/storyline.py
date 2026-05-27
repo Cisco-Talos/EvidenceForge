@@ -968,11 +968,6 @@ class StorylineMixin:
         if not service:
             return None
 
-        installed_at = service.get("installed_at")
-        if isinstance(installed_at, datetime):
-            if time < installed_at or time - installed_at > timedelta(minutes=30):
-                return None
-
         service_file_name = str(service.get("service_file_name") or "")
         if not service_file_name:
             return None
@@ -980,6 +975,13 @@ class StorylineMixin:
         service_exe = service_image.rsplit("\\", 1)[-1].lower()
         if service_exe not in {"psexesvc.exe", "healthmonitorsvc.exe"}:
             return None
+        installed_at = service.get("installed_at")
+        if isinstance(installed_at, datetime):
+            context_window = (
+                timedelta(minutes=2) if service_exe == "psexesvc.exe" else timedelta(minutes=30)
+            )
+            if time < installed_at or time - installed_at > context_window:
+                return None
 
         process_exe = process_name.rsplit("\\", 1)[-1].rsplit("/", 1)[-1].lower()
         if process_exe == service_exe:
@@ -1266,12 +1268,14 @@ class StorylineMixin:
         service_file_name = self._normalize_storyline_service_file_name(service_file_name)
 
         image_lower = service_file_name.lower()
+        service_exe = service_file_name.rsplit("\\", 1)[-1].lower()
         running = [
             proc
             for proc in self.state_manager.get_processes_on_system(system.hostname)
             if proc.image.lower() == image_lower
             and proc.start_time is not None
             and proc.start_time <= time
+            and (service_exe != "psexesvc.exe" or time - proc.start_time <= timedelta(minutes=2))
         ]
         if running:
             proc = max(running, key=lambda candidate: candidate.start_time)
@@ -1283,6 +1287,14 @@ class StorylineMixin:
         process_time = time - timedelta(seconds=45)
         if isinstance(installed_at, datetime):
             process_time = max(process_time, installed_at + timedelta(seconds=1))
+        if service_exe == "psexesvc.exe":
+            start_lead_ms = 500 + (
+                _stable_seed(f"storyline_psexesvc_start:{system.hostname}:{time.isoformat()}")
+                % 2500
+            )
+            process_time = time - timedelta(milliseconds=start_lead_ms)
+            if isinstance(installed_at, datetime):
+                process_time = max(process_time, installed_at + timedelta(seconds=1))
         if process_time >= time:
             process_time = time - timedelta(milliseconds=100)
 
@@ -1301,6 +1313,19 @@ class StorylineMixin:
         )
         self.activity_generator._record_user_process(system, actor, pid, service_file_name)
         self._record_last_storyline_process(system, pid, service_file_name)
+        if service_exe == "psexesvc.exe":
+            ttl_ms = 8000 + (
+                _stable_seed(f"storyline_psexesvc_ttl:{system.hostname}:{pid}:{time.isoformat()}")
+                % 37000
+            )
+            self._queue_story_process_termination(
+                actor=actor,
+                system=system,
+                time=time + timedelta(milliseconds=ttl_ms),
+                pid=pid,
+                process_name=service_file_name,
+                logon_id="0x3e7",
+            )
         return pid, service_file_name
 
     def _record_storyline_logon(

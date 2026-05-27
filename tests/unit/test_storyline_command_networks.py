@@ -2214,6 +2214,54 @@ class TestStorylineCommandSideEffects:
         assert child_proc["logon_id"] == "0x3e7"
         assert child_proc["parent_pid"] == 4242
 
+    def test_old_psexesvc_service_does_not_parent_later_commands(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.local",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        service_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        engine._record_storyline_service_install(
+            system=source,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            service_account="LocalSystem",
+            time=service_time,
+        )
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\net.exe",
+            command_line="net user svc_mhsync /delete /domain",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=service_time + timedelta(minutes=15),
+            activity="later cleanup command",
+            explicit_types={"process"},
+        )
+
+        assert len(engine.activity_generator.processes) == 1
+        assert engine.activity_generator.processes[0]["process_name"] == (
+            r"C:\Windows\System32\net.exe"
+        )
+        assert engine.activity_generator.processes[0]["parent_pid"] == 1
+
     def test_psexesvc_storyline_process_is_short_lived(self):
         """PsExec wrappers should not survive long enough to own unrelated later commands."""
         lifetime = _estimate_process_lifetime(
