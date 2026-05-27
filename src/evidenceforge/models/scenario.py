@@ -468,7 +468,9 @@ class ConnectionEventSpec(_EventSpecBase):
     status_code: int | None = None  # HTTP response status
     user_agent: str | None = None  # Client User-Agent string
     referrer: str | None = None  # Referer header value (None = auto-generated)
-    response_body_len: int | None = None  # Override auto-sized response bytes
+    response_body_len: int | None = Field(
+        default=None, ge=0, le=10_000_000_000
+    )  # Override auto-sized response bytes
     # Override auto-sized byte counts and connection outcome
     orig_bytes: int | None = None  # Originator payload bytes (large for exfil)
     resp_bytes: int | None = None  # Responder payload bytes (large for downloads)

@@ -12,6 +12,9 @@ Covers:
 
 from datetime import datetime
 
+import pytest
+from pydantic import ValidationError
+
 from evidenceforge.generation.engine.storyline import StorylineMixin
 from evidenceforge.models import (
     BaselineActivity,
@@ -96,6 +99,14 @@ class TestConnectionEventSpecHostname:
     def test_hostname_defaults_none(self):
         spec = ConnectionEventSpec(dst_ip="159.65.43.201")
         assert spec.hostname is None
+
+    def test_response_body_len_rejects_unbounded_values(self):
+        """response_body_len must stay within datetime-safe realistic bounds."""
+        with pytest.raises(ValidationError):
+            ConnectionEventSpec(
+                dst_ip="159.65.43.201",
+                response_body_len=100_000_000_000_000_000_000,
+            )
 
     def test_hostname_in_storyline_event(self):
         """hostname field works when embedded in a storyline event dict."""
