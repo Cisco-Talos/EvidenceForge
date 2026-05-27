@@ -104,6 +104,19 @@ or follow-up batch is needed.
   read-only, and detection review rerun. The next target is texture rather than
   correctness: diversify Linux bash-history command pools by persona/role/host
   purpose and reduce exact-hour update/proxy/package traffic alignment.
+- Loop 208 fixed exact Linux shell diagnostic repetition (`ca6ebca6`) by
+  replacing broad exact diagnostic commands in the bash YAML pools, adding
+  low-repeat command-family caps, and routing legacy activity-key shell commands
+  through the shared command-memory selector. Automated eval passed at
+  96.90138712062229 over 75650 records; rendered probes confirmed exact
+  reviewer-cited command hits dropped from 30 in loop 207 to 1 in loop 208 and
+  recent DNS/TCP tuple regression probes stayed clean. Blind scores were
+  46/53/47/58, average 51.00. No deliberation was triggered because all
+  reviewers agreed on Synthetic and score spread was small. The next
+  highest-leverage target is Linux session semantics: reduce repeated named-user
+  SSH fan-out across production Linux systems and eliminate unsupported generic
+  eCAR `remote` successful sessions unless source-native SSH/PAM companion
+  evidence exists.
 
 ## Recent Completed Work Previously Kept in TODO
 
