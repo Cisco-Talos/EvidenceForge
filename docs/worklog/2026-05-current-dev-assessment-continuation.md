@@ -190,6 +190,19 @@ or follow-up batch is needed.
   consistency across `resumed`/`ssl_history`/certificate FUIDs, and Windows
   source-native texture for Defender paths and Sysmon `ProcessGuid` shape.
 
+- Loop 215 fixed eCAR Linux local-session durability and generic Linux FILE
+  ownership (`e8ea4deb`) by reusing active same-user local Linux sessions and
+  removing Apache access-log paths from generic eCAR file churn. Automated eval
+  passed at 96.58483954300257 over 69503 records; the hard probe showed
+  `WS-LNGUYEN-01/lina.nguyen` successful local logins dropped from 12 to 1,
+  max duplicate local-login groups dropped from 12 to 2, and generic
+  `/var/log/apache2/access.log` FILE rows dropped from 24 to 0. Blind scores
+  were 63/66/32/43, average 51.00; deliberation final scores were
+  66/68/45/56, average 58.75. The next highest-leverage target is Linux shell
+  pipeline process overlap: probe confirmed 10 of 10 visible two-stage pipeline
+  commands had non-overlapping eCAR process lifetimes, with WEB-EXT LDAP stale
+  endpoint/Zeek tuple ownership queued behind it.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
