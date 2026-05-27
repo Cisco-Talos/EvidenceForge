@@ -32,6 +32,7 @@ class TestLoadEdrPools:
         assert "registry_keys_hklm" in pools
         assert "dll_pool" in pools
         assert "runmru_commands" in pools
+        assert "installed_software_products" in pools
 
     def test_all_sections_non_empty(self):
         pools = load_edr_pools()
@@ -43,6 +44,7 @@ class TestLoadEdrPools:
             "dll_pool",
             "runmru_commands",
             "file_side_effect_profiles",
+            "installed_software_products",
         ]:
             assert len(pools[key]) > 0, f"{key} is empty"
 
@@ -345,6 +347,65 @@ class TestTemplateMaterialization:
         assert first == second
         assert first != other
         assert first[2] == "10.10.2.20"
+
+    def test_materializes_installed_product_identity_stably_per_host(self):
+        product = {
+            "name": "Contoso Endpoint Agent",
+            "publisher": "Contoso Ltd.",
+            "version": "8.4.2",
+        }
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"installed_software_products": [product]},
+        ):
+            templates = (
+                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{{installed_product_guid}}}",
+                "DisplayName",
+                "{installed_product_name}",
+            )
+            first = materialize_edr_template_group(
+                templates,
+                random.Random(1),
+                host_key="WS-EBROOKS-01",
+            )
+            second = materialize_edr_template_group(
+                templates,
+                random.Random(999),
+                host_key="WS-EBROOKS-01",
+            )
+            other_host = materialize_edr_template_group(
+                templates,
+                random.Random(1),
+                host_key="WS-OTHER-01",
+            )
+
+        assert first == second
+        assert first != other_host
+        assert first[2] == "Contoso Endpoint Agent"
+
+    def test_materializes_installed_product_related_values_together(self):
+        product = {
+            "name": "Contoso Endpoint Agent",
+            "publisher": "Contoso Ltd.",
+            "version": "8.4.2",
+        }
+        with patch(
+            "evidenceforge.generation.activity.edr_pools.load_edr_pools",
+            return_value={"installed_software_products": [product]},
+        ):
+            key, publisher, version = materialize_edr_template_group(
+                (
+                    r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{{{installed_product_guid}}}",
+                    "{installed_product_publisher}",
+                    "{installed_product_version}",
+                ),
+                random.Random(5),
+                host_key="WS-EBROOKS-01",
+            )
+
+        assert "{" in key and "}" in key
+        assert publisher == "Contoso Ltd."
+        assert version == "8.4.2"
 
     def test_materializes_defender_platform_with_product_version_shape(self):
         import random

@@ -52,3 +52,8 @@ def registry_noise_config() -> dict[str, Any]:
 def ecar_flow_identity_config() -> dict[str, Any]:
     """Return eCAR FLOW process/principal attribution policy."""
     return load_endpoint_noise().get("ecar_flow_identity", {})
+
+
+def ecar_file_churn_config() -> dict[str, Any]:
+    """Return ambient eCAR FILE churn policy."""
+    return load_endpoint_noise().get("ecar_file_churn", {})

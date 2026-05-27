@@ -238,7 +238,7 @@ def validate_config() -> ValidationResult:
             "list_fields": {"patterns": None},
         },
         "activity/edr_pools.yaml": {
-            "list_fields": {"file_side_effect_profiles": None},
+            "list_fields": {"file_side_effect_profiles": None, "installed_software_products": None},
             "string_list_fields": {
                 "file_paths_windows",
                 "file_paths_linux",
@@ -251,6 +251,7 @@ def validate_config() -> ValidationResult:
                 "windows_scheduled_processes",
                 "registry_noise",
                 "ecar_flow_identity",
+                "ecar_file_churn",
             },
         },
         "activity/host_activity_profiles.yaml": {
@@ -1899,6 +1900,7 @@ def validate_config() -> ValidationResult:
         DnsTunnelRttConfig,
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
+        EdrInstalledSoftwareProduct,
         EndpointNoiseConfig,
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
@@ -2028,6 +2030,13 @@ def validate_config() -> ValidationResult:
                 edr_pools_data.get("file_side_effect_profiles", []),
                 EdrFileSideEffectProfile,
                 "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
+        _SCHEMA_CHECKS.append(
+            (
+                edr_pools_data.get("installed_software_products", []),
+                EdrInstalledSoftwareProduct,
+                "edr_pools.yaml (installed_software_products)",
             )
         )
     if endpoint_noise_data:

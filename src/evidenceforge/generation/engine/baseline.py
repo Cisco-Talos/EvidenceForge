@@ -97,7 +97,7 @@ from evidenceforge.generation.activity.suspicious_benign import (
     pick_suspicious_pattern,
 )
 from evidenceforge.models.scenario import Persona, System, User
-from evidenceforge.utils.rng import _get_rng, _stable_seed
+from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
 
@@ -4314,6 +4314,135 @@ class BaselineMixin:
                 )
             )
 
+    def _emit_ecar_file_churn(
+        self,
+        system: Any,
+        current_hour: datetime,
+        rng: random.Random,
+        os_cat: str,
+        sys_pids: dict[str, int],
+    ) -> None:
+        """Emit ordinary endpoint FILE telemetry from running baseline processes."""
+        if "ecar" not in self.emitters:
+            return
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import (
+            AuthContext,
+            EdrContext,
+            FileContext,
+            ProcessContext,
+        )
+        from evidenceforge.generation.activity.edr_pools import (
+            get_file_paths,
+            materialize_edr_template,
+        )
+        from evidenceforge.generation.activity.endpoint_noise import ecar_file_churn_config
+
+        cfg = ecar_file_churn_config()
+        if not cfg.get("enabled", True):
+            return
+        os_cfg = cfg.get(os_cat, {})
+        count_min = int(os_cfg.get("count_min", 0))
+        count_max = int(os_cfg.get("count_max", count_min))
+        if count_max <= 0 or count_min > count_max:
+            return
+
+        processes = []
+        for pid in sorted(set(sys_pids.values())):
+            running = self.state_manager.get_process(system.hostname, pid)
+            if running is not None:
+                processes.append(running)
+        if not processes:
+            return
+
+        action_weights = os_cfg.get("action_weights", {"read": 60, "modify": 30, "create": 10})
+        actions = [str(action) for action, weight in action_weights.items() if int(weight) > 0]
+        weights = [int(action_weights[action]) for action in actions]
+        path_templates = get_file_paths(os_cat)
+        if not actions or not path_templates:
+            return
+
+        count = self._scaled_randint(
+            rng,
+            system,
+            "ecar_file_churn",
+            count_min,
+            count_max,
+        )
+        host_ctx = self.activity_generator._build_host_context(system)
+        assigned_user = getattr(system, "assigned_user", None) or ""
+        hour_end = current_hour + timedelta(hours=1)
+
+        for idx in range(count):
+            process = rng.choice(processes)
+            username = (
+                assigned_user or process.username or ("root" if os_cat == "linux" else "SYSTEM")
+            )
+            if process.username and rng.random() < 0.55:
+                username = process.username
+
+            candidates = list(path_templates)
+            if not assigned_user and username.upper() == "SYSTEM" and os_cat == "windows":
+                non_profile = [path for path in candidates if r"C:\Users\{user}" not in path]
+                candidates = non_profile or candidates
+            elif username == "root" and os_cat == "linux":
+                non_home = [path for path in candidates if "/home/{user}/" not in path]
+                candidates = non_home or candidates
+
+            file_action = str(rng.choices(actions, weights=weights, k=1)[0])
+            file_path = materialize_edr_template(
+                str(rng.choice(candidates)),
+                rng,
+                username,
+                host_ip=system.ip,
+                host_key=system.hostname,
+                host_os=system.os,
+            )
+            if os_cat == "linux" and username == "root":
+                file_path = file_path.replace("/home/root/", "/root/")
+
+            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            if process.start_time and ts <= process.start_time:
+                ts = process.start_time + timedelta(milliseconds=rng.randint(5, 750))
+            if ts >= hour_end:
+                continue
+
+            event_type = f"file_{file_action}"
+            object_id = stable_uuid(
+                "baseline.ecar.file",
+                system.hostname,
+                process.pid,
+                file_path,
+                file_action,
+                current_hour.isoformat(),
+                idx,
+            )
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=ts,
+                    event_type=event_type,
+                    src_host=host_ctx,
+                    auth=AuthContext(
+                        username=username,
+                        user_sid=self.activity_generator._get_sid(username),
+                        logon_id=process.logon_id,
+                    ),
+                    process=ProcessContext(
+                        pid=process.pid,
+                        parent_pid=process.parent_pid,
+                        image=process.image,
+                        command_line=process.command_line,
+                        username=process.username,
+                        integrity_level=process.integrity_level,
+                        logon_id=process.logon_id,
+                        start_time=process.start_time,
+                    ),
+                    file=FileContext(path=file_path, action=file_action, pid=process.pid),
+                    edr=EdrContext(object_id=object_id, actor_id=process.ecar_object_id),
+                )
+            )
+
     def _generate_profile_traffic(
         self,
         current_hour: datetime,
@@ -5350,6 +5479,8 @@ class BaselineMixin:
                         parent_pid=svc_parent,
                         username="SYSTEM",
                     )
+
+            self._emit_ecar_file_churn(system, current_hour, rng, os_cat, sys_pids)
 
             # Baseline registry activity from running services. Real Sysmon
             # generates hundreds-thousands of Event 12/13 per hour. We emit
