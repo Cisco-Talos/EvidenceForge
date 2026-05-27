@@ -2290,6 +2290,29 @@ class TestActivityGenerator:
         )
         assert logon_event.auth.username == "orphan"
 
+    def test_reserve_ssh_source_port_reuses_recent_explicit_reservation(self, activity_gen):
+        """Pre-reserved SSH ports should be idempotent for the owning near-time tuple."""
+
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        first = activity_gen.reserve_ssh_source_port(
+            "10.0.0.10",
+            "10.0.0.20",
+            None,
+            random.Random(7),
+            "linux",
+            time=timestamp,
+        )
+        second = activity_gen.reserve_ssh_source_port(
+            "10.0.0.10",
+            "10.0.0.20",
+            first,
+            random.Random(11),
+            "linux",
+            time=timestamp + timedelta(milliseconds=250),
+        )
+
+        assert second == first
+
     def test_nmap_process_emits_matching_network_scan_evidence(
         self, activity_gen, test_user, state_manager, mock_emitters
     ):

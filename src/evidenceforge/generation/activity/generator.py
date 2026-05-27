@@ -8817,6 +8817,14 @@ class ActivityGenerator:
                 and recent_seen is not None
                 and time.timestamp() - recent_seen <= 86_400.0
             )
+            if (
+                source_port is not None
+                and key in self._ssh_source_ports
+                and time is not None
+                and recent_seen is not None
+                and abs(time.timestamp() - recent_seen) <= 1.0
+            ):
+                return candidate
             if key not in self._ssh_source_ports and not recent_is_active:
                 self._ssh_source_ports.add(key)
                 if time is not None:
