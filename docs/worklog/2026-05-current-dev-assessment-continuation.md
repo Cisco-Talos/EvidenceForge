@@ -215,6 +215,20 @@ or follow-up batch is needed.
   file-transfer ordering, especially RDP login-before-endpoint-flow and SCP
   receiver file-before-SSH/session evidence.
 
+- Loop 217 fixed remote-session and receiver-side file-transfer ordering
+  (`70351fe7`, `057db70b`) by clamping SSH/RDP target logins after matching
+  inbound eCAR FLOW evidence, recording SSH session readiness for SCP receiver
+  file timing, and making recent explicit SSH source-port reservations
+  idempotent. Automated eval passed at 96.29905741773004 over 70577 records; the
+  hard probe confirmed zero SCP file-before-readiness violations, shared
+  source-port `57349` across Zeek/eCAR/syslog for the DB-to-APP SCP transfer,
+  and zero RDP target-login-before-flow inversions, with one target-side RDP
+  FLOW collection-gap note. Blind initial scores were 56/48/34/64, average
+  50.50; deliberation was triggered by verdict disagreement and produced final
+  scores 58/50/38/62, average 52.00. The highest-leverage next target is
+  host-source texture: DC remote-admin command parentage through concrete
+  execution owners and high-frequency Linux journald runtime-size filler.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed
