@@ -2144,8 +2144,8 @@ class TestWindowsEventEmitter:
         assert "<SubjectDomainName>CORP</SubjectDomainName>" in content
         assert "EventData" not in content or content.count("EventData") == 0
 
-    def test_event_record_id_restarts_after_log_cleared(self, format_def, temp_output):
-        """Security EventRecordID should restart after source-native 1102 log clear."""
+    def test_event_record_id_remains_monotonic_after_log_cleared(self, format_def, temp_output):
+        """Security EventRecordID should remain monotonic in a rendered output stream."""
         emitter = WindowsEventEmitter(format_def, temp_output, buffer_size=10)
         base = {
             "Computer": "WIN-TEST-01.corp.local",
@@ -2202,10 +2202,9 @@ class TestWindowsEventEmitter:
             int(value) for value in re.findall(r"<EventRecordID>(\d+)</EventRecordID>", content)
         ]
         assert len(record_ids) == 3
-        assert record_ids[1] < record_ids[0]
-        assert record_ids[1] <= 20
+        assert record_ids == sorted(record_ids)
+        assert record_ids[1] > record_ids[0]
         assert record_ids[2] > record_ids[1]
-        assert record_ids[2] <= 25
 
     def test_emit_workstation_lock_contains_event_data(self, format_def, temp_output):
         """Test emitting 4800 (workstation locked) with populated EventData fields."""
