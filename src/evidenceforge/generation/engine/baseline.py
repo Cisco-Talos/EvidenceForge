@@ -5496,6 +5496,7 @@ class BaselineMixin:
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
                     materialize_edr_template,
+                    materialize_edr_template_group,
                 )
                 from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
@@ -5556,24 +5557,8 @@ class BaselineMixin:
                     ):
                         continue
                     _template_user = system.assigned_user or "SYSTEM"
-                    _key = materialize_edr_template(
-                        _key,
-                        rng,
-                        _template_user,
-                        host_ip=system.ip,
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    _vname = materialize_edr_template(
-                        _vname,
-                        rng,
-                        _template_user,
-                        host_ip=system.ip,
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    _details = materialize_edr_template(
-                        _details,
+                    _key, _vname, _details = materialize_edr_template_group(
+                        (_key, _vname, _details),
                         rng,
                         _template_user,
                         host_ip=system.ip,

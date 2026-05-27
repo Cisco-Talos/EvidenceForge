@@ -1338,6 +1338,7 @@ class TestBaselineRegistryRealism:
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
         assert "driverdesc" in source
+        assert "materialize_edr_template_group" in source
 
     def test_ambient_registry_noise_suppresses_dhcp_values_for_static_hosts(self):
         """Static infrastructure should not emit DHCP registry churn as ambient noise."""
