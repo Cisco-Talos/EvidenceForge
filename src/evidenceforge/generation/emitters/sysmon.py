@@ -746,16 +746,15 @@ class SysmonEventEmitter(LogEmitter):
         deterministic process-create source offset so Event 1 and all follow-on
         events share the same source-native identifier.
         """
-        cached_guid = self._final_process_guids.get((hostname, pid))
-        if cached_guid is not None:
-            return cached_guid
-
         ts = fallback_timestamp
         sm = getattr(self, "_state_manager", None)
         if sm and pid > 0:
             proc = sm.get_process(hostname, pid)
             if proc is not None and proc.start_time <= fallback_timestamp:
                 ts = proc.start_time
+        cached_guid = self._final_process_guids.get((hostname, pid, ts))
+        if cached_guid is not None:
+            return cached_guid
         rendered_create_time = _SOURCE_TIMING.source_time(
             SecurityEvent(timestamp=ts, event_type="process_create"),
             "source.sysmon_process_create",
@@ -1742,7 +1741,7 @@ class SysmonEventEmitter(LogEmitter):
         self._erid_rngs: dict[str, random.Random] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
-        self._final_process_guids: dict[tuple[str, int], str] = {}
+        self._final_process_guids: dict[tuple[str, int, datetime], str] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1976,7 +1975,7 @@ class SysmonEventEmitter(LogEmitter):
             hostname = computer.split(".", 1)[0] if computer else ""
             new_guid = self._generate_process_guid(hostname, pid_int, ts)
             old_guid = str(guid)
-            self._final_process_guids[(hostname, pid_int)] = new_guid
+            self._final_process_guids[(hostname, pid_int, ts)] = new_guid
             if new_guid != old_guid:
                 replacements[(computer, old_guid)] = new_guid
                 event["ProcessGuid"] = new_guid
