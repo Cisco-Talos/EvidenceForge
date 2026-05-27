@@ -760,6 +760,64 @@ class TestChronologicalOutput:
         )
         assert terminate_ts < int((ts + timedelta(minutes=5)).timestamp() * 1000)
 
+    def test_close_drops_minute_scale_module_after_process_terminate(self, tmp_path, ts):
+        """Minute-scale module rows should not keep a terminated process alive."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(seconds=45),
+                "hostname": "ws01",
+                "object": "MODULE",
+                "action": "LOAD",
+                "actorID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert {row["object"] for row in rows} == {"PROCESS"}
+        terminate_ts = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+        )
+        assert terminate_ts < int((ts + timedelta(seconds=30)).timestamp() * 1000)
+
     def test_close_scrubs_stale_flow_process_identity_after_process_terminate(self, tmp_path, ts):
         """Late FLOW rows should keep transport evidence without stale PID attribution."""
         fmt = Mock()

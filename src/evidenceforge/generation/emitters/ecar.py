@@ -194,6 +194,7 @@ class EcarEmitter(HostMultiplexEmitter):
     _defer_sorted_flush_until_close = True
     _output_end_time: datetime | None = None
     _stale_process_reference_grace_ms = 5 * 60 * 1000
+    _post_termination_dependent_grace_ms = 30 * 1000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize per-source ordering memory for cross-event eCAR contracts."""
@@ -1372,13 +1373,17 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(line)
                 continue
             timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            stale_threshold_ms = (
+                cls._stale_process_reference_grace_ms
+                if record.get("object") == "FLOW"
+                else cls._post_termination_dependent_grace_ms
+            )
             stale_refs = [
                 process_id
                 for process_id in cls._referenced_process_ids(record)
                 if (
                     process_id in terminate_ms_by_process_id
-                    and timestamp_ms
-                    > terminate_ms_by_process_id[process_id] + cls._stale_process_reference_grace_ms
+                    and timestamp_ms > terminate_ms_by_process_id[process_id] + stale_threshold_ms
                 )
             ]
             if not stale_refs:
