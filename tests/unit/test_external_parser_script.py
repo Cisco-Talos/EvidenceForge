@@ -75,7 +75,7 @@ def test_external_parser_script_rejects_invalid_output_target(
 
     assert not external_parser._require_sof_elk_output_target(data_dir)
 
-    message = error_output.getvalue()
+    message = _normalize_console_text(error_output.getvalue())
     assert "contains unsupported output target 'splunk'" in message
     assert "expected `sof-elk`" in message
 
@@ -101,3 +101,7 @@ def _capture_error_console(monkeypatch) -> StringIO:
         Console(file=output, force_terminal=False, color_system=None, width=120),
     )
     return output
+
+
+def _normalize_console_text(message: str) -> str:
+    return " ".join(message.split())
