@@ -98,6 +98,94 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_non_numeric_web_scan_ids_fields(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "ids_ua": {"sid": "bad", "message": "ua", "rev": "x"},
+                        "ids_rate": {"sid": 200001, "message": "rate", "priority": "high"},
+                        "paths": [
+                            {
+                                "uri": "/cgi-bin/test",
+                                "status": 404,
+                                "ids": {"sid": "oops", "message": "path"},
+                            }
+                        ],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" ids_ua sid must be a positive integer' in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" ids_rate priority must be a positive integer' in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" path #1 (/cgi-bin/test) ids sid must be a positive integer'
+            in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_non_numeric_ids_signature_fields(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": "bad-sid",
+                        "rev": "bad-rev",
+                        "message": "bad numeric fields",
+                        "classification": "misc-activity",
+                        "priority": "bad-priority",
+                        "proto": "tcp",
+                        "gid": "bad-gid",
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "sid must be a positive integer" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "rev must be a positive integer" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "priority must be a positive integer" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import endpoint_noise
 
