@@ -552,6 +552,22 @@ class TestParserDiscovery:
 
         assert files["bash_history"] == [history_file]
 
+    def test_bash_history_discovery_does_not_use_recursive_rglob(self, tmp_path, monkeypatch):
+        from evidenceforge.evaluation.parsers import discover_log_files
+
+        history_file = tmp_path / "host01" / "bash_history" / "alice.history"
+        history_file.parent.mkdir(parents=True)
+        history_file.write_text("#1718431208\nid\n", encoding="utf-8")
+
+        def _fail_rglob(*_args, **_kwargs):
+            raise AssertionError("discover_log_files should not use unbounded Path.rglob")
+
+        monkeypatch.setattr(Path, "rglob", _fail_rglob)
+
+        files = discover_log_files(tmp_path)
+
+        assert files["bash_history"] == [history_file]
+
     def test_skips_symlinked_sensor_directories(self, tmp_path):
         """Symlinked subdirectories should be skipped during discovery."""
         from evidenceforge.evaluation.parsers import discover_log_files

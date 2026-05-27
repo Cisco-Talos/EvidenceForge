@@ -103,10 +103,25 @@ def _is_safe_path(path: Path, root: Path) -> bool:
 def _discover_bash_history_files(output_dir: Path, output_root: Path) -> list[Path]:
     """Discover bash history files across supported output layouts."""
     files: dict[Path, None] = {}
-    for history_dir in output_dir.rglob("bash_history"):
+    candidate_dirs: dict[Path, None] = {}
+
+    direct_bash_history = output_dir / "bash_history"
+    candidate_dirs[direct_bash_history] = None
+
+    for child in output_dir.iterdir():
+        if not _is_safe_path(child, output_root) or not child.is_dir():
+            continue
+        candidate_dirs[child / "bash_history"] = None
+
+        for subdir in child.iterdir():
+            if not _is_safe_path(subdir, output_root) or not subdir.is_dir():
+                continue
+            candidate_dirs[subdir / "bash_history"] = None
+
+    for history_dir in candidate_dirs:
         if not _is_safe_path(history_dir, output_root) or not history_dir.is_dir():
             continue
-        for candidate in history_dir.rglob("*"):
+        for candidate in history_dir.iterdir():
             if not _is_safe_path(candidate, output_root) or not candidate.is_file():
                 continue
             if candidate.suffix in (".history", ".bash_history"):
