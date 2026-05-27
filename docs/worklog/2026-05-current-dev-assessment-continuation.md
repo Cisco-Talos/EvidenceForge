@@ -80,6 +80,18 @@ or follow-up batch is needed.
   42/38/64/63, average 51.75; deliberation final scores were 58/56/72/69,
   average 63.75. Next target: DNS source-native semantics, especially
   short-name/FQDN qtype behavior and resolver TTL modeling.
+- Loop 206 fixed known internal DNS short-name semantics (`c95bd588`) by
+  canonicalizing scenario host short names to internal FQDNs before resolver
+  normalization and automatic lookup fan-out, and by rejecting MX owner context
+  for single-label hostnames. Automated eval passed at 96.36440050584102 over
+  78826 records; DNS probes confirmed zero internal short-name NOERROR rows,
+  zero short-name MX rows, zero non-authoritative known internal FQDN rows, and
+  zero public MX answers on internal names, with 7 remaining external RRset TTL
+  increase cases inside 600 seconds. Blind scores were 28/36/68/66, average
+  49.50; deliberation final scores were 58/61/72/70, average 65.25. The new
+  highest-leverage target is TCP source-port lifecycle ownership: hard probes
+  confirmed one same-sensor overlapping SMB 5-tuple in Zeek core and 32
+  unmatched/stale eCAR FLOW examples after checking 9353 TCP flow rows.
 
 ## Recent Completed Work Previously Kept in TODO
 
