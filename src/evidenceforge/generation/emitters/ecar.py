@@ -193,6 +193,7 @@ class EcarEmitter(HostMultiplexEmitter):
     _sort_key = staticmethod(_ecar_sort_key)
     _defer_sorted_flush_until_close = True
     _output_end_time: datetime | None = None
+    _stale_process_reference_grace_ms = 5 * 60 * 1000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize per-source ordering memory for cross-event eCAR contracts."""
@@ -1341,6 +1342,62 @@ class EcarEmitter(HostMultiplexEmitter):
         return normalized
 
     @classmethod
+    def _filter_stale_process_references_after_termination(cls, lines: list[str]) -> list[str]:
+        """Drop or de-attrib stale process-owned rows after PROCESS/TERMINATE."""
+        records: list[dict[str, Any] | None] = []
+        terminate_ms_by_process_id: dict[str, int] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "PROCESS" or record.get("action") != "TERMINATE":
+                continue
+            process_id = str(record.get("objectID") or "")
+            if not process_id:
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            current = terminate_ms_by_process_id.get(process_id)
+            if current is None or timestamp_ms < current:
+                terminate_ms_by_process_id[process_id] = timestamp_ms
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS":
+                normalized.append(line)
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            stale_refs = [
+                process_id
+                for process_id in cls._referenced_process_ids(record)
+                if (
+                    process_id in terminate_ms_by_process_id
+                    and timestamp_ms
+                    > terminate_ms_by_process_id[process_id] + cls._stale_process_reference_grace_ms
+                )
+            ]
+            if not stale_refs:
+                normalized.append(line)
+                continue
+            if record.get("object") == "FLOW":
+                record.pop("actorID", None)
+                record.pop("pid", None)
+                record.pop("principal", None)
+                props = record.get("properties")
+                if isinstance(props, dict):
+                    for key in ("image_path", "command_line", "parent_image_path"):
+                        props.pop(key, None)
+                normalized.append(json.dumps(record, separators=(",", ":")))
+                continue
+            continue
+        return normalized
+
+    @classmethod
     def _normalize_parent_termination_after_children(cls, lines: list[str]) -> list[str]:
         """Keep visible parents alive through visible child process lifecycles."""
         records: list[dict[str, Any] | None] = []
@@ -1895,6 +1952,9 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
+                    writer.buffer = self._filter_stale_process_references_after_termination(
+                        writer.buffer
+                    )
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)

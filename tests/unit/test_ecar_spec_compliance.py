@@ -702,6 +702,122 @@ class TestChronologicalOutput:
         )
         assert terminate_ts > module_ts
 
+    def test_close_drops_stale_module_after_process_terminate(self, tmp_path, ts):
+        """Long-stale process-owned module rows should not drag termination forward."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(hours=1),
+                "hostname": "ws01",
+                "object": "MODULE",
+                "action": "LOAD",
+                "actorID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        assert {row["object"] for row in rows} == {"PROCESS"}
+        terminate_ts = next(
+            row["timestamp_ms"]
+            for row in rows
+            if row["object"] == "PROCESS" and row["action"] == "TERMINATE"
+        )
+        assert terminate_ts < int((ts + timedelta(minutes=5)).timestamp() * 1000)
+
+    def test_close_scrubs_stale_flow_process_identity_after_process_terminate(self, tmp_path, ts):
+        """Late FLOW rows should keep transport evidence without stale PID attribution."""
+        fmt = Mock()
+        fmt.output.template = "{}"
+        fmt.output.header_template = None
+        fmt.output.footer_template = None
+        fmt.output.encoding = "utf-8"
+        emitter = EcarEmitter(fmt, tmp_path, threaded=False)
+        process_id = "proc-123"
+
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=1),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "CREATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts.replace(second=2),
+                "hostname": "ws01",
+                "object": "PROCESS",
+                "action": "TERMINATE",
+                "objectID": process_id,
+                "pid": 100,
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+        emitter.emit_event(
+            {
+                "timestamp": ts + timedelta(hours=1),
+                "hostname": "ws01",
+                "object": "FLOW",
+                "action": "CONNECT",
+                "actorID": process_id,
+                "pid": 100,
+                "principal": "alice",
+                "image_path": r"C:\Program Files\App\app.exe",
+                "_host_fqdn": "ws01.example.org",
+            }
+        )
+
+        emitter.close()
+
+        rows = [
+            json.loads(line)
+            for line in (tmp_path / "ws01.example.org" / "ecar.json").read_text().splitlines()
+        ]
+        flow = next(row for row in rows if row["object"] == "FLOW")
+        assert "actorID" not in flow
+        assert "pid" not in flow
+        assert "principal" not in flow
+        assert "image_path" not in flow["properties"]
+
     def test_close_rewrites_linux_pids_by_source_timestamp_not_canonical_order(self, tmp_path, ts):
         """Linux PID morphology should follow rendered source time, not canonical time."""
         fmt = Mock()

@@ -15774,6 +15774,18 @@ class ActivityGenerator:
                 dll_path,
             )
             return
+        session_end_time = (
+            self.state_manager.get_session_end_time(proc.logon_id) if proc.logon_id else None
+        )
+        if session_end_time is not None and ensure_utc(time) >= ensure_utc(session_end_time):
+            logger.debug(
+                "Skipping image load after owning session ended: %s pid=%s logon_id=%s dll=%s",
+                system.hostname,
+                pid,
+                proc.logon_id,
+                dll_path,
+            )
+            return
         if not self._mark_loaded_module(system.hostname, pid, proc.start_time, dll_path):
             logger.debug(
                 "Skipping duplicate image load for process instance: %s pid=%s dll=%s",

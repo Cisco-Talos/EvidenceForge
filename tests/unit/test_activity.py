@@ -4878,6 +4878,41 @@ class TestActivityGenerator:
 
         assert not mock_emitters["windows_event_security"].emit.called
 
+    def test_image_load_skips_process_after_owning_session_end(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """Ambient module loads should not attach to processes after logoff."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=test_system.hostname,
+            logon_type=2,
+            source_ip=test_system.ip,
+        )
+        pid = state_manager.create_process(
+            system=test_system.hostname,
+            parent_pid=4,
+            image=r"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe",
+            command_line=r'"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe" /systemstartup',
+            username=test_user.username,
+            integrity_level="Medium",
+            logon_id=logon_id,
+        )
+        state_manager.end_session(logon_id, timestamp + timedelta(minutes=30))
+        mock_emitters["windows_event_security"].reset_mock()
+
+        activity_gen.generate_image_load(
+            test_user,
+            test_system,
+            timestamp + timedelta(hours=1),
+            pid,
+            r"C:\Program Files (x86)\Dropbox\Client\Dropbox.exe",
+            r"C:\Windows\System32\ws2_32.dll",
+        )
+
+        assert not mock_emitters["windows_event_security"].emit.called
+
     def test_image_load_skips_duplicate_module_for_process_instance(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
