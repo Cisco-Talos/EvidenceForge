@@ -889,6 +889,10 @@ class StorylineMixin:
         """Initialize the account SID tracking dict if not already present."""
         if not hasattr(self, "_created_account_sids"):
             self._created_account_sids: dict[str, str] = {}
+        if not hasattr(self, "_created_account_effect_times"):
+            self._created_account_effect_times: dict[tuple[str, str], datetime] = {}
+        if not hasattr(self, "_storyline_host_available_at"):
+            self._storyline_host_available_at: dict[tuple[str, str], datetime] = {}
 
     def _record_last_storyline_process(self, system: System, pid: int, image: str) -> None:
         """Record the last storyline process by host for later network provenance."""
@@ -1131,6 +1135,30 @@ class StorylineMixin:
         """Return the recent net user /add command for an explicit account-created event."""
         commands = getattr(self, "_storyline_account_create_commands", {})
         return commands.get(self._account_create_lookup_key(system, username), "")
+
+    @staticmethod
+    def _storyline_host_actor_key(system: System, actor: User) -> tuple[str, str]:
+        """Return the host/actor key used for in-step action readiness."""
+        return (system.hostname, actor.username.strip().lower())
+
+    def _record_storyline_host_available_after(
+        self,
+        *,
+        system: System,
+        actor: User,
+        time: datetime,
+        rng: random.Random,
+    ) -> None:
+        """Delay later same-host commands until a prior audit effect is visible."""
+        if not hasattr(self, "_storyline_host_available_at"):
+            self._storyline_host_available_at: dict[tuple[str, str], datetime] = {}
+        delay = timedelta(milliseconds=rng.randint(180, 950))
+        key = self._storyline_host_actor_key(system, actor)
+        available_at = time + delay
+        self._storyline_host_available_at[key] = max(
+            available_at,
+            self._storyline_host_available_at.get(key, available_at),
+        )
 
     def _emit_storyline_account_password_followups(
         self,
@@ -1585,7 +1613,12 @@ class StorylineMixin:
         time: datetime,
         rng: random.Random,
     ) -> datetime:
-        """Delay Linux same-user storyline siblings until their shell is available."""
+        """Delay same-host storyline siblings until prior actions and shells are ready."""
+        host_ready = getattr(self, "_storyline_host_available_at", {}).get(
+            self._storyline_host_actor_key(system, actor)
+        )
+        if host_ready is not None and time < host_ready:
+            time = host_ready + timedelta(milliseconds=rng.randint(120, 700))
         if _get_os_category(system.os) != "linux":
             return time
         available_at = getattr(self, "_storyline_shell_available_at", {}).get(
@@ -2781,6 +2814,15 @@ class StorylineMixin:
             # and any _get_sid() lookups (Windows event rendering).
             self._created_account_sids[spec.target_username] = target_sid
             self.activity_generator.sid_registry[spec.target_username] = target_sid
+            self._created_account_effect_times[
+                self._account_create_lookup_key(dc, spec.target_username)
+            ] = effect_time
+            self._record_storyline_host_available_after(
+                system=dc,
+                actor=actor,
+                time=effect_time,
+                rng=rng,
+            )
             if self._recent_storyline_account_create_command(dc, spec.target_username):
                 self._emit_storyline_account_password_followups(
                     actor=actor,
@@ -2834,6 +2876,11 @@ class StorylineMixin:
                 event_time=time,
                 rng=rng,
             )
+            account_created_at = self._created_account_effect_times.get(
+                self._account_create_lookup_key(dc, spec.member_name)
+            )
+            if account_created_at is not None and effect_time <= account_created_at:
+                effect_time = account_created_at + timedelta(milliseconds=rng.randint(180, 950))
             self.activity_generator.generate_group_membership_change(
                 actor=actor,
                 system=dc,
@@ -2844,6 +2891,12 @@ class StorylineMixin:
                 group_sid=group_sid,
                 member_username=spec.member_name,
                 member_sid=member_sid,
+            )
+            self._record_storyline_host_available_after(
+                system=dc,
+                actor=actor,
+                time=effect_time,
+                rng=rng,
             )
             malicious_event["group_name"] = spec.group_name
             malicious_event["member_name"] = spec.member_name

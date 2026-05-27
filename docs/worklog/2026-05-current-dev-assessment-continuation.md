@@ -42,6 +42,15 @@ or follow-up batch is needed.
   Blind synthetic-confidence scores were 72/68/67/76, average 70.75. Next
   target: AD account-management lifecycle ordering, with UDP/123/NTP contracts
   and built-in service-account profile paths queued behind it.
+- Loop 202 fixed AD account-management lifecycle ordering by recording
+  account-create effect times and delaying later same-host storyline commands
+  and group-membership effects until after the prior AD audit effect is visible.
+  Automated eval passed at 95.83680366637293 over 78514 records; the hard probe
+  confirmed `net user`/4720 now precede `net group`/4728 for `svc_mhsync` in
+  DC Security, Sysmon, and eCAR. Blind synthetic-confidence scores were
+  68/76/72/74, average 72.50. Next target: canonical endpoint process/file
+  ownership, especially service/kernel principals on user profile paths and
+  Sysmon terminal-session inheritance.
 
 ## Recent Completed Work Previously Kept in TODO
 

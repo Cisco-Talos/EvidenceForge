@@ -1911,6 +1911,102 @@ class TestStorylineCommandSideEffects:
         assert engine.activity_generator.log_clears[0]["time"] > visible_process_time
         assert engine.activity_generator.process_accesses[0]["time"] > visible_process_time
 
+    def test_account_create_barriers_following_group_add_command(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.local",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine._ensure_account_sid_tracking()
+        rng = random.Random(7)
+        base_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        visible_process_time = base_time + timedelta(seconds=4)
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\net.exe",
+                command_line="net user svc_mhsync MhsSvc!2024 /add /domain",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time,
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+        process_pid = engine.activity_generator._next_pid
+        engine.state_manager.processes[(source.hostname, process_pid)] = SimpleNamespace(
+            username=actor.username,
+            logon_id="0x3e7",
+            start_time=base_time,
+        )
+        engine.activity_generator.process_source_times[(source.hostname, process_pid)] = (
+            visible_process_time
+        )
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="account_created",
+                target_username="svc_mhsync",
+                target_sid="S-1-5-21-111-222-333-4444",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=1),
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+        account_create_time = engine.activity_generator.account_creates[0]["time"]
+
+        next_command_time = engine._apply_storyline_shell_availability(
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=2),
+            rng=rng,
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\net.exe",
+                command_line='net group "Domain Admins" svc_mhsync /add /domain',
+            ),
+            actor=actor,
+            system=source,
+            time=next_command_time,
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="group_member_added",
+                scope="global",
+                group_name="Domain Admins",
+                member_name="svc_mhsync",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=3),
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+
+        assert account_create_time > visible_process_time
+        assert engine.activity_generator.processes[-1]["time"] > account_create_time
+        assert engine.activity_generator.group_memberships[0]["time"] > account_create_time
+
     def test_process_url_network_reuses_storyline_authored_domain_ip(self):
         source = System(
             hostname="DC-01",
