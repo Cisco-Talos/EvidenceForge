@@ -2366,6 +2366,8 @@ def _dns_address_rrset(hostname: str | None, dst_ip: str, *, is_internal: bool) 
 def _dns_hostname_allows_mx(hostname: str) -> bool:
     """Return whether a hostname is plausible owner context for MX lookups."""
     lowered = hostname.lower().rstrip(".")
+    if "." not in lowered:
+        return False
     cdn_suffixes = (
         "cloudfront.net",
         "akamaiedge.net",
@@ -3543,6 +3545,21 @@ class ActivityGenerator:
             if wanted in {system_host, system_fqdn}:
                 return system
         return None
+
+    def _dns_canonical_internal_hostname(self, hostname: str | None) -> str | None:
+        """Return the scenario FQDN for known internal hostnames."""
+        if not hostname:
+            return hostname
+        system = self._system_for_hostname(hostname)
+        if system is None:
+            return hostname
+        ad_domain = str(getattr(self, "_ad_domain", "") or "").strip().rstrip(".")
+        system_host = str(getattr(system, "hostname", "") or "").strip().rstrip(".")
+        if not system_host or not ad_domain:
+            return system_host or hostname
+        if "." in system_host:
+            return system_host
+        return f"{system_host}.{ad_domain}"
 
     def _unique_environment_systems(self) -> list[Any]:
         """Return scenario systems once, preserving environment order where possible."""
@@ -12104,6 +12121,8 @@ class ActivityGenerator:
         """Normalize caller-provided DNS context through shared resolver semantics."""
         ad_domain = getattr(self, "_ad_domain", "corp.local")
         qtype_name = (dns.query_type or "").upper()
+        if qtype_name in {"A", "AAAA", "PTR", "MX", "NS", "SOA"}:
+            dns.query = self._dns_canonical_internal_hostname(dns.query) or dns.query
         is_internal = qtype_name == "SRV" or _dns_is_internal_name(dns.query, ad_domain)
         if is_internal:
             dns.AA = True
@@ -12179,6 +12198,7 @@ class ActivityGenerator:
                 )
             else:
                 hostname = _generate_random_hostname(rng, dst_ip)
+        hostname = self._dns_canonical_internal_hostname(hostname) or hostname
 
         # DNS caching: skip re-emission if this (src, hostname) was queried recently.
         # Real clients cache DNS responses (TTL typically 60-3600s), so not every
