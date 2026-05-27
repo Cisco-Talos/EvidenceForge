@@ -30,6 +30,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+from urllib.parse import urlsplit
 
 from evidenceforge.events.base import SecurityEvent
 from evidenceforge.events.contexts import (
@@ -177,7 +178,25 @@ def _http_content_seed_material(
 ) -> str:
     """Return the canonical HTTP response-content identity seed."""
 
-    return f"http:{host}:{uri}:{response_body_len}:{mime_type}"
+    identity_uri = _http_content_identity_uri(host, uri)
+    return f"http:{host}:{identity_uri}:{response_body_len}:{mime_type}"
+
+
+def _http_content_identity_uri(host: str, uri: str) -> str:
+    """Normalize absolute-form proxy URLs to the origin-form content identity."""
+
+    if not uri:
+        return "/"
+    parsed = urlsplit(uri)
+    if parsed.scheme and parsed.netloc:
+        parsed_host = (parsed.hostname or "").rstrip(".").lower()
+        expected_host = host.rstrip(".").lower()
+        if not expected_host or parsed_host == expected_host:
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            return path
+    return uri
 
 
 def _http_pe_is_64bit(uri: str, content_seed_material: str) -> bool:

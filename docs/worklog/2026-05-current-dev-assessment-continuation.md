@@ -22,6 +22,27 @@ or follow-up batch is needed.
 - Preserve per-loop artifacts under the scenario or assessment output directory
   chosen for that loop; do not use `TODO.md` for loop transcripts.
 
+## 2026-05-27 Loop Batch Notes
+
+- Loop 200 fixed eCAR endpoint file texture and installed-software registry
+  identity stability (`ed4ab68a`, `88db6b22`). Automated eval passed at
+  96.66140704016262 over 78539 records; the hard probe saw 419 eCAR FILE events
+  across all 15 hosts and zero duplicate installed-software DisplayName/GUID
+  groups.
+- Loop 200 blind review remained synthetic-leaning: initial synthetic-confidence
+  average 59.0, deliberated average 64.75. The strongest confirmed next targets
+  are proxy file-transfer object identity/timing and Linux eCAR process-to-flow
+  attribution.
+- Loop 201 fixed explicit-proxy HTTP file-transfer identity/timing by sharing
+  origin-form content identity across proxy legs, pairing client/origin
+  `files.log` metadata, and delaying client-facing file observation until after
+  proxy-origin fetch observation. Automated eval passed at 95.83681405251764
+  over 78513 records; the hard probe saw zero hash/size mismatches and both
+  Dell updater client observations started/finished after origin observation.
+  Blind synthetic-confidence scores were 72/68/67/76, average 70.75. Next
+  target: AD account-management lifecycle ordering, with UDP/123/NTP contracts
+  and built-in service-account profile paths queued behind it.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

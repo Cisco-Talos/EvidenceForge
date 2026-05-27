@@ -54,6 +54,7 @@ from evidenceforge.generation.activity import generator as generator_module
 from evidenceforge.generation.activity.dns_registry import resolve_domain_ip
 from evidenceforge.generation.activity.timing_profiles import sample_timing_delta
 from evidenceforge.generation.emitters.ecar import EcarEmitter
+from evidenceforge.generation.emitters.zeek_files import _bounded_file_transfer_observation
 from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed, _thread_local
@@ -1312,6 +1313,79 @@ class TestSslContextPopulation:
 
         assert client.timestamp < base_time
         assert egress.timestamp >= base_time + required_gap
+
+    def test_explicit_proxy_download_keeps_file_identity_and_order(self, activity_gen):
+        """Proxy client and origin legs should preserve object identity and file timing."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+        body_len = 97_117_831
+        host = "dellupdater.dell.com"
+        uri = "/FOLDER16e0077c/M/335e80f3/Dell-Command-Update.exe"
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="203.0.113.25",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.5,
+            orig_bytes=220,
+            resp_bytes=body_len,
+            conn_state="SF",
+            source_system=source,
+            hostname=host,
+            http=HttpContext(
+                method="GET",
+                host=host,
+                uri=uri,
+                response_body_len=body_len,
+                status_code=200,
+                status_msg="OK",
+                resp_mime_types=["application/x-msdownload"],
+            ),
+        )
+
+        client = next(
+            event
+            for event in events
+            if event.network
+            and event.network.src_ip == source.ip
+            and event.network.dst_ip == proxy.ip
+        )
+        egress = next(
+            event
+            for event in events
+            if event.network and event.network.src_ip == proxy.ip and event.http is not None
+        )
+
+        assert client.file_transfer is not None
+        assert egress.file_transfer is not None
+        assert client.file_transfer.fuid != egress.file_transfer.fuid
+        assert client.file_transfer.sha1 == egress.file_transfer.sha1
+        assert client.http is not None
+        assert egress.http is not None
+        assert client.http.uri == f"http://{host}{uri}"
+        assert egress.http.uri == uri
+        assert client.http.resp_fuids == [client.file_transfer.fuid]
+        assert egress.http.resp_fuids == [egress.file_transfer.fuid]
+
+        client_file_ts, client_file_duration = _bounded_file_transfer_observation(client)
+        egress_file_ts, egress_file_duration = _bounded_file_transfer_observation(egress)
+        assert client_file_ts >= egress_file_ts
+        assert client_file_ts + timedelta(seconds=client_file_duration) >= (
+            egress_file_ts + timedelta(seconds=egress_file_duration)
+        )
 
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""

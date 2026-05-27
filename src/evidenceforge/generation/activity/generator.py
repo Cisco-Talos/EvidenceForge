@@ -57,6 +57,7 @@ from evidenceforge.events.contexts import (
     KerberosContext,
     NetworkContext,
     OcspContext,
+    PeContext,
     ProcessAccessContext,
     ProcessContext,
     ProxyContext,
@@ -9002,6 +9003,7 @@ class ActivityGenerator:
         ids: Optional["IdsContext"] = None,
         http: Optional["HttpContext"] = None,
         file_transfer: FileTransferContext | None = None,
+        pe: PeContext | None = None,
         ocsp: OcspContext | None = None,
         proxy: Optional["ProxyContext"] = None,
         firewall: FirewallContext | None = None,
@@ -9064,6 +9066,7 @@ class ActivityGenerator:
             ids=ids,
             http=http,
             file_transfer=file_transfer,
+            pe=pe,
             ocsp=ocsp,
             proxy=proxy,
             firewall=firewall,
@@ -9100,6 +9103,7 @@ class ActivityGenerator:
         http = request.http
         caller_supplied_http = http is not None
         file_transfer = request.file_transfer
+        pe = request.pe
         ocsp = request.ocsp
         proxy = request.proxy
         firewall = request.firewall
@@ -10181,6 +10185,8 @@ class ActivityGenerator:
             event.http = http
         if file_transfer is not None:
             event.file_transfer = file_transfer
+        if pe is not None:
+            event.pe = pe
         if ocsp is not None:
             event.ocsp = ocsp
         if proxy is not None:
