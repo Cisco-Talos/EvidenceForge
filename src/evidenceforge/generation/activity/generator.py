@@ -11480,7 +11480,7 @@ class ActivityGenerator:
                 'journalctl -u apache2 --since "1 hour ago"',
                 "htop",
                 "ss -tulnp",
-                "ip addr show",
+                "ip -o addr show scope global",
             ],
             "default": [
                 "ls -la",
@@ -11494,7 +11494,7 @@ class ActivityGenerator:
                 "free -m",
                 "w",
                 "tail -20 /var/log/syslog",
-                "history",
+                "history | tail -20",
                 "date",
                 "ls /tmp",
                 "mount | grep -v tmpfs",
@@ -11524,7 +11524,7 @@ class ActivityGenerator:
                         "ss -tulnp",
                         "w",
                         "htop",
-                        "ip addr show",
+                        "ip -4 addr show scope global",
                     ]
                 elif server_role != "web":
                     web_markers = (
@@ -11539,7 +11539,18 @@ class ActivityGenerator:
                         for command in command_list
                         if not any(marker in command for marker in web_markers)
                     ]
-            command = _get_rng().choice(command_list)
+            from evidenceforge.generation.activity.bash_commands import (
+                _choose_template_with_memory,
+            )
+
+            command = _choose_template_with_memory(
+                _get_rng(),
+                command_list,
+                {},
+                list(getattr(system, "services", []) or []),
+                system.hostname,
+                user.username,
+            )
         else:
             command = activity_type_or_command
         return command

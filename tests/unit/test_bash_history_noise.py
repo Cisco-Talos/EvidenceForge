@@ -393,6 +393,49 @@ class TestBaselineLinuxBashHistory:
         for target in targets:
             assert counts[target] <= 2
 
+    def test_reviewer_cited_diagnostics_share_low_repeat_budgets(self):
+        """Reviewer-cited exact diagnostics should not become broad bash-history fingerprints."""
+        from evidenceforge.generation.activity import bash_commands
+
+        target_groups = {
+            "history_review": ("history", "history | tail -15", "history | tail -20"),
+            "python3_discovery": ("which python3", "command -v python3", "python3 -V 2>&1"),
+            "auth_tail": ("tail -20 /var/log/auth.log", "tail -50 /var/log/auth.log"),
+            "kernel_version": ("uname -a", "uname -sr", "uname -mrs"),
+            "ip_addr_show": ("ip addr show", "ip addr show eth0"),
+        }
+        targets = [command for commands in target_groups.values() for command in commands]
+        pool = [*targets, *(f"echo host-check-{index}" for index in range(40))]
+
+        class BiasedRng(random.Random):
+            def __init__(self) -> None:
+                super().__init__(23)
+                self.calls = 0
+
+            def choice(self, values):
+                self.calls += 1
+                if self.calls % 2 and targets[self.calls % len(targets)] in values:
+                    return targets[self.calls % len(targets)]
+                return values[self.calls % len(values)]
+
+        bash_commands.reset_bash_command_memory()
+        rng = BiasedRng()
+        picked = [
+            bash_commands._choose_template_with_memory(
+                rng,
+                pool,
+                {},
+                None,
+                f"linux-{index}",
+                f"user-{index}",
+            )
+            for index in range(90)
+        ]
+
+        counts = Counter(picked)
+        for commands in target_groups.values():
+            assert sum(counts[command] for command in commands) <= 2
+
     def test_bash_picker_suppresses_same_user_repeats_across_hosts(self):
         """A user's command memory should carry across parallel SSH hosts."""
         from evidenceforge.generation.activity import bash_commands
