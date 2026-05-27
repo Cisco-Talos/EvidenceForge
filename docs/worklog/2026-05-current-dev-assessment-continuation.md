@@ -139,6 +139,18 @@ or follow-up batch is needed.
   Synthetic and score spread was small. The next highest-leverage target is
   Windows explicit-credential 4648 source/target semantics, with shell workflow
   texture close behind.
+- Loop 211 fixed Windows explicit-credential 4648 source semantics (`c2c6a344`)
+  by omitting synthetic local-host network endpoints from source-side 4648
+  records while preserving authored modeled remote origins. Automated eval
+  passed at 96.29214042141777 over 73942 records; the rendered probe showed
+  loop 210 had 31/31 remote 4648 rows using the reporting host IP as
+  `NetworkAddress`, while loop 211 had zero local-host-IP 4648 network
+  addresses and only the authored attacker origin remained nonblank. Blind
+  scores were 56/31/42/42, average 42.75. Deliberation was triggered by verdict
+  disagreement and ended Inconclusive with final scores 50/38/42/44, average
+  43.50. The next highest-leverage target is Windows remote-execution lifecycle
+  texture, especially long-lived PsExec parentage and audit-log-clear 1102
+  subject rendering.
 
 ## Recent Completed Work Previously Kept in TODO
 
