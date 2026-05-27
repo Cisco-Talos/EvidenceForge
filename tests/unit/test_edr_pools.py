@@ -4,6 +4,7 @@
 """Unit tests for EDR pools YAML loader."""
 
 import random
+import re
 from unittest.mock import patch
 
 from evidenceforge.generation.activity.edr_pools import (
@@ -164,6 +165,24 @@ class TestFilePaths:
     def test_linux_paths_have_forward_slashes(self):
         paths = get_file_paths("linux")
         assert all("/" in p for p in paths), "Linux paths should use forward slashes"
+
+    def test_windows_prefetch_templates_use_hex_suffix(self):
+        paths = get_file_paths("windows")
+        prefetch_paths = [
+            path for path in paths if r"\windows\prefetch" in path.lower().replace("/", "\\")
+        ]
+
+        assert prefetch_paths, "No Windows Prefetch templates in EDR path pool"
+        for template in prefetch_paths:
+            assert "{hex}" in template
+            path = materialize_edr_template(template, random.Random(7), user="alice")
+            assert re.search(r"-[0-9A-F]{8}\.pf$", path), path
+
+    def test_linux_generic_paths_avoid_action_incompatible_sources(self):
+        paths = get_file_paths("linux")
+        assert not any(re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", path) for path in paths)
+        assert "/etc/passwd" not in paths
+        assert not any("systemd-private-" in path and "apache2.service" in path for path in paths)
 
 
 class TestRegistryKeys:

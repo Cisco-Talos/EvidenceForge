@@ -7,7 +7,8 @@
 # Override via .eforge/config/activity/edr_pools.yaml — any top-level
 # key you include fully replaces the corresponding default section.
 #
-# Template variables: {user} = process owner username, {rand} = 5-digit random
+# Template variables: {user} = process owner username, {rand} = 5-digit random,
+# {hex} = 8-character hexadecimal token
 
 # Process-aware file side effects for ambient eCAR/Sysmon FILE telemetry.
 # Only processes matching one of these profiles emit probabilistic file events;
@@ -123,8 +124,8 @@ file_paths_windows:
   - "C:\\Users\\{user}\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\spreadsheet-{rand}.xlsx.lnk"
   # System paths
   - "C:\\ProgramData\\Microsoft\\Windows\\WER\\ReportQueue\\{rand}\\Report.wer"
-  - "C:\\Windows\\Prefetch\\CMD.EXE-{rand}.pf"
-  - "C:\\Windows\\Prefetch\\SVCHOST.EXE-{rand}.pf"
+  - "C:\\Windows\\Prefetch\\CMD.EXE-{hex}.pf"
+  - "C:\\Windows\\Prefetch\\SVCHOST.EXE-{hex}.pf"
   - "C:\\Windows\\Temp\\{rand}.tmp"
   - "C:\\ProgramData\\Microsoft\\Windows Defender\\Scans\\History\\Service\\DetectionHistory\\{rand}"
   - "C:\\Windows\\System32\\winevt\\Logs\\Security.evtx"
@@ -140,7 +141,7 @@ file_paths_linux:
   - "/home/{user}/.ssh/known_hosts"
   # Temp files
   - "/tmp/tmp{rand}"
-  - "/tmp/systemd-private-{rand}-apache2.service"
+  - "/tmp/.cache-{rand}.tmp"
   - "/var/tmp/{rand}.lock"
   # Application caches
   - "/home/{user}/.cache/mozilla/firefox/cache2/entries/{rand}"
@@ -150,8 +151,7 @@ file_paths_linux:
   - "/var/log/syslog"
   - "/var/log/auth.log"
   - "/var/log/apache2/access.log"
-  - "/proc/{rand}/status"
-  - "/etc/passwd"
+  - "/var/log/journal/{hex}/system.journal"
   # Package manager
   - "/var/lib/dpkg/status"
   - "/var/cache/apt/archives/lock"

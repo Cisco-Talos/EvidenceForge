@@ -743,6 +743,54 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_edr_file_path_pools(self, monkeypatch):
+        from evidenceforge.generation.activity import edr_pools
+
+        real_loader = edr_pools.load_edr_pools
+
+        def load_invalid_edr_pools():
+            data = real_loader()
+            return {
+                **data,
+                "file_paths_windows": [
+                    r"C:\Windows\Prefetch\SVCHOST.EXE-{rand}.pf",
+                ],
+                "file_paths_linux": [
+                    "/proc/{rand}/status",
+                    "/etc/passwd",
+                    "/tmp/systemd-private-12345-apache2.service",
+                ],
+            }
+
+        monkeypatch.setattr(edr_pools, "load_edr_pools", load_invalid_edr_pools)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_windows)"
+            and "Prefetch templates" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "/proc/<pid>/status" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "/etc/passwd" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "apache2 systemd-private" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_windows_collision_spacing(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
