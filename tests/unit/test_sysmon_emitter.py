@@ -587,6 +587,63 @@ class TestSysmonEventEmitter:
         content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
         assert '<Data Name="TerminalSessionId">7</Data>' in content
 
+    def test_process_create_keeps_terminal_session_stable_per_logon_id(self, format_def, tmp_path):
+        """Sysmon TerminalSessionId should not drift for children in the same logon."""
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import AuthContext, HostContext, ProcessContext
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        emitter = SysmonEventEmitter(format_def, output_dir, buffer_size=1)
+
+        host = HostContext(
+            hostname="WKS-01",
+            ip="10.0.0.50",
+            os="Windows 10",
+            os_category="windows",
+            system_type="workstation",
+            domain="corp.local",
+            fqdn="WKS-01.corp.local",
+            netbios_domain="CORP",
+        )
+        logon_id = "0xabc123"
+        parent = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=8052,
+                parent_pid=4200,
+                image=r"C:\Windows\System32\cmd.exe",
+                command_line=r"C:\Windows\System32\cmd.exe /k",
+                username="jsmith",
+                logon_id=logon_id,
+            ),
+            auth=AuthContext(username="jsmith", logon_id=logon_id, session_id=2, logon_type=2),
+        )
+        child = SecurityEvent(
+            timestamp=datetime(2024, 1, 15, 10, 30, 1, tzinfo=UTC),
+            event_type="process_create",
+            src_host=host,
+            process=ProcessContext(
+                pid=8056,
+                parent_pid=8052,
+                image=r"C:\Windows\System32\whoami.exe",
+                command_line="whoami /all",
+                username="jsmith",
+                logon_id=logon_id,
+            ),
+            auth=AuthContext(username="jsmith", logon_id=logon_id, session_id=4, logon_type=2),
+        )
+
+        emitter.emit(parent)
+        emitter.emit(child)
+        emitter.close()
+
+        content = (output_dir / "WKS-01.corp.local" / "windows_event_sysmon.xml").read_text()
+        session_ids = re.findall(r'<Data Name="TerminalSessionId">(\d+)</Data>', content)
+        assert session_ids == ["2", "2"]
+
     def test_process_create_renders_current_directory_from_context(self, format_def, tmp_path):
         """Sysmon Event 1 should preserve the process working directory."""
         from evidenceforge.events.base import SecurityEvent

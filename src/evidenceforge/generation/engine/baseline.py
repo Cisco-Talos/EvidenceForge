@@ -4334,7 +4334,9 @@ class BaselineMixin:
             ProcessContext,
         )
         from evidenceforge.generation.activity.edr_pools import (
+            file_path_templates_for_user,
             get_file_paths,
+            is_service_account,
             materialize_edr_template,
         )
         from evidenceforge.generation.activity.endpoint_noise import ecar_file_churn_config
@@ -4376,19 +4378,19 @@ class BaselineMixin:
 
         for idx in range(count):
             process = rng.choice(processes)
-            username = (
-                assigned_user or process.username or ("root" if os_cat == "linux" else "SYSTEM")
-            )
-            if process.username and rng.random() < 0.55:
+            process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
+            if is_service_account(os_cat, process_username):
+                username = process_username
+            else:
+                username = assigned_user or process_username
+            if (
+                process.username
+                and not is_service_account(os_cat, process.username)
+                and rng.random() < 0.55
+            ):
                 username = process.username
 
-            candidates = list(path_templates)
-            if not assigned_user and username.upper() == "SYSTEM" and os_cat == "windows":
-                non_profile = [path for path in candidates if r"C:\Users\{user}" not in path]
-                candidates = non_profile or candidates
-            elif username == "root" and os_cat == "linux":
-                non_home = [path for path in candidates if "/home/{user}/" not in path]
-                candidates = non_home or candidates
+            candidates = file_path_templates_for_user(path_templates, os_cat, username)
 
             file_action = str(rng.choices(actions, weights=weights, k=1)[0])
             file_path = materialize_edr_template(

@@ -9,10 +9,12 @@ from unittest.mock import patch
 from evidenceforge.generation.activity.edr_pools import (
     _sanitize_edr_pools,
     defender_platform_version,
+    file_path_templates_for_user,
     get_dll_pool,
     get_file_paths,
     get_registry_keys_hkcu,
     get_registry_keys_hklm,
+    is_service_account,
     load_edr_pools,
     materialize_edr_template,
     materialize_edr_template_group,
@@ -111,6 +113,35 @@ class TestLoadEdrPools:
             assert effect is not None
             _action, path = effect
             assert expected_path_fragment in path.lower()
+
+    def test_service_accounts_do_not_receive_interactive_profile_side_effects(self):
+        import random
+
+        assert is_service_account("windows", "LOCAL SERVICE")
+        assert is_service_account("linux", "systemd-timesync")
+
+        windows_templates = file_path_templates_for_user(
+            get_file_paths("windows"),
+            "windows",
+            "LOCAL SERVICE",
+        )
+        linux_templates = file_path_templates_for_user(
+            get_file_paths("linux"),
+            "linux",
+            "systemd-timesync",
+        )
+
+        assert not any(path.startswith(r"C:\Users\{user}") for path in windows_templates)
+        assert not any(path.startswith("/home/{user}/") for path in linux_templates)
+
+        shell_effect = select_file_side_effect(
+            process_name="/bin/bash",
+            command_line="bash -lc true",
+            os_category="linux",
+            rng=random.Random(5),
+            user="systemd-timesync",
+        )
+        assert shell_effect is None
 
 
 class TestFilePaths:

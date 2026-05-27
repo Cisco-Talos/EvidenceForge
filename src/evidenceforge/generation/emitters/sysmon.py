@@ -987,7 +987,7 @@ class SysmonEventEmitter(LogEmitter):
             "User": user,
             "LogonGuid": self._resolve_logon_guid(host.hostname, logon_id, auth),
             "LogonId": logon_id,
-            "TerminalSessionId": self._terminal_session_id(auth, logon_id),
+            "TerminalSessionId": self._terminal_session_id(host.hostname, auth, logon_id),
             "IntegrityLevel": integrity,
             "Hashes": self._generate_hashes(proc.image, host),
             "ParentProcessGuid": parent_guid,
@@ -1093,18 +1093,26 @@ class SysmonEventEmitter(LogEmitter):
             return resolve_image_path(image, "windows", username=username)
         return image
 
-    @staticmethod
-    def _terminal_session_id(auth, logon_id: str) -> int:
+    def _terminal_session_id(self, hostname: str, auth, logon_id: str) -> int:
         """Return a source-native TerminalSessionId for Sysmon process creates."""
         if auth is None:
             return 0
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
+        key = (hostname, logon_id or username)
+        cached_session_id = self._terminal_session_ids_by_logon.get(key)
+        if cached_session_id is not None:
+            return cached_session_id
         if auth.session_id > 0:
+            self._terminal_session_ids_by_logon[key] = auth.session_id
             return auth.session_id
         if auth.logon_type in {2, 7, 10, 11}:
-            return 1 + (_stable_seed(f"sysmon_terminal_session:{logon_id or username}") % 8)
+            session_id = 1 + (
+                _stable_seed(f"sysmon_terminal_session:{hostname}:{logon_id or username}") % 8
+            )
+            self._terminal_session_ids_by_logon[key] = session_id
+            return session_id
         return 0
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
@@ -1743,6 +1751,7 @@ class SysmonEventEmitter(LogEmitter):
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._final_process_guids: dict[tuple[str, int], str] = {}
+        self._terminal_session_ids_by_logon: dict[tuple[str, str], int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)

@@ -51,6 +51,48 @@ _DEFAULT_INSTALLED_SOFTWARE_PRODUCTS = (
         "version": "5.72.0.0",
     },
 )
+_WINDOWS_SERVICE_USERS = {
+    "ANONYMOUS LOGON",
+    "LOCAL SERVICE",
+    "NETWORK SERVICE",
+    "SYSTEM",
+}
+_LINUX_SERVICE_USERS = {
+    "_apt",
+    "apache",
+    "backup",
+    "chrony",
+    "daemon",
+    "dnsmasq",
+    "games",
+    "gnats",
+    "httpd",
+    "irc",
+    "list",
+    "lp",
+    "mail",
+    "man",
+    "messagebus",
+    "mysql",
+    "news",
+    "nginx",
+    "nobody",
+    "ntp",
+    "postgres",
+    "proxy",
+    "redis",
+    "root",
+    "sshd",
+    "sync",
+    "sys",
+    "syslog",
+    "systemd-network",
+    "systemd-resolve",
+    "systemd-timesync",
+    "tomcat",
+    "uucp",
+    "www-data",
+}
 
 
 def _merge_edr_pools(default: dict, overlay: dict) -> dict:
@@ -149,6 +191,48 @@ def get_file_paths(os_category: str) -> list[str]:
     pools = load_edr_pools()
     key = "file_paths_windows" if os_category == "windows" else "file_paths_linux"
     return pools.get(key, [])
+
+
+def _principal_name(user: str) -> str:
+    """Return the account leaf name from a source-native principal string."""
+    return user.rsplit("\\", 1)[-1].strip()
+
+
+def is_service_account(os_category: str, user: str) -> bool:
+    """Return True when a principal should not use an interactive profile path."""
+    account = _principal_name(user)
+    if not account:
+        return True
+    if os_category == "windows":
+        return account.upper() in _WINDOWS_SERVICE_USERS or account.endswith("$")
+    return account.lower() in _LINUX_SERVICE_USERS
+
+
+def file_path_templates_for_user(
+    templates: list[str],
+    os_category: str,
+    user: str,
+) -> list[str]:
+    """Return templates compatible with the account's source-native profile model."""
+    if not is_service_account(os_category, user):
+        return list(templates)
+
+    if os_category == "windows":
+        filtered = [
+            template
+            for template in templates
+            if not template.lower().startswith(r"c:\users\{user}".lower())
+        ]
+    else:
+        filtered = [template for template in templates if not template.startswith("/home/{user}/")]
+    return filtered or list(templates)
+
+
+def _uses_interactive_profile_template(template: str, os_category: str) -> bool:
+    """Return True when a file template requires a normal user profile root."""
+    if os_category == "windows":
+        return template.lower().startswith(r"c:\users\{user}".lower())
+    return template.startswith("/home/{user}/")
 
 
 def get_registry_keys_hkcu() -> list[tuple[str, str, str]]:
@@ -469,7 +553,17 @@ def select_file_side_effect(
         if not paths or not actions:
             return None
         action = str(rng.choice(actions)).lower()
-        path_templates = list(paths)
+        raw_path_templates = [str(path) for path in paths]
+        path_templates = file_path_templates_for_user(raw_path_templates, os_category, user)
+        if (
+            is_service_account(os_category, user)
+            and path_templates == raw_path_templates
+            and any(
+                _uses_interactive_profile_template(template, os_category)
+                for template in raw_path_templates
+            )
+        ):
+            return None
         path = materialize_edr_template(str(rng.choice(path_templates)), rng, user=user)
         if (
             exe in {"bash", "sh"}
