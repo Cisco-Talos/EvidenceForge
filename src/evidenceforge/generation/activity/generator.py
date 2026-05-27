@@ -14053,37 +14053,37 @@ class ActivityGenerator:
         target_server: str,
         source_ip: str = "",
     ) -> str:
-        """Return source network metadata for remote explicit-credential use."""
+        """Return source network metadata for explicit-credential use."""
         target = target_server.strip().lower()
-        if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
-            default_source_ip = "-"
-        else:
-            system_domain = getattr(system, "domain", "")
-            local_names = {
-                system.hostname.lower(),
-                f"{system.hostname}.{system_domain}".lower() if system_domain else "",
-                system.ip,
-            }
-            target_host = target.split(".", 1)[0]
-            default_source_ip = (
-                "-"
-                if target in local_names or target_host == system.hostname.lower()
-                else system.ip
-            )
-        explicit_source_ip = source_ip.strip()
-        if explicit_source_ip in {"", "-"}:
-            return default_source_ip
-        if default_source_ip == "-":
-            return "-"
         system_domain = getattr(system, "domain", "")
         local_names = {
             system.hostname.lower(),
             f"{system.hostname}.{system_domain}".lower() if system_domain else "",
             system.ip,
         }
-        if explicit_source_ip.lower() in local_names:
-            return system.ip
-        return default_source_ip
+        if target in {"", "-", "localhost", "127.0.0.1", "::1"}:
+            return "-"
+        target_host = target.split(".", 1)[0]
+        if target in local_names or target_host == system.hostname.lower():
+            return "-"
+
+        explicit_source_ip = source_ip.strip()
+        if explicit_source_ip in {"", "-"}:
+            return "-"
+
+        normalized_source_ip = explicit_source_ip.removeprefix("::ffff:")
+        if normalized_source_ip.lower() in local_names or explicit_source_ip.lower() in local_names:
+            return "-"
+
+        source_system = getattr(self, "_ip_to_system", {}).get(normalized_source_ip)
+        if source_system is None:
+            return "-"
+        if (
+            source_system.ip == system.ip
+            or source_system.hostname.lower() == system.hostname.lower()
+        ):
+            return "-"
+        return normalized_source_ip
 
     def _ensure_explicit_credentials_subject_logon(
         self,

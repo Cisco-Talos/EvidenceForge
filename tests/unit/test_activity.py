@@ -5638,10 +5638,10 @@ class TestActivityGenerator:
         assert logon.timestamp < explicit.timestamp
         assert explicit.auth.subject_logon_id == logon.auth.logon_id
 
-    def test_generate_explicit_credentials_defaults_remote_network_endpoint(
+    def test_generate_explicit_credentials_defaults_remote_network_endpoint_blank(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """Remote 4648 records should carry source endpoint metadata by default."""
+        """Remote 4648 records should not invent local source endpoint metadata."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -5659,13 +5659,13 @@ class TestActivityGenerator:
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        assert explicit.auth.source_ip == test_system.ip
-        assert 49152 <= explicit.auth.source_port <= 65535
+        assert explicit.auth.source_ip == "-"
+        assert explicit.auth.source_port == 0
 
     def test_generate_explicit_credentials_ignores_unrelated_source_ip_override(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters
     ):
-        """A 4648 on a workstation should not borrow another host's source address."""
+        """A 4648 on a workstation should not borrow an unknown source address."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
         state_manager.set_current_time(timestamp)
 
@@ -5685,9 +5685,44 @@ class TestActivityGenerator:
             call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
         ]
         explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
-        assert explicit.auth.source_ip == test_system.ip
-        assert explicit.auth.source_port != 50001
-        assert 49152 <= explicit.auth.source_port <= 65535
+        assert explicit.auth.source_ip == "-"
+        assert explicit.auth.source_port == 0
+
+    def test_generate_explicit_credentials_preserves_modeled_remote_origin(
+        self, activity_gen, test_user, test_system, state_manager, mock_emitters
+    ):
+        """A modeled remote-origin 4648 may carry its known source endpoint."""
+        timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        state_manager.set_current_time(timestamp)
+        remote_system = System(
+            hostname="ADMIN-01",
+            ip="10.0.0.50",
+            os="Windows 11",
+            type="workstation",
+        )
+        activity_gen._ip_to_system = {
+            test_system.ip: test_system,
+            remote_system.ip: remote_system,
+        }
+
+        activity_gen.generate_explicit_credentials(
+            user=test_user,
+            system=test_system,
+            time=timestamp,
+            target_username="admin01",
+            target_server="dc01.corp.local",
+            process_name=r"C:\Windows\System32\runas.exe",
+            process_pid=4242,
+            source_ip=remote_system.ip,
+            source_port=50001,
+        )
+
+        emitted = [
+            call[0][0] for call in mock_emitters["windows_event_security"].emit.call_args_list
+        ]
+        explicit = next(event for event in emitted if event.event_type == "explicit_credentials")
+        assert explicit.auth.source_ip == remote_system.ip
+        assert explicit.auth.source_port == 50001
 
     def test_generate_explicit_credentials_local_target_keeps_blank_network_endpoint(
         self, activity_gen, test_user, test_system, state_manager, mock_emitters

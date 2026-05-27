@@ -4022,7 +4022,7 @@ class StorylineMixin:
                 target_server=spec.target_server or system.hostname,
                 process_name=spec.process_name or r"C:\Windows\System32\runas.exe",
                 process_pid=story_pid if story_pid > 0 else 0,
-                source_ip=spec.source_ip or system.ip,
+                source_ip=spec.source_ip or "",
             )
             malicious_event["target_username"] = spec.target_username
             malicious_event["target_server"] = spec.target_server
