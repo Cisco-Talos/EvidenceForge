@@ -4,6 +4,66 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v1.1.0 (2026-05-28)
+
+This minor release promotes the external-parser validation work and the latest
+current-dev realism hardening from `dev` to `main`. The branch contains public
+`feat:` commits since v1.0.1, so the project moves from `1.0.1` to `1.1.0`.
+
+**External parser validation and source rendering**
+
+- Added SOF-ELK harness support for Zeek, Cisco ASA, web access, syslog-family,
+  Windows Snare sidecars, parser tag policy, target-aware output rendering, and
+  coverage summaries, with runner/script documentation and parser smoke coverage
+  (`3e6bccb8`, `b40c7bd5`, `a932ab56`, `544d877c`, `b1267bb6`, `c4374af6`,
+  `461d8e5b`, `931cbe46`, `6ee64c21`, `fb03b056`, `5ea85fbe`, `c7235660`,
+  `b46a9c5f`, `388421cb`, `fd83d83a`, `d8edbceb`, `a909693c`, `9873f0d0`,
+  `37979eee`, `9507f69e`, `ad1d1b81`, `23c7ba94`, `103fb895`).
+- Clarified external-parser validation workflow, parser progress phases, ignored
+  parser tags, and dev-sync follow-up notes (`d90c9f67`, `2174b1c0`,
+  `aa7195df`, `9af38656`).
+
+**Current-dev realism assessment and generator hardening**
+
+- Landed the loop 203-217 fix family for endpoint/eCAR coherence, proxy and HTTP
+  file identity, Windows audit ordering, DNS hostname canonicalization, SMB
+  transport binding, Linux shell/session texture, Zeek timing variation,
+  explicit credential endpoints, PsExec lifecycle, Windows record IDs, source
+  timing, Linux session reuse, eCAR concurrency, remote-session ordering, SSH
+  source-port reuse, and the current-dev blind-review findings (`3a0647e1`,
+  `8f2881c2`, `2e9462a4`, `af62abd0`, `74fd68a3`, `2e86c4aa`, `f6189674`,
+  `c95bd588`, `786e7b88`, `b7a9c0fa`, `199d1f78`, `ca6ebca6`, `01f6954b`,
+  `67bec768`, `d2688faf`, `f2b1c34b`, `ce79bc82`, `c2c6a344`, `1f95b0e3`,
+  `0ad5983c`, `b725f912`, `e3fc1fc2`, `9ce3ad27`, `ecde3b4a`, `9895f149`,
+  `607f4749`, `e8ea4deb`, `354eda17`, `fd786afc`, `70351fe7`, `057db70b`,
+  `907678c1`).
+- Added the final root-cause fixes for scanner probe isolation and explicit proxy
+  HTTP outcome preservation, plus regression coverage for those contracts
+  (`97d79a0a`).
+- Recorded loop assessment handoff history and follow-up issues in the current
+  dev worklog/TODO flow (`55d9afb3`, `d2688faf`, `ce79bc82`, `e3fc1fc2`,
+  `607f4749`, `41b0569e`, `4f80e4a4`).
+
+**Validation, model, and configuration fixes**
+
+- Tightened ConnectionEventSpec response-body bounds, NTP schedule carryover,
+  IDS numeric validation, SCP target username sanitization, proxy duration
+  floors, SSH auth datetime normalization, bash-history and Sysmon PR review
+  findings, and SOF-ELK smoke-log harvesting (`2b2bca5f`, `a1776317`,
+  `43fc5454`, `cfa6b8d8`, `17a6c272`, `8e9e9cc2`, `199b6865`, `9507f69e`).
+- Improved parser/runtime policy and related unit coverage so optional external
+  parser failures surface as controlled validation outcomes (`103fb895`,
+  `ad1d1b81`).
+
+**Documentation, CI, and dependency maintenance**
+
+- Updated the blog-post title and carried forward roadmap/worklog documentation
+  for the assessment and parser-validation efforts (`787308aa`, `9af38656`,
+  `41b0569e`, `4f80e4a4`).
+- Refreshed CI and dependency pins for Python setup, uv setup, checkout,
+  Ruff, pytest-asyncio, Codecov, and Typer (`4111a3dd`, `6ecd03e5`,
+  `c00420e9`, `5ea0c7ac`, `b215608c`, `b9bf3ed2`, `5a46742e`).
+
 ## v1.0.1 (2026-05-27)
 
 This patch release packages the final GitHub/source release-readiness cleanup
