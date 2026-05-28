@@ -747,10 +747,6 @@ class SysmonEventEmitter(LogEmitter):
         deterministic process-create source offset so Event 1 and all follow-on
         events share the same source-native identifier.
         """
-        cached_guid = self._final_process_guids.get((hostname, pid))
-        if cached_guid is not None:
-            return cached_guid
-
         ts = fallback_timestamp
         sm = getattr(self, "_state_manager", None)
         if sm and pid > 0:
@@ -763,7 +759,8 @@ class SysmonEventEmitter(LogEmitter):
             seed_parts=(hostname, pid, ts),
             not_before=ts,
         )
-        return self._generate_process_guid(hostname, pid, rendered_create_time)
+        base_guid = self._generate_process_guid(hostname, pid, rendered_create_time)
+        return self._final_process_guids.get((hostname, pid, base_guid), base_guid)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
@@ -1751,7 +1748,7 @@ class SysmonEventEmitter(LogEmitter):
         self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
-        self._final_process_guids: dict[tuple[str, int], str] = {}
+        self._final_process_guids: dict[tuple[str, int, str], str] = {}
         self._terminal_session_ids_by_logon: dict[tuple[str, str], int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
@@ -1980,7 +1977,7 @@ class SysmonEventEmitter(LogEmitter):
             hostname = computer.split(".", 1)[0] if computer else ""
             new_guid = self._generate_process_guid(hostname, pid_int, ts)
             old_guid = str(guid)
-            self._final_process_guids[(hostname, pid_int)] = new_guid
+            self._final_process_guids[(hostname, pid_int, old_guid)] = new_guid
             if new_guid != old_guid:
                 replacements[(computer, old_guid)] = new_guid
                 event["ProcessGuid"] = new_guid

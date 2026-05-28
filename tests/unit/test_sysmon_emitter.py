@@ -1019,7 +1019,7 @@ class TestSysmonEventEmitter:
         emitter = SysmonEventEmitter(format_def, temp_output)
         original = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
         shifted = original + timedelta(microseconds=453)
-        old_guid = emitter._generate_process_guid("WKS-01", 1234, original)
+        old_guid = emitter._get_stable_process_guid("WKS-01", 1234, original)
         new_guid = emitter._generate_process_guid("WKS-01", 1234, shifted)
         emitter._event_dicts = [
             {
@@ -1035,3 +1035,28 @@ class TestSysmonEventEmitter:
 
         assert emitter._event_dicts[0]["ProcessGuid"] == new_guid
         assert emitter._get_stable_process_guid("WKS-01", 1234, original) == new_guid
+
+    def test_event1_time_shift_does_not_leak_process_guid_to_reused_pid(
+        self, format_def, temp_output
+    ):
+        """Event 1 GUID rewrites should stay scoped to a single process lifetime."""
+        emitter = SysmonEventEmitter(format_def, temp_output)
+        first_start = datetime(2024, 1, 15, 10, 30, 0, tzinfo=UTC)
+        first_shifted = first_start + timedelta(microseconds=453)
+        first_old_guid = emitter._get_stable_process_guid("WKS-01", 1234, first_start)
+        first_new_guid = emitter._generate_process_guid("WKS-01", 1234, first_shifted)
+        emitter._event_dicts = [
+            {
+                "EventID": 1,
+                "Computer": "WKS-01.corp.local",
+                "TimeCreated": first_shifted,
+                "ProcessGuid": first_old_guid,
+                "ProcessId": 1234,
+            }
+        ]
+
+        emitter._sync_process_guids_to_event1_times()
+
+        second_start = first_start + timedelta(hours=1)
+        assert emitter._get_stable_process_guid("WKS-01", 1234, first_start) == first_new_guid
+        assert emitter._get_stable_process_guid("WKS-01", 1234, second_start) != first_new_guid
