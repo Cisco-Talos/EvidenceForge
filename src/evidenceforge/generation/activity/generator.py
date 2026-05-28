@@ -774,6 +774,14 @@ def _attach_http_response_file_transfer(
         )
         min_http_file_duration = duration_floor + floor_rng.uniform(0.05, 0.55)
         event.network.duration = max(event.network.duration or 0.0, min_http_file_duration)
+        if event.proxy is not None:
+            event.proxy.time_taken = _proxy_time_taken_ms(
+                event.network.duration,
+                rng,
+                method=event.proxy.method,
+                status_code=event.proxy.status_code,
+                cache_result=event.proxy.cache_result,
+            )
 
     file_result = HttpResponseFileTransferActionBundle(
         HttpResponseFileTransferRequest(
