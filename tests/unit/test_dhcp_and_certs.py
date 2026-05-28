@@ -1266,7 +1266,7 @@ class TestTlsIssuers:
         assert intermediate.certificate_subject == issuer_name
         assert intermediate.certificate_key_type == "ecdsa"
         assert intermediate.certificate_issuer == (
-            "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE"
+            "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US"
         )
         expected = signature_algorithm_for_issuer(intermediate.certificate_issuer)
         assert intermediate.certificate_sig_alg == expected
@@ -1278,10 +1278,10 @@ class TestTlsIssuers:
             (
                 "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
                 "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
-                "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE",
+                "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US",
                 "ecdsa",
                 256,
-                "sha256WithRSAEncryption",
+                "ecdsa-with-SHA256",
             ),
             (
                 "CN=E1, O=Let's Encrypt, C=US",

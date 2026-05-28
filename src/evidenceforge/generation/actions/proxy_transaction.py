@@ -235,6 +235,7 @@ class ProxyTransactionExecutor(Protocol):
         firewall: FirewallContext | None = None,
         hostname: str | None = None,
         proxy_bypass: bool = False,
+        preserve_http_outcome: bool = False,
         process_image: str | None = None,
     ) -> str:
         """Generate a canonical connection event."""
@@ -437,6 +438,7 @@ class ProxyTransactionActionBundle:
             proxy=proxy_context,
             hostname=executor._proxy_fqdn(proxy_sys),
             proxy_bypass=True,
+            preserve_http_outcome=True,
             process_image=client_process_image,
         )
 
@@ -490,6 +492,7 @@ class ProxyTransactionActionBundle:
             firewall=request.firewall,
             hostname=proxy_context.host,
             proxy_bypass=True,
+            preserve_http_outcome=True,
         )
         if request.dst_port == 443:
             executor._explicit_proxy_tunnels[tunnel_key] = (client_time, client_uid)

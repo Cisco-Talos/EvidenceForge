@@ -97,6 +97,8 @@ class NetworkConnectionRequest:
     proxy_bypass: bool = False
     process_image: str | None = None
     preserve_dst_ip: bool = False
+    preserve_http_outcome: bool = False
+    suppress_application_side_effects: bool = False
     packet_overhead_bytes: int | None = None
     responding_pid: int = -1
     source: str = "activity_generator"
@@ -118,6 +120,7 @@ class NetworkConnectionRequest:
             f"{_context_fingerprint(self.proxy)}:"
             f"{_context_fingerprint(self.firewall)}:{self.hostname or ''}:"
             f"{self.proxy_bypass}:{self.process_image or ''}:{self.preserve_dst_ip}:"
+            f"{self.preserve_http_outcome}:{self.suppress_application_side_effects}:"
             f"{self.packet_overhead_bytes or ''}:{self.responding_pid}:{self.source}"
         )
         return f"network-connection-{seed:016x}"

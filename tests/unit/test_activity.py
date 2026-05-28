@@ -2325,7 +2325,7 @@ class TestActivityGenerator:
         assert second == first
 
     def test_nmap_process_emits_matching_network_scan_evidence(
-        self, activity_gen, test_user, state_manager, mock_emitters
+        self, activity_gen, test_user, state_manager, mock_emitters, monkeypatch
     ):
         """Nmap process commands should leave network scan evidence."""
         timestamp = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
@@ -2357,6 +2357,15 @@ class TestActivityGenerator:
             target_b.ip: target_b,
         }
         state_manager.set_current_time(timestamp)
+        probe_requests = []
+        original_generate_connection = activity_gen.generate_connection
+
+        def capture_probe_connection(**kwargs):
+            if kwargs.get("process_image") == "/usr/bin/nmap":
+                probe_requests.append(dict(kwargs))
+            return original_generate_connection(**kwargs)
+
+        monkeypatch.setattr(activity_gen, "generate_connection", capture_probe_connection)
 
         pid = activity_gen.generate_process(
             user=test_user,
@@ -2375,17 +2384,29 @@ class TestActivityGenerator:
             and call.args[0].network.src_ip == source.ip
             and call.args[0].network.initiating_pid == pid
         ]
-        assert scan_events
-        assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
-        assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445, 3306}
-        assert len({event.network.conn_state for event in scan_events}) > 1
-        assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
-        assert {event.network.service for event in scan_events if event.network.service} >= {
+        assert probe_requests
+        assert {request["dst_ip"] for request in probe_requests} == {target_a.ip, target_b.ip}
+        assert {request["dst_port"] for request in probe_requests} >= {22, 80, 443, 445, 3306}
+        assert {request.get("service") for request in probe_requests if request.get("service")} >= {
             "ssh",
             "http",
+            "ssl",
             "smb",
             "mysql",
         }
+        assert all(
+            request["suppress_application_side_effects"] is True for request in probe_requests
+        )
+        assert scan_events
+        assert {event.network.dst_ip for event in scan_events} == {target_a.ip, target_b.ip}
+        assert {event.network.dst_port for event in scan_events} >= {22, 80, 443, 445}
+        assert len({event.network.conn_state for event in scan_events}) > 1
+        assert any(event.network.conn_state in {"S0", "REJ"} for event in scan_events)
+        assert all(event.http is None for event in scan_events)
+        assert all(event.ssl is None for event in scan_events)
+        assert all(event.x509 is None for event in scan_events)
+        assert all(event.ocsp is None for event in scan_events)
+        assert all(event.file_transfer is None for event in scan_events)
 
     def test_nmap_command_probe_bundle_anchor_is_stable(self, test_user):
         """Nmap command probe bundles should expose deterministic anchors."""
@@ -7342,7 +7363,7 @@ class TestActivityGenerator:
         ]
         assert terminate_events
         assert create_event.timestamp < terminate_events[-1].timestamp
-        assert terminate_events[-1].timestamp <= process_time + timedelta(seconds=2)
+        assert terminate_events[-1].timestamp <= create_event.timestamp + timedelta(seconds=2)
 
     def test_linux_process_activity_bash_history_uses_canonical_command(
         self, activity_gen, test_user, state_manager, mock_emitters

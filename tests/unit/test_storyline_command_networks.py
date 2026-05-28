@@ -868,7 +868,23 @@ class _FakeStateManager:
         return None
 
     def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
-        return [SimpleNamespace(system="SRC", logon_id="0xabc")]
+        if self.sessions:
+            return list(self.sessions.values())
+        return [
+            SimpleNamespace(
+                username=username,
+                system="SRC",
+                logon_id="0xabc",
+                logon_type=2,
+                source_ip="",
+                start_time=datetime(2020, 1, 1, tzinfo=UTC),
+                network_close_time=None,
+            )
+        ]
+
+    def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[SimpleNamespace]:
+        _ = at_time
+        return self.get_sessions_for_user(username)
 
     def get_session(self, logon_id: str) -> SimpleNamespace | None:
         return self.sessions.get(logon_id)
@@ -1553,9 +1569,18 @@ class TestStorylineCommandSideEffects:
             )
 
         engine._emit_smb_logon_pair = capture_smb_logon_pair
-        engine._record_storyline_logon(actor, file_server, "0xabc", source_ip=source.ip)
         archive_time = datetime(2026, 5, 18, 14, 1, tzinfo=UTC)
         upload_time = datetime(2026, 5, 18, 14, 25, tzinfo=UTC)
+        engine.state_manager.sessions["0xabc"] = SimpleNamespace(
+            username=actor.username,
+            system=file_server.hostname,
+            logon_id="0xabc",
+            logon_type=3,
+            source_ip=source.ip,
+            start_time=archive_time - timedelta(minutes=5),
+            network_close_time=upload_time + timedelta(minutes=5),
+        )
+        engine._record_storyline_logon(actor, file_server, "0xabc", source_ip=source.ip)
         process_spec = SimpleNamespace(
             type="process",
             process_name="powershell.exe",

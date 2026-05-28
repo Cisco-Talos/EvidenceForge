@@ -8942,6 +8942,7 @@ class ActivityGenerator:
                 conn_state=conn_state,
                 proxy_bypass=True,
                 process_image=process_name,
+                suppress_application_side_effects=True,
             )
 
     def _resolve_nmap_targets(self, command_line: str, system: System) -> list[str]:
@@ -9644,6 +9645,8 @@ class ActivityGenerator:
         proxy_bypass: bool = False,
         process_image: str | None = None,
         preserve_dst_ip: bool = False,
+        preserve_http_outcome: bool = False,
+        suppress_application_side_effects: bool = False,
         packet_overhead_bytes: int | None = None,
         responding_pid: int = -1,
     ) -> str:
@@ -9707,6 +9710,8 @@ class ActivityGenerator:
             proxy_bypass=proxy_bypass,
             process_image=process_image,
             preserve_dst_ip=preserve_dst_ip,
+            preserve_http_outcome=preserve_http_outcome,
+            suppress_application_side_effects=suppress_application_side_effects,
             packet_overhead_bytes=packet_overhead_bytes,
             responding_pid=responding_pid,
         )
@@ -9744,6 +9749,8 @@ class ActivityGenerator:
         proxy_bypass = request.proxy_bypass
         process_image = request.process_image
         preserve_dst_ip = request.preserve_dst_ip
+        preserve_http_outcome = request.preserve_http_outcome
+        suppress_application_side_effects = request.suppress_application_side_effects
         packet_overhead_bytes = request.packet_overhead_bytes
         responding_pid = request.responding_pid
 
@@ -9957,7 +9964,18 @@ class ActivityGenerator:
             # or was explicitly configured to use that hostname.
             tls_hostname = ""
 
-        if http is not None:
+        will_route_explicit_proxy = (
+            not proxy_bypass
+            and getattr(self, "_proxy_mode", "transparent") == "explicit"
+            and bool(proxy_chain)
+            and proto == "tcp"
+            and service in ("ssl", "http")
+            and dst_port in (80, 443)
+            and proxyable_external_destination
+            and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
+        )
+
+        if http is not None and not preserve_http_outcome and not will_route_explicit_proxy:
             http = _apply_plaintext_http_policy(
                 http,
                 hostname=hostname,
@@ -9965,16 +9983,7 @@ class ActivityGenerator:
                 dst_port=dst_port,
             )
 
-        explicit_proxy = (
-            not proxy_bypass
-            and getattr(self, "_proxy_mode", "transparent") == "explicit"
-            and proxy_chain
-            and proto == "tcp"
-            and service in ("ssl", "http")
-            and dst_port in (80, 443)
-            and proxyable_external_destination
-            and conn_state not in ("S0", "REJ", "S1", "SH", "SHR", "RSTO", "RSTR")
-        )
+        explicit_proxy = will_route_explicit_proxy
         if explicit_proxy:
             proxy_request = ProxyTransactionRequest(
                 src_ip=src_ip,
@@ -10439,7 +10448,12 @@ class ActivityGenerator:
                 if duration is not None:
                     duration = rng.uniform(0.001, 0.5)
 
-        if proto == "tcp" and dst_port == 443 and conn_state == "SF":
+        if (
+            not suppress_application_side_effects
+            and proto == "tcp"
+            and dst_port == 443
+            and conn_state == "SF"
+        ):
             # A completed TLS session with ssl.log/SNI evidence must include
             # at least a ClientHello and server handshake payload at conn.log
             # accounting level, even when the logical request body is empty.
@@ -10477,7 +10491,7 @@ class ActivityGenerator:
                 if rng.random() < 0.08:
                     duration += rng.uniform(1.5, 8.0)
 
-        if http is not None and conn_state == "SF":
+        if not suppress_application_side_effects and http is not None and conn_state == "SF":
             http_timing = get_timing_window(
                 "source.zeek_http_request",
                 default_min_ms=1,
@@ -10492,7 +10506,7 @@ class ActivityGenerator:
         kerberos_has_response = conn_state not in {"S0", "S1", "SH", "SHR", "REJ", "OTH"} and (
             (resp_bytes or 0) > 0 or conn_state == "SF"
         )
-        if kerberos_has_response:
+        if kerberos_has_response and not suppress_application_side_effects:
             self._emit_dc_audit_for_kerberos_connection(
                 src_ip=src_ip,
                 src_port=src_port,
@@ -10521,7 +10535,8 @@ class ActivityGenerator:
         )
         kerberos_audit_count = 0
         if (
-            service == "kerberos"
+            not suppress_application_side_effects
+            and service == "kerberos"
             and dst_port == 88
             and proto in {"tcp", "udp"}
             and kerberos_dc_hostname
@@ -11164,7 +11179,13 @@ class ActivityGenerator:
         # Zeek protocol-layer contexts: populate SSL/HTTP/files for fan-out
         # Skip for local-only events (no network sensor will see them)
         rng = _get_rng()
-        if not local_only and service == "ssl" and proto == "tcp" and conn_state == "SF":
+        if (
+            not suppress_application_side_effects
+            and not local_only
+            and service == "ssl"
+            and proto == "tcp"
+            and conn_state == "SF"
+        ):
             self._attach_ssl_context(
                 event,
                 hostname=tls_hostname,
@@ -11184,6 +11205,7 @@ class ActivityGenerator:
 
         elif (
             not local_only
+            and not suppress_application_side_effects
             and service == "http"
             and proto == "tcp"
             and conn_state == "SF"
@@ -11330,15 +11352,17 @@ class ActivityGenerator:
                 tags=[],
             )
 
-        _attach_http_response_file_transfer(
-            event,
-            dst_ip=dst_ip,
-            rng=rng,
-            probabilistic_file_analysis=not caller_supplied_http,
-        )
+        if not suppress_application_side_effects:
+            _attach_http_response_file_transfer(
+                event,
+                dst_ip=dst_ip,
+                rng=rng,
+                probabilistic_file_analysis=not caller_supplied_http,
+            )
 
         if (
-            event.file_transfer is None
+            not suppress_application_side_effects
+            and event.file_transfer is None
             and service == "smb"
             and proto == "tcp"
             and dst_port == 445
@@ -11460,7 +11484,7 @@ class ActivityGenerator:
                         response_body_len + response_overhead,
                         rng.randint(90, 450),
                     )
-            if event.network.service == "ssl":
+            if event.network.service == "ssl" and not suppress_application_side_effects:
                 event.network.orig_bytes = max(event.network.orig_bytes or 0, rng.randint(180, 900))
                 event.network.resp_bytes = max(
                     event.network.resp_bytes or 0, rng.randint(900, 4500)
@@ -11473,7 +11497,7 @@ class ActivityGenerator:
                     rng,
                 )
             )
-            if event.network.service == "ssl":
+            if event.network.service == "ssl" and not suppress_application_side_effects:
                 event.network.orig_pkts += rng.choices(
                     [0, 1, 2, 3, 5],
                     weights=[45, 25, 15, 10, 5],
@@ -11501,7 +11525,8 @@ class ActivityGenerator:
             )
 
         if (
-            not local_only
+            not suppress_application_side_effects
+            and not local_only
             and event.network.service == "ssl"
             and event.network.conn_state == "SF"
             and event.ssl is None
