@@ -104,6 +104,78 @@ class ValidationResult:
         return [i for i in self.issues if i.severity == "INFO"]
 
 
+def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict[str, Any]) -> None:
+    """Validate generic EDR file churn pools for source-native path templates."""
+    windows_paths = edr_pools_data.get("file_paths_windows", [])
+    if isinstance(windows_paths, list):
+        for path in windows_paths:
+            if not isinstance(path, str):
+                continue
+            normalized = path.replace("/", "\\").lower()
+            if "\\windows\\prefetch\\" not in normalized or not normalized.endswith(".pf"):
+                continue
+            if not re.search(r"-\{hex\}\.pf$", normalized):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_windows)",
+                        "Windows Prefetch templates in generic EDR file churn must use an "
+                        "8-character hex suffix via {hex}, not decimal {rand}",
+                    )
+                )
+
+    linux_paths = edr_pools_data.get("file_paths_linux", [])
+    if isinstance(linux_paths, list):
+        for path in linux_paths:
+            if not isinstance(path, str):
+                continue
+            normalized = path.lower()
+            if re.fullmatch(r"/proc/(?:\{rand\}|\d+)/status", normalized):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use /proc/<pid>/status paths because "
+                        "the churn action model can emit impossible CREATE/WRITE events",
+                    )
+                )
+            elif normalized == "/etc/passwd":
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use /etc/passwd because ambient "
+                        "service-principal reads look source-native synthetic",
+                    )
+                )
+            elif normalized.startswith(
+                (
+                    "/var/cache/apt/",
+                    "/var/lib/apt/",
+                    "/var/lib/dnf/",
+                    "/var/lib/dpkg/",
+                    "/var/log/apt/",
+                )
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use package-manager state paths; "
+                        "emit apt/dpkg artifacts through process-aware package-manager profiles",
+                    )
+                )
+            elif "systemd-private-" in normalized and "apache2.service" in normalized:
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use apache2 systemd-private temp "
+                        "paths without web-role/process constraints",
+                    )
+                )
+
+
 def _safe_load_yaml(path: Path) -> tuple[Any, str | None]:
     """Load YAML file, returning (data, error_message)."""
     try:
@@ -238,7 +310,7 @@ def validate_config() -> ValidationResult:
             "list_fields": {"patterns": None},
         },
         "activity/edr_pools.yaml": {
-            "list_fields": {"file_side_effect_profiles": None},
+            "list_fields": {"file_side_effect_profiles": None, "installed_software_products": None},
             "string_list_fields": {
                 "file_paths_windows",
                 "file_paths_linux",
@@ -251,6 +323,7 @@ def validate_config() -> ValidationResult:
                 "windows_scheduled_processes",
                 "registry_noise",
                 "ecar_flow_identity",
+                "ecar_file_churn",
             },
         },
         "activity/host_activity_profiles.yaml": {
@@ -615,6 +688,31 @@ def validate_config() -> ValidationResult:
                 )
             )
 
+    def _validate_ids_numeric_field(
+        file_name: str,
+        context: str,
+        signature: dict[str, object],
+        field_name: str,
+        *,
+        required: bool = False,
+        minimum: int = 1,
+    ) -> None:
+        """Validate IDS numeric fields that generation later casts with int()."""
+        value = signature.get(field_name)
+        if value is None and not required:
+            return
+        if not isinstance(value, int) or value < minimum:
+            requirement = (
+                f"a positive integer (>= {minimum})" if minimum > 1 else "a positive integer"
+            )
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{context} {field_name} must be {requirement}, got {value!r}",
+                )
+            )
+
     # --- IDS Signature Integrity ---
     for i, sig in enumerate(ids_data.get("signatures", [])):
         sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
@@ -650,14 +748,16 @@ def validate_config() -> ValidationResult:
                 )
             )
         gid = sig.get("gid", 1)
-        if not isinstance(gid, int) or gid < 1:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    "ids_signatures.yaml",
-                    f"Signature {sid} gid must be a positive integer",
-                )
-            )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "sid", required=True
+        )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "rev", required=True
+        )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "priority", required=True
+        )
+        _validate_ids_numeric_field("ids_signatures.yaml", f"Signature {sid}", sig, "gid")
         _record_ids_rule_identity("ids_signatures.yaml", sig.get("sid"), gid, sig.get("message"))
         templates = sig.get("dns_query_templates")
         if templates is not None:
@@ -791,6 +891,7 @@ def validate_config() -> ValidationResult:
         content_types = entry.get("content_types")
         domain_class = entry.get("domain_class")
         referrer_policy = entry.get("referrer_policy", "normal")
+        source_system_types = entry.get("source_system_types")
         if not isinstance(paths, list) or not paths:
             result.issues.append(
                 Issue(
@@ -825,6 +926,21 @@ def validate_config() -> ValidationResult:
                     f'Domain "{domain}" has invalid referrer_policy "{referrer_policy}"',
                 )
             )
+        if source_system_types is not None:
+            valid_source_types = {"workstation", "server", "domain_controller"}
+            observed_types = (
+                {str(value) for value in source_system_types}
+                if isinstance(source_system_types, list)
+                else set()
+            )
+            if not observed_types or not observed_types.issubset(valid_source_types):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_uri_templates.yaml",
+                        f'Domain "{domain}" has invalid source_system_types',
+                    )
+                )
         if domain_class in _INFRA_PROXY_CLASSES:
             if referrer_policy != "none":
                 result.issues.append(
@@ -1899,6 +2015,7 @@ def validate_config() -> ValidationResult:
         DnsTunnelRttConfig,
         DnsTunnelTtlEntry,
         EdrFileSideEffectProfile,
+        EdrInstalledSoftwareProduct,
         EndpointNoiseConfig,
         ExternalScannerPortProfile,
         HostActivityProfilesConfig,
@@ -2023,11 +2140,19 @@ def validate_config() -> ValidationResult:
 
     edr_pools_data = load_edr_pools()
     if edr_pools_data:
+        _validate_edr_file_path_pools(result, edr_pools_data)
         _SCHEMA_CHECKS.append(
             (
                 edr_pools_data.get("file_side_effect_profiles", []),
                 EdrFileSideEffectProfile,
                 "edr_pools.yaml (file_side_effect_profiles)",
+            )
+        )
+        _SCHEMA_CHECKS.append(
+            (
+                edr_pools_data.get("installed_software_products", []),
+                EdrInstalledSoftwareProduct,
+                "edr_pools.yaml (installed_software_products)",
             )
         )
     if endpoint_noise_data:
@@ -2567,6 +2692,18 @@ def validate_config() -> ValidationResult:
                     ids_ua.get("gid", 1),
                     ids_ua.get("message"),
                 )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "sid", required=True
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "rev"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "priority"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "gid"
+                )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
@@ -2593,6 +2730,22 @@ def validate_config() -> ValidationResult:
                     ids_rate.get("sid"),
                     ids_rate.get("gid", 1),
                     ids_rate.get("message"),
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml",
+                    f'Preset "{name}" ids_rate',
+                    ids_rate,
+                    "sid",
+                    required=True,
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "rev"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "priority"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "gid"
                 )
                 threshold = ids_rate.get("threshold")
                 if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
@@ -2631,6 +2784,15 @@ def validate_config() -> ValidationResult:
                     path_ids.get("gid", 1),
                     path_ids.get("message"),
                 )
+                path_context = f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids'
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", path_context, path_ids, "sid", required=True
+                )
+                _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "rev")
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", path_context, path_ids, "priority"
+                )
+                _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "gid")
 
     # --- RSAT tools validation ---
     from evidenceforge.generation.activity.rsat_tools import load_rsat_tools

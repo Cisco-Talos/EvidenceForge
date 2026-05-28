@@ -393,6 +393,7 @@ class FileTransferContext:
     analyzers: list[str] = field(default_factory=list)
     mime_type: str = ""
     duration: float = 0.0
+    observation_not_before: datetime | None = None
     local_orig: bool = False
     is_orig: bool = False
     seen_bytes: int = 0

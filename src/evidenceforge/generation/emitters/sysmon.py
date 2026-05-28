@@ -51,6 +51,7 @@ from evidenceforge.generation.emitters.windows import (
     _subject_domain,
 )
 from evidenceforge.generation.emitters.windows_event import format_windows_system_time
+from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
@@ -746,10 +747,6 @@ class SysmonEventEmitter(LogEmitter):
         deterministic process-create source offset so Event 1 and all follow-on
         events share the same source-native identifier.
         """
-        cached_guid = self._final_process_guids.get((hostname, pid))
-        if cached_guid is not None:
-            return cached_guid
-
         ts = fallback_timestamp
         sm = getattr(self, "_state_manager", None)
         if sm and pid > 0:
@@ -762,7 +759,8 @@ class SysmonEventEmitter(LogEmitter):
             seed_parts=(hostname, pid, ts),
             not_before=ts,
         )
-        return self._generate_process_guid(hostname, pid, rendered_create_time)
+        base_guid = self._generate_process_guid(hostname, pid, rendered_create_time)
+        return self._final_process_guids.get((hostname, pid, base_guid), base_guid)
 
     def can_handle(self, event: SecurityEvent) -> bool:
         """Sysmon emitter handles supported event types on Windows hosts."""
@@ -987,7 +985,7 @@ class SysmonEventEmitter(LogEmitter):
             "User": user,
             "LogonGuid": self._resolve_logon_guid(host.hostname, logon_id, auth),
             "LogonId": logon_id,
-            "TerminalSessionId": self._terminal_session_id(auth, logon_id),
+            "TerminalSessionId": self._terminal_session_id(host.hostname, auth, logon_id),
             "IntegrityLevel": integrity,
             "Hashes": self._generate_hashes(proc.image, host),
             "ParentProcessGuid": parent_guid,
@@ -1093,18 +1091,26 @@ class SysmonEventEmitter(LogEmitter):
             return resolve_image_path(image, "windows", username=username)
         return image
 
-    @staticmethod
-    def _terminal_session_id(auth, logon_id: str) -> int:
+    def _terminal_session_id(self, hostname: str, auth, logon_id: str) -> int:
         """Return a source-native TerminalSessionId for Sysmon process creates."""
         if auth is None:
             return 0
         username = (auth.username or "").upper()
         if username in {"SYSTEM", "LOCAL SERVICE", "NETWORK SERVICE", "ANONYMOUS LOGON"}:
             return 0
+        key = (hostname, logon_id or username)
+        cached_session_id = self._terminal_session_ids_by_logon.get(key)
+        if cached_session_id is not None:
+            return cached_session_id
         if auth.session_id > 0:
+            self._terminal_session_ids_by_logon[key] = auth.session_id
             return auth.session_id
         if auth.logon_type in {2, 7, 10, 11}:
-            return 1 + (_stable_seed(f"sysmon_terminal_session:{logon_id or username}") % 8)
+            session_id = 1 + (
+                _stable_seed(f"sysmon_terminal_session:{hostname}:{logon_id or username}") % 8
+            )
+            self._terminal_session_ids_by_logon[key] = session_id
+            return session_id
         return 0
 
     def _render_sysmon_create_remote_thread(self, event: SecurityEvent) -> None:
@@ -1739,10 +1745,11 @@ class SysmonEventEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_counters: dict[str, int] = {}
-        self._erid_rngs: dict[str, random.Random] = {}
+        self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
-        self._final_process_guids: dict[tuple[str, int], str] = {}
+        self._final_process_guids: dict[tuple[str, int, str], str] = {}
+        self._terminal_session_ids_by_logon: dict[tuple[str, str], int] = {}
 
     def _get_host_writer(self, host_fqdn: str) -> _SingleHostWriter:
         safe_host = sanitize_path_component(host_fqdn)
@@ -1866,20 +1873,14 @@ class SysmonEventEmitter(LogEmitter):
             )
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
-            if counter_key not in self._record_id_counters:
-                self._erid_rngs[counter_key] = random.Random(f"sysmon_erid_{counter_key}")
-                self._record_id_counters[counter_key] = self._erid_rngs[counter_key].randint(
-                    100_000, 500_000
-                )
-            rng = self._erid_rngs[counter_key]
-            # Simulate gaps from event types we don't generate (6, 9, 14-21, 23-29, etc.)
-            # Real Sysmon shares ETW session with other providers; gaps vary widely.
-            if rng.random() < 0.15:
-                gap = rng.randint(8, 50)  # Occasional large gap (batch ETW events)
-            else:
-                gap = rng.randint(1, 7)
-            self._record_id_counters[counter_key] += gap
-            event["EventRecordID"] = self._record_id_counters[counter_key]
+            sequence_model = self._record_id_sequences.setdefault(
+                counter_key, WindowsRecordIdSequence("sysmon", counter_key)
+            )
+            event["EventRecordID"] = sequence_model.next(
+                event.get("TimeCreated"),
+                int(event.get("EventID") or 0),
+            )
+            self._record_id_counters[counter_key] = sequence_model.current
 
         self._sync_utc_time_fields()
         self._sync_process_guids_to_event1_times()
@@ -1976,7 +1977,7 @@ class SysmonEventEmitter(LogEmitter):
             hostname = computer.split(".", 1)[0] if computer else ""
             new_guid = self._generate_process_guid(hostname, pid_int, ts)
             old_guid = str(guid)
-            self._final_process_guids[(hostname, pid_int)] = new_guid
+            self._final_process_guids[(hostname, pid_int, old_guid)] = new_guid
             if new_guid != old_guid:
                 replacements[(computer, old_guid)] = new_guid
                 event["ProcessGuid"] = new_guid

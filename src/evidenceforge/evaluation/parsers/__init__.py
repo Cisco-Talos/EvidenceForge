@@ -103,14 +103,40 @@ def _is_safe_path(path: Path, root: Path) -> bool:
 def _discover_bash_history_files(output_dir: Path, output_root: Path) -> list[Path]:
     """Discover bash history files across supported output layouts."""
     files: dict[Path, None] = {}
-    for history_dir in output_dir.rglob("bash_history"):
+
+    def add_history_files(history_dir: Path) -> None:
         if not _is_safe_path(history_dir, output_root) or not history_dir.is_dir():
-            continue
-        for candidate in history_dir.rglob("*"):
+            return
+        for candidate in history_dir.iterdir():
             if not _is_safe_path(candidate, output_root) or not candidate.is_file():
                 continue
             if candidate.suffix in (".history", ".bash_history"):
                 files[candidate] = None
+
+    def add_legacy_history_tree(history_root: Path) -> None:
+        add_history_files(history_root)
+        if not _is_safe_path(history_root, output_root) or not history_root.is_dir():
+            return
+        for host_dir in history_root.iterdir():
+            if not _is_safe_path(host_dir, output_root) or not host_dir.is_dir():
+                continue
+            add_history_files(host_dir)
+
+    add_legacy_history_tree(output_dir / "bash_history")
+    for child in output_dir.iterdir():
+        if not _is_safe_path(child, output_root) or not child.is_dir():
+            continue
+        if child.name == "bash_history":
+            continue
+        add_history_files(child / "bash_history")
+        for subdir in child.iterdir():
+            if not _is_safe_path(subdir, output_root) or not subdir.is_dir():
+                continue
+            if subdir.name == "bash_history":
+                add_legacy_history_tree(subdir)
+            else:
+                add_history_files(subdir / "bash_history")
+
     return sorted(files, key=lambda path: path.as_posix())
 
 

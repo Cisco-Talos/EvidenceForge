@@ -64,6 +64,34 @@ touches generation behavior or before a release PR:
 uv run pytest --include-slow -m slow --no-cov --durations=20
 ```
 
+Run optional third-party parser validation when touching emitted log formats
+covered by an external parser harness. This lane requires Docker Compose v2 or
+Podman Compose:
+
+```bash
+uv run pytest --include-external-parsers -m external_parser --no-cov
+```
+
+See [External Parser Validation](docs/external-parser-validation/README.md)
+for the full-dataset runner command, SOF-ELK® harness architecture, coverage
+matrix, ignored-tag policy, and failure report details.
+
+If you add or change a log format that already has external parser support,
+update the external-parser smoke lane for that format and run it. If you add a
+new supported parser family, include discovery, staging, representative smoke
+fixtures, validation checks, docs coverage, and any explicit tag-policy rules.
+If there is no applicable third-party parser yet, update the coverage matrix
+and keep discovery warnings/tests in place so the unsupported format is not
+silently skipped.
+
+For target-dependent parser support, add or update smoke fixtures for the
+target that the parser expects. SOF-ELK checks for Windows/Sysmon, Linux syslog,
+and Cisco ASA use `eforge generate --target sof-elk`; default-target output
+must still be covered by normal generation/evaluation tests and should produce a
+clear diagnostic in the external-parser runner. The developer-facing SOF-ELK
+script requires `OUTPUT_TARGET.txt` to exist and contain `sof-elk`; legacy or
+default-target datasets exit before parser discovery/staging.
+
 Coverage is reserved for final readiness checks before opening a `dev` → `main`
 release PR. Do not combine slow tests with coverage during release validation:
 slow tests are intentionally run with `--no-cov`, and coverage is measured on
@@ -121,6 +149,8 @@ uv run ruff format --check .
 
 - `@pytest.mark.slow`: large dataset and workload tests, skipped by default and normally
   run without coverage instrumentation
+- `@pytest.mark.external_parser`: third-party parser container tests, skipped by default
+  and normally run only in an explicitly opted-in local or CI lane
 
 ```bash
 # Normal fast run
@@ -128,6 +158,9 @@ uv run pytest --no-cov
 
 # Slow comprehensive run
 uv run pytest --include-slow -m slow --no-cov --durations=20
+
+# External parser run
+uv run pytest --include-external-parsers -m external_parser --no-cov
 
 # Release coverage gate; do not combine with --include-slow
 uv run pytest --cov=evidenceforge --cov-report=term-missing --cov-report=xml --cov-fail-under=70

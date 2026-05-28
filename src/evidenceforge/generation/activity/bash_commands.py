@@ -410,14 +410,24 @@ def _remember_command(system_hostname: str, username: str, command: str) -> None
 def _low_repeat_group(command: str) -> str | None:
     """Return a canonical low-repeat budget key for equivalent diagnostic commands."""
     normalized = " ".join(command.split())
+    if normalized in _LOW_REPEAT_EXACT_COMMANDS:
+        return normalized.replace(" ", "_").replace("/", "_")
     if normalized.startswith("cat /proc/cpuinfo | grep 'model name'"):
         return "cpuinfo_model_name"
     if normalized == "df -h /tmp":
         return "df_tmp"
+    if normalized in {"command -v python3", "python3 -V 2>&1", "which python3"}:
+        return "python3_discovery"
+    if normalized in {"history", "history | tail -15", "history | tail -20"}:
+        return "history_review"
     if normalized == "hostnamectl":
         return "hostnamectl"
+    if normalized.startswith("ip addr show"):
+        return "ip_addr_show"
     if normalized.startswith("ip -br addr"):
         return "ip_br_addr"
+    if normalized.startswith("ip -o addr show"):
+        return "ip_o_addr"
     if normalized.startswith("ip route get "):
         return "ip_route_get"
     if normalized.startswith("journalctl -p warning"):
@@ -444,8 +454,12 @@ def _low_repeat_group(command: str) -> str | None:
         parts = normalized.split()
         if len(parts) >= 3:
             return f"systemctl_status_{parts[2]}"
+    if normalized in {"tail -20 /var/log/auth.log", "tail -50 /var/log/auth.log"}:
+        return "auth_log_tail_generic"
     if normalized == "timedatectl":
         return "timedatectl"
+    if normalized in {"uname -a", "uname -sr", "uname -mrs"}:
+        return "uname_kernel"
     if normalized == "systemctl status sshd" or normalized.startswith("systemctl status sshd "):
         return "systemctl_sshd"
     return None

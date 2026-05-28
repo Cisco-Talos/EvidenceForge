@@ -109,11 +109,67 @@ def _fallback_linux_uid(user: str) -> int:
     """Return a source-native fallback UID for a syslog-only PAM backfill."""
     if user == "root":
         return 0
-    if user == "ubuntu":
-        return 1000
-    if user == "admin":
-        return 1001
-    return 1000
+    well_known = {
+        "ubuntu": 1000,
+        "ec2-user": 1000,
+        "admin": 1001,
+        "ansible": 998,
+        "deploy": 1002,
+    }
+    if user in well_known:
+        return well_known[user]
+    return 2000 + (_stable_seed(f"linux_uid:{user}") % 5000)
+
+
+def _fallback_linux_uid_for_host(host_key: str, user: str) -> int:
+    """Return a stable UID for a syslog-only PAM row on one host."""
+    if user == "root":
+        return 0
+    well_known = {
+        "ubuntu": 1000,
+        "ec2-user": 1000,
+        "admin": 1001,
+        "ansible": 998,
+        "deploy": 1002,
+    }
+    if user in well_known:
+        return well_known[user]
+    return 2000 + (_stable_seed(f"linux_uid:{host_key}:{user}") % 5000)
+
+
+def _linux_uid_collision_repaired(lines: list[str], host_key: str) -> list[str]:
+    """Repair fallback PAM UIDs so default and named users do not collide."""
+    seen_users_by_uid: dict[int, set[str]] = {}
+    parsed: list[re.Match[str] | None] = []
+    for line in lines:
+        match = _RFC5424_PAM_OPEN_RE.match(line)
+        parsed.append(match)
+        if match is None:
+            continue
+        uid = int(match.group("uid"))
+        seen_users_by_uid.setdefault(uid, set()).add(match.group("user"))
+
+    collision_uids = {
+        uid
+        for uid, users in seen_users_by_uid.items()
+        if len(users) > 1 and any(user not in {"root", "ubuntu", "ec2-user"} for user in users)
+    }
+    if not collision_uids:
+        return lines
+
+    normalized: list[str] = []
+    for line, match in zip(lines, parsed, strict=True):
+        if match is None:
+            normalized.append(line)
+            continue
+        user = match.group("user")
+        uid = int(match.group("uid"))
+        if uid not in collision_uids or user in {"root", "ubuntu", "ec2-user"}:
+            normalized.append(line)
+            continue
+        repaired_uid = _fallback_linux_uid_for_host(host_key, user)
+        normalized.append(line[: match.start("uid")] + str(repaired_uid) + line[match.end("uid") :])
+    return normalized
 
 
 def _parse_logind_session_id(value: str) -> int | None:
@@ -349,6 +405,7 @@ class SyslogEmitter(HostMultiplexEmitter):
             self.stop_thread()
         self._normalize_logind_session_ids()
         self._backfill_missing_logind_pam_openers()
+        self._normalize_pam_uid_collisions()
         self._normalize_sudo_session_lifecycles()
         self._normalize_kernel_uptime_stamps()
         self._normalize_sshd_child_pids()
@@ -452,6 +509,20 @@ class SyslogEmitter(HostMultiplexEmitter):
             lines = [row[3] for row in rows]
             normalized = self._normalize_sudo_session_lifecycles_for_lines(lines)
             self._replace_buffers_by_sorted_rows(rows, normalized)
+
+    def _normalize_pam_uid_collisions(self) -> None:
+        """Keep syslog-only PAM UID ownership coherent on each host."""
+        if self.output_target == OutputTarget.SOF_ELK:
+            return
+        with self._writers_lock:
+            for host_key, rows in self._sorted_lines_by_host().items():
+                if not rows:
+                    continue
+                normalized = _linux_uid_collision_repaired(
+                    [line for _year, _sort_key, _route_key, line in rows],
+                    host_key,
+                )
+                self._replace_buffers_by_sorted_rows(rows, normalized)
 
     def _normalize_kernel_uptime_stamps(self) -> None:
         """Clamp visible kernel bracket uptime values to final syslog order."""
@@ -667,10 +738,10 @@ class SyslogEmitter(HostMultiplexEmitter):
         """Render a source-native PAM open row for a visible orphaned logind row."""
         seed = _stable_seed(f"syslog_logind_pam_backfill:{host_key}:{user}:{index}")
         if user == "root":
-            service = ("cron", "sudo", "su")[seed % 3]
+            service = ("login", "su")[seed % 2]
         else:
-            service = ("login", "sudo", "cron")[seed % 3]
-        app_name = "CRON" if service == "cron" else service
+            service = "login"
+        app_name = service
         pid = 1200 + (seed % 8300)
         lead = timedelta(milliseconds=1800 + (seed % 2200))
         opener = "LOGIN(uid=0)" if service == "login" else "(uid=0)"

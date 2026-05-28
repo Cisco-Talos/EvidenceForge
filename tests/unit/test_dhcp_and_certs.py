@@ -13,9 +13,10 @@ import yaml
 
 from evidenceforge.config.schemas import TlsRealismConfig
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import NetworkContext, X509Context
+from evidenceforge.events.contexts import HttpContext, NetworkContext, X509Context
 from evidenceforge.generation.activity.generator import (
     ActivityGenerator,
+    _bound_certificate_validity_to_issuer_window,
     _dns_rtt,
     _ntp_stratum_and_ref_id,
     _ocsp_status_for_certificate,
@@ -215,10 +216,99 @@ class TestTlsIssuers:
 
     def test_ocsp_does_not_mark_mainstream_domains_revoked(self):
         """Ordinary mainstream browsing certificates should not produce revoked OCSP."""
-        domains = ["zoom.us", "www.bing.com", "slack.com", "a0.awsstatic.com", "www.google.com"]
+        domains = [
+            "zoom.us",
+            "www.bing.com",
+            "slack.com",
+            "a0.awsstatic.com",
+            "www.google.com",
+            "assets.adobedtm.com",
+        ]
         for domain in domains:
             statuses = {_ocsp_status_for_certificate(domain, f"{i:02X}") for i in range(200)}
             assert "revoked" not in statuses
+
+    def test_successful_http_tls_can_suppress_revoked_ocsp(self):
+        """Clean inspected HTTP outcomes should not be paired with revoked OCSP."""
+        revoked_case = None
+        for index in range(5000):
+            cert_name = f"edge{index}.example.net"
+            serial = f"{index:04X}"
+            if _ocsp_status_for_certificate(cert_name, serial) == "revoked":
+                revoked_case = (cert_name, serial)
+                break
+
+        assert revoked_case is not None
+        cert_name, serial = revoked_case
+        assert (
+            _ocsp_status_for_certificate(
+                cert_name,
+                serial,
+                suppress_revoked=True,
+            )
+            != "revoked"
+        )
+
+    def test_successful_http_tls_passes_ocsp_revocation_suppression(self, monkeypatch):
+        """TLS events with clean HTTP success should request non-revoked OCSP status."""
+
+        class ZeroRandom(random.Random):
+            def random(self) -> float:
+                return 0.0
+
+        import evidenceforge.generation.activity.generator as generator_module
+
+        captured: dict[str, bool] = {}
+
+        def fake_ocsp_status(
+            cert_name: str,
+            serial_number: str,
+            *,
+            suppress_revoked: bool = False,
+        ) -> str:
+            captured["suppress_revoked"] = suppress_revoked
+            return "good"
+
+        state_manager = StateManager()
+        generator = ActivityGenerator(state_manager, {})
+        generator._emit_ocsp_http_response = lambda *args, **kwargs: captured.setdefault(
+            "emitted",
+            True,
+        )
+        monkeypatch.setattr(generator_module, "_TLS_VERSION_VALUES", ("TLSv12",))
+        monkeypatch.setattr(generator_module, "_TLS_VERSION_WEIGHTS", (1,))
+        monkeypatch.setattr(generator_module, "_ocsp_status_for_certificate", fake_ocsp_status)
+
+        event = SecurityEvent(
+            timestamp=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+            event_type="connection",
+            network=NetworkContext(
+                src_ip="10.30.40.101",
+                src_port=50123,
+                dst_ip="93.184.216.34",
+                dst_port=443,
+                protocol="tcp",
+                service="ssl",
+                zeek_uid="COcspCleanSuccess",
+            ),
+            http=HttpContext(
+                method="GET",
+                host="edge42.example.net",
+                uri="/asset.js",
+                status_code=200,
+                status_msg="OK",
+            ),
+        )
+
+        generator._attach_ssl_context(
+            event,
+            hostname="edge42.example.net",
+            dns=None,
+            dst_ip="93.184.216.34",
+            rng=ZeroRandom(),
+        )
+
+        assert captured == {"suppress_revoked": True, "emitted": True}
 
     def test_ocsp_request_path_uses_long_encoded_der_shape(self):
         """OCSP-over-HTTP GET paths should not look like short synthetic tokens."""
@@ -1176,7 +1266,7 @@ class TestTlsIssuers:
         assert intermediate.certificate_subject == issuer_name
         assert intermediate.certificate_key_type == "ecdsa"
         assert intermediate.certificate_issuer == (
-            "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE"
+            "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US"
         )
         expected = signature_algorithm_for_issuer(intermediate.certificate_issuer)
         assert intermediate.certificate_sig_alg == expected
@@ -1188,10 +1278,10 @@ class TestTlsIssuers:
             (
                 "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
                 "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
-                "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE",
+                "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US",
                 "ecdsa",
                 256,
-                "sha256WithRSAEncryption",
+                "ecdsa-with-SHA256",
             ),
             (
                 "CN=E1, O=Let's Encrypt, C=US",
@@ -1338,6 +1428,67 @@ class TestTlsIssuers:
                 break
 
         assert checked >= len(issuer_names)
+
+    def test_public_ca_chain_validity_windows_fit_parent_certificates(self):
+        """Rendered public CA chain rows should not let children outlive issuers."""
+        generator = ActivityGenerator(StateManager(), {})
+        issuer_names = [
+            "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US",
+            "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US",
+            "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, L=Salford, ST=Greater Manchester, C=GB",
+            "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US",
+        ]
+
+        checked = 0
+        for issuer_name in issuer_names:
+            for seed in range(1, 800):
+                chain = generator._build_tls_certificate_chain(
+                    leaf=X509Context(
+                        fuid="FLeaf",
+                        certificate_subject=f"CN=leaf-{seed}.example",
+                        certificate_issuer=issuer_name,
+                        certificate_not_valid_before=int(
+                            datetime(2024, 1, 1, tzinfo=UTC).timestamp()
+                        ),
+                        certificate_not_valid_after=int(
+                            datetime(2024, 12, 31, tzinfo=UTC).timestamp()
+                        ),
+                    ),
+                    cert_name=f"leaf-{issuer_name}-{seed}.example",
+                    issuer_name=issuer_name,
+                    event_time=datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+                    connection_uid=f"CPublicCaValidity{seed}",
+                    rng=random.Random(seed),
+                )
+                if len(chain) < 3:
+                    continue
+                for child, issuer in zip(chain[1:], chain[2:], strict=False):
+                    assert child.certificate_issuer == issuer.certificate_subject
+                    assert issuer.certificate_not_valid_before <= child.certificate_not_valid_before
+                    assert child.certificate_not_valid_after <= issuer.certificate_not_valid_after
+                    checked += 1
+                break
+
+        assert checked >= len(issuer_names)
+
+    def test_leaf_certificate_validity_window_is_bounded_to_issuer_profile(self):
+        """Generated leaf cert validity should not predate or outlive the issuing CA."""
+        issuer_name = "CN=GlobalSign Atlas R3 DV TLS CA 2024 Q1, O=GlobalSign nv-sa, C=BE"
+        issuer_profile = certificate_authority_profile(issuer_name)
+        assert issuer_profile is not None
+
+        raw_validity = (
+            int(issuer_profile["not_valid_before"]) - 30 * 86400,
+            int(issuer_profile["not_valid_after"]) + 30 * 86400,
+        )
+        bounded_validity = _bound_certificate_validity_to_issuer_window(
+            raw_validity,
+            issuer_name,
+            datetime(2024, 10, 14, 12, 0, tzinfo=UTC),
+        )
+
+        assert bounded_validity[0] == issuer_profile["not_valid_before"]
+        assert bounded_validity[1] == issuer_profile["not_valid_after"]
 
     def test_leaf_signature_algorithm_follows_issuer_not_leaf_key(self):
         """An ECDSA leaf signed by an RSA CA should render an RSA signature algorithm."""

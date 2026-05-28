@@ -48,6 +48,43 @@ class TestEmitSmbLogonPair:
         delay = (logoff_time - ts).total_seconds()
         assert 5.0 <= delay <= 60.0, f"Logoff delay {delay}s outside [5, 60] range"
 
+    def test_can_bind_to_existing_transport_without_duplicate_network_evidence(self):
+        """Companion SMB logons should reuse the transport port without emitting another flow."""
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        obj = MagicMock()
+        obj.activity_generator = MagicMock()
+        obj.activity_generator.generate_logon.return_value = "0x54321"
+        method = BaselineMixin._emit_smb_logon_pair.__get__(obj)
+
+        user = MagicMock()
+        file_server = MagicMock()
+        file_server.os = "Windows Server 2019"
+        ts = datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC)
+        rng = random.Random(42)
+
+        logon_id = method(
+            user,
+            file_server,
+            "10.10.10.50",
+            ts,
+            rng,
+            source_port=50001,
+            emit_network_evidence=False,
+        )
+
+        assert logon_id == "0x54321"
+        obj.activity_generator.generate_logon.assert_called_once_with(
+            user=user,
+            system=file_server,
+            time=ts,
+            logon_type=3,
+            source_ip="10.10.10.50",
+            source_port=50001,
+            emit_network_evidence=False,
+        )
+        obj.activity_generator.generate_logoff.assert_called_once()
+
     def test_skips_linux_file_servers(self):
         """Linux file servers don't get Windows 4624 logon events."""
         from evidenceforge.generation.engine.baseline import BaselineMixin

@@ -69,6 +69,129 @@ per-loop or per-PR details in worklogs or PR descriptions.
 
 ### Correctness and Realism Backlog
 
+- [ ] **P1** Add source-side file-read, archive, browser-upload, or
+  proxy-client staging evidence around large outbound HTTP POST/upload flows so
+  multi-hundred-MB uploads have plausible endpoint preparation and ownership.
+- [ ] **P1** Model Windows inbound/server-side endpoint network telemetry for
+  DC/server roles, including Security 5156 and Sysmon Event 3
+  `Initiated=false`, or add an explicit collection profile that plausibly
+  filters inbound endpoint flow events while preserving hunt semantics.
+- [ ] **P1** Separate public IP pools by role so hostile scanner/red-herring
+  sources, ordinary public web clients, crawlers, API clients, ordinary service
+  responders, public DNS/NTP/CDN destinations, and PTR/provider identities do
+  not reuse the same IPs in contradictory ways; keep User-Agent/persona behavior
+  stable per external source.
+- [ ] **P2** Reduce dataset-wide Sysmon Event 1 before Security 4688 timestamp
+  bias by varying source timing per host/channel without breaking process
+  correlation.
+- [ ] **P1** Model Windows Security and Sysmon `EventRecordID` gaps against
+  plausible hidden event volume while preserving near-adjacent native pairings
+  such as Security `4624`/`4672` and tightly coupled Sysmon process events.
+- [ ] **P2** Validate and improve Sysmon `ProcessGuid` morphology against
+  native Sysmon output while preserving stable process correlation.
+- [ ] **P2** Separate NTP infrastructure/server IP pools from hostile scanner
+  pools and make UDP/123 Zeek output consistently include or omit NTP analyzer
+  evidence according to modeled sensor configuration.
+- [ ] **P1** Improve public PTR, TLS, and provider realism so public reverse DNS
+  is sparse/provider-style rather than forward-hostname-derived, and
+  SNI/certificate issuer/provider relationships remain plausible.
+- [ ] **P1** Route Windows remote-admin command execution through concrete
+  execution owners instead of direct `services.exe` parentage; model realistic
+  chains such as PsExec service wrapper → `cmd.exe`, WMI provider, PowerShell
+  remoting, or temporary service binaries with matching lifecycle evidence and
+  source-visible binary staging when a service path first appears in-window.
+- [ ] **P1** Model executable-specific Windows utility runtimes and lifecycle
+  cadence so short-lived maintenance tools such as `usoclient.exe`,
+  `MpCmdRun.exe -SignatureUpdate`, `cleanmgr.exe`, `CompatTelRunner.exe`, and
+  `gpupdate.exe /force` do not run for hours or repeat uniformly across many
+  hosts.
+- [ ] **P1** Reduce high-frequency Linux `systemd-journald` runtime-size filler;
+  gate those messages around startup, rotation, vacuum, or explicit journal
+  pressure instead of emitting them as dense background texture.
+- [ ] **P2** Make Sysmon Event ID 10 LSASS access call traces source-image-aware
+  so module stacks are plausible for the accessing process and are not reused
+  across incompatible sources such as `csrss.exe`, `services.exe`, and
+  `svchost.exe`.
+- [ ] **P2** Widen ordinary SMB file-transfer filename, path, and size
+  distributions; add organically recurring documents and fewer semantically
+  assembled one-off business filenames.
+- [ ] **P2** Add friction and timing texture to staged intrusion/exfiltration
+  chains, including retries, failed commands, dwell-time slack, partial cleanup,
+  tool residue, competing benign traffic, and less perfectly staged large-file
+  handoffs.
+- [ ] **P2** Add perimeter TLS imperfection for public-facing services,
+  including missing SNI, IP-literal/default scanner SNI, malformed handshakes,
+  failed handshakes, and reset outcomes tied to scanner/client families.
+- [ ] **P3** De-rate uniform Windows maintenance and endpoint startup palettes,
+  especially repeated `cleanmgr.exe`, `gpupdate.exe`, and clustered VPN/ZTNA
+  tray launches on DC/server roles.
+- [ ] **P2** Add session-aware RDP baseline texture so repeated remote desktop
+  activity reconnects, replaces, or reuses sessions instead of stacking many
+  concurrent client launches to DC/file-server roles.
+- [ ] **P2** Diversify Linux/eCAR temporary file paths by process family, user,
+  daemon role, and OS convention instead of reusing generic `/tmp` and
+  `/var/tmp` templates across unrelated processes.
+- [ ] **P2** Reduce exact-hour proxy and update bursts, keep browser/User-Agent
+  families consistent per host/session, vary Linux cron/sysstat schedules by
+  host history, and add realistic network collection imperfections such as
+  occasional Zeek `missed_bytes`, incomplete TLS/x509 companion evidence, and
+  less curated IDS alert clustering.
+- [ ] **P3** Polish proxy/web application semantics for SaaS token endpoints,
+  MIME/status combinations, scanner request texture, and selective large-file
+  extraction imperfection.
+- [ ] **P2** Improve DNS TTL texture by binding public and internal TTLs to
+  resolver/cache/domain-family behavior instead of broad low-value randomization
+  outside explicitly suspicious DNS-tunnel activity.
+- [ ] **P2** Bind endpoint software inventory, module-load noise, and registry
+  side effects to host role/cohort; avoid repeated writes to static uninstall
+  metadata such as `DisplayName`, `Publisher`, and `DisplayVersion`, especially
+  on server and domain-controller roles.
+- [ ] **P2** Improve eCAR `FLOW` actor semantics so rows with PIDs either carry
+  coherent process/principal context or intentionally omit actor identity when
+  endpoint attribution is unavailable.
+- [ ] **P2** Enforce Zeek file/connection timing contracts so `files.log` rows
+  referencing a connection UID land inside that visible connection interval, or
+  the connection timing expands to cover the file observation.
+- [ ] **P2** Improve Linux eCAR thread semantics so `tid` is populated from a
+  plausible thread model or omitted when unavailable instead of copying `pid`
+  across every Linux flow/file/process row.
+- [ ] **P2** Make SSH eCAR session login/logout tuple fields symmetric when the
+  transport tuple is known, including `src_port` on both sides of the same
+  `objectID`.
+- [ ] **P2** Tighten Linux SSH command/process-to-transport timing so most LAN
+  SSH commands reach the TCP/22 connection in sub-second to low-single-digit
+  seconds, reserving longer gaps for DNS, retries, or explicit delay.
+- [ ] **P1** Bind Linux bash-history command sequences to concrete SSH or local
+  session intervals so commands, especially `exit`, do not render after all
+  visible sessions for that user/host have closed unless supporting console,
+  tmux, screen, sudo, or detached-shell evidence exists.
+- [ ] **P2** Reduce direct root/password SSH volume and model routine Linux
+  administration through bastions, named admin users, sudo, and service
+  automation instead of repeated polished interactive root access.
+- [ ] **P2** Align DHCP syslog renewal promises with the next DHCPREQUEST/ACK
+  schedule and vary source-native syslog timestamp suffixes within renewal
+  triplets.
+- [ ] **P2** Add per-host endpoint observation jitter for paired source and
+  destination eCAR `FLOW` rows so cross-host endpoint observations do not land
+  on the same millisecond by default.
+- [ ] **P2** Normalize eCAR service-process principal attribution so the same
+  actor/pid does not alternate between missing and populated principal identity
+  without an explicit collection profile reason; for proxies, separate local
+  daemon ownership from original client/user attribution.
+- [ ] **P2** Enforce monotonic bash-history timestamps per file unless modeling
+  multiple shell sessions explicitly, and filter incomplete shell constructs
+  such as standalone `if` from generic command pools.
+- [ ] **P2** Diversify LDAP discovery command texture by tool, filter, user,
+  host role, and result/failure pattern so repeated `ldapsearch` reconnaissance
+  does not appear as one procedural command pool across many hosts.
+- [ ] **P3** Gate desktop/GUI Linux artifacts such as Polkit auth-agent startup
+  by host role and active desktop session so server roles do not emit
+  workstation-style GUI background churn.
+- [ ] **P3** Validate SSH `Accepted publickey` syslog formatting against native
+  OpenSSH variants and include key type/fingerprint details when configured.
+- [ ] **P3** Validate Windows Security Event ID 1102 rendering against real
+  exported XML and ensure audit-log-clear subject/account fields appear in the
+  correct native structure.
 - [ ] Ground truth File IOCs section truncated in `GROUND_TRUTH.md` output.
 - [ ] Add RFC 5737 validation warnings for realism-bound scenario fields such as
   `public_cidrs`, NAT `mapped_ip`, storyline `source_ip`/`dst_ip`, and DNS

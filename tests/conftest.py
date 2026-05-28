@@ -42,16 +42,27 @@ def pytest_addoption(parser):
         default=False,
         help="Include slow tests (large dataset generation, 100+ users)",
     )
+    parser.addoption(
+        "--include-external-parsers",
+        action="store_true",
+        default=False,
+        help="Include tests that run third-party parser containers",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip tests marked @pytest.mark.slow unless --include-slow is passed."""
-    if config.getoption("--include-slow"):
-        return
+    """Skip opt-in test groups unless their matching CLI flag is passed."""
     skip_slow = pytest.mark.skip(reason="slow test — pass --include-slow to run")
+    skip_external_parser = pytest.mark.skip(
+        reason="external parser test — pass --include-external-parsers to run"
+    )
     for item in items:
-        if "slow" in item.keywords:
+        if "slow" in item.keywords and not config.getoption("--include-slow"):
             item.add_marker(skip_slow)
+        if "external_parser" in item.keywords and not config.getoption(
+            "--include-external-parsers"
+        ):
+            item.add_marker(skip_external_parser)
 
 
 @pytest.fixture(autouse=True)

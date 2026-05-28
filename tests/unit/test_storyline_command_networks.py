@@ -22,6 +22,7 @@ from evidenceforge.generation.actions import (
 from evidenceforge.generation.activity import ActivityGenerator
 from evidenceforge.generation.engine.storyline import (
     StorylineMixin,
+    _estimate_process_lifetime,
     _linux_shell_process_command_line,
 )
 from evidenceforge.generation.source_timing import SourceTimingPlanner
@@ -30,6 +31,98 @@ from evidenceforge.models.scenario import ConnectionEventSpec, System, User
 
 
 class TestStorylineCommandNetworks:
+    def test_recorded_storyline_logon_expires_at_transport_close(self):
+        """Recorded storyline SSH sessions should not be reused after TCP close."""
+        state = StateManager()
+        start = datetime(2024, 3, 18, 14, 15, 0, tzinfo=UTC)
+        close = start + timedelta(minutes=10)
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.local",
+        )
+        system = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state.create_session(
+            username=actor.username,
+            system=system.hostname,
+            logon_type=10,
+            source_ip="10.10.3.10",
+            start_time=start,
+            session_kind="ssh",
+        )
+        state.update_session_metadata(logon_id, network_close_time=close)
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = state
+        engine._record_storyline_logon(actor, system, logon_id, source_ip="10.10.3.10")
+
+        assert (
+            engine._last_storyline_logon_for_actor_system(
+                actor,
+                system,
+                at_time=close - timedelta(seconds=1),
+            )
+            == logon_id
+        )
+        assert (
+            engine._last_storyline_logon_for_actor_system(
+                actor,
+                system,
+                at_time=close + timedelta(minutes=1),
+            )
+            is None
+        )
+        assert (
+            engine._last_storyline_logon_source_for_actor_system(
+                actor,
+                system,
+                at_time=close + timedelta(minutes=1),
+            )
+            is None
+        )
+
+    def test_next_storyline_logoff_time_finds_matching_actor_and_host(self):
+        """Future logoff lookups should bind storyline SSH lifetimes to the right host."""
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.local",
+        )
+        system = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    actor="root",
+                    system="WEB-EXT-01",
+                    time="+5h50m",
+                    events=[SimpleNamespace(type="logoff")],
+                ),
+                SimpleNamespace(
+                    actor="root",
+                    system="APP-INT-01",
+                    time="+5h57m",
+                    events=[SimpleNamespace(type="logoff")],
+                ),
+            ]
+        )
+
+        assert engine._next_storyline_logoff_time_for_actor_system(
+            actor,
+            system,
+            datetime(2024, 3, 18, 17, 41, 0, tzinfo=UTC),
+        ) == datetime(2024, 3, 18, 17, 57, 0, tzinfo=UTC)
+
     def test_linux_shell_storyline_process_renders_explicit_shell_invocation(self):
         """Bare shell control syntax should be rendered as source-native bash -c argv."""
         command_line = _linux_shell_process_command_line(
@@ -552,6 +645,7 @@ class _FakeActivityGenerator:
         self.process_terminations: list[dict] = []
         self.process_source_times: dict[tuple[str, int], datetime] = {}
         self.process_source_termination_times: dict[tuple[str, int], datetime] = {}
+        self.ssh_ready_times: dict[tuple[str, int, str], datetime] = {}
         self.process_source_termination_offset: timedelta | None = None
         self.service_installs: list[dict] = []
         self.dhcp_leases: list[dict] = []
@@ -563,6 +657,7 @@ class _FakeActivityGenerator:
         self.group_memberships: list[dict] = []
         self.log_clears: list[dict] = []
         self.process_accesses: list[dict] = []
+        self._last_connection_effective_tuple: tuple[str, int, str, int, str] | None = None
         self.remote_threads: list[dict] = []
         self.scheduled_tasks: list[dict] = []
         self.sid_registry: dict[str, str] = {}
@@ -664,8 +759,38 @@ class _FakeActivityGenerator:
         return 45678
 
     def generate_connection(self, **kwargs: Any) -> str:
+        src_port = kwargs.get("src_port") or 50000 + len(self.connections)
+        self._last_connection_effective_tuple = (
+            kwargs["src_ip"],
+            src_port,
+            kwargs["dst_ip"],
+            kwargs["dst_port"],
+            kwargs.get("proto", "tcp"),
+        )
         self.connections.append(kwargs)
         return "Cscptransfer00001"
+
+    def _last_effective_connection_source_port(
+        self,
+        *,
+        src_ip: str,
+        dst_ip: str,
+        dst_port: int,
+        proto: str = "tcp",
+    ) -> int | None:
+        if self._last_connection_effective_tuple is None:
+            return None
+        last_src_ip, last_src_port, last_dst_ip, last_dst_port, last_proto = (
+            self._last_connection_effective_tuple
+        )
+        if (
+            last_src_ip == src_ip
+            and last_dst_ip == dst_ip
+            and last_dst_port == dst_port
+            and last_proto == proto
+        ):
+            return last_src_port
+        return None
 
     def generate_ssh_session(self, **kwargs: Any) -> str:
         self.ssh_sessions.append(kwargs)
@@ -683,6 +808,14 @@ class _FakeActivityGenerator:
 
     def process_source_terminate_time(self, hostname: str, pid: int) -> datetime | None:
         return self.process_source_termination_times.get((hostname, pid))
+
+    def ssh_session_ready_time_for_tuple(
+        self,
+        source_ip: str,
+        source_port: int,
+        target_ip: str,
+    ) -> datetime | None:
+        return self.ssh_ready_times.get((source_ip, source_port, target_ip))
 
     def generate_explicit_credentials(self, **kwargs: Any) -> None:
         self.explicit_credentials.append(kwargs)
@@ -735,7 +868,23 @@ class _FakeStateManager:
         return None
 
     def get_sessions_for_user(self, username: str) -> list[SimpleNamespace]:
-        return [SimpleNamespace(system="SRC", logon_id="0xabc")]
+        if self.sessions:
+            return list(self.sessions.values())
+        return [
+            SimpleNamespace(
+                username=username,
+                system="SRC",
+                logon_id="0xabc",
+                logon_type=2,
+                source_ip="",
+                start_time=datetime(2020, 1, 1, tzinfo=UTC),
+                network_close_time=None,
+            )
+        ]
+
+    def get_sessions_for_user_at(self, username: str, at_time: datetime) -> list[SimpleNamespace]:
+        _ = at_time
+        return self.get_sessions_for_user(username)
 
     def get_session(self, logon_id: str) -> SimpleNamespace | None:
         return self.sessions.get(logon_id)
@@ -1404,14 +1553,34 @@ class TestStorylineCommandSideEffects:
             src_ip: str,
             time: datetime,
             rng: random.Random,
+            *,
+            source_port: int | None = None,
+            emit_network_evidence: bool = True,
         ) -> None:
             _ = time, rng
-            smb_logons.append({"actor": actor.username, "dst": dst_sys.hostname, "src_ip": src_ip})
+            smb_logons.append(
+                {
+                    "actor": actor.username,
+                    "dst": dst_sys.hostname,
+                    "emit_network_evidence": emit_network_evidence,
+                    "source_port": source_port,
+                    "src_ip": src_ip,
+                }
+            )
 
         engine._emit_smb_logon_pair = capture_smb_logon_pair
-        engine._record_storyline_logon(actor, file_server, "0xabc", source_ip=source.ip)
         archive_time = datetime(2026, 5, 18, 14, 1, tzinfo=UTC)
         upload_time = datetime(2026, 5, 18, 14, 25, tzinfo=UTC)
+        engine.state_manager.sessions["0xabc"] = SimpleNamespace(
+            username=actor.username,
+            system=file_server.hostname,
+            logon_id="0xabc",
+            logon_type=3,
+            source_ip=source.ip,
+            start_time=archive_time - timedelta(minutes=5),
+            network_close_time=upload_time + timedelta(minutes=5),
+        )
+        engine._record_storyline_logon(actor, file_server, "0xabc", source_ip=source.ip)
         process_spec = SimpleNamespace(
             type="process",
             process_name="powershell.exe",
@@ -1470,7 +1639,13 @@ class TestStorylineCommandSideEffects:
         assert file_transfer.total_bytes == smb_transfer["resp_bytes"]
         assert file_transfer.filename == (r"\\FILE-SRV-01\C$\ProgramData\Microsoft\cache_7f3a.zip")
         assert smb_logons == [
-            {"actor": actor.username, "dst": file_server.hostname, "src_ip": source.ip}
+            {
+                "actor": actor.username,
+                "dst": file_server.hostname,
+                "emit_network_evidence": False,
+                "source_port": 50000,
+                "src_ip": source.ip,
+            }
         ]
 
     def test_scp_receiver_file_artifacts_leave_ssh_syslog_to_bundle(self):
@@ -1569,6 +1744,54 @@ class TestStorylineCommandSideEffects:
 
         assert file_events
         assert file_events[0].timestamp > visible_source_process_time
+
+    def test_scp_receiver_file_waits_for_ssh_session_readiness(self):
+        source = System(
+            hostname="SRC",
+            ip="10.10.4.10",
+            os="Ubuntu 22.04",
+            type="workstation",
+        )
+        target = System(
+            hostname="DST",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        actor = User(
+            username="alice",
+            full_name="Alice Example",
+            email="alice@example.com",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        file_events: list[Any] = []
+        engine.dispatcher = SimpleNamespace(
+            dispatch=lambda event: (
+                file_events.append(event) if event.event_type == "file_create" else None
+            )
+        )
+        transfer_time = datetime(2024, 3, 18, 17, 15, 2, 638000, tzinfo=UTC)
+        ready_time = transfer_time + timedelta(seconds=8)
+        engine.activity_generator.ssh_ready_times[(source.ip, 40117, target.ip)] = ready_time
+
+        engine._emit_scp_receiver_artifacts(
+            source_system=source,
+            target_system=target,
+            actor=actor,
+            source_pid=4242,
+            source_process="/usr/bin/scp",
+            source_command="scp /tmp/archive.tar.gz root@DST:/var/tmp/archive.tar.gz",
+            target_user="root",
+            target_path="/var/tmp/archive.tar.gz",
+            transfer_time=transfer_time,
+            source_port=40117,
+            rng=random.Random(7),
+        )
+
+        assert file_events
+        assert file_events[0].timestamp > ready_time
 
     def test_linux_process_uses_scheduled_bash_history_time(self):
         source = System(
@@ -1911,6 +2134,102 @@ class TestStorylineCommandSideEffects:
         assert engine.activity_generator.log_clears[0]["time"] > visible_process_time
         assert engine.activity_generator.process_accesses[0]["time"] > visible_process_time
 
+    def test_account_create_barriers_following_group_add_command(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.local",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        engine._ensure_account_sid_tracking()
+        rng = random.Random(7)
+        base_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        visible_process_time = base_time + timedelta(seconds=4)
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\net.exe",
+                command_line="net user svc_mhsync MhsSvc!2024 /add /domain",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time,
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+        process_pid = engine.activity_generator._next_pid
+        engine.state_manager.processes[(source.hostname, process_pid)] = SimpleNamespace(
+            username=actor.username,
+            logon_id="0x3e7",
+            start_time=base_time,
+        )
+        engine.activity_generator.process_source_times[(source.hostname, process_pid)] = (
+            visible_process_time
+        )
+
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="account_created",
+                target_username="svc_mhsync",
+                target_sid="S-1-5-21-111-222-333-4444",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=1),
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+        account_create_time = engine.activity_generator.account_creates[0]["time"]
+
+        next_command_time = engine._apply_storyline_shell_availability(
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=2),
+            rng=rng,
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="process",
+                process_name=r"C:\Windows\System32\net.exe",
+                command_line='net group "Domain Admins" svc_mhsync /add /domain',
+            ),
+            actor=actor,
+            system=source,
+            time=next_command_time,
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+        engine._execute_typed_event(
+            spec=SimpleNamespace(
+                type="group_member_added",
+                scope="global",
+                group_name="Domain Admins",
+                member_name="svc_mhsync",
+            ),
+            actor=actor,
+            system=source,
+            time=base_time + timedelta(seconds=3),
+            activity="create privileged service account",
+            explicit_types={"process", "account_created", "group_member_added"},
+        )
+
+        assert account_create_time > visible_process_time
+        assert engine.activity_generator.processes[-1]["time"] > account_create_time
+        assert engine.activity_generator.group_memberships[0]["time"] > account_create_time
+
     def test_process_url_network_reuses_storyline_authored_domain_ip(self):
         source = System(
             hostname="DC-01",
@@ -2068,6 +2387,70 @@ class TestStorylineCommandSideEffects:
         assert child_proc["user"].username == "SYSTEM"
         assert child_proc["logon_id"] == "0x3e7"
         assert child_proc["parent_pid"] == 4242
+
+    def test_old_psexesvc_service_does_not_parent_later_commands(self):
+        source = System(
+            hostname="DC-01",
+            ip="10.10.0.10",
+            os="Windows Server 2022",
+            type="domain_controller",
+        )
+        actor = User(
+            username="SYSTEM",
+            full_name="Local System",
+            email="system@example.local",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.scenario = SimpleNamespace(
+            environment=SimpleNamespace(systems=[source], service_accounts=[])
+        )
+        engine.state_manager = _FakeStateManager()
+        engine.activity_generator = _FakeActivityGenerator()
+        engine.dispatcher = SimpleNamespace(visibility_engine=None)
+        service_time = datetime(2026, 5, 11, 12, 0, tzinfo=UTC)
+        engine._record_storyline_service_install(
+            system=source,
+            service_name="PSEXESVC",
+            service_file_name=r"%SystemRoot%\PSEXESVC.exe",
+            service_account="LocalSystem",
+            time=service_time,
+        )
+        spec = SimpleNamespace(
+            type="process",
+            process_name=r"C:\Windows\System32\net.exe",
+            command_line="net user svc_mhsync /delete /domain",
+        )
+
+        engine._execute_typed_event(
+            spec=spec,
+            actor=actor,
+            system=source,
+            time=service_time + timedelta(minutes=15),
+            activity="later cleanup command",
+            explicit_types={"process"},
+        )
+
+        assert len(engine.activity_generator.processes) == 1
+        assert engine.activity_generator.processes[0]["process_name"] == (
+            r"C:\Windows\System32\net.exe"
+        )
+        assert engine.activity_generator.processes[0]["parent_pid"] == 1
+
+    def test_psexesvc_storyline_process_is_short_lived(self):
+        """PsExec wrappers should not survive long enough to own unrelated later commands."""
+        lifetime = _estimate_process_lifetime(
+            r"C:\Windows\System32\PSEXESVC.exe",
+            "PSEXESVC.exe -accepteula",
+        )
+
+        assert lifetime == (8.0, 45.0)
+        assert (
+            _estimate_process_lifetime(
+                r"C:\Windows\System32\HealthMonitorSvc.exe",
+                r"C:\Windows\System32\HealthMonitorSvc.exe",
+            )
+            is None
+        )
 
     def test_storyline_dhcp_lease_reuses_existing_host_lease_identity(self):
         source = System(

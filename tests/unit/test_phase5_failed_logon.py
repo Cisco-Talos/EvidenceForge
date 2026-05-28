@@ -22,6 +22,7 @@
 
 """Unit tests for Phase 5.2.2: Failed logon generation."""
 
+import random
 from datetime import UTC, datetime
 from unittest.mock import Mock
 
@@ -182,6 +183,33 @@ class TestFailedLogonLinux:
         assert event.auth.username == "alice.smith"
         assert event.auth.source_ip == "203.0.113.50"
 
+    def test_baseline_linux_logon_does_not_emit_generic_remote_success(
+        self,
+        activity_gen,
+        test_user,
+        linux_system,
+        timestamp,
+        state_manager,
+        mock_emitters,
+        monkeypatch,
+    ):
+        """Baseline Linux logon activity should stay local unless the SSH bundle owns it."""
+        rng = random.Random(42)
+        monkeypatch.setattr(generator_mod, "_get_rng", lambda: rng)
+        activity_gen._all_system_ips = [linux_system.ip, "10.0.10.99"]
+        state_manager.set_current_time(timestamp)
+
+        activity_gen.execute_baseline_activity(test_user, linux_system, timestamp, "logon")
+
+        ecar_events = [call.args[0] for call in mock_emitters["ecar"].emit.call_args_list]
+        logon_events = [
+            event for event in ecar_events if event.event_type == "logon" and event.auth is not None
+        ]
+        assert logon_events
+        assert {event.auth.logon_type for event in logon_events} == {2}
+        assert {event.auth.source_ip for event in logon_events} == {"-"}
+        assert not any(event.event_type == "ssh_session" for event in ecar_events)
+
 
 class TestFailedLogonEcar:
     """Test eCAR emission for failed logon."""
@@ -242,26 +270,31 @@ class TestFailedLogonFormatValidation:
 class TestFailedLogonRate:
     """Test that baseline activity includes ~10% failed logons."""
 
-    def test_baseline_logon_failure_rate(self, state_manager, timestamp):
+    def test_baseline_logon_failure_rate(self, timestamp, monkeypatch):
         """Over many logon attempts, ~10% should fail."""
-        emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
-        gen = ActivityGenerator(state_manager, emitters)
+        rng = random.Random(42)
+        monkeypatch.setattr(generator_mod, "_get_rng", lambda: rng)
         user = User(username="test", full_name="Test", email="t@t.com", enabled=True)
         system = System(hostname="W1", ip="10.0.0.1", os="Windows 10", type="workstation")
-        state_manager.set_current_time(timestamp)
 
         total = 0
         failed = 0
         for _ in range(200):
-            emitters["windows_event_security"].reset_mock()
+            state_manager = StateManager()
+            emitters = {"windows_event_security": Mock(), "zeek_conn": Mock()}
+            gen = ActivityGenerator(state_manager, emitters)
+            state_manager.set_current_time(timestamp)
             gen.execute_baseline_activity(user, system, timestamp, "logon")
             emitter = emitters["windows_event_security"]
             # Both successful and failed logons now dispatched via emit()
-            if emitter.emit.called:
-                event = emitter.emit.call_args[0][0]
+            for call in emitter.emit.call_args_list:
+                event = call.args[0]
+                if event.event_type not in {"logon", "failed_logon"}:
+                    continue
                 total += 1
                 if event.event_type == "failed_logon":
                     failed += 1
+                break
 
         # Expect ~10% failure rate (allow 3-25% for statistical variation)
         assert total > 0

@@ -177,6 +177,38 @@ class TestProxyUriOsFiltering:
             path="/files/dbeaver-ce-latest-x86_64-setup.exe",
         ) in {301, 302}
 
+    def test_workstation_update_domains_are_source_type_scoped(self):
+        """Server/DC background traffic should not select workstation app updaters."""
+        from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
+        from evidenceforge.generation.activity.proxy_uri import (
+            plaintext_http_redirect_status,
+            proxy_domain_allows_source_system_type,
+        )
+
+        workstation_only = {
+            "desktop.dropbox.com",
+            "clients4.google.com",
+            "clients6.google.com",
+            "download.lenovo.com",
+        }
+        for host in workstation_only:
+            assert proxy_domain_allows_source_system_type(host, "workstation") is True
+            assert proxy_domain_allows_source_system_type(host, "domain_controller") is False
+            assert plaintext_http_redirect_status(host, port=80, path="/") in {301, 302}
+
+        picked = {
+            pick_domain_and_ip(
+                random.Random(seed),
+                "background",
+                "windows",
+                src_host="DC-01",
+                include_os="windows",
+                source_system_type="domain_controller",
+            )[0]
+            for seed in range(100)
+        }
+        assert not picked.intersection(workstation_only)
+
     def test_plaintext_redirect_default_excludes_internal_and_service_endpoints(self):
         """Internal hosts and source-native service endpoints keep plaintext behavior."""
         from evidenceforge.generation.activity.proxy_uri import plaintext_http_redirect_status

@@ -97,9 +97,13 @@ from evidenceforge.generation.activity.suspicious_benign import (
     pick_suspicious_pattern,
 )
 from evidenceforge.models.scenario import Persona, System, User
-from evidenceforge.utils.rng import _get_rng, _stable_seed
+from evidenceforge.utils.rng import _get_rng, _stable_seed, stable_uuid
 
 logger = logging.getLogger(__name__)
+
+_LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY = 0.28
+_LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY = 0.18
+_LINUX_AMBIENT_SSH_NOISE_BAND = 0.006
 
 
 def _ufw_block_syn_packet_len(src_ip: str) -> int:
@@ -201,6 +205,50 @@ def _ntp_sync_seconds_for_hour(
     return observed_seconds
 
 
+def _ntp_sync_seconds_for_hour_from_state(
+    hostname: str,
+    ntp_ip: str,
+    hour_start_sec: float,
+    poll_seconds: int,
+    state: dict[str, float | int],
+) -> list[float]:
+    """Return observed NTP sync seconds for one hour using carried scheduler state."""
+    hour_end_sec = hour_start_sec + 3600
+    scheduled_second = float(state["scheduled_second"])
+    sequence = int(state["sequence"])
+
+    while scheduled_second < hour_start_sec:
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+
+    observed_seconds: list[float] = []
+    while scheduled_second < hour_end_sec:
+        observed_second = _ntp_observed_second(
+            hostname,
+            ntp_ip,
+            sequence,
+            scheduled_second,
+        )
+        if hour_start_sec <= observed_second < hour_end_sec:
+            observed_seconds.append(observed_second)
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+
+    state["scheduled_second"] = scheduled_second
+    state["sequence"] = sequence
+    return observed_seconds
+
+
 def _linux_baseline_session_initiator(
     user: str,
     *,
@@ -210,9 +258,9 @@ def _linux_baseline_session_initiator(
     """Return a plausible PAM initiator for ambient logind session noise."""
     if system_type == "server":
         if user == "root":
-            service = rng.choices(("login", "sudo", "su"), weights=(18, 58, 24), k=1)[0]
+            service = rng.choices(("login", "sudo", "su"), weights=(3, 70, 27), k=1)[0]
         else:
-            service = rng.choices(("login", "sudo"), weights=(34, 66), k=1)[0]
+            service = rng.choices(("login", "sudo"), weights=(5, 95), k=1)[0]
     elif user == "root":
         service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
     else:
@@ -229,7 +277,7 @@ def _linux_baseline_session_initiator(
 def _linux_ambient_logind_probability(system_type: str) -> float:
     """Return thinning probability for generic ambient logind session noise."""
     if system_type == "server":
-        return 0.12
+        return 0.05
     return 0.42
 
 
@@ -1455,6 +1503,58 @@ class BaselineMixin:
         scaled_lo, scaled_hi = self._scaled_count_range(system, family, lo, hi, persona=persona)
         return rng.randint(scaled_lo, scaled_hi)
 
+    @staticmethod
+    def _utc(value: datetime) -> datetime:
+        """Normalize datetimes for scheduler comparisons."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    def _baseline_rdp_hourly_count(self, rng: random.Random, system: Any) -> int:
+        """Return the number of new baseline RDP sessions to consider this hour."""
+        desired = self._scaled_randint(rng, system, "windows_remote_admin", 1, 3)
+        sys_type = (getattr(system, "type", None) or "workstation").lower()
+        if sys_type == "domain_controller":
+            return min(desired, 1)
+        return min(desired, 2)
+
+    def _baseline_rdp_cooldown_allows(
+        self,
+        *,
+        target_hostname: str,
+        source_hostname: str,
+        username: str,
+        planned_time: datetime,
+        cooldown: timedelta = timedelta(minutes=45),
+    ) -> bool:
+        """Return whether baseline may emit a new RDP session for this tuple."""
+        state = getattr(self, "_baseline_rdp_last_session", None)
+        if state is None:
+            state = {}
+            self._baseline_rdp_last_session = state
+
+        key = (target_hostname, source_hostname, username)
+        last_time = state.get(key)
+        if last_time is None:
+            return True
+
+        return self._utc(planned_time) - last_time >= cooldown
+
+    def _remember_baseline_rdp_session(
+        self,
+        *,
+        target_hostname: str,
+        source_hostname: str,
+        username: str,
+        session_time: datetime,
+    ) -> None:
+        """Record the actual time a baseline RDP session was materialized."""
+        state = getattr(self, "_baseline_rdp_last_session", None)
+        if state is None:
+            state = {}
+            self._baseline_rdp_last_session = state
+
+        key = (target_hostname, source_hostname, username)
+        state[key] = self._utc(session_time)
+
     def _scaled_interval_range(
         self,
         system: Any | None,
@@ -1650,10 +1750,11 @@ class BaselineMixin:
                         slot_key, 1.0 - float(skip_probability)
                     ):
                         continue
+                    configured_jitter = sched.get("slot_jitter_seconds")
                     jitter_seconds = (
-                        0.0
+                        max(0.0, float(configured_jitter or 0.0))
                         if sched_type == "cron"
-                        else max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                        else max(30.0, float(configured_jitter or 30.0))
                     )
                     ts = current_hour + timedelta(
                         minutes=fm,
@@ -4046,6 +4147,20 @@ class BaselineMixin:
         self._ssh_user_roster_cache[system.hostname] = roster
         return roster
 
+    def _linux_remote_admin_hour_probability(self, system: Any) -> float:
+        """Return the hourly probability of an organic SSH admin session on a Linux server."""
+        multiplier = self._activity_multiplier(system, "linux_remote_admin")
+        return min(0.72, _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY * multiplier)
+
+    def _linux_remote_admin_session_count(self, rng: random.Random, system: Any) -> int:
+        """Return a low-volume count for organic SSH admin sessions in one hour."""
+        multiplier = self._activity_multiplier(system, "linux_remote_admin")
+        second_session_probability = min(
+            0.38,
+            _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY * multiplier,
+        )
+        return 1 + int(rng.random() < second_session_probability)
+
     # Service→DNS tag defaults for external resolution when dns_tags is absent
     _SERVICE_DNS_DEFAULTS: dict[str, tuple[str, ...]] = {
         "smtp": ("email",),
@@ -4063,6 +4178,7 @@ class BaselineMixin:
         inbound: bool = False,
         src_host: str = "",
         service: str = "",
+        source_system_type: str | None = None,
     ) -> tuple[str | None, str | None]:
         """Resolve a role name to (ip, hostname), excluding a specific IP.
 
@@ -4097,10 +4213,17 @@ class BaselineMixin:
                     rng,
                     src_host=src_host,
                     source_os=os_cat,
+                    system_type=source_system_type,
                     purpose_tags=tuple(tags),
                 )
             else:
-                domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
+                domain, ip = pick_domain_and_ip(
+                    rng,
+                    *tags,
+                    src_host=src_host,
+                    include_os=os_cat,
+                    source_system_type=source_system_type,
+                )
             return ip, domain
 
         if hasattr(self, "world_model"):
@@ -4197,6 +4320,9 @@ class BaselineMixin:
         source_ip: str,
         time: datetime,
         rng: Any,
+        *,
+        source_port: int | None = None,
+        emit_network_evidence: bool = True,
     ) -> str | None:
         """Emit type 3 network logon + logoff pair on a file server for SMB access.
 
@@ -4209,12 +4335,20 @@ class BaselineMixin:
         if _get_os_category(file_server.os) != "windows":
             return None
 
+        logon_kwargs: dict[str, Any] = {
+            "user": user,
+            "system": file_server,
+            "time": time,
+            "logon_type": 3,
+            "source_ip": source_ip,
+        }
+        if source_port is not None:
+            logon_kwargs["source_port"] = source_port
+        if not emit_network_evidence:
+            logon_kwargs["emit_network_evidence"] = False
+
         logon_id = self.activity_generator.generate_logon(
-            user=user,
-            system=file_server,
-            time=time,
-            logon_type=3,
-            source_ip=source_ip,
+            **logon_kwargs,
         )
         logoff_delay = rng.uniform(5.0, 60.0)
         logoff_time = time + timedelta(seconds=logoff_delay)
@@ -4226,6 +4360,19 @@ class BaselineMixin:
             logon_type=3,
         )
         return logon_id
+
+    def _last_smb_connection_source_port(
+        self,
+        *,
+        source_ip: str,
+        dst_ip: str,
+    ) -> int | None:
+        """Return the source port from the most recent matching SMB transport."""
+        activity_generator = getattr(self, "activity_generator", None)
+        matcher = getattr(activity_generator, "_last_effective_connection_source_port", None)
+        if matcher is None:
+            return None
+        return matcher(src_ip=source_ip, dst_ip=dst_ip, dst_port=445, proto="tcp")
 
     def _build_smb_targets(self, system: Any, dc_ips: list[str]) -> tuple[list[str], list[Any]]:
         """Build weighted SMB targets for Windows client browsing noise."""
@@ -4314,6 +4461,139 @@ class BaselineMixin:
                 )
             )
 
+    def _emit_ecar_file_churn(
+        self,
+        system: Any,
+        current_hour: datetime,
+        rng: random.Random,
+        os_cat: str,
+        sys_pids: dict[str, int],
+    ) -> None:
+        """Emit ordinary endpoint FILE telemetry from running baseline processes."""
+        if "ecar" not in self.emitters:
+            return
+
+        from evidenceforge.events.base import SecurityEvent
+        from evidenceforge.events.contexts import (
+            AuthContext,
+            EdrContext,
+            FileContext,
+            ProcessContext,
+        )
+        from evidenceforge.generation.activity.edr_pools import (
+            file_path_templates_for_user,
+            get_file_paths,
+            is_service_account,
+            materialize_edr_template,
+        )
+        from evidenceforge.generation.activity.endpoint_noise import ecar_file_churn_config
+
+        cfg = ecar_file_churn_config()
+        if not cfg.get("enabled", True):
+            return
+        os_cfg = cfg.get(os_cat, {})
+        count_min = int(os_cfg.get("count_min", 0))
+        count_max = int(os_cfg.get("count_max", count_min))
+        if count_max <= 0 or count_min > count_max:
+            return
+
+        processes = []
+        for pid in sorted(set(sys_pids.values())):
+            running = self.state_manager.get_process(system.hostname, pid)
+            if running is not None:
+                processes.append(running)
+        if not processes:
+            return
+
+        action_weights = os_cfg.get("action_weights", {"read": 60, "modify": 30, "create": 10})
+        actions = [str(action) for action, weight in action_weights.items() if int(weight) > 0]
+        weights = [int(action_weights[action]) for action in actions]
+        path_templates = get_file_paths(os_cat)
+        if not actions or not path_templates:
+            return
+
+        count = self._scaled_randint(
+            rng,
+            system,
+            "ecar_file_churn",
+            count_min,
+            count_max,
+        )
+        host_ctx = self.activity_generator._build_host_context(system)
+        assigned_user = getattr(system, "assigned_user", None) or ""
+        hour_end = current_hour + timedelta(hours=1)
+
+        for idx in range(count):
+            process = rng.choice(processes)
+            process_username = process.username or ("root" if os_cat == "linux" else "SYSTEM")
+            if is_service_account(os_cat, process_username):
+                username = process_username
+            else:
+                username = assigned_user or process_username
+            if (
+                process.username
+                and not is_service_account(os_cat, process.username)
+                and rng.random() < 0.55
+            ):
+                username = process.username
+
+            candidates = file_path_templates_for_user(path_templates, os_cat, username)
+            if not candidates:
+                continue
+
+            file_action = str(rng.choices(actions, weights=weights, k=1)[0])
+            file_path = materialize_edr_template(
+                str(rng.choice(candidates)),
+                rng,
+                username,
+                host_ip=system.ip,
+                host_key=system.hostname,
+                host_os=system.os,
+            )
+            if os_cat == "linux" and username == "root":
+                file_path = file_path.replace("/home/root/", "/root/")
+
+            ts = current_hour + timedelta(seconds=rng.uniform(0, 3599))
+            if process.start_time and ts <= process.start_time:
+                ts = process.start_time + timedelta(milliseconds=rng.randint(5, 750))
+            if ts >= hour_end:
+                continue
+
+            event_type = f"file_{file_action}"
+            object_id = stable_uuid(
+                "baseline.ecar.file",
+                system.hostname,
+                process.pid,
+                file_path,
+                file_action,
+                current_hour.isoformat(),
+                idx,
+            )
+            self.activity_generator.dispatcher.dispatch(
+                SecurityEvent(
+                    timestamp=ts,
+                    event_type=event_type,
+                    src_host=host_ctx,
+                    auth=AuthContext(
+                        username=username,
+                        user_sid=self.activity_generator._get_sid(username),
+                        logon_id=process.logon_id,
+                    ),
+                    process=ProcessContext(
+                        pid=process.pid,
+                        parent_pid=process.parent_pid,
+                        image=process.image,
+                        command_line=process.command_line,
+                        username=process.username,
+                        integrity_level=process.integrity_level,
+                        logon_id=process.logon_id,
+                        start_time=process.start_time,
+                    ),
+                    file=FileContext(path=file_path, action=file_action, pid=process.pid),
+                    edr=EdrContext(object_id=object_id, actor_id=process.ecar_object_id),
+                )
+            )
+
     def _generate_profile_traffic(
         self,
         current_hour: datetime,
@@ -4384,6 +4664,7 @@ class BaselineMixin:
                     dns_tags=conn.get("dns_tags"),
                     src_host=system.hostname,
                     service=conn.get("service", ""),
+                    source_system_type=getattr(system, "type", None),
                 )
                 if not dst_ip:
                     continue
@@ -4705,6 +4986,10 @@ class BaselineMixin:
                             emit_dns=is_internal_src,
                             hostname=dst_hostname,
                         )
+                        smb_source_port = self._last_smb_connection_source_port(
+                            source_ip=src_ip,
+                            dst_ip=effective_dst_ip,
+                        )
 
                         # SMB access to file servers produces type 3 logon
                         if (
@@ -4727,7 +5012,15 @@ class BaselineMixin:
                                         None,
                                     )
                                     if smb_user:
-                                        self._emit_smb_logon_pair(smb_user, system, src_ip, ts, rng)
+                                        self._emit_smb_logon_pair(
+                                            smb_user,
+                                            system,
+                                            src_ip,
+                                            ts,
+                                            rng,
+                                            source_port=smb_source_port,
+                                            emit_network_evidence=smb_source_port is None,
+                                        )
                                         break
 
         # --- Persona traffic (user-level, during active sessions) ---
@@ -4790,6 +5083,7 @@ class BaselineMixin:
                     dns_tags=conn.get("dns_tags"),
                     src_host=system.hostname,
                     service=conn.get("service", ""),
+                    source_system_type=getattr(system, "type", None),
                 )
                 if not dst_ip:
                     continue
@@ -4987,6 +5281,8 @@ class BaselineMixin:
         ntp_ips = self._infra_ips.get("ntp", ["129.6.15.28"])
         if isinstance(ntp_ips, str):
             ntp_ips = [ntp_ips]
+        if not hasattr(self, "_ntp_schedule_state"):
+            self._ntp_schedule_state: dict[tuple[str, str, int], dict[str, float | int]] = {}
 
         for system in self.scenario.environment.systems:
             services = self._system_service_defaults.get(system.hostname, [])
@@ -5064,12 +5360,23 @@ class BaselineMixin:
                         if os_cat == "windows"
                         else _svc_pid("chronyd", "timesyncd")
                     )
-                    for observed_second in _ntp_sync_seconds_for_hour(
+                    state_key = (system.hostname, ntp_ip, poll_seconds)
+                    schedule_state = self._ntp_schedule_state.get(state_key)
+                    if schedule_state is None:
+                        phase_rng = random.Random(
+                            _stable_seed(f"ntp_phase:{system.hostname}:{ntp_ip}:{poll_seconds}")
+                        )
+                        schedule_state = {
+                            "scheduled_second": phase_rng.uniform(0, min(3600, poll_seconds)),
+                            "sequence": 0,
+                        }
+                        self._ntp_schedule_state[state_key] = schedule_state
+                    for observed_second in _ntp_sync_seconds_for_hour_from_state(
                         system.hostname,
                         ntp_ip,
-                        self._generation_epoch,
-                        current_hour,
+                        hour_start_sec,
                         poll_seconds,
+                        schedule_state,
                     ):
                         ts = self._generation_epoch + timedelta(seconds=observed_second)
                         self.state_manager.set_current_time(ts)
@@ -5197,6 +5504,10 @@ class BaselineMixin:
                             source_system=system,
                             pid=4,  # SMB: kernel System process
                         )
+                        smb_source_port = self._last_smb_connection_source_port(
+                            source_ip=system.ip,
+                            dst_ip=smb_dst_ip,
+                        )
                         # Emit type 3 logon on file server for SMB access
                         if smb_dst_sys:
                             # Find active user on this workstation
@@ -5213,7 +5524,13 @@ class BaselineMixin:
                                     )
                                     if ws_user:
                                         self._emit_smb_logon_pair(
-                                            ws_user, smb_dst_sys, system.ip, ts, rng
+                                            ws_user,
+                                            smb_dst_sys,
+                                            system.ip,
+                                            ts,
+                                            rng,
+                                            source_port=smb_source_port,
+                                            emit_network_evidence=smb_source_port is None,
                                         )
                                         self._emit_smb_file_operations(
                                             ws_user, smb_dst_sys, system, ts, rng
@@ -5351,6 +5668,8 @@ class BaselineMixin:
                         username="SYSTEM",
                     )
 
+            self._emit_ecar_file_churn(system, current_hour, rng, os_cat, sys_pids)
+
             # Baseline registry activity from running services. Real Sysmon
             # generates hundreds-thousands of Event 12/13 per hour. We emit
             # 15-40 per host per hour to provide realistic background volume.
@@ -5365,6 +5684,7 @@ class BaselineMixin:
                     get_registry_keys_hkcu,
                     get_registry_keys_hklm,
                     materialize_edr_template,
+                    materialize_edr_template_group,
                 )
                 from evidenceforge.generation.activity.endpoint_noise import registry_noise_config
 
@@ -5425,24 +5745,8 @@ class BaselineMixin:
                     ):
                         continue
                     _template_user = system.assigned_user or "SYSTEM"
-                    _key = materialize_edr_template(
-                        _key,
-                        rng,
-                        _template_user,
-                        host_ip=system.ip,
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    _vname = materialize_edr_template(
-                        _vname,
-                        rng,
-                        _template_user,
-                        host_ip=system.ip,
-                        host_key=system.hostname,
-                        host_os=system.os,
-                    )
-                    _details = materialize_edr_template(
-                        _details,
+                    _key, _vname, _details = materialize_edr_template_group(
+                        (_key, _vname, _details),
                         rng,
                         _template_user,
                         host_ip=system.ip,
@@ -5734,12 +6038,12 @@ class BaselineMixin:
             sys_type = (system.type or "workstation").lower()
             if os_cat == "linux" and sys_type == "server":
                 roster = self._get_server_ssh_users(system)
-                if roster:
+                if roster and rng.random() < self._linux_remote_admin_hour_probability(system):
                     from evidenceforge.generation.activity.bash_commands import (
                         pick_bash_session_commands,
                     )
 
-                    num_ssh = self._scaled_randint(rng, system, "linux_remote_admin", 1, 3)
+                    num_ssh = self._linux_remote_admin_session_count(rng, system)
                     for _ in range(num_ssh):
                         ssh_user = rng.choice(roster)
                         offset = rng.uniform(0, 3599)
@@ -5898,22 +6202,51 @@ class BaselineMixin:
             ):
                 continue
 
-            num_rdp = self._scaled_randint(rng, system, "windows_remote_admin", 1, 3)
+            num_rdp = self._baseline_rdp_hourly_count(rng, system)
             roster = self._get_server_ssh_users(system)
             if not roster:
                 continue
+
+            rdp_requests = []
             for _ in range(num_rdp):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
                 rdp_user = rng.choice(roster)
-                self.world_planner.bootstrap_user_session(
+                source_system = (
+                    self.world_model.pick_remote_source_system(rdp_user, system, rng)
+                    if hasattr(self, "world_model")
+                    else None
+                )
+                if source_system is not None and _get_os_category(source_system.os) != "windows":
+                    continue
+                rdp_requests.append((ts, rdp_user, source_system))
+
+            for ts, rdp_user, source_system in sorted(rdp_requests, key=lambda request: request[0]):
+                source_hostname = source_system.hostname if source_system is not None else "-"
+                if not self._baseline_rdp_cooldown_allows(
+                    target_hostname=system.hostname,
+                    source_hostname=source_hostname,
+                    username=rdp_user.username,
+                    planned_time=ts,
+                ):
+                    continue
+
+                self.state_manager.set_current_time(ts)
+                result = self.world_planner.bootstrap_user_session(
                     user=rdp_user,
                     target_system=system,
                     time=ts,
                     rng=rng,
                     session_kind="rdp",
+                    source_system=source_system,
                     allow_existing=True,
+                )
+                session_time = result.session.start_time if result.session is not None else ts
+                self._remember_baseline_rdp_session(
+                    target_hostname=system.hostname,
+                    source_hostname=source_hostname,
+                    username=rdp_user.username,
+                    session_time=session_time,
                 )
 
         # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
@@ -6239,10 +6572,18 @@ class BaselineMixin:
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
-                    session_users = ["root", "admin"]
-                    if not is_rhel_like:
-                        session_users.append("ubuntu")
-                    user = rng.choice(session_users)
+                    if sys_type == "server":
+                        session_users = ["admin", "root"]
+                        session_weights = [24, 2]
+                        if not is_rhel_like:
+                            session_users.append("ubuntu")
+                            session_weights.append(1)
+                        user = rng.choices(session_users, weights=session_weights, k=1)[0]
+                    else:
+                        session_users = ["root", "admin"]
+                        if not is_rhel_like:
+                            session_users.append("ubuntu")
+                        user = rng.choice(session_users)
                     pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
                         user,
                         rng=rng,
@@ -6289,7 +6630,7 @@ class BaselineMixin:
                             pid=sys_pids.get("logind", rng.randint(400, 800)),
                             facility=10,
                         )
-                elif source_roll < 0.34 and sys_type == "server":
+                elif source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server":
                     other_ips = [
                         s.ip for s in self.scenario.environment.systems if s.ip != system.ip
                     ]
@@ -6935,7 +7276,7 @@ class BaselineMixin:
         )
 
         ext_pool_size = min(200, max(10, top_level_budget // 10))
-        ext_ip_pool = [self._generate_external_client_ip(rng) for _ in range(ext_pool_size)]
+        ext_ip_pool = [self._generate_external_web_client_ip(rng) for _ in range(ext_pool_size)]
         ext_ip_weights = [1.0 / (i + 1) for i in range(ext_pool_size)]
         int_ip_weights = [1.0 / (i + 1) for i in range(len(internal_ips))]
         public_hosts = getattr(sys_obj, "public_hostnames", None) or []
@@ -7022,9 +7363,11 @@ class BaselineMixin:
             attempts += 1
             client_ip = _choose_client_ip()
             is_external_client = not _is_private_ip(client_ip)
-            profile_name, profile = pick_web_visitor_profile(
-                rng,
+            profile_name, profile = self._web_visitor_profile_for_client(
+                client_ip,
                 is_external=is_external_client,
+                rng=rng,
+                pick_profile=pick_web_visitor_profile,
             )
 
             restricted_pool = None
@@ -7150,6 +7493,65 @@ class BaselineMixin:
                     hostname=http_host,
                 )
                 top_level_emitted += 1
+
+    def _reserved_external_web_client_ips(self) -> set[str]:
+        """Return external IPs already claimed by scanner or authored activity."""
+        reserved: set[str] = set()
+        scanner_ips = getattr(self, "_external_scanner_ips", [])
+        if isinstance(scanner_ips, (list, tuple, set)):
+            reserved.update(
+                str(ip) for ip in scanner_ips if isinstance(ip, str) and not _is_private_ip(ip)
+            )
+
+        scenario = getattr(self, "scenario", None)
+        for group_name in ("storyline", "red_herrings"):
+            group = getattr(scenario, group_name, None)
+            if not isinstance(group, list):
+                continue
+            for event in group:
+                specs = getattr(event, "events", None)
+                if not isinstance(specs, list):
+                    continue
+                for spec in specs:
+                    source_ip = getattr(spec, "source_ip", None)
+                    if isinstance(source_ip, str) and source_ip and not _is_private_ip(source_ip):
+                        reserved.add(source_ip)
+        return reserved
+
+    def _generate_external_web_client_ip(self, rng: random.Random) -> str:
+        """Generate an external web-client IP that does not reuse scanner identities."""
+        reserved = self._reserved_external_web_client_ips()
+        fallback = ""
+        for _ in range(1000):
+            candidate = self._generate_external_client_ip(rng)
+            fallback = candidate
+            if candidate not in reserved:
+                return candidate
+        return fallback
+
+    def _web_visitor_profile_for_client(
+        self,
+        client_ip: str,
+        *,
+        is_external: bool,
+        rng: random.Random,
+        pick_profile: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        """Return a source-sticky web visitor profile for external clients."""
+        if not is_external:
+            return pick_profile(rng, is_external=False)
+
+        cache = getattr(self, "_web_external_client_profiles", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._web_external_client_profiles = cache
+
+        cached = cache.get(client_ip)
+        if cached is None:
+            profile_rng = random.Random(_stable_seed(f"web_external_client_profile:{client_ip}"))
+            cached = pick_profile(profile_rng, is_external=True)
+            cache[client_ip] = cached
+        return cached
 
     def _generate_rsat_sessions(self, current_hour: datetime, rng, local_dt) -> None:
         """Generate correlated RSAT sessions from admin workstations to DCs.

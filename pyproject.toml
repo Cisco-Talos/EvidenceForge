@@ -22,7 +22,7 @@
 
 [project]
 name = "evidence-forge"
-version = "1.0.1"
+version = "1.1.0"
 description = "Generate realistic synthetic security logs for cybersecurity threat hunting training and research"
 readme = "README.md"
 license = "MIT"
@@ -32,8 +32,9 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
+    "click>=8.0.0",
     "pydantic>=2.13.4",
-    "typer>=0.25.1",
+    "typer>=0.26.2",
     "rich>=15.0.0",
     "pyyaml>=6.0",
     "pytz>=2026.2",
@@ -55,10 +56,10 @@ Changelog = "https://github.com/Cisco-Talos/EvidenceForge/blob/main/CHANGELOG.md
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=7.1.0",
-    "pytest-asyncio>=0.23.0",
+    "pytest-asyncio>=1.4.0",
     "pytest-mock>=3.12.0",
     "pytest-benchmark>=4.0.0",
-    "ruff>=0.15.13",
+    "ruff>=0.15.14",
     "pre-commit>=4.6.0",
 ]
 
@@ -81,6 +82,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "slow: Tests requiring large dataset generation (100+ users, minutes to run)",
+    "external_parser: Tests that run third-party parser containers",
 ]
 addopts = [
     "-v",

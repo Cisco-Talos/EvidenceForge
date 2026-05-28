@@ -552,6 +552,29 @@ class TestParserDiscovery:
 
         assert files["bash_history"] == [history_file]
 
+    def test_discovers_bash_history_without_recursive_rglob(self, tmp_path, monkeypatch):
+        from evidenceforge.evaluation.parsers import discover_log_files
+
+        legacy_file = tmp_path / "bash_history" / "SRV-WEB-01" / "admin.history"
+        legacy_file.parent.mkdir(parents=True)
+        legacy_file.write_text("#1718431208\nwhoami\n", encoding="utf-8")
+        bundle_file = (
+            tmp_path / "data" / "SRV-LIN-01.corp.com" / "bash_history" / "dev01.bash_history"
+        )
+        bundle_file.parent.mkdir(parents=True)
+        bundle_file.write_text("#1718431210\nid\n", encoding="utf-8")
+
+        def fail_rglob(self, pattern):
+            raise AssertionError(f"unexpected recursive glob for {pattern} below {self}")
+
+        monkeypatch.setattr(Path, "rglob", fail_rglob)
+
+        files = discover_log_files(tmp_path)
+
+        assert files["bash_history"] == sorted(
+            [legacy_file, bundle_file], key=lambda path: path.as_posix()
+        )
+
     def test_skips_symlinked_sensor_directories(self, tmp_path):
         """Symlinked subdirectories should be skipped during discovery."""
         from evidenceforge.evaluation.parsers import discover_log_files

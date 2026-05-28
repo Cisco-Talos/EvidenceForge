@@ -93,6 +93,29 @@ def get_proxy_domain_http_policy(hostname: str) -> str:
     return str(policy).strip().lower() if policy else ""
 
 
+def proxy_domain_allows_source_system_type(
+    hostname: str,
+    source_system_type: str | None,
+) -> bool:
+    """Return whether a domain template is compatible with a source host type."""
+    if not source_system_type:
+        return True
+
+    entry = load_proxy_uri_templates().get("domains", {}).get(hostname, {})
+    if not isinstance(entry, dict):
+        return True
+
+    allowed_types = entry.get("source_system_types")
+    if not allowed_types:
+        return True
+    if not isinstance(allowed_types, list):
+        return True
+
+    normalized_source_type = source_system_type.strip().lower()
+    normalized_allowed = {str(value).strip().lower() for value in allowed_types}
+    return normalized_source_type in normalized_allowed
+
+
 def _is_public_hostname(hostname: str) -> bool:
     """Return whether a hostname should use public-web plaintext defaults."""
     normalized = hostname.strip().lower().rstrip(".")
@@ -101,7 +124,10 @@ def _is_public_hostname(hostname: str) -> bool:
     if normalized.endswith(_INTERNAL_HOST_SUFFIXES):
         return False
     try:
-        ip_address(normalized.strip("[]"))
+        ip_literal = normalized.strip("[]")
+        if ":" in ip_literal and ip_literal.count(":") == 1:
+            ip_literal = ip_literal.rsplit(":", 1)[0]
+        ip_address(ip_literal)
     except ValueError:
         return True
     return False
@@ -150,16 +176,26 @@ def is_browser_like_proxy_domain(hostname: str) -> bool:
     return domain_class not in _NON_BROWSER_DOMAIN_CLASSES
 
 
-def _entry_matches_source_os(entry: Any, source_os: str | None) -> bool:
-    """Return whether a URI template entry is compatible with the source OS."""
+def _entry_matches_source(
+    hostname: str,
+    entry: Any,
+    source_os: str | None,
+    source_system_type: str | None,
+) -> bool:
+    """Return whether a URI template entry is compatible with the source host."""
     if not isinstance(entry, dict):
         return False
     entry_os = entry.get("os")
-    if not entry_os or not source_os:
-        return True
-    if isinstance(entry_os, list):
-        return source_os in {str(value) for value in entry_os}
-    return str(entry_os) == source_os
+    if entry_os and source_os:
+        if isinstance(entry_os, list):
+            if source_os not in {str(value) for value in entry_os}:
+                return False
+        elif str(entry_os) != source_os:
+            return False
+    return proxy_domain_allows_source_system_type(
+        hostname,
+        source_system_type,
+    )
 
 
 def _substitute_vars(rng: random.Random, path: str, data: dict[str, Any]) -> str:
@@ -188,6 +224,7 @@ def pick_proxy_uri(
     hostname: str,
     domain_tags: list[str],
     source_os: str | None = None,
+    source_system_type: str | None = None,
 ) -> tuple[str, str, str, str | None, str]:
     """Pick URI path, content type, HTTP method, optional UA override, and referrer policy.
 
@@ -200,6 +237,9 @@ def pick_proxy_uri(
             When set, domain-specific user_agent overrides are only returned
             if the entry's ``os`` field matches.  This prevents Windows-only
             UAs (e.g. Windows-Update-Agent) from being applied to Linux hosts.
+        source_system_type: Source host type such as "workstation", "server",
+            or "domain_controller". Exact templates can restrict themselves
+            to compatible source types.
 
     Returns:
         (path, content_type, method, user_agent_override, referrer_policy) tuple.
@@ -211,7 +251,7 @@ def pick_proxy_uri(
     # 1. Exact domain match
     domains = data.get("domains", {})
     entry = domains.get(hostname)
-    if not _entry_matches_source_os(entry, source_os):
+    if not _entry_matches_source(hostname, entry, source_os, source_system_type):
         entry = None
 
     # 2. Tag-based fallback
@@ -219,7 +259,7 @@ def pick_proxy_uri(
         tags = data.get("tags", {})
         for tag in domain_tags:
             candidate = tags.get(tag)
-            if _entry_matches_source_os(candidate, source_os):
+            if _entry_matches_source(hostname, candidate, source_os, source_system_type):
                 entry = candidate
                 break
 

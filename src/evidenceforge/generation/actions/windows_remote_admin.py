@@ -281,11 +281,13 @@ class ExplicitCredentialUseActionBundle:
             self._request.target_server,
             self._request.source_ip,
         )
-        network_source_port = (
-            self._request.source_port
-            if not self._request.source_ip or self._request.source_ip.strip() == network_source_ip
-            else 0
-        )
+        network_source_port = 0
+        if network_source_ip not in {"", "-"}:
+            network_source_port = (
+                self._request.source_port
+                if self._request.source_ip.strip().removeprefix("::ffff:") == network_source_ip
+                else 0
+            )
         if network_source_ip not in {"", "-"} and network_source_port <= 0:
             network_source_port = self._sample_source_port()
         event = SecurityEvent(

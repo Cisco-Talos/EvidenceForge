@@ -193,11 +193,14 @@ class EcarEmitter(HostMultiplexEmitter):
     _sort_key = staticmethod(_ecar_sort_key)
     _defer_sorted_flush_until_close = True
     _output_end_time: datetime | None = None
+    _stale_process_reference_grace_ms = 5 * 60 * 1000
+    _post_termination_dependent_grace_ms = 30 * 1000
+    _pre_process_flow_identity_repair_grace_ms = 30 * 1000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize per-source ordering memory for cross-event eCAR contracts."""
         super().__init__(*args, **kwargs)
-        self._ssh_inbound_flow_times: dict[tuple[str, str, int, str, int], datetime] = {}
+        self._remote_inbound_flow_times: dict[tuple[str, str, int, str, int], datetime] = {}
 
     _supported_types: set[str] = {
         "logon",
@@ -417,34 +420,42 @@ class EcarEmitter(HostMultiplexEmitter):
             ),
         )
         if event.event_type == "ssh_session" and lifecycle == "login":
-            return self._ssh_session_timestamp_after_flow(event, host, timestamp)
+            return self._remote_session_timestamp_after_flow(event, host, timestamp, dst_port=22)
+        if (
+            event.event_type == "logon"
+            and lifecycle == "login"
+            and getattr(auth, "logon_type", None) == 10
+        ):
+            return self._remote_session_timestamp_after_flow(event, host, timestamp, dst_port=3389)
         return timestamp
 
-    def _ssh_session_timestamp_after_flow(
+    def _remote_session_timestamp_after_flow(
         self,
         event: SecurityEvent,
         host: HostContext | None,
         timestamp: datetime,
+        *,
+        dst_port: int,
     ) -> datetime:
-        """Keep eCAR SSH session login after the matching inbound FLOW row."""
+        """Keep eCAR remote session login after the matching inbound FLOW row."""
         auth = event.auth
         if auth is None or host is None or not auth.source_ip or not auth.source_port:
             return timestamp
-        flow_time = getattr(self, "_ssh_inbound_flow_times", {}).get(
+        flow_time = getattr(self, "_remote_inbound_flow_times", {}).get(
             (
                 host.hostname,
                 auth.source_ip,
                 int(auth.source_port),
                 host.ip,
-                22,
+                dst_port,
             )
         )
         if flow_time is None or timestamp > flow_time:
             return timestamp
         seed = _stable_seed(
-            "ecar_ssh_login_after_flow:"
+            "ecar_remote_login_after_flow:"
             f"{host.hostname}:{auth.source_ip}:{auth.source_port}:"
-            f"{getattr(auth, 'logon_id', '')}:{timestamp.isoformat()}"
+            f"{dst_port}:{getattr(auth, 'logon_id', '')}:{timestamp.isoformat()}"
         )
         return flow_time + timedelta(milliseconds=12 + (seed % 83))
 
@@ -755,8 +766,8 @@ class EcarEmitter(HostMultiplexEmitter):
                         getattr(event.dst_host, "os_category", ""),
                     ),
                 )
-                if net.protocol == "tcp" and net.dst_port == 22:
-                    self._ssh_inbound_flow_times[
+                if net.protocol == "tcp" and net.dst_port in {22, 3389}:
+                    self._remote_inbound_flow_times[
                         (
                             event.dst_host.hostname,
                             net.src_ip,
@@ -912,11 +923,20 @@ class EcarEmitter(HostMultiplexEmitter):
         host = event.dst_host
         if net is None or host is None:
             return -1
+        if net.dst_port in {22, 3389}:
+            return self._resolve_system_listener_pid(host, net.dst_port)
         if net.responding_pid > 0:
             return net.responding_pid
 
+        listener_pid = self._resolve_system_listener_pid(host, net.dst_port)
+        if listener_pid > 0:
+            return listener_pid
+        return -1
+
+    def _resolve_system_listener_pid(self, host: HostContext, dst_port: int) -> int:
+        """Resolve a stable service listener PID for endpoint transport ownership."""
         system_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
-        for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(net.dst_port, ()):
+        for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(dst_port, ()):
             pid = system_pids.get(candidate)
             if pid and pid > 0:
                 return pid
@@ -1341,6 +1361,60 @@ class EcarEmitter(HostMultiplexEmitter):
         return normalized
 
     @classmethod
+    def _filter_stale_process_references_after_termination(cls, lines: list[str]) -> list[str]:
+        """Drop or de-attrib stale process-owned rows after PROCESS/TERMINATE."""
+        records: list[dict[str, Any] | None] = []
+        terminate_ms_by_process_id: dict[str, int] = {}
+        for line in lines:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                records.append(None)
+                continue
+            records.append(record)
+            if record.get("object") != "PROCESS" or record.get("action") != "TERMINATE":
+                continue
+            process_id = str(record.get("objectID") or "")
+            if not process_id:
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            current = terminate_ms_by_process_id.get(process_id)
+            if current is None or timestamp_ms < current:
+                terminate_ms_by_process_id[process_id] = timestamp_ms
+
+        normalized: list[str] = []
+        for line, record in zip(lines, records, strict=True):
+            if record is None:
+                normalized.append(line)
+                continue
+            if record.get("object") == "PROCESS":
+                normalized.append(line)
+                continue
+            timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+            stale_threshold_ms = (
+                cls._stale_process_reference_grace_ms
+                if record.get("object") == "FLOW"
+                else cls._post_termination_dependent_grace_ms
+            )
+            stale_refs = [
+                process_id
+                for process_id in cls._referenced_process_ids(record)
+                if (
+                    process_id in terminate_ms_by_process_id
+                    and timestamp_ms > terminate_ms_by_process_id[process_id] + stale_threshold_ms
+                )
+            ]
+            if not stale_refs:
+                normalized.append(line)
+                continue
+            if record.get("object") == "FLOW":
+                cls._drop_flow_process_identity(record)
+                normalized.append(json.dumps(record, separators=(",", ":")))
+                continue
+            continue
+        return normalized
+
+    @classmethod
     def _normalize_parent_termination_after_children(cls, lines: list[str]) -> list[str]:
         """Keep visible parents alive through visible child process lifecycles."""
         records: list[dict[str, Any] | None] = []
@@ -1406,7 +1480,10 @@ class EcarEmitter(HostMultiplexEmitter):
                     latest_child_ms_by_parent_id.get(object_id, 0),
                     latest_child_ms_by_parent_pid.get(pid, 0),
                 )
-                if latest_child_ms >= timestamp_ms:
+                if (
+                    latest_child_ms >= timestamp_ms
+                    and latest_child_ms - timestamp_ms <= cls._stale_process_reference_grace_ms
+                ):
                     stable_delay_ms = 20 + (sum(ord(ch) for ch in object_id) % 480)
                     record["timestamp_ms"] = latest_child_ms + stable_delay_ms
                     line = json.dumps(record, separators=(",", ":"))
@@ -1522,6 +1599,7 @@ class EcarEmitter(HostMultiplexEmitter):
         "whoami",
         "zip",
     }
+    _LINUX_SHELL_PIPELINE_CREATE_WINDOW_MS = 1000
 
     @classmethod
     def _is_linux_shell_foreground_create(cls, record: dict[str, Any]) -> bool:
@@ -1554,7 +1632,7 @@ class EcarEmitter(HostMultiplexEmitter):
 
     @classmethod
     def _normalize_linux_shell_foreground_order(cls, lines: list[str]) -> list[str]:
-        """Serialize foreground Linux commands created by the same visible shell."""
+        """Serialize foreground shell commands while preserving pipeline concurrency."""
         records: list[dict[str, Any] | None] = []
         for line in lines:
             try:
@@ -1601,34 +1679,63 @@ class EcarEmitter(HostMultiplexEmitter):
                 )
             )
             next_available_ms = 0
+            groups: list[list[int]] = []
             for index in indexes:
                 record = records[index]
                 if record is None:
                     continue
                 timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
-                object_id = str(record.get("objectID") or "")
+                if groups:
+                    first_record = records[groups[-1][0]]
+                    first_ms = (
+                        cls._ecar_int(first_record.get("timestamp_ms"), 0)
+                        if first_record is not None
+                        else 0
+                    )
+                    if timestamp_ms <= first_ms + cls._LINUX_SHELL_PIPELINE_CREATE_WINDOW_MS:
+                        groups[-1].append(index)
+                        continue
+                groups.append([index])
+
+            for group in groups:
+                group_records = [records[index] for index in group if records[index] is not None]
+                if not group_records:
+                    continue
+                group_start_ms = min(
+                    cls._ecar_int(record.get("timestamp_ms"), 0) for record in group_records
+                )
                 shift_ms = 0
-                if next_available_ms and timestamp_ms <= next_available_ms:
+                if next_available_ms and group_start_ms <= next_available_ms:
                     seed_text = ":".join(
-                        [
-                            object_id,
-                            str(record.get("pid", "")),
-                            str(record.get("id", "")),
-                        ]
+                        ":".join(
+                            [
+                                str(record.get("objectID") or ""),
+                                str(record.get("pid", "")),
+                                str(record.get("id", "")),
+                            ]
+                        )
+                        for record in group_records
                     )
                     shifted_ms = next_available_ms + 50 + (sum(ord(ch) for ch in seed_text) % 950)
-                    shift_ms = shifted_ms - timestamp_ms
-                    record["timestamp_ms"] = shifted_ms
-                    if object_id:
-                        shift_by_object_id[object_id] = shift_ms
-                    timestamp_ms = shifted_ms
-                if object_id and object_id in terminate_ms_by_object_id:
-                    next_available_ms = max(
-                        next_available_ms,
-                        terminate_ms_by_object_id[object_id] + shift_ms,
-                    )
-                else:
-                    next_available_ms = max(next_available_ms, timestamp_ms)
+                    shift_ms = shifted_ms - group_start_ms
+
+                group_latest_ms = next_available_ms
+                for record in group_records:
+                    timestamp_ms = cls._ecar_int(record.get("timestamp_ms"), 0)
+                    object_id = str(record.get("objectID") or "")
+                    if shift_ms:
+                        timestamp_ms += shift_ms
+                        record["timestamp_ms"] = timestamp_ms
+                        if object_id:
+                            shift_by_object_id[object_id] = shift_ms
+                    if object_id and object_id in terminate_ms_by_object_id:
+                        group_latest_ms = max(
+                            group_latest_ms,
+                            terminate_ms_by_object_id[object_id] + shift_ms,
+                        )
+                    else:
+                        group_latest_ms = max(group_latest_ms, timestamp_ms)
+                next_available_ms = max(next_available_ms, group_latest_ms)
 
         normalized: list[str] = []
         for line, record in zip(lines, records, strict=True):
@@ -1814,6 +1921,18 @@ class EcarEmitter(HostMultiplexEmitter):
             if referenced_create_ms:
                 minimum_ms = max(referenced_create_ms)
                 if timestamp_ms <= minimum_ms:
+                    if record.get("object") == "FLOW":
+                        if record.get("action") == "CONNECT":
+                            cls._drop_flow_process_identity(record)
+                            normalized.append(json.dumps(record, separators=(",", ":")))
+                            continue
+                        if (
+                            minimum_ms - timestamp_ms
+                            > cls._pre_process_flow_identity_repair_grace_ms
+                        ):
+                            cls._drop_flow_process_identity(record)
+                            normalized.append(json.dumps(record, separators=(",", ":")))
+                            continue
                     seed_text = ":".join(
                         [
                             str(record.get("id", "")),
@@ -1828,6 +1947,17 @@ class EcarEmitter(HostMultiplexEmitter):
                     line = json.dumps(record, separators=(",", ":"))
             normalized.append(line)
         return normalized
+
+    @staticmethod
+    def _drop_flow_process_identity(record: dict[str, Any]) -> None:
+        """Remove process attribution from a FLOW that cannot safely claim it."""
+        record.pop("actorID", None)
+        record.pop("pid", None)
+        record.pop("principal", None)
+        props = record.get("properties")
+        if isinstance(props, dict):
+            for key in ("image_path", "command_line", "parent_image_path"):
+                props.pop(key, None)
 
     @staticmethod
     def _semantic_dedup_key(record: dict[str, Any]) -> str:
@@ -1895,6 +2025,9 @@ class EcarEmitter(HostMultiplexEmitter):
                     writer.buffer = self._normalize_linux_shell_foreground_order(writer.buffer)
                     writer.buffer = self._normalize_linux_pid_morphology(writer.buffer)
                     writer.buffer = self._normalize_process_reference_order(writer.buffer)
+                    writer.buffer = self._filter_stale_process_references_after_termination(
+                        writer.buffer
+                    )
                     writer.buffer = self._normalize_process_termination_order(writer.buffer)
                     writer.buffer = self._normalize_parent_termination_after_children(writer.buffer)
                     writer.buffer = self._deduplicate_semantic_events(writer.buffer)

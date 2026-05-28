@@ -294,6 +294,77 @@ class TestLogoffLinux:
             "pam_unix(sshd:session): session closed for user alice.smith"
         )
 
+    def test_storyline_ssh_logoff_binds_to_transport_close(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Storyline cleanup should not extend an SSH session past the transport close."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        close_time = timestamp + timedelta(minutes=8)
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        mock_emitters["syslog"].reset_mock()
+        mock_emitters["ecar"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            timestamp + timedelta(hours=2),
+            logon_id,
+            logon_type=10,
+            from_storyline=True,
+        )
+
+        expected_delta = sample_timing_delta(
+            "windows.logoff_after_last_activity",
+            seed_parts=(linux_system.hostname, logon_id, close_time),
+        )
+        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
+        assert syslog_event.timestamp == close_time + expected_delta
+        assert ecar_event.timestamp == close_time + expected_delta
+
+    def test_storyline_ssh_logoff_preserves_time_before_transport_close(
+        self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
+    ):
+        """Storyline logout should stay authored when the SSH transport is still open."""
+        state_manager.set_current_time(timestamp)
+        logon_id = state_manager.create_session(
+            username=test_user.username,
+            system=linux_system.hostname,
+            logon_type=10,
+            source_ip="10.0.10.50",
+            source_port=51111,
+            session_kind="ssh",
+            transport_pid=6505,
+        )
+        close_time = timestamp + timedelta(hours=2)
+        logoff_time = timestamp + timedelta(minutes=30)
+        state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+        mock_emitters["syslog"].reset_mock()
+        mock_emitters["ecar"].reset_mock()
+
+        activity_gen.generate_logoff(
+            test_user,
+            linux_system,
+            logoff_time,
+            logon_id,
+            logon_type=10,
+            from_storyline=True,
+        )
+
+        syslog_event = mock_emitters["syslog"].emit.call_args[0][0]
+        ecar_event = mock_emitters["ecar"].emit.call_args[0][0]
+        assert syslog_event.timestamp == logoff_time
+        assert ecar_event.timestamp == logoff_time
+
     def test_linux_type10_logoff_gets_pam_close_even_when_kind_was_not_preserved(
         self, activity_gen, test_user, linux_system, timestamp, state_manager, mock_emitters
     ):

@@ -44,15 +44,12 @@ from evidenceforge.models.scenario import ConnectionEventSpec
 from evidenceforge.output_targets import OUTPUT_TARGET_FILENAME
 
 
-def test_service_wrapper_storyline_processes_are_long_lived():
-    """Remote service wrappers should remain available for later follow-on commands."""
-    assert (
-        _estimate_process_lifetime(
-            r"C:\Windows\System32\PSEXESVC.exe",
-            "PSEXESVC.exe -accepteula",
-        )
-        is None
-    )
+def test_service_wrapper_storyline_process_lifetimes_are_source_native():
+    """Remote service wrappers should use the lifecycle of the modeled tool."""
+    assert _estimate_process_lifetime(
+        r"C:\Windows\System32\PSEXESVC.exe",
+        "PSEXESVC.exe -accepteula",
+    ) == (8.0, 45.0)
     assert (
         _estimate_process_lifetime(
             r"C:\Windows\System32\HealthMonitorSvc.exe",

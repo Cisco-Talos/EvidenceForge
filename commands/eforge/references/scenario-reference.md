@@ -980,7 +980,7 @@ Use `scenarios/<slug>/` as the standard scenario bundle root. `scenario.yaml` an
 `ENVIRONMENT.md` live directly in that directory, optional authored collateral such as
 phishing `.eml` files lives under `scenarios/<slug>/artifacts/`, and generated logs always
 live in `scenarios/<slug>/data/`. Output formats here are canonical and target-neutral.
-Choose target-specific file shapes, such as SOF-ELK Snare Windows events or
+Choose target-specific file shapes, such as SOF-ELK® Snare Windows events or
 year-partitioned RFC3164 syslog, with `eforge generate --target default|sof-elk`; do
 not encode a parser target in scenario YAML or create target-named output directories.
 

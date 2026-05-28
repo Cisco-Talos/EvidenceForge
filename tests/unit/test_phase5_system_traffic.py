@@ -342,8 +342,8 @@ def test_cron_schedule_emits_shell_and_workload_process_tree(linux_system):
     assert term_calls[0].kwargs["time"] >= ts + timedelta(seconds=1)
 
 
-def test_cron_schedule_launches_on_minute_boundaries(linux_system):
-    """Cron jobs should not inherit arbitrary second jitter from systemd timers."""
+def test_cron_schedule_honors_configured_slot_jitter(linux_system):
+    """Cron jobs may carry configured source-observation jitter."""
     engine = type("FakeEngine", (object,), {})()
     engine._emit_scheduled_event = Mock()
     engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
@@ -358,6 +358,43 @@ def test_cron_schedule_launches_on_minute_boundaries(linux_system):
         "typical_hour": 0,
         "jitter_minutes": 8,
         "slot_jitter_seconds": 45,
+        "distro": "debian",
+        "cron_user": "sysstat",
+        "cron_commands": {"debian": "debian-sa1 1 1"},
+    }
+
+    with patch("evidenceforge.generation.engine.baseline._load_systemd_schedules") as load:
+        load.return_value = [sched]
+        engine._generate_scheduled_tasks(
+            current_hour,
+            linux_system,
+            random.Random(11),
+            {"cron": 1337},
+            False,
+            False,
+        )
+
+    fire_times = [call.args[2] for call in engine._emit_scheduled_event.call_args_list]
+    assert len(fire_times) == 2
+    assert any(fire_time.second > 0 for fire_time in fire_times)
+    assert all(0 <= fire_time.second <= 45 for fire_time in fire_times)
+
+
+def test_cron_schedule_without_slot_jitter_stays_minute_aligned(linux_system):
+    """Unconfigured cron schedules still render on cron-like minute boundaries."""
+    engine = type("FakeEngine", (object,), {})()
+    engine._emit_scheduled_event = Mock()
+    engine._generate_scheduled_tasks = BaselineMixin._generate_scheduled_tasks.__get__(
+        engine,
+        type(engine),
+    )
+    current_hour = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+    sched = {
+        "service": "debian-sa1",
+        "type": "cron",
+        "frequency": "30min",
+        "typical_hour": 0,
+        "jitter_minutes": 8,
         "distro": "debian",
         "cron_user": "sysstat",
         "cron_commands": {"debian": "debian-sa1 1 1"},

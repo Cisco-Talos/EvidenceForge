@@ -386,6 +386,8 @@ def _bounded_file_transfer_observation(
     file_duration = ft.duration
     file_ts = _file_transfer_analyzer_timestamp(event, net.zeek_uid, ft.fuid, conn_ts)
     lower_bound = max(conn_ts, min_start) if min_start is not None else conn_ts
+    if ft.observation_not_before is not None:
+        lower_bound = max(lower_bound, ft.observation_not_before)
     if file_ts < lower_bound:
         file_ts = lower_bound
     if conn_duration is None or conn_duration <= 0:

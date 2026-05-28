@@ -36,6 +36,41 @@ def test_executable_download_uses_binary_mime_and_size_range():
     assert is_stable_resource_path("/files/tool.exe")
 
 
+def test_installer_and_archive_downloads_use_production_scale_sizes():
+    assert (
+        normalize_mime_type_for_path(
+            "/duo/device-health/2f7c6c95/DuoDeviceHealth-latest.msi",
+            "application/octet-stream",
+        )
+        == "application/x-msdownload"
+    )
+    assert (
+        normalize_mime_type_for_path(
+            "/edgedl/chrome/chrome-for-testing/12adbeef/win64/chrome-win64.zip",
+            "application/octet-stream",
+        )
+        == "application/zip"
+    )
+    assert is_stable_resource_path("/globalprotect/GlobalProtect64-4191fe73.msi")
+    assert is_stable_resource_path(
+        "/edgedl/chrome/chrome-for-testing/12adbeef/win64/chrome-win64.zip"
+    )
+
+    msi_size = response_size_for_status(
+        200,
+        "dl.duosecurity.com",
+        "/duo/device-health/2f7c6c95/DuoDeviceHealth-latest.msi",
+    )
+    zip_size = response_size_for_status(
+        200,
+        "dl.google.com",
+        "/edgedl/chrome/chrome-for-testing/12adbeef/win64/chrome-win64.zip",
+    )
+
+    assert 5_000_000 <= msi_size <= 150_000_000
+    assert 1_000_000 <= zip_size <= 200_000_000
+
+
 def test_download_mime_replaces_tiny_preferred_response_size():
     size = coerce_response_size_for_mime(
         random.Random(7),
@@ -43,6 +78,15 @@ def test_download_mime_replaces_tiny_preferred_response_size():
         32_000,
     )
     assert 5_000_000 <= size <= 150_000_000
+
+
+def test_archive_download_mime_replaces_tiny_preferred_response_size():
+    size = coerce_response_size_for_mime(
+        random.Random(7),
+        "application/zip",
+        32_000,
+    )
+    assert 1_000_000 <= size <= 200_000_000
 
 
 def test_unknown_extension_keeps_supplied_content_type():

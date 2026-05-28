@@ -119,8 +119,8 @@ relationships:
   source.ecar_after_sysmon_process_create_gap:
     class: source_latency
     position: after
-    min_ms: 120
-    max_ms: 420
+    min_ms: 85
+    max_ms: 3600
   source.ecar_dependent_after_process_create:
     class: source_latency
     position: after
@@ -134,8 +134,8 @@ relationships:
   source.ecar_flow:
     class: source_latency
     position: after
-    min_ms: 40
-    max_ms: 300
+    min_ms: 180
+    max_ms: 1800
   source.ecar_session:
     class: source_latency
     position: after

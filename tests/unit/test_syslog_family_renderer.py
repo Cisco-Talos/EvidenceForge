@@ -24,7 +24,11 @@
 
 from datetime import UTC, datetime
 
-from evidenceforge.generation.emitters.syslog import SyslogEmitter
+from evidenceforge.generation.emitters.syslog import (
+    SyslogEmitter,
+    _fallback_linux_uid,
+    _linux_uid_collision_repaired,
+)
 from evidenceforge.generation.emitters.syslog_family import (
     make_syslog_family_route_key,
     render_rfc3164_syslog,
@@ -64,6 +68,23 @@ def test_render_rfc3164_syslog_omits_empty_pid() -> None:
 def test_syslog_priority_clamps_facility_and_severity() -> None:
     assert syslog_priority(10, 6) == 86
     assert syslog_priority(99, 99) == 191
+
+
+def test_syslog_pam_uid_collision_repair_keeps_named_users_distinct() -> None:
+    """Syslog-only PAM backfills should not alias named users to ubuntu(uid=1000)."""
+    lines = [
+        "<86>1 2024-03-18T12:00:00.000000Z host login 100 - - "
+        "pam_unix(login:session): session opened for user ubuntu(uid=1000) by LOGIN(uid=0)",
+        "<86>1 2024-03-18T12:00:01.000000Z host CRON 101 - - "
+        "pam_unix(cron:session): session opened for user lina.nguyen(uid=1000) by (uid=0)",
+    ]
+
+    repaired = _linux_uid_collision_repaired(lines, "host")
+
+    assert "ubuntu(uid=1000)" in repaired[0]
+    assert "lina.nguyen(uid=1000)" not in repaired[1]
+    assert "lina.nguyen(uid=" in repaired[1]
+    assert _fallback_linux_uid("lina.nguyen") != 1000
 
 
 def test_year_route_key_writes_source_year_path(tmp_path) -> None:
@@ -140,6 +161,24 @@ def test_backfill_missing_logind_pam_openers_adds_native_opener() -> None:
     pam_index = next(i for i, line in enumerate(normalized) if "pam_unix(" in line)
     logind_index = next(i for i, line in enumerate(normalized) if "systemd-logind" in line)
     assert pam_index < logind_index
+    assert any(" app login " in line for line in normalized if "pam_unix(" in line)
+    assert not any("pam_unix(cron:session)" in line for line in normalized)
+
+
+def test_backfill_missing_logind_pam_openers_never_labels_human_logind_as_cron() -> None:
+    lines = [
+        "<86>1 2024-03-18T15:06:10.442818Z WS-LNGUYEN-01 systemd-logind 33515 - - New session 20798 of user lina.nguyen.",
+    ]
+
+    normalized = SyslogEmitter._backfill_missing_logind_pam_openers_for_lines(
+        lines,
+        "WS-LNGUYEN-01.meridianhcs.local",
+    )
+
+    pam_line = next(line for line in normalized if "pam_unix(" in line)
+    assert "pam_unix(login:session)" in pam_line
+    assert " CRON " not in pam_line
+    assert "pam_unix(cron:session)" not in pam_line
 
 
 def test_backfill_missing_logind_pam_openers_ignores_future_openers() -> None:

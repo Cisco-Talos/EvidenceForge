@@ -430,6 +430,7 @@ programs:
     distro: ubuntu
     system_types: [server]
     weight: 1
+    max_per_host_window: 8
     params:
       origin_set:
         - "o=Ubuntu,a=jammy-security"

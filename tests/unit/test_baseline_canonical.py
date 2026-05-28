@@ -36,8 +36,12 @@ import pytest
 from evidenceforge.events.contexts import HttpContext, IdsContext
 from evidenceforge.generation.actions import DhcpLeaseActionBundle, DhcpLeaseRequest
 from evidenceforge.generation.activity import ActivityGenerator
+from evidenceforge.generation.activity.generator import _ntp_payload_accounting
 from evidenceforge.generation.activity.linux_interfaces import linux_primary_interface
 from evidenceforge.generation.engine.baseline import (
+    _LINUX_AMBIENT_SSH_NOISE_BAND,
+    _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY,
+    _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY,
     _ambient_registry_entry_allowed,
     _extra_syslog_service_values,
     _linux_ambient_logind_probability,
@@ -128,7 +132,7 @@ def test_linux_server_ambient_logind_noise_is_thinned():
     assert _linux_ambient_logind_probability("server") < _linux_ambient_logind_probability(
         "workstation"
     )
-    assert _linux_ambient_logind_probability("server") <= 0.15
+    assert _linux_ambient_logind_probability("server") <= 0.05
 
 
 def test_server_pam_initiator_favors_sudo_over_local_login():
@@ -140,6 +144,7 @@ def test_server_pam_initiator_favors_sudo_over_local_login():
     services = [service for _app_name, service, _message in samples]
 
     assert services.count("sudo") > services.count("login")
+    assert services.count("login") <= 12
 
 
 def test_extra_sudo_command_template_uses_host_services():
@@ -354,7 +359,8 @@ class TestIdsAlertCorrelation:
         assert event.ntp.xmt_ts >= event.ntp.rec_ts
         assert event.network.conn_state == "SF"
         assert event.network.history == "Dd"
-        assert event.network.resp_bytes > 0
+        assert 40 <= event.network.orig_bytes <= 140
+        assert 40 <= event.network.resp_bytes <= 140
         assert event.network.resp_pkts > 0
         assert event.network.resp_ip_bytes > 0
 
@@ -427,6 +433,23 @@ class TestIdsAlertCorrelation:
         assert {row.precision for row in ntp_rows} == {ntp_rows[0].precision}
         assert {row.root_delay for row in ntp_rows} == {ntp_rows[0].root_delay}
         assert {row.root_disp for row in ntp_rows} == {ntp_rows[0].root_disp}
+
+    def test_ntp_payload_accounting_clamps_udp_123_probe_sizes(self, timestamp):
+        """UDP/123 conn rows should not inherit generic high-byte probe payloads."""
+        orig_bytes, resp_bytes, duration = _ntp_payload_accounting(
+            src_ip="10.10.3.20",
+            dst_ip="74.172.69.175",
+            time=timestamp,
+            conn_state="SF",
+            history="DdDd",
+            orig_bytes=1707,
+            resp_bytes=770,
+            duration=3.5,
+        )
+
+        assert 80 <= orig_bytes <= 240
+        assert 80 <= resp_bytes <= 240
+        assert duration is not None and duration <= 0.25
 
     def test_ntp_schedule_helpers_avoid_exact_hourly_fingerprint(self):
         """Baseline NTP intervals should vary around the association poll."""
@@ -1119,6 +1142,46 @@ class TestDhcpLease:
         assert dhcp_events[0].dhcp.client_addr == "0.0.0.0"
         assert dhcp_events[0].dhcp.assigned_addr == "10.0.10.2"
         assert dhcp_events[0].network.duration == dhcp_events[0].dhcp.duration
+        assert dhcp_events[0].network.orig_bytes != 300
+        assert dhcp_events[0].network.resp_bytes != 300
+
+    def test_dhcp_lease_payload_sizes_vary_by_client(
+        self, activity_gen, state_manager, mock_emitters, timestamp
+    ):
+        """DHCP conn rows should not render fixed byte counts for every lease."""
+        first = System(hostname="LNX-01", ip="10.0.10.2", os="Linux Ubuntu 22.04", type="server")
+        second = System(hostname="LNX-02", ip="10.0.10.3", os="Linux Ubuntu 22.04", type="server")
+        state_manager.set_current_time(timestamp)
+
+        for system, mac in (
+            (first, "00:50:56:ab:cd:ef"),
+            (second, "00:50:56:ab:cd:f0"),
+        ):
+            activity_gen.generate_dhcp_lease(
+                system=system,
+                time=timestamp,
+                mac=mac,
+                uid=f"C{system.hostname.replace('-', '')}",
+                msg_types=["REQUEST", "ACK"],
+            )
+
+        all_calls = [
+            call[0][0]
+            for emitter in mock_emitters.values()
+            if emitter.emit.called
+            for call in emitter.emit.call_args_list
+        ]
+        renewal_events = [
+            e
+            for e in all_calls
+            if e.event_type == "dhcp_lease" and e.dhcp.msg_types == ["REQUEST", "ACK"]
+        ]
+
+        assert len(renewal_events) >= 2
+        observed_sizes = {
+            (event.network.orig_bytes, event.network.resp_bytes) for event in renewal_events[-2:]
+        }
+        assert len(observed_sizes) == 2
 
     def test_generate_dhcp_lease_uses_ad_domain_when_unspecified(
         self, activity_gen, state_manager, mock_emitters, timestamp
@@ -1291,6 +1354,8 @@ class TestBaselineSshTiming:
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
+        assert "_linux_remote_admin_hour_probability(system)" in source
+        assert "_linux_remote_admin_session_count(rng, system)" in source
         assert "ssh_duration = rng.uniform(30.0, 1800.0)" in source
         assert "generate_ssh_session(" in source
         assert "duration=ssh_duration" in source
@@ -1305,7 +1370,12 @@ class TestBaselineSshTiming:
         from evidenceforge.generation.engine.baseline import BaselineMixin
 
         source = inspect.getsource(BaselineMixin)
-        assert 'source_roll < 0.34 and sys_type == "server"' in source
+        assert _LINUX_AMBIENT_SSH_NOISE_BAND <= 0.01
+        assert _LINUX_REMOTE_ADMIN_HOURLY_BASE_PROBABILITY <= 0.35
+        assert _LINUX_REMOTE_ADMIN_SECOND_SESSION_PROBABILITY <= 0.25
+        assert 'source_roll < 0.32 + _LINUX_AMBIENT_SSH_NOISE_BAND and sys_type == "server"' in (
+            source
+        )
         assert "ssh_roster = self._get_server_ssh_users(system)" in source
         assert "ssh_usernames = [user.username for user in ssh_roster]" in source
 
@@ -1338,6 +1408,7 @@ class TestBaselineRegistryRealism:
         assert "Windows NT\\\\CurrentVersion\\\\Winlogon" in source
         assert "Services\\\\EventLog\\\\Application" in source
         assert "driverdesc" in source
+        assert "materialize_edr_template_group" in source
 
     def test_ambient_registry_noise_suppresses_dhcp_values_for_static_hosts(self):
         """Static infrastructure should not emit DHCP registry churn as ambient noise."""
@@ -1516,6 +1587,21 @@ class TestWebAccessExternalVisitors:
         engine = MagicMock(spec=EmitterSetupMixin)
         engine._get_system_exposure = MagicMock(return_value=exposure)
         return engine
+
+    def _attach_web_helpers(self, engine, *, scenario=None, scanner_ips=None):
+        """Attach BaselineMixin helper methods to lightweight mock engines."""
+        from types import SimpleNamespace
+
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        engine.scenario = scenario or SimpleNamespace(storyline=[], red_herrings=[])
+        engine._external_scanner_ips = scanner_ips or []
+        for method_name in (
+            "_reserved_external_web_client_ips",
+            "_generate_external_web_client_ip",
+            "_web_visitor_profile_for_client",
+        ):
+            setattr(engine, method_name, getattr(BaselineMixin, method_name).__get__(engine))
 
     def test_external_segment_gives_100pct_external_ips(self):
         """exposure=external: all client IPs must be non-RFC1918."""
@@ -1718,6 +1804,7 @@ class TestWebAccessExternalVisitors:
             external_ratio=None,
         )
         engine._generate_external_client_ip.side_effect = [f"8.8.4.{idx}" for idx in range(1, 20)]
+        self._attach_web_helpers(engine)
         sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
 
         BaselineMixin._emit_web_server_access(
@@ -1806,6 +1893,7 @@ class TestWebAccessExternalVisitors:
             external_ratio=None,
         )
         engine._generate_external_client_ip.return_value = "8.8.4.20"
+        self._attach_web_helpers(engine)
         sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
 
         BaselineMixin._emit_web_server_access(
@@ -1904,6 +1992,7 @@ class TestWebAccessExternalVisitors:
             external_ratio=None,
         )
         engine._generate_external_client_ip.return_value = "8.8.4.20"
+        self._attach_web_helpers(engine)
         sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
 
         BaselineMixin._emit_web_server_access(
@@ -1974,6 +2063,7 @@ class TestWebAccessExternalVisitors:
             external_ratio=None,
         )
         engine._generate_external_client_ip.side_effect = [f"8.8.8.{idx}" for idx in range(1, 20)]
+        self._attach_web_helpers(engine)
         sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
 
         BaselineMixin._emit_web_server_access(
@@ -1988,6 +2078,159 @@ class TestWebAccessExternalVisitors:
         assert {kw["http"].status_code for kw in collected} == {404}
         assert {kw["http"].uri for kw in collected} == {"/wp-login.php"}
         assert all(kw["http"].referrer == "" for kw in collected)
+
+    def test_web_server_access_keeps_external_profile_sticky_per_ip(self, monkeypatch):
+        """Repeated external visitors from one IP should not switch source persona families."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        calls = []
+        profiles = [
+            (
+                "api_client",
+                {
+                    "kind": "requests",
+                    "request_count": [1, 1],
+                    "user_agent_pool": "api_client",
+                    "referrer_mode": "none",
+                    "requests": [
+                        {
+                            "path": "/api/v1/status",
+                            "method": "GET",
+                            "status": 200,
+                            "type": "application/json",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ),
+            (
+                "opportunistic_probe",
+                {
+                    "kind": "requests",
+                    "request_count": [1, 1],
+                    "user_agent_pool": "scanner",
+                    "referrer_mode": "none",
+                    "requests": [
+                        {
+                            "path": "/wp-login.php",
+                            "method": "GET",
+                            "status": 404,
+                            "type": "text/html",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ),
+        ]
+
+        def fake_pick(_rng, *, is_external):
+            calls.append(is_external)
+            return profiles[min(len(calls) - 1, 1)]
+
+        monkeypatch.setattr(web_session_profiles, "pick_web_visitor_profile", fake_pick)
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (4, 4)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.return_value = "8.8.8.8"
+        self._attach_web_helpers(engine)
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(23),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        assert len(collected) == 4
+        assert calls == [True]
+        assert {kw["src_ip"] for kw in collected} == {"8.8.8.8"}
+        assert {kw["http"].uri for kw in collected} == {"/api/v1/status"}
+        assert {kw["http"].status_code for kw in collected} == {200}
+
+    def test_web_server_access_avoids_authored_and_scanner_external_ips(self, monkeypatch):
+        """Generic web clients should not reuse external IPs already claimed by other roles."""
+        from random import Random
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+
+        from evidenceforge.generation.activity import web_session_profiles
+        from evidenceforge.generation.engine.baseline import BaselineMixin
+
+        monkeypatch.setattr(
+            web_session_profiles,
+            "pick_web_visitor_profile",
+            lambda rng, *, is_external: (
+                "api_client",
+                {
+                    "kind": "requests",
+                    "request_count": [1, 1],
+                    "user_agent_pool": "api_client",
+                    "referrer_mode": "none",
+                    "requests": [
+                        {
+                            "path": "/api/v1/status",
+                            "method": "GET",
+                            "status": 200,
+                            "type": "application/json",
+                            "weight": 1,
+                        }
+                    ],
+                },
+            ),
+        )
+
+        authored_source = "185.70.41.45"
+        scanner_source = "57.219.255.52"
+        generated_ips = [authored_source, scanner_source]
+        generated_ips.extend(f"8.8.4.{idx}" for idx in range(1, 25))
+        scenario = SimpleNamespace(
+            storyline=[SimpleNamespace(events=[SimpleNamespace(source_ip=authored_source)])],
+            red_herrings=[],
+        )
+
+        collected = []
+        activity_gen = MagicMock()
+        activity_gen._ip_to_system = {}
+        activity_gen.generate_connection.side_effect = lambda **kw: collected.append(kw)
+        engine = MagicMock()
+        engine.activity_generator = activity_gen
+        engine._resolve_traffic_rate.return_value = (6, 6)
+        engine._get_segment_for_system.return_value = SimpleNamespace(
+            exposure="external",
+            external_ratio=None,
+        )
+        engine._generate_external_client_ip.side_effect = generated_ips
+        self._attach_web_helpers(engine, scenario=scenario, scanner_ips=[scanner_source])
+        sys_obj = self._make_web_system("external", public_hostnames=["portal.example.com"])
+
+        BaselineMixin._emit_web_server_access(
+            engine,
+            sys_obj,
+            [sys_obj],
+            Random(31),
+            datetime(2024, 3, 15, 10, 0, 0, tzinfo=UTC),
+        )
+
+        observed_ips = {kw["src_ip"] for kw in collected}
+        assert authored_source not in observed_ips
+        assert scanner_source not in observed_ips
+        assert observed_ips <= {f"8.8.4.{idx}" for idx in range(1, 25)}
 
     def test_health_checks_use_server_scoped_internal_sources(self, monkeypatch):
         """Monitoring UAs should not be sourced from ordinary workstations."""
@@ -2053,6 +2296,7 @@ class TestWebAccessExternalVisitors:
             external_ratio=None,
         )
         engine._generate_external_client_ip.return_value = "8.8.8.8"
+        self._attach_web_helpers(engine)
 
         BaselineMixin._emit_web_server_access(
             engine,

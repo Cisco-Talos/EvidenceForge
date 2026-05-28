@@ -53,6 +53,16 @@ _HOST_LOGON_BUCKET_SPACE = 0x01000000
 _HOST_LOGON_BUCKET_STEP = 131071
 
 
+def _session_valid_at(session: ActiveSession, cutoff: datetime) -> bool:
+    """Return whether a session can own visible activity at cutoff."""
+    if ensure_utc(session.start_time) > cutoff:
+        return False
+    network_close_time = session.network_close_time
+    if network_close_time is not None and cutoff >= ensure_utc(network_close_time):
+        return False
+    return True
+
+
 def _normalize_generated_logon_luid(value: int) -> int:
     """Keep generated Windows LogonIDs in the ordinary rendered LUID range."""
     return _MIN_GENERATED_LOGON_LUID + (
@@ -400,12 +410,13 @@ class StateManager:
         with self._lock:
             sessions: dict[str, ActiveSession] = {}
             for session in self.state.active_sessions.values():
-                if session.username == username and ensure_utc(session.start_time) <= cutoff:
+                if session.username == username and _session_valid_at(session, cutoff):
                     sessions[session.logon_id] = session
             for session, end_time in self._ended_sessions.values():
                 if (
                     session.username == username
-                    and ensure_utc(session.start_time) <= cutoff < end_time
+                    and _session_valid_at(session, cutoff)
+                    and cutoff < end_time
                 ):
                     sessions[session.logon_id] = session
             return list(sessions.values())

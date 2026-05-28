@@ -98,6 +98,94 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_non_numeric_web_scan_ids_fields(self, monkeypatch):
+        from evidenceforge.config import web_scan_presets
+
+        def load_invalid_web_scan_presets():
+            return {
+                "presets": {
+                    "nikto": {
+                        "ids_ua": {"sid": "bad", "message": "ua", "rev": "x"},
+                        "ids_rate": {"sid": 200001, "message": "rate", "priority": "high"},
+                        "paths": [
+                            {
+                                "uri": "/cgi-bin/test",
+                                "status": 404,
+                                "ids": {"sid": "oops", "message": "path"},
+                            }
+                        ],
+                    }
+                }
+            }
+
+        monkeypatch.setattr(
+            web_scan_presets, "load_web_scan_presets", load_invalid_web_scan_presets
+        )
+        monkeypatch.setattr(web_scan_presets, "list_preset_names", lambda: ["nikto"])
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" ids_ua sid must be a positive integer' in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" ids_rate priority must be a positive integer' in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "web_scan_presets.yaml"
+            and 'Preset "nikto" path #1 (/cgi-bin/test) ids sid must be a positive integer'
+            in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_non_numeric_ids_signature_fields(self, monkeypatch):
+        from evidenceforge.generation.activity import ids_signatures
+
+        def load_invalid_ids_signatures():
+            return {
+                "signatures": [
+                    {
+                        "sid": "bad-sid",
+                        "rev": "bad-rev",
+                        "message": "bad numeric fields",
+                        "classification": "misc-activity",
+                        "priority": "bad-priority",
+                        "proto": "tcp",
+                        "gid": "bad-gid",
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(ids_signatures, "load_ids_signatures", load_invalid_ids_signatures)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "sid must be a positive integer" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "rev must be a positive integer" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "ids_signatures.yaml"
+            and "priority must be a positive integer" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_endpoint_noise_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import endpoint_noise
 
@@ -327,6 +415,45 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "tls_realism.yaml"
             and "authority profile not_valid_after must be after not_valid_before" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_child_ca_validity_outside_parent_window(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            certificate_chains = dict(data.get("certificate_chains", {}))
+            certificate_chains["authority_profiles"] = [
+                {
+                    "subject": "CN=Parent Root CA, O=Example, C=US",
+                    "issuer": "CN=Parent Root CA, O=Example, C=US",
+                    "not_valid_before": 100,
+                    "not_valid_after": 500,
+                    "key_type": "rsa",
+                    "key_length": 2048,
+                },
+                {
+                    "subject": "CN=Child Issuing CA, O=Example, C=US",
+                    "issuer": "CN=Parent Root CA, O=Example, C=US",
+                    "not_valid_before": 200,
+                    "not_valid_after": 600,
+                    "key_type": "rsa",
+                    "key_length": 2048,
+                },
+            ]
+            return {**data, "certificate_chains": certificate_chains}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "authority profile validity must fit within issuer validity window" in issue.message
             for issue in result.issues
         )
 
@@ -678,6 +805,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_proxy_source_system_type(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_uri
+
+        real_loader = proxy_uri.load_proxy_uri_templates
+
+        def load_invalid_proxy_templates():
+            data = real_loader()
+            domains = dict(data.get("domains", {}))
+            domains["desktop.dropbox.com"] = {
+                **domains["desktop.dropbox.com"],
+                "source_system_types": ["laptop"],
+            }
+            return {**data, "domains": domains}
+
+        monkeypatch.setattr(proxy_uri, "load_proxy_uri_templates", load_invalid_proxy_templates)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_uri_templates.yaml"
+            and "invalid source_system_types" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_timing_profile_window(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
@@ -740,6 +892,61 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "edr_pools.yaml (file_side_effect_profiles)"
             and "profile must define executables" in issue.message
+            for issue in result.issues
+        )
+
+    def test_validate_config_rejects_invalid_edr_file_path_pools(self, monkeypatch):
+        from evidenceforge.generation.activity import edr_pools
+
+        real_loader = edr_pools.load_edr_pools
+
+        def load_invalid_edr_pools():
+            data = real_loader()
+            return {
+                **data,
+                "file_paths_windows": [
+                    r"C:\Windows\Prefetch\SVCHOST.EXE-{rand}.pf",
+                ],
+                "file_paths_linux": [
+                    "/proc/{rand}/status",
+                    "/etc/passwd",
+                    "/var/lib/dpkg/status",
+                    "/tmp/systemd-private-12345-apache2.service",
+                ],
+            }
+
+        monkeypatch.setattr(edr_pools, "load_edr_pools", load_invalid_edr_pools)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_windows)"
+            and "Prefetch templates" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "/proc/<pid>/status" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "/etc/passwd" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "package-manager state paths" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "apache2 systemd-private" in issue.message
             for issue in result.issues
         )
 
@@ -1938,6 +2145,7 @@ class TestValidateConfig:
         unattended = next(entry for entry in programs if entry["app"] == "unattended-upgr")
         percentage_values = unattended["params"]["phased_percentage"]
 
+        assert unattended["max_per_host_window"] <= 8
         assert all(0 <= int(value) <= 100 for value in percentage_values)
         assert not any(
             "phased update percentage {}" in message for message in unattended["messages"]

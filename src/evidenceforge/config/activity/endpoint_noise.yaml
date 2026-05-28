@@ -41,3 +41,20 @@ ecar_flow_identity:
   service_process_probability: 0.48
   root_process_probability: 0.42
   inbound_listener_probability: 0.36
+
+ecar_file_churn:
+  enabled: true
+  windows:
+    count_min: 3
+    count_max: 8
+    action_weights:
+      read: 58
+      modify: 30
+      create: 12
+  linux:
+    count_min: 2
+    count_max: 6
+    action_weights:
+      read: 62
+      modify: 28
+      create: 10

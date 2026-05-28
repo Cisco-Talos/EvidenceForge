@@ -140,6 +140,7 @@ def pick_domain_and_ip(
     *tags: str,
     src_host: str = "",
     include_os: str | None = None,
+    source_system_type: str | None = None,
 ) -> tuple[str, str]:
     """Pick a domain by tag(s) and select a deterministic primary IP.
 
@@ -154,6 +155,8 @@ def pick_domain_and_ip(
         include_os: Source host OS category ("windows" or "linux"). When set,
             domains tagged for a different OS are excluded. Domains with no
             OS tag are always included.
+        source_system_type: Optional source host type used to exclude domains
+            whose proxy templates are explicitly workstation-only.
 
     Returns:
         (domain, ip) tuple.
@@ -167,6 +170,20 @@ def pick_domain_and_ip(
             entry
             for entry in entries
             if not (os_tags & set(entry.get("tags", []))) or include_os in entry.get("tags", [])
+        ]
+
+    if source_system_type and entries:
+        from evidenceforge.generation.activity.proxy_uri import (
+            proxy_domain_allows_source_system_type,
+        )
+
+        entries = [
+            entry
+            for entry in entries
+            if proxy_domain_allows_source_system_type(
+                str(entry.get("domain", "")),
+                source_system_type,
+            )
         ]
 
     if not entries:
