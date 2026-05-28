@@ -74,6 +74,7 @@ ocsp:
     unknown: 7
     revoked: 3
   suppress_revoked_suffixes:
+    - .adobedtm.com
     - .amazon.com
     - .awsstatic.com
     - .bing.com
@@ -186,7 +187,7 @@ certificate_chains:
     - subject: "CN=DigiCert Global G2 TLS RSA SHA256 2020 CA1, O=DigiCert Inc, C=US"
       issuer: "CN=DigiCert Global Root G2, OU=www.digicert.com, O=DigiCert Inc, C=US"
       not_valid_before: 1576627200   # 2019-12-18
-      not_valid_after: 2289254400    # 2042-07-18
+      not_valid_after: 2147126400    # 2038-01-15
       key_type: rsa
       key_length: 2048
     - subject: "CN=DigiCert SHA2 Extended Validation Server CA, O=DigiCert Inc, C=US"
@@ -240,7 +241,7 @@ certificate_chains:
     - subject: "CN=GTS CA 1C3, O=Google Trust Services LLC, C=US"
       issuer: "CN=GTS Root R1, O=Google Trust Services LLC, C=US"
       not_valid_before: 1576627200   # 2019-12-18
-      not_valid_after: 2289254400    # 2042-07-18
+      not_valid_after: 2097705600    # 2036-06-22
       key_type: rsa
       key_length: 2048
     - subject: "CN=GTS Root R1, O=Google Trust Services LLC, C=US"
@@ -294,7 +295,7 @@ certificate_chains:
     - subject: "CN=Sectigo RSA Domain Validation Secure Server CA, O=Sectigo Limited, L=Salford, ST=Greater Manchester, C=GB"
       issuer: "CN=USERTrust RSA Certification Authority, O=The USERTRUST Network, C=US"
       not_valid_before: 1599177600   # 2020-09-04
-      not_valid_after: 2231452800    # 2040-09-17
+      not_valid_after: 2147385600    # 2038-01-18
       key_type: rsa
       key_length: 2048
     - subject: "CN=Sectigo Public Server Authentication Root R46, O=Sectigo Limited, C=GB"
@@ -310,7 +311,7 @@ certificate_chains:
       key_type: rsa
       key_length: 4096
     - subject: "CN=Cloudflare Inc ECC CA-3, O=Cloudflare Inc, C=US"
-      issuer: "CN=Baltimore CyberTrust Root, OU=CyberTrust, O=Baltimore, C=IE"
+      issuer: "CN=Cloudflare Inc ECC Root CA, O=Cloudflare Inc, C=US"
       not_valid_before: 1599177600   # 2020-09-04
       not_valid_after: 1891555200    # 2029-12-10
       key_type: ecdsa

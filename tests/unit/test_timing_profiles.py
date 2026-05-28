@@ -98,6 +98,7 @@ def test_timing_profiles_load_default_relationship():
     assert 0 < sysmon_terminate_window.min_ms < sysmon_terminate_window.max_ms
     assert ecar_process_window.max_ms >= 900
     assert 0 < ecar_after_sysmon_window.min_ms < ecar_after_sysmon_window.max_ms
+    assert ecar_after_sysmon_window.max_ms >= 3000
     security_gap_window = get_timing_window(
         "source.windows_security_after_sysmon_process_create_gap",
         default_min_ms=0,

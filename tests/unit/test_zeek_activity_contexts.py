@@ -1393,6 +1393,65 @@ class TestSslContextPopulation:
             egress_file_ts + timedelta(seconds=egress_file_duration)
         )
 
+    def test_explicit_proxy_installer_template_uses_download_scale_body_and_files(
+        self,
+        activity_gen,
+    ):
+        """Software-update installer paths should not render as tiny full 200 bodies."""
+        gen, events = activity_gen
+        source = System(hostname="WKS-01", ip="10.0.10.50", os="Windows 10", type="workstation")
+        proxy = System(
+            hostname="PROXY-01",
+            ip="10.0.20.10",
+            os="Ubuntu 22.04",
+            type="server",
+            roles=["forward_proxy"],
+        )
+        gen._ip_to_system = {source.ip: source, proxy.ip: proxy}
+        gen._proxy_mode = "explicit"
+        gen._proxy_routes = {source.ip: [proxy]}
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip="203.0.113.25",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=0.25,
+            orig_bytes=220,
+            resp_bytes=23_000,
+            conn_state="SF",
+            source_system=source,
+            hostname="dl.duosecurity.com",
+        )
+
+        client = next(
+            event
+            for event in events
+            if event.network
+            and event.network.src_ip == source.ip
+            and event.network.dst_ip == proxy.ip
+            and event.http is not None
+        )
+        egress = next(
+            event
+            for event in events
+            if event.network and event.network.src_ip == proxy.ip and event.http is not None
+        )
+
+        for event in (client, egress):
+            assert event.http is not None
+            assert event.network is not None
+            assert event.http.uri.endswith(".msi")
+            assert event.http.response_body_len >= 5_000_000
+            assert event.http.resp_mime_types == ["application/x-msdownload"]
+            assert event.http.resp_fuids
+            assert event.file_transfer is not None
+            assert event.file_transfer.mime_type == "application/x-msdownload"
+            assert event.file_transfer.total_bytes == event.http.response_body_len
+            assert event.network.resp_bytes >= event.http.response_body_len
+
     def test_same_scheduled_connections_get_distinct_start_jitter(self, activity_gen):
         """Batched logical connections should not render with identical Zeek start times."""
         gen, events = activity_gen
@@ -1522,6 +1581,61 @@ class TestSslContextPopulation:
         }
         assert syslog_pids == {transport_event.network.responding_pid}
 
+    def test_ssh_session_linux_source_uses_client_process_not_local_sshd(self, activity_gen):
+        gen, events = activity_gen
+
+        user = User(username="admin", full_name="Admin User", email="admin@example.com")
+        source = System(
+            hostname="admin01",
+            ip="10.0.10.50",
+            os="Ubuntu 24.04",
+            type="server",
+            assigned_user="admin",
+            services=["ssh"],
+        )
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {source.ip: source, target.ip: target}
+        systemd_pid = gen.state_manager.create_process(
+            source.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd",
+            "root",
+            "System",
+        )
+        source_sshd_pid = gen.state_manager.create_process(
+            source.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        gen._system_pids = {source.hostname: {"systemd": systemd_pid, "sshd": source_sshd_pid}}
+
+        gen.generate_ssh_session(
+            user=user,
+            target_system=target,
+            time=datetime(2024, 1, 15, 10, 0, 30, tzinfo=UTC),
+            source_ip=source.ip,
+            source_system=source,
+            source_port=51111,
+        )
+
+        transport_event = _ssh_transport_event(events)
+        assert transport_event.network.initiating_pid > 0
+        assert transport_event.network.initiating_pid != source_sshd_pid
+        assert transport_event.process is not None
+        assert transport_event.process.image == "/usr/bin/ssh"
+        assert transport_event.process.command_line == "ssh admin@linux01"
+
     def test_generic_ssh_connection_sets_destination_side_transport_pid(self, activity_gen):
         gen, events = activity_gen
 
@@ -1598,6 +1712,63 @@ class TestSslContextPopulation:
         ]
         assert transport_events
         assert conn_event.network.responding_pid == transport_events[0].process.pid
+
+    def test_generic_linux_outbound_ssh_does_not_use_source_sshd_pid(self, activity_gen):
+        gen, events = activity_gen
+
+        source = System(
+            hostname="admin01",
+            ip="10.0.10.50",
+            os="Ubuntu 24.04",
+            type="server",
+            services=["ssh"],
+        )
+        target = System(
+            hostname="linux01",
+            ip="10.0.20.10",
+            os="Ubuntu 24.04",
+            type="server",
+            roles=["web_server"],
+            services=["ssh"],
+        )
+        gen._ip_to_system = {source.ip: source, target.ip: target}
+        systemd_pid = gen.state_manager.create_process(
+            source.hostname,
+            0,
+            "/usr/lib/systemd/systemd",
+            "/usr/lib/systemd/systemd",
+            "root",
+            "System",
+        )
+        source_sshd_pid = gen.state_manager.create_process(
+            source.hostname,
+            systemd_pid,
+            "/usr/sbin/sshd",
+            "/usr/sbin/sshd -D",
+            "root",
+            "System",
+        )
+        gen._system_pids = {source.hostname: {"systemd": systemd_pid, "sshd": source_sshd_pid}}
+
+        gen.generate_connection(
+            src_ip=source.ip,
+            dst_ip=target.ip,
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=22,
+            proto="tcp",
+            service="ssh",
+            duration=8.0,
+            orig_bytes=1200,
+            resp_bytes=2400,
+            src_port=51111,
+            source_system=source,
+            conn_state="SF",
+        )
+
+        conn_event = next(event for event in events if event.event_type == "connection")
+        assert conn_event.network.initiating_pid != source_sshd_pid
+        assert conn_event.process is None
+        assert conn_event.network.responding_pid > 0
 
     def test_ssh_session_avoids_existing_destination_endpoint_tuple(self, activity_gen):
         gen, events = activity_gen

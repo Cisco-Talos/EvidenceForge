@@ -93,6 +93,13 @@ _LINUX_SERVICE_USERS = {
     "uucp",
     "www-data",
 }
+_LINUX_ROOT_ONLY_FILE_PREFIXES = (
+    "/var/cache/apt/",
+    "/var/lib/apt/",
+    "/var/lib/dnf/",
+    "/var/lib/dpkg/",
+    "/var/log/apt/",
+)
 
 
 def _merge_edr_pools(default: dict, overlay: dict) -> dict:
@@ -214,18 +221,33 @@ def file_path_templates_for_user(
     user: str,
 ) -> list[str]:
     """Return templates compatible with the account's source-native profile model."""
-    if not is_service_account(os_category, user):
-        return list(templates)
+    compatible = list(templates)
 
-    if os_category == "windows":
-        filtered = [
-            template
-            for template in templates
-            if not template.lower().startswith(r"c:\users\{user}".lower())
+    if is_service_account(os_category, user):
+        if os_category == "windows":
+            filtered = [
+                template
+                for template in compatible
+                if not template.lower().startswith(r"c:\users\{user}".lower())
+            ]
+        else:
+            filtered = [
+                template for template in compatible if not template.startswith("/home/{user}/")
+            ]
+        compatible = filtered or compatible
+
+    if os_category == "linux" and _principal_name(user).lower() != "root":
+        compatible = [
+            template for template in compatible if not _requires_linux_root_file_ownership(template)
         ]
-    else:
-        filtered = [template for template in templates if not template.startswith("/home/{user}/")]
-    return filtered or list(templates)
+
+    return compatible
+
+
+def _requires_linux_root_file_ownership(template: str) -> bool:
+    """Return True when a Linux file template should only be written by root."""
+    normalized = template.lower()
+    return any(normalized.startswith(prefix) for prefix in _LINUX_ROOT_ONLY_FILE_PREFIXES)
 
 
 def _uses_interactive_profile_template(template: str, os_category: str) -> bool:
@@ -555,6 +577,8 @@ def select_file_side_effect(
         action = str(rng.choice(actions)).lower()
         raw_path_templates = [str(path) for path in paths]
         path_templates = file_path_templates_for_user(raw_path_templates, os_category, user)
+        if not path_templates:
+            return None
         if (
             is_service_account(os_category, user)
             and path_templates == raw_path_templates

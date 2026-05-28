@@ -214,9 +214,9 @@ def _linux_baseline_session_initiator(
     """Return a plausible PAM initiator for ambient logind session noise."""
     if system_type == "server":
         if user == "root":
-            service = rng.choices(("login", "sudo", "su"), weights=(18, 58, 24), k=1)[0]
+            service = rng.choices(("login", "sudo", "su"), weights=(3, 70, 27), k=1)[0]
         else:
-            service = rng.choices(("login", "sudo"), weights=(34, 66), k=1)[0]
+            service = rng.choices(("login", "sudo"), weights=(5, 95), k=1)[0]
     elif user == "root":
         service = rng.choices(("login", "sudo", "su"), weights=(45, 35, 20), k=1)[0]
     else:
@@ -233,7 +233,7 @@ def _linux_baseline_session_initiator(
 def _linux_ambient_logind_probability(system_type: str) -> float:
     """Return thinning probability for generic ambient logind session noise."""
     if system_type == "server":
-        return 0.12
+        return 0.05
     return 0.42
 
 
@@ -1459,6 +1459,58 @@ class BaselineMixin:
         scaled_lo, scaled_hi = self._scaled_count_range(system, family, lo, hi, persona=persona)
         return rng.randint(scaled_lo, scaled_hi)
 
+    @staticmethod
+    def _utc(value: datetime) -> datetime:
+        """Normalize datetimes for scheduler comparisons."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    def _baseline_rdp_hourly_count(self, rng: random.Random, system: Any) -> int:
+        """Return the number of new baseline RDP sessions to consider this hour."""
+        desired = self._scaled_randint(rng, system, "windows_remote_admin", 1, 3)
+        sys_type = (getattr(system, "type", None) or "workstation").lower()
+        if sys_type == "domain_controller":
+            return min(desired, 1)
+        return min(desired, 2)
+
+    def _baseline_rdp_cooldown_allows(
+        self,
+        *,
+        target_hostname: str,
+        source_hostname: str,
+        username: str,
+        planned_time: datetime,
+        cooldown: timedelta = timedelta(minutes=45),
+    ) -> bool:
+        """Return whether baseline may emit a new RDP session for this tuple."""
+        state = getattr(self, "_baseline_rdp_last_session", None)
+        if state is None:
+            state = {}
+            self._baseline_rdp_last_session = state
+
+        key = (target_hostname, source_hostname, username)
+        last_time = state.get(key)
+        if last_time is None:
+            return True
+
+        return self._utc(planned_time) - last_time >= cooldown
+
+    def _remember_baseline_rdp_session(
+        self,
+        *,
+        target_hostname: str,
+        source_hostname: str,
+        username: str,
+        session_time: datetime,
+    ) -> None:
+        """Record the actual time a baseline RDP session was materialized."""
+        state = getattr(self, "_baseline_rdp_last_session", None)
+        if state is None:
+            state = {}
+            self._baseline_rdp_last_session = state
+
+        key = (target_hostname, source_hostname, username)
+        state[key] = self._utc(session_time)
+
     def _scaled_interval_range(
         self,
         system: Any | None,
@@ -1654,10 +1706,11 @@ class BaselineMixin:
                         slot_key, 1.0 - float(skip_probability)
                     ):
                         continue
+                    configured_jitter = sched.get("slot_jitter_seconds")
                     jitter_seconds = (
-                        0.0
+                        max(0.0, float(configured_jitter or 0.0))
                         if sched_type == "cron"
-                        else max(30.0, float(sched.get("slot_jitter_seconds") or 30))
+                        else max(30.0, float(configured_jitter or 30.0))
                     )
                     ts = current_hour + timedelta(
                         minutes=fm,
@@ -4081,6 +4134,7 @@ class BaselineMixin:
         inbound: bool = False,
         src_host: str = "",
         service: str = "",
+        source_system_type: str | None = None,
     ) -> tuple[str | None, str | None]:
         """Resolve a role name to (ip, hostname), excluding a specific IP.
 
@@ -4115,10 +4169,17 @@ class BaselineMixin:
                     rng,
                     src_host=src_host,
                     source_os=os_cat,
+                    system_type=source_system_type,
                     purpose_tags=tuple(tags),
                 )
             else:
-                domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_host, include_os=os_cat)
+                domain, ip = pick_domain_and_ip(
+                    rng,
+                    *tags,
+                    src_host=src_host,
+                    include_os=os_cat,
+                    source_system_type=source_system_type,
+                )
             return ip, domain
 
         if hasattr(self, "world_model"):
@@ -4433,6 +4494,8 @@ class BaselineMixin:
                 username = process.username
 
             candidates = file_path_templates_for_user(path_templates, os_cat, username)
+            if not candidates:
+                continue
 
             file_action = str(rng.choices(actions, weights=weights, k=1)[0])
             file_path = materialize_edr_template(
@@ -4557,6 +4620,7 @@ class BaselineMixin:
                     dns_tags=conn.get("dns_tags"),
                     src_host=system.hostname,
                     service=conn.get("service", ""),
+                    source_system_type=getattr(system, "type", None),
                 )
                 if not dst_ip:
                     continue
@@ -4975,6 +5039,7 @@ class BaselineMixin:
                     dns_tags=conn.get("dns_tags"),
                     src_host=system.hostname,
                     service=conn.get("service", ""),
+                    source_system_type=getattr(system, "type", None),
                 )
                 if not dst_ip:
                     continue
@@ -6080,22 +6145,51 @@ class BaselineMixin:
             ):
                 continue
 
-            num_rdp = self._scaled_randint(rng, system, "windows_remote_admin", 1, 3)
+            num_rdp = self._baseline_rdp_hourly_count(rng, system)
             roster = self._get_server_ssh_users(system)
             if not roster:
                 continue
+
+            rdp_requests = []
             for _ in range(num_rdp):
                 offset = rng.uniform(0, 3599)
                 ts = current_hour + timedelta(seconds=offset)
-                self.state_manager.set_current_time(ts)
                 rdp_user = rng.choice(roster)
-                self.world_planner.bootstrap_user_session(
+                source_system = (
+                    self.world_model.pick_remote_source_system(rdp_user, system, rng)
+                    if hasattr(self, "world_model")
+                    else None
+                )
+                if source_system is not None and _get_os_category(source_system.os) != "windows":
+                    continue
+                rdp_requests.append((ts, rdp_user, source_system))
+
+            for ts, rdp_user, source_system in sorted(rdp_requests, key=lambda request: request[0]):
+                source_hostname = source_system.hostname if source_system is not None else "-"
+                if not self._baseline_rdp_cooldown_allows(
+                    target_hostname=system.hostname,
+                    source_hostname=source_hostname,
+                    username=rdp_user.username,
+                    planned_time=ts,
+                ):
+                    continue
+
+                self.state_manager.set_current_time(ts)
+                result = self.world_planner.bootstrap_user_session(
                     user=rdp_user,
                     target_system=system,
                     time=ts,
                     rng=rng,
                     session_kind="rdp",
+                    source_system=source_system,
                     allow_existing=True,
+                )
+                session_time = result.session.start_time if result.session is not None else ts
+                self._remember_baseline_rdp_session(
+                    target_hostname=system.hostname,
+                    source_hostname=source_hostname,
+                    username=rdp_user.username,
+                    session_time=session_time,
                 )
 
         # RSAT: admin workstation → DC management sessions (mmc.exe + LDAP/RPC)
@@ -6421,10 +6515,18 @@ class BaselineMixin:
                     # Sequential session IDs per host (systemd-logind increments from boot)
                     sid = self.state_manager.next_linux_logind_session_id(system.hostname, rng, ts)
                     # Use OS-appropriate usernames
-                    session_users = ["root", "admin"]
-                    if not is_rhel_like:
-                        session_users.append("ubuntu")
-                    user = rng.choice(session_users)
+                    if sys_type == "server":
+                        session_users = ["admin", "root"]
+                        session_weights = [24, 2]
+                        if not is_rhel_like:
+                            session_users.append("ubuntu")
+                            session_weights.append(1)
+                        user = rng.choices(session_users, weights=session_weights, k=1)[0]
+                    else:
+                        session_users = ["root", "admin"]
+                        if not is_rhel_like:
+                            session_users.append("ubuntu")
+                        user = rng.choice(session_users)
                     pam_app, pam_service, pam_open = _linux_baseline_session_initiator(
                         user,
                         rng=rng,
@@ -7117,7 +7219,7 @@ class BaselineMixin:
         )
 
         ext_pool_size = min(200, max(10, top_level_budget // 10))
-        ext_ip_pool = [self._generate_external_client_ip(rng) for _ in range(ext_pool_size)]
+        ext_ip_pool = [self._generate_external_web_client_ip(rng) for _ in range(ext_pool_size)]
         ext_ip_weights = [1.0 / (i + 1) for i in range(ext_pool_size)]
         int_ip_weights = [1.0 / (i + 1) for i in range(len(internal_ips))]
         public_hosts = getattr(sys_obj, "public_hostnames", None) or []
@@ -7204,9 +7306,11 @@ class BaselineMixin:
             attempts += 1
             client_ip = _choose_client_ip()
             is_external_client = not _is_private_ip(client_ip)
-            profile_name, profile = pick_web_visitor_profile(
-                rng,
+            profile_name, profile = self._web_visitor_profile_for_client(
+                client_ip,
                 is_external=is_external_client,
+                rng=rng,
+                pick_profile=pick_web_visitor_profile,
             )
 
             restricted_pool = None
@@ -7332,6 +7436,65 @@ class BaselineMixin:
                     hostname=http_host,
                 )
                 top_level_emitted += 1
+
+    def _reserved_external_web_client_ips(self) -> set[str]:
+        """Return external IPs already claimed by scanner or authored activity."""
+        reserved: set[str] = set()
+        scanner_ips = getattr(self, "_external_scanner_ips", [])
+        if isinstance(scanner_ips, (list, tuple, set)):
+            reserved.update(
+                str(ip) for ip in scanner_ips if isinstance(ip, str) and not _is_private_ip(ip)
+            )
+
+        scenario = getattr(self, "scenario", None)
+        for group_name in ("storyline", "red_herrings"):
+            group = getattr(scenario, group_name, None)
+            if not isinstance(group, list):
+                continue
+            for event in group:
+                specs = getattr(event, "events", None)
+                if not isinstance(specs, list):
+                    continue
+                for spec in specs:
+                    source_ip = getattr(spec, "source_ip", None)
+                    if isinstance(source_ip, str) and source_ip and not _is_private_ip(source_ip):
+                        reserved.add(source_ip)
+        return reserved
+
+    def _generate_external_web_client_ip(self, rng: random.Random) -> str:
+        """Generate an external web-client IP that does not reuse scanner identities."""
+        reserved = self._reserved_external_web_client_ips()
+        fallback = ""
+        for _ in range(1000):
+            candidate = self._generate_external_client_ip(rng)
+            fallback = candidate
+            if candidate not in reserved:
+                return candidate
+        return fallback
+
+    def _web_visitor_profile_for_client(
+        self,
+        client_ip: str,
+        *,
+        is_external: bool,
+        rng: random.Random,
+        pick_profile: Any,
+    ) -> tuple[str, dict[str, Any]]:
+        """Return a source-sticky web visitor profile for external clients."""
+        if not is_external:
+            return pick_profile(rng, is_external=False)
+
+        cache = getattr(self, "_web_external_client_profiles", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._web_external_client_profiles = cache
+
+        cached = cache.get(client_ip)
+        if cached is None:
+            profile_rng = random.Random(_stable_seed(f"web_external_client_profile:{client_ip}"))
+            cached = pick_profile(profile_rng, is_external=True)
+            cache[client_ip] = cached
+        return cached
 
     def _generate_rsat_sessions(self, current_hour: datetime, rng, local_dt) -> None:
         """Generate correlated RSAT sessions from admin workstations to DCs.

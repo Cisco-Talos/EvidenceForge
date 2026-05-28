@@ -229,6 +229,300 @@ or follow-up batch is needed.
   host-source texture: DC remote-admin command parentage through concrete
   execution owners and high-frequency Linux journald runtime-size filler.
 
+- Loop 218 was a fresh post-merge `dev` assessment with no code changes in the
+  loop. Automated eval passed at 96.29905741773004 over 70577 records. Blind
+  initial scores were 43/43/68/64, average 54.50; deliberation was triggered by
+  verdict disagreement and produced final scores 48/58/72/66, average 61.00.
+  The dominant new finding is a DB-to-DC LDAP lifecycle contradiction: four
+  DB-PROD-01 eCAR `ldapsearch` FLOW rows at 17:50-17:51 reused exact LDAP source
+  ports that Zeek and DC endpoint telemetry already observed at 15:25-16:31.
+  Secondary targets are RDP target Security 4624 evidence preceding target eCAR
+  inbound FLOW for matching tuples, over-sampled Windows maintenance process
+  texture, and the previously noted DC remote-admin command parentage.
+
+- Loop 219 fixed stale endpoint FLOW process attribution by keeping eCAR FLOW
+  rows bounded to canonical connection timing and dropping PID/actor attribution
+  when the visible process create is too late to claim the flow. It also added a
+  same-day exact 5-tuple reuse guard in the source-port allocator. Automated eval
+  passed at 96.29905741773004 over 70577 records; the hard probe showed 5
+  DB-PROD-01 to DC-01 LDAP eCAR FLOW rows, 5 matching Zeek rows, and zero late
+  attributed exact-tuple matches over 60 seconds apart. Blind initial scores were
+  62/44/28/68, average 50.50; deliberation produced final scores 64/52/36/70,
+  average 55.50. The next highest-leverage target is Linux host/auth texture:
+  per-host UID ownership collisions, overproduced `unattended-upgr` chatter, and
+  excess direct `pam_unix(login:session)` local/root/admin sessions on servers.
+
+- Loop 220 fixed the Linux host/auth texture family by assigning named Linux
+  users non-default UID ranges, repairing same-host PAM UID collisions at syslog
+  finalization, capping `unattended-upgr` filler to 8 rows per host/window, and
+  reducing server local-console login noise. Automated eval passed at
+  96.88614699870703 over 69207 records; the probe showed zero same-host PAM UID
+  collisions, max 8 `unattended-upgr` rows per host, and sharply reduced server
+  local login rows. Blind initial scores were 28/34/30/66, average 39.50;
+  deliberation produced final scores 46/48/42/66, average 50.50. The next
+  highest-leverage target is an APP-INT SSH lifecycle contradiction: a root SSH
+  shell/session tied to `10.10.3.10:47995 -> 10.10.2.30:22` continued producing
+  eCAR child process/logout evidence hours after the matching Zeek TCP/22 flow
+  closed.
+
+- Loop 221 fixed the Linux SSH storyline lifecycle family by preventing reuse of
+  recorded SSH sessions after transport close, rejecting closed SSH shells for
+  later process parents, extending SSH transports when future authored logoffs
+  need the session to remain open, and preserving in-window storyline logoffs
+  while clamping genuinely late logoffs to transport close. Automated eval
+  passed at 96.44916777020666 over 76731 records; the probe showed the APP-INT
+  root SSH FLOW, LOGIN, cleanup process, and LOGOUT all share a transport that
+  remains open through the cleanup/logoff window. Blind initial scores were
+  57/42/34/67, average 50.00; deliberation produced final scores 68/60/47/72,
+  average 61.75. The next highest-leverage target is Windows outbound SMB
+  network-logon ownership: client workstations emit local Type 3/self-IP logons
+  and eCAR USER_SESSION rows for outbound SMB while the file server also records
+  the correct remote Type 3 logon.
+
+- Loop 222 fixed human Windows Type 3 network-logon source ownership by making
+  ambient/direct successful Type 3 logons choose a real remote source when the
+  environment inventory supports it, or downgrade to local interactive semantics
+  instead of fabricating a human self-IP/port-0 network session. It also removed
+  the successful Type 3 `NtLmSsp`/`Negotiate`/`LmPackageName=-` auth tuple in
+  favor of NTLM V2. Automated eval passed at 96.9222107992763 over 72722
+  records; hard probes found zero human/admin successful Type 3 self-IP
+  `IpPort=0` rows and zero human eCAR Type 3 `USER_SESSION LOGIN` rows with
+  `src_ip:"-"`. Blind scores were 48/36/49/46, average 44.75; no deliberation
+  was triggered because all reviewers returned Inconclusive. Next targets are
+  TLS/X.509 CA-chain validity bounds, endpoint collection timing texture, and
+  broader scenario/noise messiness.
+
+- Loop 223 fixed TLS/X.509 chain-validity contradictions by correcting public
+  CA authority profiles so configured intermediates no longer outlive their
+  roots, moving Cloudflare ECC issuance under the configured Cloudflare ECC
+  root, adding config validation for child-CA windows versus parent issuer
+  windows, and clamping generated leaf/intermediate validity to configured
+  issuer validity. Focused cert/config tests, Ruff checks, and
+  `uv run eforge validate-config` passed. Automated eval stayed at
+  96.9222107992763 over 72722 records; the hard probe found 718 rendered
+  X.509 rows and zero parent-window violations. Blind scores were 42/39/43/45,
+  average 42.25, all Inconclusive; network forensics explicitly called TLS
+  varied and credible. Next targets are source-native network byte/accounting
+  texture, especially NTP payload sizing, DHCP byte-size invariance, and one
+  HTTP response-body total exceeding Zeek connection payload accounting.
+
+- Loop 224 fixed source-native network byte/accounting texture by clamping
+  NTP payload accounting to realistic UDP/123 message sizes, varying DHCP
+  request/response payload buckets by host and message type, and making Zeek
+  connection accounting honor flow-level HTTP body totals for reused HTTP UIDs.
+  Focused NTP/DHCP/HTTP body-floor tests and Ruff checks passed. Automated eval
+  stayed at 96.9222107992763 over 72722 records; hard probes found NTP payloads
+  bounded to 144/124 bytes, 28 distinct DHCP byte-size buckets across 28 rows,
+  and zero HTTP body-budget violations. Initial blind scores were 66/35/62/42,
+  average 51.25; deliberation was triggered by mixed verdicts and a 31-point
+  spread, producing final scores 68/48/64/52, average 58.00. The strongest next
+  target is HTTP binary-transfer realism: successful `.msi`/`.zip` proxy/Zeek
+  downloads rendered as `200 application/octet-stream` with only 23-38 KB
+  bodies and no coherent Zeek file-transfer evidence.
+
+- Loop 225 fixed HTTP binary-transfer realism by teaching shared HTTP content
+  helpers to infer installer/archive/package MIME types from `.msi`, `.msp`,
+  `.zip`, `.deb`, and `.rpm` paths and size them at download scale. Focused
+  HTTP helper and explicit-proxy file-transfer tests plus Ruff checks passed.
+  Automated eval passed at 96.77569096689754 over 72405 records; hard probes
+  found 6 MSI/ZIP-style HTTP rows, zero tiny successful binary-body violations,
+  zero missing `resp_fuids` references, 2 proxy binary rows, and zero tiny proxy
+  binary rows. Initial blind scores were 38/61/42/68, average 52.25;
+  deliberation was triggered by mixed verdicts and a 30-point spread, producing
+  final scores 46/64/48/70, average 57.00. The next highest-leverage target is
+  Linux interactive session ownership/timing: `WS-LNGUYEN-01` developer
+  workflows are anchored to cron/local session semantics with near-zero
+  shell-to-command think time and short editor lifetimes. Public PTR realism is
+  next behind it.
+
+- Loop 226 fixed Linux interactive session ownership/timing by preventing
+  syslog logind PAM backfill from labeling human local sessions as cron,
+  adding shell-readiness gaps before first foreground children, and treating
+  Linux `code`/`codium` launches as long-lived GUI editors rather than
+  short-lived foreground commands. Focused syslog/activity/world-model tests,
+  scenario validation, Ruff checks, and rendered probes passed. Automated eval
+  passed at 96.47672953376664 over 72989 records; hard probes found zero human
+  `cron:session` PAM opens, a minimum human shell-to-child gap of 11806 ms
+  across 82 pairs, and zero short `code` terminations. Initial blind scores
+  were 66/55/42/67, average 57.50; deliberation produced final scores
+  70/62/48/72, average 63.00. The next highest-leverage target is the sibling
+  Linux SSH endpoint ownership defect: outbound TCP/22 client flows on Linux
+  hosts are attributed to long-running `sshd` listener PIDs instead of
+  `/usr/bin/ssh`, `/usr/bin/scp`, or the invoking shell.
+
+- Loop 227 fixed the sibling Linux SSH endpoint ownership defect by
+  materializing source-side `/usr/bin/ssh` or `/usr/bin/scp` processes for SSH
+  bundle transports and suppressing generic Linux outbound TCP/22 attribution to
+  local `sshd` listener PIDs when no explicit client process is known. Focused
+  SSH/world-model/activity tests, scenario validation, Ruff checks, and rendered
+  probes passed; the hard probe found 101 outbound TCP/22 flows, zero `sshd`
+  owner hits, and 34 explicit ssh/scp client-owned rows. Automated eval passed
+  at 96.74526439145288 over 76230 records. Initial blind scores were
+  62/61/43/62, average 57.00; deliberation final scores were 63/64/45/66,
+  average 59.50. The next highest-leverage targets are Windows source-native
+  metadata and coverage texture: Security/Sysmon `EventRecordID` gap bands,
+  outbound-only 5156 direction coverage, and Sysmon/Security process timing
+  bias.
+
+- Loop 228 fixed Windows Security/Sysmon `EventRecordID` texture by replacing
+  bounded renderer gap buckets with a shared per-host/per-channel sequence model
+  that includes elapsed-time hidden activity, mid-range gaps, and occasional
+  large filtered-channel jumps. Focused record-ID/emitter tests, Ruff checks,
+  scenario validation, generation, and rendered probes passed; the rendered
+  probe found Security now has 1946 gaps in the 9-40 range, 280 gaps over 200,
+  and max gap 17933, while Sysmon has 925 gaps in the 9-40 range, 155 gaps over
+  200, and max gap 7407. Automated eval passed at 96.74526439145288 over 76230
+  records. Initial blind scores were 64/42/38/43, average 46.75; deliberation
+  final scores were 58/44/40/46, average 47.00. No reviewer repeated the prior
+  EventRecordID finding. The next highest-leverage target is a concrete
+  web/endpoint contract gap: add source-native web-access precursor evidence
+  around service-user reverse-shell process creation, with eCAR/Sysmon timing
+  texture next behind it.
+
+- Loop 229 first hard-probed the loop-228 web/endpoint precursor claim and
+  found it was a false positive: `WEB-EXT-01` has a same-second
+  `POST /ehr/admin/upload.php` web-access row for the service-user reverse-shell
+  process creation. The loop then fixed the verified eCAR/Sysmon process-create
+  timing texture by widening `source.ecar_after_sysmon_process_create_gap` in
+  the data-driven timing profile. Focused timing/config tests, Ruff checks,
+  config validation, scenario validation, generation, and rendered probes
+  passed; the hard probe moved exact Sysmon/eCAR process-create deltas from a
+  loop-228 median of 0.28s and max 1.45s to a loop-229 median of 1.81s, p90
+  3.25s, and 136 matches over 3s while preserving ordering. Automated eval
+  passed at 96.83950751584356 over 75311 records. Initial blind scores were
+  46/67/74/64, average 62.75; deliberation final scores were 62/70/76/68,
+  average 69.00. The timing fix was not criticized; reviewers instead converged
+  on a new highest-leverage hard contradiction: proxy-origin TLS byte/packet
+  accounting diverges from ASA teardown bytes for same tuples, with Linux
+  journald filler, public IP role reuse, repeated Windows maintenance/RDP
+  density, and polished intrusion-path texture queued behind it.
+
+- Loop 230 fixed proxy-origin TLS byte/packet accounting by sizing canonical
+  TLS transport bytes from HTTP flow-level request/response body budgets and
+  updating connection state after TCP SF normalization. Focused activity tests,
+  Ruff checks, scenario validation, generation, and rendered probes passed; the
+  hard probe moved large Zeek-greater-than-ASA mismatches from 75 to 0 and bad
+  payload-per-packet rows from 34 to 0 across matched teardowns. Automated eval
+  passed at 95.35415427133147 over 80189 records. Initial blind scores were
+  64/38/34/55, average 47.75; deliberation final scores were 67/44/38/60,
+  average 52.25. The previous hard proxy/TLS accounting contradiction was not
+  repeated. The next highest-leverage targets are behavioral texture: large
+  upload endpoint staging evidence, dense regular-user RDP/DC sessions, generic
+  Linux/eCAR temp paths, exact-hour proxy bursts with inconsistent User-Agent
+  families, and overly clean network collection.
+
+- Loop 231 fixed dense baseline RDP session texture by capping domain-controller
+  RDP noise to one considered session per hour, sorting candidate sessions
+  chronologically, selecting the source workstation up front, and applying a
+  same source/user/target cooldown keyed to the actual materialized session
+  start. Focused RDP tests, Ruff checks, scenario validation, generation, and
+  rendered probes passed; the hard probe moved `mstsc.exe` creates from 38 to
+  14, DC-01 targets from 27 to 7, and the maximum two-minute
+  same-source/user/target cluster from 5 to 1. Automated eval passed at
+  96.6902301042063 over 74252 records. Initial blind scores were 47/38/31/34,
+  average 37.50; deliberation final scores were 44/40/34/36, average 38.50.
+  The prior RDP/DC tell was inverted into positive host evidence. The next
+  highest-leverage targets are Security 1102 native EventData, operational
+  roughness around the `svc_mhsync` attack path, host-specific sysstat/cron and
+  top-of-hour scheduling texture, and eCAR FLOW actor semantics.
+
+- Loop 232 fixed the verified Linux sysstat CRON cadence tell by honoring
+  configured `slot_jitter_seconds` for cron schedules while keeping
+  unconfigured cron schedules minute-aligned. Focused scheduler tests, Ruff,
+  config validation, scenario validation, generation, and rendered probes
+  passed; the probe moved sysstat rows at second `00` from 66/66 in loop 231 to
+  2/66 in loop 232, with zero exact half-hour boundary rows. Automated eval
+  passed at 96.52362201870753 over 75598 records. Blind scores were
+  61/57/58/49, average 56.25, with no deliberation because all reviewers agreed
+  on Synthetic and the score spread was 12. The next highest-leverage targets
+  are broad SSH/admin access and scenario roughness, Windows remote-exec/service
+  staging semantics, public web-client persona stability plus DNS TTL texture,
+  and endpoint software inventory/registry churn. A full non-slow pytest run
+  still had unrelated broader failures in existing storyline/session, TLS-chain,
+  nmap, baseline failure-rate, and foreground-process timing tests.
+
+- Loop 233 fixed generic external web-client persona instability by reserving
+  scanner/authored external source IPs away from ordinary baseline web clients
+  and making external visitor profile selection sticky per source IP. Focused
+  web-access tests, Ruff, config validation, scenario validation, generation,
+  and rendered probes passed; the probe moved generic mixed external web-client
+  IPs from 8 in loop 232 to 0 in loop 233, with the only remaining mixed source
+  being authored storyline IP `185.70.41.45`. Automated eval passed at
+  97.17049896473532 over 74239 records. Blind scores were 58/64/32/63, average
+  54.25. Network review improved to Mostly realistic with no hard network
+  contradictions; the next highest-leverage target is Linux eCAR attaching
+  privileged apt/dpkg file writes to non-root daemon principals, followed by
+  Windows utility runtimes, Linux eCAR pid/tid texture, SSH eCAR session tuple
+  symmetry, repeated LDAP discovery commands, and polished attack-storyline
+  semantics.
+
+- Loop 234 fixed Linux eCAR privileged package-state ownership by removing
+  package-manager state paths from generic Linux FILE churn and filtering
+  root-owned apt/dpkg/dnf paths away from non-root principals in the
+  process-aware side-effect helper. Focused EDR/config tests, Ruff, config
+  validation, scenario validation, generation, and rendered probes passed; the
+  probe moved non-root privileged package FILE events from 17 in loop 233 to 0
+  in loop 234. Automated eval passed at 97.09115240170016 over 74508 records.
+  Initial blind scores were 31/29/44/37, average 35.25; deliberation final
+  scores were 38/36/47/39, average 40.0. Detection and Host/EDR both flipped to
+  Real and the previous apt/dpkg contradiction was not repeated. The next
+  highest-leverage target is public-domain HTTP/proxy protocol policy plus
+  host-role constraints for workstation-style proxy/update traffic on server
+  roles, followed by SSH command-to-flow timing, eCAR principal/timing texture,
+  bash-history monotonicity, scanner cadence, and Windows utility lifetimes.
+
+- Loop 235 fixed public-domain HTTP/proxy protocol policy and host-role
+  constraints for workstation-style proxy/update traffic by adding
+  source-system-type filtering to proxy URI, DNS, TLS, world-model, and
+  baseline destination selection, marking workstation update/sync domains as
+  workstation-only, and applying HTTPS-first plaintext redirect policy before
+  explicit proxy routing. Focused proxy/domain/config tests, Ruff checks,
+  config validation, scenario validation, generation, and rendered probes
+  passed; the hard probe moved HTTPS-first plaintext HTTP `200` responses from
+  53 in loop 234 to 0 in loop 235 and DC-originated consumer/update proxy rows
+  from 22 to 0. Automated eval passed at 95.46721057150579 over 86450 records.
+  Initial blind scores were 56/38/63/32, average 47.25; deliberation final
+  scores were 60/45/65/42, average 53.0. The targeted public-HTTP/DC-role
+  defects were not repeated. The next highest-leverage target is binding
+  OCSP/certificate revocation status to proxy/TLS inspection outcomes so
+  revoked certificate evidence cannot coexist with repeated clean
+  SSL-inspected HTTP `200` responses unless policy-exception telemetry explains
+  the outcome; proxy endpoint identity semantics are the next sibling target.
+
+- Loop 236 fixed the OCSP/proxy revocation contradiction by allowing successful
+  HTTP-backed TLS activity to suppress revoked OCSP statuses and by suppressing
+  mainstream Adobe telemetry revocation false positives in TLS realism config.
+  Focused OCSP tests, Ruff checks, config validation, scenario validation,
+  generation, and rendered probes passed; the hard probe moved revoked
+  `assets.adobedtm.com` leaf evidence and clean SSL-inspected `200` responses
+  for revoked hosts from present in loop 235 to zero in loop 236. Automated eval
+  passed at 95.46721057150579 over 86450 records. Blind scores were
+  56/47/69/68, average 60.0, with no deliberation because all reviewers agreed
+  on Synthetic and the score spread was 22. The targeted OCSP/proxy defect was
+  not repeated. The next highest-leverage target is the hard endpoint/network
+  causality contradiction where eCAR `FLOW` rows and process attribution can
+  appear after the matching Zeek tuple has already started or closed; Windows
+  Security/Sysmon `EventRecordID` hidden-volume pairing realism is the next
+  close target.
+
+- Loop 237 fixed the hard eCAR/Zeek endpoint-network causality contradiction by
+  keeping eCAR `FLOW/CONNECT` rows at network-observation time and dropping
+  unsafe process identity when visible process timing would require shifting the
+  flow after the matching Zeek tuple close. It also prefers stable SSH/RDP
+  listener PIDs for inbound transport ownership instead of late per-session
+  child PIDs. Focused eCAR/source-timing tests, Ruff checks, scenario
+  validation, generation, hard probes, and automated eval passed. The hard probe
+  moved identified process-create-after-Zeek-close cases from 6 in loop 236 to
+  0 in loop 237, while process-create-after-Zeek-start cases dropped from 41 to
+  4 and remained inside open intervals. Automated eval passed at
+  95.46721057150579 over 86450 records. Initial blind scores were 52/34/24/44,
+  average 38.5; deliberation final scores were 48/34/30/44, average 39.0.
+  Network flipped to Real before deliberation and explicitly found no impossible
+  endpoint/network ordering. The next highest-leverage target is Linux
+  bash-history/session alignment: commands for `lina.nguyen` continue after all
+  visible SSH sessions close on `DB-PROD-01` and `WEB-EXT-01`; Windows inbound
+  endpoint network telemetry is the next broad source-shape target.
+
 ## Recent Completed Work Previously Kept in TODO
 
 - Codex fix-family PR disposition and rework completed: rejected PRs were closed

@@ -560,6 +560,26 @@ class TlsCertificateChainConfig(BaseModel, extra="forbid"):
             raise ValueError("day values must be positive")
         return v
 
+    @model_validator(mode="after")
+    def authority_profiles_fit_parent_validity(self) -> Self:
+        """Reject configured CA chains where a child outlives its parent issuer."""
+        profiles_by_subject = {profile.subject: profile for profile in self.authority_profiles}
+        for profile in self.authority_profiles:
+            if profile.subject == profile.issuer:
+                continue
+            issuer = profiles_by_subject.get(profile.issuer)
+            if issuer is None:
+                continue
+            if (
+                profile.not_valid_before < issuer.not_valid_before
+                or profile.not_valid_after > issuer.not_valid_after
+            ):
+                raise ValueError(
+                    "authority profile validity must fit within issuer validity window: "
+                    f"{profile.subject}"
+                )
+        return self
+
 
 class TlsDestinationOsOverride(BaseModel, extra="forbid"):
     """OS-specific TLS destination pool override."""

@@ -546,6 +546,114 @@ def test_ecar_linux_shell_foreground_order_covers_scp_transfer_chain() -> None:
     assert rows[4]["timestamp_ms"] > rows[3]["timestamp_ms"]
 
 
+def test_ecar_flow_reference_order_drops_late_process_identity() -> None:
+    """FLOW timing stays near the connection when process attribution is too late."""
+    process_create = {
+        "timestamp_ms": 1_710_789_025_000,
+        "id": "ldap-create",
+        "hostname": "DB-PROD-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "ldap-process",
+        "actorID": "bash-process",
+        "pid": 699858,
+        "ppid": 699820,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/ldapsearch"},
+    }
+    flow = {
+        "timestamp_ms": 1_710_780_340_700,
+        "id": "ldap-flow",
+        "hostname": "DB-PROD-01",
+        "object": "FLOW",
+        "action": "CONNECT",
+        "objectID": "flow-ldap",
+        "actorID": "ldap-process",
+        "pid": 699858,
+        "principal": "root",
+        "properties": {
+            "src_ip": "10.10.4.10",
+            "src_port": "42430",
+            "dst_ip": "10.10.2.10",
+            "dst_port": "389",
+            "protocol": "tcp",
+            "direction": "OUTBOUND",
+            "image_path": "/usr/bin/ldapsearch",
+            "command_line": "ldapsearch -x -H ldap://DC-01",
+        },
+    }
+
+    normalized = EcarEmitter._normalize_process_reference_order(
+        [
+            json.dumps(flow, separators=(",", ":")),
+            json.dumps(process_create, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[0]["timestamp_ms"] == flow["timestamp_ms"]
+    assert "actorID" not in rows[0]
+    assert "pid" not in rows[0]
+    assert "principal" not in rows[0]
+    assert "image_path" not in rows[0]["properties"]
+    assert "command_line" not in rows[0]["properties"]
+
+
+def test_ecar_flow_connect_keeps_network_time_for_close_process_conflict() -> None:
+    """FLOW/CONNECT drops actor identity instead of moving outside the tuple interval."""
+    process_create = {
+        "timestamp_ms": 1_710_789_025_000,
+        "id": "docker-create",
+        "hostname": "WEB-EXT-01",
+        "object": "PROCESS",
+        "action": "CREATE",
+        "objectID": "docker-process",
+        "actorID": "bash-process",
+        "pid": 771204,
+        "ppid": 771190,
+        "principal": "root",
+        "properties": {"image_path": "/usr/bin/docker"},
+    }
+    flow = {
+        "timestamp_ms": 1_710_789_000_300,
+        "id": "proxy-flow",
+        "hostname": "WEB-EXT-01",
+        "object": "FLOW",
+        "action": "CONNECT",
+        "objectID": "flow-proxy",
+        "actorID": "docker-process",
+        "pid": 771204,
+        "principal": "root",
+        "properties": {
+            "src_ip": "10.10.3.15",
+            "src_port": "52844",
+            "dst_ip": "10.10.3.20",
+            "dst_port": "8080",
+            "protocol": "tcp",
+            "direction": "OUTBOUND",
+            "image_path": "/usr/bin/docker",
+            "command_line": "docker ps",
+            "parent_image_path": "/bin/bash",
+        },
+    }
+
+    normalized = EcarEmitter._normalize_process_reference_order(
+        [
+            json.dumps(flow, separators=(",", ":")),
+            json.dumps(process_create, separators=(",", ":")),
+        ]
+    )
+    rows = [json.loads(line) for line in normalized]
+
+    assert rows[0]["timestamp_ms"] == flow["timestamp_ms"]
+    assert "actorID" not in rows[0]
+    assert "pid" not in rows[0]
+    assert "principal" not in rows[0]
+    assert "image_path" not in rows[0]["properties"]
+    assert "command_line" not in rows[0]["properties"]
+    assert "parent_image_path" not in rows[0]["properties"]
+
+
 def test_ecar_linux_shell_foreground_order_keeps_pipeline_children_concurrent() -> None:
     """Pipeline children are concurrent shell work, not sequential foreground prompts."""
     cat_create = {

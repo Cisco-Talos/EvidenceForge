@@ -22,8 +22,9 @@
 
 """Tests for RDP background noise in baseline generation."""
 
+import random
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -133,4 +134,68 @@ class TestRDPBaselineNoise:
 
             assert len(rdp_connections) == 0, (
                 f"Got RDP connections to workstations: {rdp_connections}"
+            )
+
+    def test_domain_controller_rdp_noise_is_capped_per_hour(self):
+        """DC baseline RDP should not request several new sessions in one hour."""
+        systems = [
+            System(hostname="WKS-01", ip="10.10.10.50", os="Windows 10", type="workstation"),
+            System(
+                hostname="DC-01",
+                ip="10.10.100.10",
+                os="Windows Server 2019",
+                type="domain_controller",
+            ),
+        ]
+        scenario = _make_scenario(systems)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            engine = GenerationEngine(scenario, Path(tmpdir))
+            engine._initialize()
+
+            with patch.object(engine, "_scaled_randint", return_value=3):
+                assert engine._baseline_rdp_hourly_count(random.Random(11), systems[1]) == 1
+
+    def test_rdp_cooldown_rejects_dense_same_tuple_sessions(self):
+        """The same source/user/target should not open clustered baseline RDP sessions."""
+        systems = [
+            System(hostname="WKS-01", ip="10.10.10.50", os="Windows 10", type="workstation"),
+            System(
+                hostname="DC-01",
+                ip="10.10.100.10",
+                os="Windows Server 2019",
+                type="domain_controller",
+            ),
+        ]
+        scenario = _make_scenario(systems)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            engine = GenerationEngine(scenario, Path(tmpdir))
+            engine._initialize()
+            first = datetime(2024, 1, 15, 14, 23, tzinfo=UTC)
+
+            assert engine._baseline_rdp_cooldown_allows(
+                target_hostname="DC-01",
+                source_hostname="WKS-01",
+                username="admin.user",
+                planned_time=first,
+            )
+            engine._remember_baseline_rdp_session(
+                target_hostname="DC-01",
+                source_hostname="WKS-01",
+                username="admin.user",
+                session_time=first,
+            )
+
+            assert not engine._baseline_rdp_cooldown_allows(
+                target_hostname="DC-01",
+                source_hostname="WKS-01",
+                username="admin.user",
+                planned_time=first + timedelta(minutes=1),
+            )
+            assert engine._baseline_rdp_cooldown_allows(
+                target_hostname="DC-01",
+                source_hostname="WKS-01",
+                username="admin.user",
+                planned_time=first + timedelta(minutes=46),
             )

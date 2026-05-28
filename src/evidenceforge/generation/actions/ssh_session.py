@@ -98,7 +98,7 @@ def _linux_uid_for_user(username: str) -> int:
     }
     if username in well_known:
         return well_known[username]
-    return 1000 + (_stable_seed(f"linux_uid_{username}") % 5000)
+    return 2000 + (_stable_seed(f"linux_uid_{username}") % 5000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +271,19 @@ class SshSessionExecutor(Protocol):
         """Return or materialize the destination-side sshd process."""
         ...
 
+    def ensure_linux_ssh_client_process(
+        self,
+        *,
+        user: User,
+        source_system: System,
+        target_system: System,
+        time: datetime,
+        process_image: str,
+        source_port: int,
+    ) -> tuple[int, str] | None:
+        """Return or materialize the source-side SSH client process."""
+        ...
+
     def _remember_ssh_responder_pid(
         self,
         source_ip: str,
@@ -361,6 +374,14 @@ class SshSessionActionBundle:
             return self.executor._build_host_context(self.executor._ip_to_system[request.source_ip])
         return None
 
+    def _source_system(self) -> System | None:
+        """Resolve the modeled source system for endpoint process ownership."""
+
+        request = self.request
+        if request.source_system is not None:
+            return request.source_system
+        return self.executor._ip_to_system.get(request.source_ip)
+
     def _is_network_visible(self) -> bool:
         """Return whether network sensors should reveal this SSH transport."""
 
@@ -424,7 +445,26 @@ class SshSessionActionBundle:
         request = self.request
         executor = self.executor
 
-        state.source_process = self._resolve_source_process()
+        source_system = self._source_system()
+        source_pid = request.source_pid
+        source_process_image = request.source_process_image
+        if (
+            source_pid <= 0
+            and source_system is not None
+            and _get_os_category(source_system.os) == "linux"
+        ):
+            client = executor.ensure_linux_ssh_client_process(
+                user=request.user,
+                source_system=source_system,
+                target_system=request.target_system,
+                time=request.time,
+                process_image=source_process_image or "/usr/bin/ssh",
+                source_port=state.source_port,
+            )
+            if client is not None:
+                source_pid, source_process_image = client
+
+        state.source_process = self._resolve_source_process(source_pid, source_process_image)
         network_uid = executor.generate_connection(
             src_ip=request.source_ip,
             dst_ip=request.target_system.ip,
@@ -437,11 +477,11 @@ class SshSessionActionBundle:
             resp_bytes=state.resp_bytes,
             src_port=state.source_port,
             emit_dns=True,
-            pid=request.source_pid,
-            source_system=request.source_system,
+            pid=source_pid,
+            source_system=source_system,
             conn_state="SF",
             hostname=state.dst_host.fqdn or request.target_system.hostname,
-            process_image=request.source_process_image,
+            process_image=source_process_image,
             preserve_dst_ip=True,
             responding_pid=responding_pid or -1,
         )
@@ -491,18 +531,22 @@ class SshSessionActionBundle:
                 (state.close_time - self.request.time).total_seconds(),
             )
 
-    def _resolve_source_process(self) -> ProcessContext | None:
+    def _resolve_source_process(
+        self,
+        source_pid: int,
+        source_process_image: str,
+    ) -> ProcessContext | None:
         """Return source process context when the caller supplied one."""
 
-        request = self.request
-        if request.source_system is not None and request.source_pid > 0:
+        source_system = self._source_system()
+        if source_system is not None and source_pid > 0:
             running = self.executor.state_manager.get_process(
-                request.source_system.hostname,
-                request.source_pid,
+                source_system.hostname,
+                source_pid,
             )
             if running is not None:
                 return ProcessContext(
-                    pid=request.source_pid,
+                    pid=source_pid,
                     parent_pid=running.parent_pid,
                     image=running.image,
                     command_line=running.command_line,
@@ -510,11 +554,11 @@ class SshSessionActionBundle:
                     logon_id=running.logon_id,
                     start_time=running.start_time,
                 )
-            if request.source_process_image:
+            if source_process_image:
                 return ProcessContext(
-                    pid=request.source_pid,
+                    pid=source_pid,
                     parent_pid=0,
-                    image=request.source_process_image,
+                    image=source_process_image,
                     command_line="",
                     username="",
                 )

@@ -134,6 +134,9 @@ class TestLoadEdrPools:
 
         assert not any(path.startswith(r"C:\Users\{user}") for path in windows_templates)
         assert not any(path.startswith("/home/{user}/") for path in linux_templates)
+        assert not any(path.startswith("/var/lib/dpkg/") for path in linux_templates)
+        assert not any(path.startswith("/var/lib/apt/") for path in linux_templates)
+        assert not any(path.startswith("/var/cache/apt/") for path in linux_templates)
 
         shell_effect = select_file_side_effect(
             process_name="/bin/bash",
@@ -143,6 +146,30 @@ class TestLoadEdrPools:
             user="systemd-timesync",
         )
         assert shell_effect is None
+
+    def test_non_root_package_manager_cannot_write_root_owned_state(self):
+        effect = select_file_side_effect(
+            process_name="/usr/bin/apt-get",
+            command_line="apt-get update",
+            os_category="linux",
+            rng=random.Random(5),
+            user="www-data",
+        )
+
+        assert effect is None
+
+    def test_root_package_manager_keeps_package_state_side_effects(self):
+        effect = select_file_side_effect(
+            process_name="/usr/bin/apt-get",
+            command_line="apt-get update",
+            os_category="linux",
+            rng=random.Random(5),
+            user="root",
+        )
+
+        assert effect is not None
+        _action, path = effect
+        assert path.startswith(("/var/log/apt/", "/var/lib/dpkg/", "/var/lib/dnf/"))
 
 
 class TestFilePaths:
@@ -184,6 +211,9 @@ class TestFilePaths:
         assert "/etc/passwd" not in paths
         assert "/var/log/apache2/access.log" not in paths
         assert not any("systemd-private-" in path and "apache2.service" in path for path in paths)
+        assert not any(path.startswith("/var/lib/dpkg/") for path in paths)
+        assert not any(path.startswith("/var/lib/apt/") for path in paths)
+        assert not any(path.startswith("/var/cache/apt/") for path in paths)
 
 
 class TestRegistryKeys:

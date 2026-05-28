@@ -100,6 +100,27 @@ class TestStateManagerInit:
         assert second - first != 985
         assert second - first < 80
 
+    def test_sessions_for_user_at_stops_at_transport_close(self):
+        """Transport-backed sessions should not own activity after their close time."""
+        sm = StateManager()
+        start = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+        close = start + timedelta(minutes=8)
+        logon_id = sm.create_session(
+            username="alice",
+            system="linux01",
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="ssh",
+        )
+        sm.update_session_metadata(logon_id, network_close_time=close)
+
+        assert [
+            s.logon_id for s in sm.get_sessions_for_user_at("alice", close - timedelta(seconds=1))
+        ] == [logon_id]
+        assert sm.get_sessions_for_user_at("alice", close) == []
+        assert sm.get_sessions_for_user_at("alice", close + timedelta(minutes=1)) == []
+
     def test_linux_logind_session_collision_ids_avoid_elapsed_second_deltas(self):
         """Collision bumps should not recreate an exact session-time delta."""
         import random

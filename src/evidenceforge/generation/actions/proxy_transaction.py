@@ -1047,6 +1047,9 @@ class ProxyTransactionActionBundle:
             trans_depth=client_http.trans_depth,
             tags=[],
             resp_mime_types=[proxy_context.content_type]
-            if proxy_context.content_type and proxy_context.status_code == 200
+            if proxy_context.content_type
+            and response_body_len > 0
+            and proxy_context.status_code not in {204, 304}
+            and proxy_context.status_code < 400
             else [],
         )

@@ -40,7 +40,7 @@ import re
 import shlex
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -1355,12 +1355,20 @@ class StorylineMixin:
         self,
         actor: User,
         system: System,
+        at_time: datetime | None = None,
     ) -> str | None:
         """Return the latest storyline-created active LogonID for this actor/host."""
         logons = getattr(self, "_last_storyline_logon_by_actor_system", {})
         logon_id = logons.get((actor.username, system.hostname))
         if not logon_id:
             return None
+        if at_time is not None:
+            valid_sessions = self.state_manager.get_sessions_for_user_at(actor.username, at_time)
+            if not any(
+                session.logon_id == logon_id and session.system == system.hostname
+                for session in valid_sessions
+            ):
+                return None
         session = self.state_manager.get_session(logon_id)
         if session is None or session.system != system.hostname:
             return None
@@ -1370,12 +1378,35 @@ class StorylineMixin:
         self,
         actor: User,
         system: System,
+        at_time: datetime | None = None,
     ) -> str | None:
         """Return the latest storyline network-logon source for this actor/host."""
-        if self._last_storyline_logon_for_actor_system(actor, system) is None:
+        if self._last_storyline_logon_for_actor_system(actor, system, at_time=at_time) is None:
             return None
         sources = getattr(self, "_last_storyline_logon_source_by_actor_system", {})
         return sources.get((actor.username, system.hostname))
+
+    def _next_storyline_logoff_time_for_actor_system(
+        self,
+        actor: User,
+        system: System,
+        after_time: datetime,
+    ) -> datetime | None:
+        """Return the next planned storyline logoff for this actor and host."""
+        future_logoffs: list[datetime] = []
+        after_time = after_time.replace(tzinfo=UTC) if after_time.tzinfo is None else after_time
+        after_time = after_time.astimezone(UTC)
+        for storyline_event in self.scenario.storyline:
+            if storyline_event.actor != actor.username or storyline_event.system != system.hostname:
+                continue
+            event_time = self._parse_storyline_time(storyline_event.time)
+            event_time = event_time.replace(tzinfo=UTC) if event_time.tzinfo is None else event_time
+            event_time = event_time.astimezone(UTC)
+            if event_time <= after_time:
+                continue
+            if any(spec.type == "logoff" for spec in storyline_event.events):
+                future_logoffs.append(event_time)
+        return min(future_logoffs) if future_logoffs else None
 
     @staticmethod
     def _extract_compress_archive_destination(command_line: str) -> str | None:
@@ -1958,8 +1989,16 @@ class StorylineMixin:
             malicious_event["source_ip"] = source_ip
 
         elif spec.type == "logoff":
-            sessions = self.state_manager.get_sessions_for_user(actor.username)
-            target_session = next((s for s in sessions if s.system == system.hostname), None)
+            sessions = [
+                session
+                for session in self.state_manager.get_sessions_for_user(actor.username)
+                if session.system == system.hostname
+            ]
+            target_session = max(
+                sessions,
+                key=lambda session: session.start_time,
+                default=None,
+            )
             if target_session:
                 self.activity_generator.generate_logoff(
                     actor, system, time, target_session.logon_id, from_storyline=True
@@ -1976,15 +2015,21 @@ class StorylineMixin:
                 is_local_account = (
                     actor.username in BUILTIN_ACCOUNTS or actor.username in service_accounts
                 )
-                if is_local_account:
+                is_interactive_linux_root = os_category == "linux" and actor.username == "root"
+                if is_local_account and not is_interactive_linux_root:
                     linux_daemon_users = {"apache", "www-data", "nginx", "httpd", "tomcat"}
                     if os_category == "linux" and actor.username.lower() in linux_daemon_users:
                         logon_id = ""
                     else:
                         # Use existing system session or create a service logon.
-                        sessions = self.state_manager.get_sessions_for_user(actor.username)
-                        target_session = next(
-                            (s for s in sessions if s.system == system.hostname), None
+                        sessions = self.state_manager.get_sessions_for_user_at(
+                            actor.username,
+                            time,
+                        )
+                        target_session = max(
+                            (s for s in sessions if s.system == system.hostname),
+                            key=lambda session: session.start_time,
+                            default=None,
                         )
                         if target_session:
                             logon_id = target_session.logon_id
@@ -1996,8 +2041,19 @@ class StorylineMixin:
                                 service_account=actor.username,
                             )
                 else:
-                    logon_id = self._last_storyline_logon_for_actor_system(actor, system)
+                    logon_id = self._last_storyline_logon_for_actor_system(
+                        actor,
+                        system,
+                        at_time=time,
+                    )
                     if logon_id is None:
+                        required_until = self._next_storyline_logoff_time_for_actor_system(
+                            actor,
+                            system,
+                            time,
+                        )
+                        if required_until is not None:
+                            required_until += timedelta(minutes=2)
                         # Pre-compute the session kind via the planner so reuse
                         # filtering matches the correct transport type.
                         plan = self.world_model.plan_session(
@@ -2012,12 +2068,17 @@ class StorylineMixin:
                             rng,
                             session_kind=plan.session_kind,
                             storyline_protected=True,
+                            required_until=required_until,
                         )
                         logon_id = target_session.logon_id
                         self._record_storyline_logon(actor, system, logon_id)
             else:
                 sessions = self.state_manager.get_sessions_for_user(actor.username)
-                target_session = next((s for s in sessions if s.system == system.hostname), None)
+                target_session = max(
+                    (s for s in sessions if s.system == system.hostname),
+                    key=lambda session: session.start_time,
+                    default=None,
+                )
                 if not target_session:
                     logon_time = time - timedelta(seconds=rng.uniform(0.5, 2.0))
                     logon_id = self.activity_generator.generate_logon(
@@ -2145,6 +2206,7 @@ class StorylineMixin:
                 staging_source_ip = self._last_storyline_logon_source_for_actor_system(
                     actor,
                     system,
+                    at_time=time,
                 )
                 if staging_source_ip and staging_source_ip != system.ip:
                     self._record_storyline_staged_archive(

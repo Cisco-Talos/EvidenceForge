@@ -1199,6 +1199,75 @@ class TestChronologicalOutput:
         assert inbound["pid"] == -1
         assert "principal" not in inbound
 
+    def test_inbound_ssh_flow_prefers_stable_listener_over_session_child(
+        self,
+        emitter,
+        monkeypatch,
+        ts,
+    ):
+        """SSH transport FLOW ownership should use the daemon listener, not auth child pids."""
+        emitted: list[dict] = []
+        monkeypatch.setattr(emitter, "emit_event", emitted.append)
+        state_manager = StateManager()
+        state_manager.set_current_time(ts - timedelta(hours=1))
+        listener_pid = state_manager.create_process(
+            "linux01",
+            parent_pid=0,
+            image="/usr/sbin/sshd",
+            command_line="/usr/sbin/sshd -D",
+            username="root",
+            integrity_level="System",
+        )
+        state_manager.set_current_time(ts + timedelta(milliseconds=450))
+        child_pid = state_manager.create_process(
+            "linux01",
+            parent_pid=listener_pid,
+            image="/usr/sbin/sshd",
+            command_line="sshd: admin [priv]",
+            username="root",
+            integrity_level="System",
+        )
+        emitter._state_manager = state_manager
+        emitter._system_pids = {"linux01": {"sshd": listener_pid}}
+        event = SecurityEvent(
+            timestamp=ts,
+            event_type="connection",
+            src_host=HostContext(
+                hostname="ws01",
+                ip="10.0.0.10",
+                os="Windows 11",
+                os_category="windows",
+                system_type="workstation",
+                fqdn="ws01.example.org",
+            ),
+            dst_host=HostContext(
+                hostname="linux01",
+                ip="10.0.0.20",
+                os="Ubuntu 24.04",
+                os_category="linux",
+                system_type="server",
+                fqdn="linux01.example.org",
+            ),
+            network=NetworkContext(
+                src_ip="10.0.0.10",
+                src_port=49152,
+                dst_ip="10.0.0.20",
+                dst_port=22,
+                protocol="tcp",
+                duration=0.35,
+                conn_state="SF",
+                history="ShADadfF",
+                initiating_pid=-1,
+                responding_pid=child_pid,
+            ),
+        )
+
+        emitter._render_connection(event)
+
+        inbound = next(row for row in emitted if row["direction"] == "INBOUND")
+        assert inbound["pid"] == listener_pid
+        assert inbound["pid"] != child_pid
+
     def test_rdp_inbound_flow_drops_late_listener_identity_instead_of_delaying_flow(
         self,
         emitter,

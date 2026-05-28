@@ -31,6 +31,98 @@ from evidenceforge.models.scenario import ConnectionEventSpec, System, User
 
 
 class TestStorylineCommandNetworks:
+    def test_recorded_storyline_logon_expires_at_transport_close(self):
+        """Recorded storyline SSH sessions should not be reused after TCP close."""
+        state = StateManager()
+        start = datetime(2024, 3, 18, 14, 15, 0, tzinfo=UTC)
+        close = start + timedelta(minutes=10)
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.local",
+        )
+        system = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        logon_id = state.create_session(
+            username=actor.username,
+            system=system.hostname,
+            logon_type=10,
+            source_ip="10.10.3.10",
+            start_time=start,
+            session_kind="ssh",
+        )
+        state.update_session_metadata(logon_id, network_close_time=close)
+        engine = object.__new__(StorylineMixin)
+        engine.state_manager = state
+        engine._record_storyline_logon(actor, system, logon_id, source_ip="10.10.3.10")
+
+        assert (
+            engine._last_storyline_logon_for_actor_system(
+                actor,
+                system,
+                at_time=close - timedelta(seconds=1),
+            )
+            == logon_id
+        )
+        assert (
+            engine._last_storyline_logon_for_actor_system(
+                actor,
+                system,
+                at_time=close + timedelta(minutes=1),
+            )
+            is None
+        )
+        assert (
+            engine._last_storyline_logon_source_for_actor_system(
+                actor,
+                system,
+                at_time=close + timedelta(minutes=1),
+            )
+            is None
+        )
+
+    def test_next_storyline_logoff_time_finds_matching_actor_and_host(self):
+        """Future logoff lookups should bind storyline SSH lifetimes to the right host."""
+        actor = User(
+            username="root",
+            full_name="Root",
+            email="root@example.local",
+        )
+        system = System(
+            hostname="APP-INT-01",
+            ip="10.10.2.30",
+            os="Ubuntu 22.04",
+            type="server",
+        )
+        engine = object.__new__(StorylineMixin)
+        engine.start_time = datetime(2024, 3, 18, 12, 0, 0, tzinfo=UTC)
+        engine.scenario = SimpleNamespace(
+            storyline=[
+                SimpleNamespace(
+                    actor="root",
+                    system="WEB-EXT-01",
+                    time="+5h50m",
+                    events=[SimpleNamespace(type="logoff")],
+                ),
+                SimpleNamespace(
+                    actor="root",
+                    system="APP-INT-01",
+                    time="+5h57m",
+                    events=[SimpleNamespace(type="logoff")],
+                ),
+            ]
+        )
+
+        assert engine._next_storyline_logoff_time_for_actor_system(
+            actor,
+            system,
+            datetime(2024, 3, 18, 17, 41, 0, tzinfo=UTC),
+        ) == datetime(2024, 3, 18, 17, 57, 0, tzinfo=UTC)
+
     def test_linux_shell_storyline_process_renders_explicit_shell_invocation(self):
         """Bare shell control syntax should be rendered as source-native bash -c argv."""
         command_line = _linux_shell_process_command_line(

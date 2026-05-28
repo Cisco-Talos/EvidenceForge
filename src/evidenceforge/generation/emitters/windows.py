@@ -55,6 +55,7 @@ from evidenceforge.generation.emitters.syslog_family import (
     syslog_family_writer_path,
 )
 from evidenceforge.generation.emitters.windows_event import format_windows_system_time
+from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SECURITY_SNARE_FILENAME,
     render_windows_security_snare_syslog,
@@ -1488,6 +1489,7 @@ class WindowsEventEmitter(LogEmitter):
         self._event_dicts: list[dict[str, Any]] = []
         # Per-computer RecordID counters persist across flushes
         self._record_id_counters: dict[str, int] = {}
+        self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._last_record_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
@@ -2088,27 +2090,14 @@ class WindowsEventEmitter(LogEmitter):
             )
             computer = sanitize_path_component(event.get("Computer", ""))
             counter_key = computer.split(".")[0] if "." in computer else computer
-            if counter_key not in self._record_id_counters:
-                rng = random.Random(f"erid_{counter_key}")
-                key_lower = counter_key.lower()
-                if "dc" in key_lower:
-                    self._record_id_counters[counter_key] = rng.randint(5_000_000, 15_000_000)
-                elif any(
-                    x in key_lower for x in ("srv", "server", "web", "file", "db", "mail", "exch")
-                ):
-                    self._record_id_counters[counter_key] = rng.randint(50_000, 550_000)
-                else:
-                    self._record_id_counters[counter_key] = rng.randint(5_000, 55_000)
-            gap_rng = random.Random(
-                f"erid_gap_{counter_key}_{self._record_id_counters[counter_key]}"
+            sequence_model = self._record_id_sequences.setdefault(
+                counter_key, WindowsRecordIdSequence("security", counter_key)
             )
-            if gap_rng.random() < 0.15:
-                self._record_id_counters[counter_key] += gap_rng.randint(2, 8)
-            elif gap_rng.random() < 0.03:
-                self._record_id_counters[counter_key] += gap_rng.randint(20, 200)
-            else:
-                self._record_id_counters[counter_key] += 1
-            event["EventRecordID"] = self._record_id_counters[counter_key]
+            event["EventRecordID"] = sequence_model.next(
+                event.get("TimeCreated"),
+                int(event.get("EventID") or 0),
+            )
+            self._record_id_counters[counter_key] = sequence_model.current
 
             normalized_time = event.get("TimeCreated")
             if isinstance(normalized_time, datetime):

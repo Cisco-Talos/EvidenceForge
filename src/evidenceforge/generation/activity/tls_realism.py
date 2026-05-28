@@ -382,7 +382,12 @@ def pick_tls_destination(
         for profile in profiles
     ]
     profile = rng.choices(profiles, weights=weights, k=1)[0]
-    domains = _tls_profile_domains(profile, rng, source_os=source_os_norm)
+    domains = _tls_profile_domains(
+        profile,
+        rng,
+        source_os=source_os_norm,
+        source_system_type=system_type_norm,
+    )
     if not domains:
         domain = generate_long_tail_domain(rng)
         return domain, resolve_domain_ip(domain, src_host=src_host)
@@ -437,10 +442,14 @@ def _tls_profile_domains(
     rng: random.Random,
     *,
     source_os: str,
+    source_system_type: str = "",
 ) -> list[str]:
     """Build a profile domain pool from explicit domains, OS overrides, and DNS tags."""
     from evidenceforge.generation.activity.dns_registry import get_domain_tags, get_domains_by_tag
-    from evidenceforge.generation.activity.proxy_uri import get_proxy_domain_class
+    from evidenceforge.generation.activity.proxy_uri import (
+        get_proxy_domain_class,
+        proxy_domain_allows_source_system_type,
+    )
 
     override: dict[str, Any] = {}
     os_overrides = profile.get("os_overrides", {})
@@ -473,6 +482,8 @@ def _tls_profile_domains(
         domain_tags = set(get_domain_tags(domain))
         os_tags = domain_tags & {"windows", "linux"}
         if source_os in {"windows", "linux"} and os_tags and source_os not in os_tags:
+            continue
+        if not proxy_domain_allows_source_system_type(domain, source_system_type):
             continue
         if get_proxy_domain_class(domain) in _CLEARTEXT_CERT_INFRA_DOMAIN_CLASSES:
             continue

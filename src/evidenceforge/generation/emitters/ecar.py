@@ -195,6 +195,7 @@ class EcarEmitter(HostMultiplexEmitter):
     _output_end_time: datetime | None = None
     _stale_process_reference_grace_ms = 5 * 60 * 1000
     _post_termination_dependent_grace_ms = 30 * 1000
+    _pre_process_flow_identity_repair_grace_ms = 30 * 1000
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         """Initialize per-source ordering memory for cross-event eCAR contracts."""
@@ -922,11 +923,20 @@ class EcarEmitter(HostMultiplexEmitter):
         host = event.dst_host
         if net is None or host is None:
             return -1
+        if net.dst_port in {22, 3389}:
+            return self._resolve_system_listener_pid(host, net.dst_port)
         if net.responding_pid > 0:
             return net.responding_pid
 
+        listener_pid = self._resolve_system_listener_pid(host, net.dst_port)
+        if listener_pid > 0:
+            return listener_pid
+        return -1
+
+    def _resolve_system_listener_pid(self, host: HostContext, dst_port: int) -> int:
+        """Resolve a stable service listener PID for endpoint transport ownership."""
         system_pids = getattr(self, "_system_pids", {}).get(host.hostname, {})
-        for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(net.dst_port, ()):
+        for candidate in _INBOUND_SERVICE_PID_CANDIDATES.get(dst_port, ()):
             pid = system_pids.get(candidate)
             if pid and pid > 0:
                 return pid
@@ -1398,13 +1408,7 @@ class EcarEmitter(HostMultiplexEmitter):
                 normalized.append(line)
                 continue
             if record.get("object") == "FLOW":
-                record.pop("actorID", None)
-                record.pop("pid", None)
-                record.pop("principal", None)
-                props = record.get("properties")
-                if isinstance(props, dict):
-                    for key in ("image_path", "command_line", "parent_image_path"):
-                        props.pop(key, None)
+                cls._drop_flow_process_identity(record)
                 normalized.append(json.dumps(record, separators=(",", ":")))
                 continue
             continue
@@ -1917,6 +1921,18 @@ class EcarEmitter(HostMultiplexEmitter):
             if referenced_create_ms:
                 minimum_ms = max(referenced_create_ms)
                 if timestamp_ms <= minimum_ms:
+                    if record.get("object") == "FLOW":
+                        if record.get("action") == "CONNECT":
+                            cls._drop_flow_process_identity(record)
+                            normalized.append(json.dumps(record, separators=(",", ":")))
+                            continue
+                        if (
+                            minimum_ms - timestamp_ms
+                            > cls._pre_process_flow_identity_repair_grace_ms
+                        ):
+                            cls._drop_flow_process_identity(record)
+                            normalized.append(json.dumps(record, separators=(",", ":")))
+                            continue
                     seed_text = ":".join(
                         [
                             str(record.get("id", "")),
@@ -1931,6 +1947,17 @@ class EcarEmitter(HostMultiplexEmitter):
                     line = json.dumps(record, separators=(",", ":"))
             normalized.append(line)
         return normalized
+
+    @staticmethod
+    def _drop_flow_process_identity(record: dict[str, Any]) -> None:
+        """Remove process attribution from a FLOW that cannot safely claim it."""
+        record.pop("actorID", None)
+        record.pop("pid", None)
+        record.pop("principal", None)
+        props = record.get("properties")
+        if isinstance(props, dict):
+            for key in ("image_path", "command_line", "parent_image_path"):
+                props.pop(key, None)
 
     @staticmethod
     def _semantic_dedup_key(record: dict[str, Any]) -> str:

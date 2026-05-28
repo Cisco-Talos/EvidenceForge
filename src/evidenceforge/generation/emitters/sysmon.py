@@ -51,6 +51,7 @@ from evidenceforge.generation.emitters.windows import (
     _subject_domain,
 )
 from evidenceforge.generation.emitters.windows_event import format_windows_system_time
+from evidenceforge.generation.emitters.windows_record_ids import WindowsRecordIdSequence
 from evidenceforge.generation.emitters.windows_snare import (
     WINDOWS_SYSMON_SNARE_FILENAME,
     render_windows_sysmon_snare_syslog,
@@ -1747,7 +1748,7 @@ class SysmonEventEmitter(LogEmitter):
         super().__init__(format_def, output_path, buffer_size, threaded)
         self._event_dicts: list[dict[str, Any]] = []
         self._record_id_counters: dict[str, int] = {}
-        self._erid_rngs: dict[str, random.Random] = {}
+        self._record_id_sequences: dict[str, WindowsRecordIdSequence] = {}
         self._last_time_created_by_computer: dict[str, datetime] = {}
         self._time_collision_count_by_computer: dict[str, int] = {}
         self._final_process_guids: dict[tuple[str, int], str] = {}
@@ -1875,20 +1876,14 @@ class SysmonEventEmitter(LogEmitter):
             )
             computer = event.get("Computer", "")
             counter_key = computer.split(".")[0] if "." in computer else computer
-            if counter_key not in self._record_id_counters:
-                self._erid_rngs[counter_key] = random.Random(f"sysmon_erid_{counter_key}")
-                self._record_id_counters[counter_key] = self._erid_rngs[counter_key].randint(
-                    100_000, 500_000
-                )
-            rng = self._erid_rngs[counter_key]
-            # Simulate gaps from event types we don't generate (6, 9, 14-21, 23-29, etc.)
-            # Real Sysmon shares ETW session with other providers; gaps vary widely.
-            if rng.random() < 0.15:
-                gap = rng.randint(8, 50)  # Occasional large gap (batch ETW events)
-            else:
-                gap = rng.randint(1, 7)
-            self._record_id_counters[counter_key] += gap
-            event["EventRecordID"] = self._record_id_counters[counter_key]
+            sequence_model = self._record_id_sequences.setdefault(
+                counter_key, WindowsRecordIdSequence("sysmon", counter_key)
+            )
+            event["EventRecordID"] = sequence_model.next(
+                event.get("TimeCreated"),
+                int(event.get("EventID") or 0),
+            )
+            self._record_id_counters[counter_key] = sequence_model.current
 
         self._sync_utc_time_fields()
         self._sync_process_guids_to_event1_times()

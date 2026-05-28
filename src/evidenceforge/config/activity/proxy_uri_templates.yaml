@@ -45,6 +45,8 @@ domains:
   dl.google.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/chrome/install/GoogleChromeStandaloneEnterprise64.msi"
@@ -56,6 +58,8 @@ domains:
   update.googleapis.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/service/update2/json"
@@ -912,6 +916,8 @@ domains:
   clients6.google.com:
     domain_class: telemetry
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/drive/v2internal/about"
@@ -923,6 +929,8 @@ domains:
   clients4.google.com:
     domain_class: telemetry
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/chrome-sync/command"
@@ -944,6 +952,8 @@ domains:
   armmf.adobe.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/arm-manifests/win/AcrobatDC/reader/current_version.xml"
@@ -954,6 +964,8 @@ domains:
   swupmf.adobe.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/swupmf/win/AcrobatDC/{hex8}/manifest.xml"
@@ -964,6 +976,8 @@ domains:
   ccmdl.adobe.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/AdobeProducts/APRO/{hex8}/win64/AcroRdrDCUpd.msp"
@@ -974,6 +988,8 @@ domains:
   desktop.dropbox.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/windows/DropboxUpdate/{hex8}/manifest.json"
@@ -1077,6 +1093,8 @@ domains:
   download.lenovo.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/pccbbs/thinkvantage_en/system_update_{hex8}.xml"
@@ -1089,6 +1107,8 @@ domains:
   hpia.hpcloud.hp.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/ref/platformList.cab"
@@ -1099,6 +1119,8 @@ domains:
   dellupdater.dell.com:
     domain_class: software_update
     os: windows
+    source_system_types: [workstation]
+    http_policy: https_redirect
     referrer_policy: none
     paths:
       - "/Catalog/CatalogPC.cab"

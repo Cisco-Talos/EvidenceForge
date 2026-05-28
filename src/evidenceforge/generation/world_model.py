@@ -482,7 +482,13 @@ class WorldModel:
             from evidenceforge.generation.activity.dns_registry import pick_domain_and_ip
 
             tags = tuple(dns_tags) if dns_tags else ("background", os_category)
-            domain, ip = pick_domain_and_ip(rng, *tags, src_host=src_system.hostname)
+            domain, ip = pick_domain_and_ip(
+                rng,
+                *tags,
+                src_host=src_system.hostname,
+                include_os=os_category,
+                source_system_type=src_system.type,
+            )
             return ip, domain
 
         if dest_role in ("_dc", "domain_controller"):
@@ -704,6 +710,7 @@ class WorldPlanner:
         source_system: System | None = None,
         allow_existing: bool = True,
         storyline_protected: bool = False,
+        required_until: datetime | None = None,
     ) -> ActiveSession:
         return self.bootstrap_user_session(
             user=user,
@@ -714,6 +721,7 @@ class WorldPlanner:
             source_system=source_system,
             allow_existing=allow_existing,
             storyline_protected=storyline_protected,
+            required_until=required_until,
         ).session
 
     def _find_windows_interactive_session(
@@ -751,6 +759,7 @@ class WorldPlanner:
         allow_existing: bool = True,
         source_ip_override: str | None = None,
         storyline_protected: bool = False,
+        required_until: datetime | None = None,
     ) -> SessionBootstrapResult:
         if allow_existing and session_kind in (None, "interactive"):
             existing_interactive = self._find_windows_interactive_session(
@@ -774,6 +783,24 @@ class WorldPlanner:
             transport_compatible = True
             if session_kind and existing.session_kind != session_kind:
                 transport_compatible = False
+            if (
+                transport_compatible
+                and required_until is not None
+                and existing.session_kind == "ssh"
+                and existing.network_close_time is not None
+            ):
+                required_until_utc = (
+                    required_until.replace(tzinfo=UTC)
+                    if required_until.tzinfo is None
+                    else required_until.astimezone(UTC)
+                )
+                network_close_time = (
+                    existing.network_close_time.replace(tzinfo=UTC)
+                    if existing.network_close_time.tzinfo is None
+                    else existing.network_close_time.astimezone(UTC)
+                )
+                if network_close_time < required_until_utc:
+                    transport_compatible = False
             if transport_compatible:
                 existing.last_activity_time = time
                 if existing.session_kind == "ssh":
@@ -807,12 +834,21 @@ class WorldPlanner:
             # process evidence. Give that source-native sequence room before
             # the first user-visible command tied to the session.
             logon_time = time - timedelta(seconds=rng.uniform(6.0, 12.0))
+        elif plan.session_kind == "interactive" and _get_os_category(target_system.os) == "linux":
+            logon_time = time - timedelta(seconds=rng.uniform(7.0, 15.0))
         else:
             logon_time = time - timedelta(seconds=rng.uniform(0.5, 5.0))
         self.state_manager.set_current_time(logon_time)
 
         if plan.session_kind == "ssh":
-            result = self._bootstrap_ssh_session(user, plan, logon_time, time, rng)
+            result = self._bootstrap_ssh_session(
+                user,
+                plan,
+                logon_time,
+                time,
+                rng,
+                required_until=required_until,
+            )
             if storyline_protected and result.session:
                 result.session.storyline_protected = True
             return result
@@ -1064,6 +1100,7 @@ class WorldPlanner:
         logon_time: datetime,
         activity_time: datetime,
         rng: random.Random,
+        required_until: datetime | None = None,
     ) -> SessionBootstrapResult:
         source_os = (
             self.world_model.hosts[plan.source_system.hostname].os_category
@@ -1084,6 +1121,16 @@ class WorldPlanner:
             30.0,
             (activity_time - logon_time).total_seconds() + rng.uniform(2.0, 20.0),
         )
+        if required_until is not None:
+            required_until = (
+                required_until.replace(tzinfo=UTC)
+                if required_until.tzinfo is None
+                else required_until.astimezone(UTC)
+            )
+            min_duration = max(
+                min_duration,
+                (required_until - logon_time).total_seconds() + rng.uniform(20.0, 90.0),
+            )
         uid = self.activity_generator.generate_ssh_session(
             user=user,
             target_system=plan.target_system,

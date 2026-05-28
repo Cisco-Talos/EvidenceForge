@@ -151,11 +151,6 @@ file_paths_linux:
   - "/var/log/syslog"
   - "/var/log/auth.log"
   - "/var/log/journal/{hex}/system.journal"
-  # Package manager
-  - "/var/lib/dpkg/status"
-  - "/var/cache/apt/archives/lock"
-  - "/var/lib/apt/lists/lock"
-
 # Registry keys for EDR events. Format: [key, value_name, details].
 # TargetObject in Sysmon = key\value_name. Details = data written.
 runmru_commands:

@@ -29,7 +29,7 @@ from pathlib import Path
 from threading import Barrier, Thread
 
 from evidenceforge.events.base import SecurityEvent
-from evidenceforge.events.contexts import DnsContext, NetworkContext, X509Context
+from evidenceforge.events.contexts import DnsContext, HttpContext, NetworkContext, X509Context
 from evidenceforge.formats import load_format
 from evidenceforge.generation.emitters.zeek import ZeekEmitter
 from evidenceforge.generation.emitters.zeek_dns import ZeekDnsEmitter
@@ -644,6 +644,49 @@ class TestPerSensorDirectoryRouting:
                 assert row["resp_bytes"] >= 65536
                 assert row["orig_ip_bytes"] >= row["orig_bytes"] + (20 * row["orig_pkts"])
                 assert row["resp_ip_bytes"] >= row["resp_bytes"] + (20 * row["resp_pkts"])
+
+    def test_conn_observation_uses_http_flow_body_floor_for_reused_connections(self):
+        """A parent HTTP conn row must cover later same-UID transaction body bytes."""
+        fmt = load_format("zeek_conn")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            emitter = ZeekEmitter(fmt, base, sensor_hostnames=["dmz"])
+
+            emitter.emit(
+                SecurityEvent(
+                    timestamp=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+                    event_type="connection",
+                    network=NetworkContext(
+                        src_ip="10.0.0.1",
+                        src_port=50000,
+                        dst_ip="8.8.8.8",
+                        dst_port=80,
+                        protocol="tcp",
+                        service="http",
+                        zeek_uid="CTestHttpFlowFloor",
+                        duration=0.25,
+                        orig_bytes=900,
+                        resp_bytes=63_000,
+                        orig_pkts=8,
+                        resp_pkts=60,
+                        orig_ip_bytes=1060,
+                        resp_ip_bytes=64_200,
+                        conn_state="SF",
+                    ),
+                    http=HttpContext(
+                        method="GET",
+                        host="portal.example",
+                        uri="/",
+                        response_body_len=4096,
+                        flow_response_body_len=65_536,
+                        flow_transaction_count=3,
+                    ),
+                )
+            )
+            emitter.close()
+
+            row = json.loads((base / "dmz" / "conn.json").read_text().splitlines()[0])
+            assert row["resp_bytes"] >= 65_536
 
     def test_lossless_conn_observation_textures_http_backed_tap_metrics(self):
         """Lossless dual-sensor rows vary tap metrics while keeping HTTP body facts."""

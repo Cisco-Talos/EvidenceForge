@@ -348,6 +348,7 @@ def test_world_planner_bootstraps_ssh_session(
         session_kind="ssh",
         source_system=systems["WKS-01"],
         allow_existing=False,
+        required_until=datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC),
     )
 
     session = state_manager.get_session(result.session.logon_id)
@@ -358,6 +359,8 @@ def test_world_planner_bootstraps_ssh_session(
     assert session.transport_pid is not None
     assert session.session_shell_pid is not None
     assert session.source_ready_time is not None
+    assert session.network_close_time is not None
+    assert session.network_close_time >= datetime(2024, 1, 15, 10, 45, 0, tzinfo=UTC)
     shell = state_manager.get_process(systems["DB-01"].hostname, session.session_shell_pid)
     assert shell is not None
     assert shell.image == "/bin/bash"
@@ -556,6 +559,89 @@ def test_linux_parent_resolution_materializes_visible_shell_for_reused_ssh_logon
         if call.args[0].process is not None and call.args[0].process.pid == parent_pid
     ]
     assert bash_events
+
+
+def test_linux_shell_parent_resolution_ignores_closed_ssh_transport(
+    state_manager: StateManager,
+    activity_generator: ActivityGenerator,
+    systems: dict[str, System],
+    users: dict[str, User],
+) -> None:
+    """Closed SSH transports should not continue owning shell parents."""
+    start_time = datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC)
+    close_time = start_time + timedelta(minutes=5)
+    late_activity_time = close_time + timedelta(minutes=30)
+    state_manager.set_current_time(start_time)
+    systemd_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        0,
+        "/usr/lib/systemd/systemd",
+        "/usr/lib/systemd/systemd",
+        "root",
+        "System",
+    )
+    sshd_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        systemd_pid,
+        "/usr/sbin/sshd",
+        "/usr/sbin/sshd -D",
+        "root",
+        "System",
+    )
+    shell_pid = state_manager.create_process(
+        systems["DB-01"].hostname,
+        sshd_pid,
+        "/bin/bash",
+        "-bash",
+        users["alice.admin"].username,
+        "Medium",
+    )
+    logon_id = state_manager.create_session(
+        username=users["alice.admin"].username,
+        system=systems["DB-01"].hostname,
+        logon_type=10,
+        source_ip=systems["WKS-01"].ip,
+        source_port=51512,
+        session_kind="ssh",
+        start_time=start_time,
+    )
+    state_manager.update_session_metadata(logon_id, network_close_time=close_time)
+    session = state_manager.get_session(logon_id)
+    assert session is not None
+    session.session_shell_pid = shell_pid
+    activity_generator._system_pids = {
+        systems["DB-01"].hostname: {"systemd": systemd_pid, "sshd": sshd_pid}
+    }
+
+    assert (
+        activity_generator.ensure_linux_ssh_session_shell(
+            user=users["alice.admin"],
+            target_system=systems["DB-01"],
+            logon_id=logon_id,
+            logon_time=start_time,
+            activity_time=late_activity_time,
+        )
+        is None
+    )
+    assert (
+        activity_generator._active_session_shell_pid(
+            systems["DB-01"],
+            users["alice.admin"],
+            late_activity_time,
+            logon_id,
+        )
+        is None
+    )
+    assert (
+        activity_generator.ensure_linux_visible_shell_parent(
+            user=users["alice.admin"],
+            target_system=systems["DB-01"],
+            activity_time=late_activity_time,
+            logon_id=logon_id,
+            logon_time=start_time,
+        )
+        is None
+    )
 
 
 def test_world_planner_bootstraps_rdp_session_with_owned_state(

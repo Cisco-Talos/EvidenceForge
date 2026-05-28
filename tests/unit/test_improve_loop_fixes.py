@@ -334,6 +334,28 @@ class TestSessionKindMatching:
         )
         assert result2.session.logon_id == result1.session.logon_id
 
+    def test_closed_ssh_transport_session_not_reused(self):
+        """An SSH session should not satisfy later activity after TCP/22 closes."""
+        planner, user, srv, state = self._setup_planner()
+        rng = random.Random(42)
+        start = datetime(2024, 1, 15, 10, 30, tzinfo=UTC)
+        close = start + timedelta(minutes=5)
+        logon_id = state.create_session(
+            username=user.username,
+            system=srv.hostname,
+            logon_type=10,
+            source_ip="10.0.1.50",
+            start_time=start,
+            session_kind="ssh",
+        )
+        state.update_session_metadata(logon_id, network_close_time=close)
+
+        result = planner.bootstrap_user_session(
+            user, srv, close + timedelta(minutes=20), rng, session_kind="ssh"
+        )
+
+        assert result.session.logon_id != logon_id
+
 
 # ============================================================
 # Small CIDR Handling

@@ -148,6 +148,23 @@ def _validate_edr_file_path_pools(result: ValidationResult, edr_pools_data: dict
                         "service-principal reads look source-native synthetic",
                     )
                 )
+            elif normalized.startswith(
+                (
+                    "/var/cache/apt/",
+                    "/var/lib/apt/",
+                    "/var/lib/dnf/",
+                    "/var/lib/dpkg/",
+                    "/var/log/apt/",
+                )
+            ):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "edr_pools.yaml (file_paths_linux)",
+                        "Generic EDR file churn must not use package-manager state paths; "
+                        "emit apt/dpkg artifacts through process-aware package-manager profiles",
+                    )
+                )
             elif "systemd-private-" in normalized and "apache2.service" in normalized:
                 result.issues.append(
                     Issue(
@@ -847,6 +864,7 @@ def validate_config() -> ValidationResult:
         content_types = entry.get("content_types")
         domain_class = entry.get("domain_class")
         referrer_policy = entry.get("referrer_policy", "normal")
+        source_system_types = entry.get("source_system_types")
         if not isinstance(paths, list) or not paths:
             result.issues.append(
                 Issue(
@@ -881,6 +899,21 @@ def validate_config() -> ValidationResult:
                     f'Domain "{domain}" has invalid referrer_policy "{referrer_policy}"',
                 )
             )
+        if source_system_types is not None:
+            valid_source_types = {"workstation", "server", "domain_controller"}
+            observed_types = (
+                {str(value) for value in source_system_types}
+                if isinstance(source_system_types, list)
+                else set()
+            )
+            if not observed_types or not observed_types.issubset(valid_source_types):
+                result.issues.append(
+                    Issue(
+                        "ERROR",
+                        "proxy_uri_templates.yaml",
+                        f'Domain "{domain}" has invalid source_system_types',
+                    )
+                )
         if domain_class in _INFRA_PROXY_CLASSES:
             if referrer_policy != "none":
                 result.issues.append(

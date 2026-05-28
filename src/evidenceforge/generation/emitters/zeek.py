@@ -181,8 +181,20 @@ class ZeekEmitter(SensorMultiplexEmitter):
             "resp_pkts": net.resp_pkts,
             "resp_ip_bytes": net.resp_ip_bytes,
             "ip_proto": net.ip_proto,
-            "_http_request_body_len": event.http.request_body_len if event.http else None,
-            "_http_response_body_len": event.http.response_body_len if event.http else None,
+            "_http_request_body_len": (
+                event.http.flow_request_body_len
+                if event.http and event.http.flow_request_body_len is not None
+                else event.http.request_body_len
+                if event.http
+                else None
+            ),
+            "_http_response_body_len": (
+                event.http.flow_response_body_len
+                if event.http and event.http.flow_response_body_len is not None
+                else event.http.response_body_len
+                if event.http
+                else None
+            ),
             "_allow_sensor_observation_variance": True,
             "_sensor_hostnames": event._sensor_hostnames_by_format.get(self.format_def.name, []),
         }

@@ -1363,6 +1363,47 @@ class TestExplicitProxyVisibility:
         assert proxy_event.proxy.method == "CONNECT"
         assert proxy_event.proxy.host == "example.com"
 
+    def test_plaintext_public_domain_redirects_instead_of_success(self):
+        generator, emitters = _generator(
+            [
+                NetworkSensor(
+                    type="network",
+                    name="both-sides",
+                    monitoring_segments=["workstations", "dmz"],
+                    direction="bidirectional",
+                    log_formats=["zeek"],
+                )
+            ]
+        )
+
+        generator.generate_connection(
+            src_ip="10.0.1.10",
+            dst_ip="52.85.84.55",
+            time=datetime(2024, 1, 15, 10, 0, 0, tzinfo=UTC),
+            dst_port=80,
+            proto="tcp",
+            service="http",
+            duration=1.0,
+            orig_bytes=500,
+            resp_bytes=5000,
+            source_system=generator._ip_to_system["10.0.1.10"],
+            hostname="aws.amazon.com",
+            conn_state="SF",
+        )
+
+        proxy_event = emitters["proxy_access"].emit.call_args.args[0]
+        assert proxy_event.proxy.host == "aws.amazon.com"
+        assert proxy_event.proxy.status_code in {301, 302}
+
+        http_events = [
+            call.args[0]
+            for call in emitters["zeek_http"].emit.call_args_list
+            if call.args[0].http.host == "aws.amazon.com"
+        ]
+        assert http_events
+        assert {event.http.status_code for event in http_events}.issubset({301, 302})
+        assert all(event.http.response_body_len < 1000 for event in http_events)
+
     def test_egress_sensor_sees_proxy_to_origin_only(self):
         generator, emitters = _generator(
             [

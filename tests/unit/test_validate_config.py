@@ -330,6 +330,45 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_child_ca_validity_outside_parent_window(self, monkeypatch):
+        from evidenceforge.generation.activity import tls_realism
+
+        real_tls_loader = tls_realism.load_tls_realism
+
+        def load_invalid_tls_realism():
+            data = real_tls_loader()
+            certificate_chains = dict(data.get("certificate_chains", {}))
+            certificate_chains["authority_profiles"] = [
+                {
+                    "subject": "CN=Parent Root CA, O=Example, C=US",
+                    "issuer": "CN=Parent Root CA, O=Example, C=US",
+                    "not_valid_before": 100,
+                    "not_valid_after": 500,
+                    "key_type": "rsa",
+                    "key_length": 2048,
+                },
+                {
+                    "subject": "CN=Child Issuing CA, O=Example, C=US",
+                    "issuer": "CN=Parent Root CA, O=Example, C=US",
+                    "not_valid_before": 200,
+                    "not_valid_after": 600,
+                    "key_type": "rsa",
+                    "key_length": 2048,
+                },
+            ]
+            return {**data, "certificate_chains": certificate_chains}
+
+        monkeypatch.setattr(tls_realism, "load_tls_realism", load_invalid_tls_realism)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "tls_realism.yaml"
+            and "authority profile validity must fit within issuer validity window" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_ocsp_request_path_bounds(self, monkeypatch):
         from evidenceforge.generation.activity import tls_realism
 
@@ -678,6 +717,31 @@ class TestValidateConfig:
             for issue in result.issues
         )
 
+    def test_validate_config_rejects_invalid_proxy_source_system_type(self, monkeypatch):
+        from evidenceforge.generation.activity import proxy_uri
+
+        real_loader = proxy_uri.load_proxy_uri_templates
+
+        def load_invalid_proxy_templates():
+            data = real_loader()
+            domains = dict(data.get("domains", {}))
+            domains["desktop.dropbox.com"] = {
+                **domains["desktop.dropbox.com"],
+                "source_system_types": ["laptop"],
+            }
+            return {**data, "domains": domains}
+
+        monkeypatch.setattr(proxy_uri, "load_proxy_uri_templates", load_invalid_proxy_templates)
+
+        result = validate_config()
+
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "proxy_uri_templates.yaml"
+            and "invalid source_system_types" in issue.message
+            for issue in result.issues
+        )
+
     def test_validate_config_rejects_invalid_timing_profile_window(self, monkeypatch):
         from evidenceforge.generation.activity import timing_profiles
 
@@ -758,6 +822,7 @@ class TestValidateConfig:
                 "file_paths_linux": [
                     "/proc/{rand}/status",
                     "/etc/passwd",
+                    "/var/lib/dpkg/status",
                     "/tmp/systemd-private-12345-apache2.service",
                 ],
             }
@@ -782,6 +847,12 @@ class TestValidateConfig:
             issue.severity == "ERROR"
             and issue.file == "edr_pools.yaml (file_paths_linux)"
             and "/etc/passwd" in issue.message
+            for issue in result.issues
+        )
+        assert any(
+            issue.severity == "ERROR"
+            and issue.file == "edr_pools.yaml (file_paths_linux)"
+            and "package-manager state paths" in issue.message
             for issue in result.issues
         )
         assert any(
@@ -1986,6 +2057,7 @@ class TestValidateConfig:
         unattended = next(entry for entry in programs if entry["app"] == "unattended-upgr")
         percentage_values = unattended["params"]["phased_percentage"]
 
+        assert unattended["max_per_host_window"] <= 8
         assert all(0 <= int(value) <= 100 for value in percentage_values)
         assert not any(
             "phased update percentage {}" in message for message in unattended["messages"]
