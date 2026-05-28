@@ -2465,7 +2465,10 @@ class StorylineMixin:
                         and _get_os_category(target_system.os) == "linux"
                         and scp_destination is not None
                     ):
-                        target_user = scp_destination[2] or process_actor.username
+                        target_user = self._resolve_scp_target_user(
+                            extracted_username=scp_destination[2],
+                            fallback_username=process_actor.username,
+                        )
                         self.activity_generator.generate_ssh_session(
                             user=self.activity_generator._user_model_for_username(target_user),
                             target_system=target_system,
@@ -4692,6 +4695,14 @@ class StorylineMixin:
             if host and path:
                 return host, path, user
         return None
+
+    @staticmethod
+    def _resolve_scp_target_user(extracted_username: str, fallback_username: str) -> str:
+        """Resolve SCP target user to a scenario-compatible username."""
+        username = extracted_username.strip()
+        if username and re.fullmatch(r"[a-zA-Z0-9._$-]+", username):
+            return username
+        return fallback_username
 
     @staticmethod
     def _extract_scp_target(command_line: str, os_category: str) -> str | None:
