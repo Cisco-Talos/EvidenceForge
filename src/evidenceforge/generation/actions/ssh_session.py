@@ -56,6 +56,7 @@ from evidenceforge.generation.state_manager import StateManager
 from evidenceforge.generation.timing import TemporalConstraintGraph
 from evidenceforge.models.scenario import System, User
 from evidenceforge.utils.rng import _stable_seed
+from evidenceforge.utils.time import ensure_utc
 
 logger = logging.getLogger(__name__)
 
@@ -682,9 +683,13 @@ class SshSessionActionBundle:
             default_position="after",
             default_class="source_latency",
         )
+        canonical_event_time = ensure_utc(event.timestamp)
+        canonical_transport_open_time = ensure_utc(transport_open_time)
         canonical_offset_ms = max(
             0,
-            math.ceil((event.timestamp - transport_open_time).total_seconds() * 1000),
+            math.ceil(
+                (canonical_event_time - canonical_transport_open_time).total_seconds() * 1000
+            ),
         )
         transport_to_syslog_ms = max(
             conn_delay_ms,
