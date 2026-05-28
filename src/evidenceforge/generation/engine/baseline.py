@@ -205,6 +205,50 @@ def _ntp_sync_seconds_for_hour(
     return observed_seconds
 
 
+def _ntp_sync_seconds_for_hour_from_state(
+    hostname: str,
+    ntp_ip: str,
+    hour_start_sec: float,
+    poll_seconds: int,
+    state: dict[str, float | int],
+) -> list[float]:
+    """Return observed NTP sync seconds for one hour using carried scheduler state."""
+    hour_end_sec = hour_start_sec + 3600
+    scheduled_second = float(state["scheduled_second"])
+    sequence = int(state["sequence"])
+
+    while scheduled_second < hour_start_sec:
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+
+    observed_seconds: list[float] = []
+    while scheduled_second < hour_end_sec:
+        observed_second = _ntp_observed_second(
+            hostname,
+            ntp_ip,
+            sequence,
+            scheduled_second,
+        )
+        if hour_start_sec <= observed_second < hour_end_sec:
+            observed_seconds.append(observed_second)
+        scheduled_second += _ntp_sync_interval_seconds(
+            hostname,
+            ntp_ip,
+            sequence,
+            poll_seconds,
+        )
+        sequence += 1
+
+    state["scheduled_second"] = scheduled_second
+    state["sequence"] = sequence
+    return observed_seconds
+
+
 def _linux_baseline_session_initiator(
     user: str,
     *,
@@ -5237,6 +5281,8 @@ class BaselineMixin:
         ntp_ips = self._infra_ips.get("ntp", ["129.6.15.28"])
         if isinstance(ntp_ips, str):
             ntp_ips = [ntp_ips]
+        if not hasattr(self, "_ntp_schedule_state"):
+            self._ntp_schedule_state: dict[tuple[str, str, int], dict[str, float | int]] = {}
 
         for system in self.scenario.environment.systems:
             services = self._system_service_defaults.get(system.hostname, [])
@@ -5314,12 +5360,23 @@ class BaselineMixin:
                         if os_cat == "windows"
                         else _svc_pid("chronyd", "timesyncd")
                     )
-                    for observed_second in _ntp_sync_seconds_for_hour(
+                    state_key = (system.hostname, ntp_ip, poll_seconds)
+                    schedule_state = self._ntp_schedule_state.get(state_key)
+                    if schedule_state is None:
+                        phase_rng = random.Random(
+                            _stable_seed(f"ntp_phase:{system.hostname}:{ntp_ip}:{poll_seconds}")
+                        )
+                        schedule_state = {
+                            "scheduled_second": phase_rng.uniform(0, min(3600, poll_seconds)),
+                            "sequence": 0,
+                        }
+                        self._ntp_schedule_state[state_key] = schedule_state
+                    for observed_second in _ntp_sync_seconds_for_hour_from_state(
                         system.hostname,
                         ntp_ip,
-                        self._generation_epoch,
-                        current_hour,
+                        hour_start_sec,
                         poll_seconds,
+                        schedule_state,
                     ):
                         ts = self._generation_epoch + timedelta(seconds=observed_second)
                         self.state_manager.set_current_time(ts)
