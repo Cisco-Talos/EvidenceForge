@@ -688,6 +688,31 @@ def validate_config() -> ValidationResult:
                 )
             )
 
+    def _validate_ids_numeric_field(
+        file_name: str,
+        context: str,
+        signature: dict[str, object],
+        field_name: str,
+        *,
+        required: bool = False,
+        minimum: int = 1,
+    ) -> None:
+        """Validate IDS numeric fields that generation later casts with int()."""
+        value = signature.get(field_name)
+        if value is None and not required:
+            return
+        if not isinstance(value, int) or value < minimum:
+            requirement = (
+                f"a positive integer (>= {minimum})" if minimum > 1 else "a positive integer"
+            )
+            result.issues.append(
+                Issue(
+                    "ERROR",
+                    file_name,
+                    f"{context} {field_name} must be {requirement}, got {value!r}",
+                )
+            )
+
     # --- IDS Signature Integrity ---
     for i, sig in enumerate(ids_data.get("signatures", [])):
         sid = sig.get("sid", f"entry #{i + 1}") if isinstance(sig, dict) else f"entry #{i + 1}"
@@ -723,14 +748,16 @@ def validate_config() -> ValidationResult:
                 )
             )
         gid = sig.get("gid", 1)
-        if not isinstance(gid, int) or gid < 1:
-            result.issues.append(
-                Issue(
-                    "ERROR",
-                    "ids_signatures.yaml",
-                    f"Signature {sid} gid must be a positive integer",
-                )
-            )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "sid", required=True
+        )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "rev", required=True
+        )
+        _validate_ids_numeric_field(
+            "ids_signatures.yaml", f"Signature {sid}", sig, "priority", required=True
+        )
+        _validate_ids_numeric_field("ids_signatures.yaml", f"Signature {sid}", sig, "gid")
         _record_ids_rule_identity("ids_signatures.yaml", sig.get("sid"), gid, sig.get("message"))
         templates = sig.get("dns_query_templates")
         if templates is not None:
@@ -2665,6 +2692,18 @@ def validate_config() -> ValidationResult:
                     ids_ua.get("gid", 1),
                     ids_ua.get("message"),
                 )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "sid", required=True
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "rev"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "priority"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_ua', ids_ua, "gid"
+                )
         # Validate ids_rate
         if "ids_rate" in preset:
             ids_rate = preset["ids_rate"]
@@ -2691,6 +2730,22 @@ def validate_config() -> ValidationResult:
                     ids_rate.get("sid"),
                     ids_rate.get("gid", 1),
                     ids_rate.get("message"),
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml",
+                    f'Preset "{name}" ids_rate',
+                    ids_rate,
+                    "sid",
+                    required=True,
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "rev"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "priority"
+                )
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", f'Preset "{name}" ids_rate', ids_rate, "gid"
                 )
                 threshold = ids_rate.get("threshold")
                 if threshold is not None and (not isinstance(threshold, int) or threshold < 1):
@@ -2729,6 +2784,15 @@ def validate_config() -> ValidationResult:
                     path_ids.get("gid", 1),
                     path_ids.get("message"),
                 )
+                path_context = f'Preset "{name}" path #{i + 1} ({path_entry.get("uri", "?")}) ids'
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", path_context, path_ids, "sid", required=True
+                )
+                _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "rev")
+                _validate_ids_numeric_field(
+                    "web_scan_presets.yaml", path_context, path_ids, "priority"
+                )
+                _validate_ids_numeric_field("web_scan_presets.yaml", path_context, path_ids, "gid")
 
     # --- RSAT tools validation ---
     from evidenceforge.generation.activity.rsat_tools import load_rsat_tools
