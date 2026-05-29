@@ -4,6 +4,26 @@ Detailed development history for the EvidenceForge project. Transferred from TOD
 
 ---
 
+## v1.1.1 (2026-05-29)
+
+This patch release promotes the post-1.1.0 current-dev assessment fixes. The
+branch contains only fixes and documentation updates since v1.1.0, so the
+project moves from `1.1.0` to `1.1.1`.
+
+**Blind realism assessment hardening**
+
+- Tightened DNS realism, SSH/eCAR tuple ownership, proxy identity, firewall path
+  ownership, paired FLOW timing, Windows Security port rendering, and related
+  regression coverage from the latest blind-review loops (`d1ee3d79`,
+  `3864057b`).
+
+**Parser and workflow documentation**
+
+- Hardened external parser output target marker reads, defaulted eforge skill
+  command docs to installed command usage, and added Claude instructions as a
+  reference to the existing AGENTS.md workflow (`9d59a887`, `617932f1`,
+  `11dee4b3`).
+
 ## v1.1.0 (2026-05-28)
 
 This minor release promotes the external-parser validation work and the latest
