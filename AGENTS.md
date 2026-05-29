@@ -127,12 +127,13 @@ The version is declared in three places that must always match:
 - `src/evidenceforge/__init__.py` → `__version__ = "X.Y.Z"`
 - `uv.lock` → updated automatically by `uv sync` after editing `pyproject.toml`
 
-**Bump rules (pre-1.0: breaking changes are allowed in MINOR bumps):**
+**Bump rules (SemVer):**
 
 | Commit type(s) on branch | Bump |
 |--------------------------|------|
-| Any `feat:` commit | MINOR (`0.x+1.0`) |
-| Only `fix:` / `docs:` / `test:` / `refactor:` / `chore:` | PATCH (`0.x.y+1`) |
+| Any breaking change | MAJOR (`x+1.0.0`) |
+| Any non-breaking `feat:` commit | MINOR (`x.y+1.0`) |
+| Only `fix:` / `docs:` / `test:` / `refactor:` / `chore:` | PATCH (`x.y.z+1`) |
 
 **When to bump:** Once per PR from `dev` to `main`, on the `dev` branch, as the last commit before opening that PR. Do not bump on feature branches or per-commit.
 
@@ -142,6 +143,54 @@ chore: bump version to X.Y.Z
 ```
 
 **Changelog update (required with every version bump):** as part of the same bump commit, prepend a new `## vX.Y.Z (YYYY-MM-DD)` section to `CHANGELOG.md` summarizing every commit since the previous version entry. Drive the summary from `git log main..dev --oneline` (or `git log vPREV..HEAD --oneline` if tagged). Group related commits into themed subsections (e.g., "Explicit proxy path modeling", "TLS & X.509 realism", "CLI & config"), cite the short SHAs inline in parentheses, and skip pure merge commits and unrelated dependabot bumps. Version-bump-only releases (no code changes) still get an entry noting that. The changelog entry and the version bump land in the same commit.
+
+**Release automation:** `.github/workflows/release.yml` enforces release hygiene
+for every PR to `main` and every push to `main`. On PRs targeting `main`, it
+verifies that `pyproject.toml`, `src/evidenceforge/__init__.py`, and `uv.lock`
+all declare the same `X.Y.Z` version, then checks that remote tag `vX.Y.Z` does
+not already exist. On pushes to `main`, it repeats those checks, creates an
+annotated tag on the merged commit, pushes the tag, and creates the GitHub
+Release entry so it appears under Releases. Remote tags are immutable release
+history; never use `git tag -f`, `git push --force`, or delete/recreate a
+`vX.Y.Z` tag to repair a missed bump. If the tag already exists, bump to the next
+correct SemVer version before merging to `main`.
+
+**Manual release tag guard (fallback only):** if the release workflow is
+unavailable and a maintainer must validate a `main` PR by hand, run:
+
+```
+VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+TAG="v${VERSION}"
+test "$(uv run python -c "import evidenceforge; print(evidenceforge.__version__)")" = "$VERSION"
+git ls-remote --exit-code --tags origin "$TAG" && {
+  echo "Remote release tag $TAG already exists; bump the version before opening the main PR."
+  exit 1
+}
+```
+
+**Manual release tagging (fallback only):** if the release workflow did not run
+after a `dev` → `main` PR was merged, create an annotated tag on the merge commit
+that landed on `main`, push it, and create the GitHub Release entry from that tag
+so it appears under Releases.
+
+```
+git fetch origin main:refs/remotes/origin/main --tags
+VERSION=$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+TAG="v${VERSION}"
+MERGE_SHA=$(git rev-parse origin/main)
+test -z "$(git tag --list "$TAG")" || {
+  echo "Local tag $TAG already exists; inspect it instead of overwriting it."
+  exit 1
+}
+git ls-remote --exit-code --tags origin "$TAG" && {
+  echo "Remote tag $TAG already exists; inspect it instead of overwriting it."
+  exit 1
+}
+git tag -a "$TAG" "$MERGE_SHA" -m "EvidenceForge $TAG"
+git push origin "$TAG"
+gh release create "$TAG" --repo Cisco-Talos/EvidenceForge --title "EvidenceForge $TAG" \
+  --verify-tag --fail-on-no-commits --generate-notes
+```
 
 The version on `dev` between releases will be ahead of `main` by one unreleased bump — this is expected and correct. Feature branches never touch the version.
 
