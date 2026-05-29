@@ -63,7 +63,7 @@ from evidenceforge.external_parsers.sof_elk_zeek import (
 from evidenceforge.output_targets import (
     OUTPUT_TARGET_FILENAME,
     OutputTarget,
-    normalize_output_target,
+    read_output_target_marker,
 )
 
 INGEST_STEP_TOTAL = 5
@@ -176,13 +176,11 @@ def _require_sof_elk_output_target(data_dir: Path) -> bool:
         error_console.print(f"Searched for `{OUTPUT_TARGET_FILENAME}` in:\n{searched}")
         return False
 
-    raw_value = marker.read_text(encoding="utf-8").strip()
     try:
-        output_target = normalize_output_target(raw_value)
-    except ValueError:
+        output_target = read_output_target_marker(data_dir)
+    except ValueError as error:
         error_console.print(
-            f"[bold red]error:[/bold red] {marker} contains unsupported output target "
-            f"{raw_value!r}; expected `sof-elk`."
+            f"[bold red]error:[/bold red] {marker} is not a valid output target marker: {error}."
         )
         return False
     if output_target != OutputTarget.SOF_ELK:
@@ -199,7 +197,7 @@ def _require_sof_elk_output_target(data_dir: Path) -> bool:
 
 def _find_output_target_marker(data_dir: Path) -> Path | None:
     for candidate in _output_target_marker_candidates(data_dir):
-        if candidate.exists():
+        if candidate.is_symlink() or candidate.is_file():
             return candidate
     return None
 
